@@ -10,6 +10,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.text.font.FontFamily
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import dev.vyoma.connect.platform.NotificationBridge
+import dev.vyoma.connect.platform.PhonePermissions
+import dev.vyoma.connect.service.LinkService
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.rounded.Sms
 import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
@@ -140,6 +145,18 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
         item(key = "sync") {
             val notifOn = remember(resumeTick) { NotificationBridge.isEnabled(context) }
             val clipOn = remember(resumeTick) { vm.backgroundClipboardSync() }
+            var phoneTick by remember { mutableIntStateOf(0) }
+            val phoneOn = remember(resumeTick, phoneTick) { PhonePermissions.allGranted(context) }
+            val askPhone = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+                phoneTick++
+                if (result.values.any { it }) LinkService.start(context, refresh = true)
+                // Denied twice: Android stops asking, so send them to the app's permission page.
+                if (result.values.any { !it } && !PhonePermissions.allGranted(context)) {
+                    runCatching {
+                        context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
+                    }
+                }
+            }
             SectionCard {
                 ListRow(
                     title = "Notifications on PC",
@@ -148,6 +165,15 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     iconTint = if (notifOn) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
                     showDivider = true,
                     onClick = { runCatching { context.startActivity(NotificationBridge.settingsIntent(context)) } },
+                )
+                ListRow(
+                    title = "Calls & messages on PC",
+                    subtitle = if (phoneOn) "On: text from the PC, see who's calling, synced contacts"
+                    else "Text from your PC and see who's calling",
+                    icon = Icons.Rounded.Sms,
+                    iconTint = if (phoneOn) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+                    showDivider = true,
+                    onClick = { if (!phoneOn) askPhone.launch(PhonePermissions.all) },
                 )
                 ListRow(
                     title = "Automatic clipboard sync",
