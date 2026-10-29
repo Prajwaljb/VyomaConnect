@@ -80,7 +80,8 @@ fun CollapsingHeaderScaffold(
         }
     }
 
-    Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    // Surface supplies onBackground as the content color, so bar icons and titles are legible.
+    Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) { Box(Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
             contentPadding = PaddingValues(
@@ -141,7 +142,7 @@ fun CollapsingHeaderScaffold(
             )
             actions()
         }
-    }
+    } }
 }
 
 /** Grouped rounded card: the basic One UI container. */

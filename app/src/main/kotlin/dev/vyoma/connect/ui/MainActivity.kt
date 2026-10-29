@@ -24,6 +24,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.vyoma.connect.designsystem.VyomaMotion
@@ -59,6 +61,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             val theme by vm.theme.collectAsStateWithLifecycle()
             VyomaTheme(theme) {
+                // Bar icons follow the app's theme, which can differ from the system's.
+                val darkUi = MaterialTheme.colorScheme.background.luminance() < 0.5f
+                LaunchedEffect(darkUi) {
+                    val clear = android.graphics.Color.TRANSPARENT
+                    val style = if (darkUi) SystemBarStyle.dark(clear) else SystemBarStyle.light(clear, clear)
+                    enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+                }
                 PermissionGate { vm.startService() }
                 AppNavigation(backStack, vm)
             }
