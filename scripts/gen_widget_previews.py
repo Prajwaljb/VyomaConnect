@@ -75,11 +75,11 @@ L['status', 'medium'] = root('medium', text('My PC', 14, bold=True) + ONLINE + F
 L['status', 'large'] = root('large', row(col(text('My PC', 15, bold=True) + ONLINE)
     + col(ring('82', 40, 12) + text('PC', 9, SOFT, extra=' android:layout_marginTop="2dp"'), weight=False, gravity='center_horizontal')
     + gap(10) + col(ring('64', 40, 12) + text('Phone', 9, SOFT, extra=' android:layout_marginTop="2dp"'), weight=False, gravity='center_horizontal'))
-    + FLEX_V + row(spaced([btn(i, 34) for i in ('ic_w_clipboard', 'ic_w_upload', 'ic_w_mouse', 'ic_w_ring')] + [btn('ic_play', 34, accent=True)])[len(FLEX_H):-len(FLEX_H)]),
+    + FLEX_V + row(spaced([btn(i, 34) for i in ('ic_w_clipboard', 'ic_w_upload', 'ic_w_mouse', 'ic_w_lock')] + [btn('ic_play', 34, accent=True)])[len(FLEX_H):-len(FLEX_H)]),
     orient='vertical', gravity='top')
 # ---- actions
 L['actions', 'small'] = root('small', spaced([btn('ic_w_clipboard', 34), btn('ic_w_upload', 34), btn('ic_play', 34, accent=True)]), pad=6)
-L['actions', 'wide_small'] = root('wide_small', spaced([btn(i, 36) for i in ('ic_w_clipboard', 'ic_w_upload', 'ic_w_mouse', 'ic_w_ring')] + [btn('ic_play', 36, accent=True)]), pad=8)
+L['actions', 'wide_small'] = root('wide_small', spaced([btn(i, 36) for i in ('ic_w_clipboard', 'ic_w_upload', 'ic_w_mouse', 'ic_w_lock')] + [btn('ic_play', 36, accent=True)]), pad=8)
 L['actions', 'medium'] = root('medium', FLEX_V + row(spaced([btn('ic_w_clipboard', 42), btn('ic_w_upload', 42)])) + FLEX_V
     + row(spaced([btn('ic_w_mouse', 42), btn('ic_play', 42, accent=True)])) + FLEX_V, orient='vertical', pad=10)
 def labelled(icon, label, accent=False):

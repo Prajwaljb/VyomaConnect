@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import dev.vyoma.connect.AppContainer
 import dev.vyoma.connect.container
 import dev.vyoma.connect.platform.Ringer
@@ -13,8 +14,11 @@ import dev.vyoma.connect.protocol.plugin.builtin.FindMyPhonePlugin
 import dev.vyoma.connect.protocol.plugin.builtin.LockPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.MprisPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.PingPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.SystemVolumePlugin
 import dev.vyoma.connect.protocol.plugin.builtin.Transfers
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * One-shot actions shared by notifications, widgets, tiles and shortcuts. They target the
@@ -27,6 +31,7 @@ object Commands {
     const val RING_PC = "dev.vyoma.connect.cmd.RING_PC"
     const val LOCK_PC = "dev.vyoma.connect.cmd.LOCK_PC"
     const val PING = "dev.vyoma.connect.cmd.PING"
+    const val MUTE_PC = "dev.vyoma.connect.cmd.MUTE_PC"
     const val STOP_RINGING = "dev.vyoma.connect.cmd.STOP_RINGING"
     const val DISMISS_TRANSFERS = "dev.vyoma.connect.cmd.DISMISS_TRANSFERS"
     const val EXTRA_DEVICE = "device"
@@ -53,11 +58,20 @@ object Commands {
             NEXT -> { c.media.control { p, player -> p.action(player, MprisPlugin.MediaAction.NEXT) }; return }
             PREVIOUS -> { c.media.control { p, player -> p.action(player, MprisPlugin.MediaAction.PREVIOUS) }; return }
         }
-        val device = deviceId?.let { c.hub.value?.device(it) } ?: primary(c) ?: return
+        val device = deviceId?.let { c.hub.value?.device(it) } ?: primary(c)
+        if (device == null || !device.state.value.isReachable) {
+            // Widgets and tiles fire these blind; say why nothing happened.
+            withContext(Dispatchers.Main) { Toast.makeText(app, "No PC connected", Toast.LENGTH_SHORT).show() }
+            return
+        }
         when (action) {
             RING_PC -> device.plugin<FindMyPhonePlugin>(FindMyPhonePlugin.ID)?.ringPeer()
             LOCK_PC -> device.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(true)
             PING -> device.plugin<PingPlugin>(PingPlugin.ID)?.ping("Ping from Vyoma")
+            MUTE_PC -> device.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.let { volume ->
+                val sink = volume.sinks.value.let { list -> list.firstOrNull { it.isDefault } ?: list.firstOrNull() } ?: return
+                volume.setMuted(sink.name, !sink.muted)
+            }
         }
     }
 }

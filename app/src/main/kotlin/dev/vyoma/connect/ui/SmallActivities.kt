@@ -12,6 +12,7 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -104,12 +105,17 @@ class ShareActivity : ComponentActivity() {
         if (uris.isNotEmpty()) forward(uris, null)
         finish()
     }
+    private val photoPicker = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
+        if (uris.isNotEmpty()) forward(uris, null)
+        finish()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (savedInstanceState != null) return
         when (intent.action) {
             ACTION_PICK -> picker.launch(arrayOf("*/*"))
+            ACTION_PICK_PHOTOS -> photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
             Intent.ACTION_SEND -> {
                 @Suppress("DEPRECATION")
                 val stream = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
@@ -155,6 +161,7 @@ class ShareActivity : ComponentActivity() {
 
     companion object {
         const val ACTION_PICK = "dev.vyoma.connect.PICK_FILES"
+        const val ACTION_PICK_PHOTOS = "dev.vyoma.connect.PICK_PHOTOS"
 
         fun pickFilesIntent(context: Context): PendingIntent = PendingIntent.getActivity(
             context, 42,

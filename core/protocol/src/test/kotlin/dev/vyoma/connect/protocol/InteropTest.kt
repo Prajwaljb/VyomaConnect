@@ -140,6 +140,33 @@ class InteropTest {
         println("all interop checks passed against kdeconnectd")
     }
 
+    /** The desktop reports its own battery once plugins load; widgets and the device page show it. */
+    @Test
+    fun desktopBatteryArrives() = runBlocking {
+        val ourId = hub.localIdentity().deviceId
+        hub.start()
+        val desktop = withTimeout(15_000) {
+            hub.devices.first { desktopId in it }.getValue(desktopId).also { d -> d.state.first { it.isReachable } }
+        }
+        if (!desktop.state.value.isPaired) {
+            val request = async(start = CoroutineStart.UNDISPATCHED) { hub.events.filterIsInstance<HubEvent.PairRequested>().first() }
+            cli("-d", ourId, "--pair")
+            withTimeout(10_000) { request.await() }
+            desktop.acceptPairing()
+            withTimeout(5_000) { desktop.state.first { it.pairState == PairState.PAIRED } }
+        }
+        try {
+            val battery = withTimeout(10_000) {
+                desktop.state.first { BatteryPlugin.ID in it.plugins }
+                desktop.plugin<BatteryPlugin>(BatteryPlugin.ID)!!.remote.first { it != null }
+            }
+            println("desktop battery: $battery")
+        } finally {
+            desktop.unpair()
+            waitUntil { dbus(ourId, "isPaired") == "false" }
+        }
+    }
+
     /** Manual-IP / Tailscale path: we dial the desktop's TCP port, so we're the TLS server. */
     @Test
     fun directConnectAsTlsServer() = runBlocking {
