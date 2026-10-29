@@ -11,10 +11,16 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,19 +32,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Computer
-import androidx.compose.material.icons.rounded.ContentPaste
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.Mouse
-import androidx.compose.material.icons.rounded.MusicNote
-import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.UploadFile
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
-import dev.vyoma.connect.platform.NowPlaying
 import androidx.compose.material.icons.rounded.Laptop
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.Refresh
@@ -49,11 +43,9 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -91,35 +83,74 @@ fun HomeScreen(
     val available = devices.filter { !it.isPaired && it.isReachable && it !in pairing }
     val offline = devices.filter { it.isPaired && !it.isReachable }
 
-    val subtitle = when {
-        connected.size == 1 -> "Connected to ${connected.first().identity.deviceName}"
-        connected.size > 1 -> "${connected.size} devices connected"
-        else -> "Looking for devices nearby"
-    }
+    var selected by rememberSaveable { mutableStateOf<String?>(null) }
+    val primary = connected.firstOrNull { it.identity.deviceId == selected } ?: connected.firstOrNull()
 
     CollapsingHeaderScaffold(
-        title = "Vyoma",
-        subtitle = subtitle,
+        title = primary?.identity?.deviceName ?: "Vyoma",
+        subtitle = when {
+            primary != null -> transportLabel(primary)
+            offline.isNotEmpty() -> "${offline.first().identity.deviceName} is away"
+            else -> "Looking for devices nearby"
+        },
+        hero = primary?.let { { DeviceGlyph(it) } },
         actions = {
             IconButton(onClick = vm::refresh) { Icon(Icons.Rounded.Refresh, "Refresh") }
             IconButton(onClick = onOpenSettings) { Icon(Icons.Rounded.Settings, "Settings") }
         },
     ) {
-        items(connected, key = { "c" + it.identity.deviceId }) { state ->
-            val id = state.identity.deviceId
-            DeviceHeroCard(
-                state = state,
-                nowPlaying = nowPlaying?.takeIf { it.deviceId == id && it.player.hasMedia },
-                onClick = { onOpenDevice(id) },
-                onPlayPause = vm::playPause,
-                actions = listOf(
-                    Triple(Icons.Rounded.UploadFile, "Files") { vm.pickFiles(context) },
-                    Triple(Icons.Rounded.ContentPaste, "Clipboard", onClipboard),
-                    Triple(Icons.Rounded.Mouse, "Touchpad") { onTouchpad(id) },
-                    Triple(Icons.Rounded.Lock, "Lock PC") { vm.lockPc(id) },
-                ),
-                modifier = Modifier.animateItem(),
-            )
+        if (primary != null) {
+            val id = primary.identity.deviceId
+            if (connected.size > 1) {
+                item(key = "switcher") {
+                    Row(Modifier.animateItem().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        connected.forEach { d ->
+                            val on = d.identity.deviceId == id
+                            Text(
+                                d.identity.deviceName,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.clip(CircleShape)
+                                    .background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
+                                    .pressable { selected = d.identity.deviceId }
+                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                            )
+                        }
+                    }
+                }
+            }
+            item(key = "bento") {
+                Staggered(0, Modifier.animateItem()) {
+                    PcDashboard(vm, primary, DashboardSection.BENTO, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard)
+                }
+            }
+            item(key = "volume") {
+                Staggered(1, Modifier.animateItem()) {
+                    PcDashboard(vm, primary, DashboardSection.VOLUME, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard)
+                }
+            }
+            item(key = "controls") {
+                Staggered(2, Modifier.animateItem()) {
+                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard)
+                }
+            }
+            val np = nowPlaying?.takeIf { it.deviceId == id && it.player.hasMedia }
+            if (np != null) {
+                item(key = "media") {
+                    Staggered(3, Modifier.animateItem()) {
+                        MediaCard(
+                            np = np,
+                            onPlayPause = vm::playPause,
+                            onNext = vm::next,
+                            onPrevious = vm::previous,
+                            onSeek = vm::seekTo,
+                            onVolume = vm::setPlayerVolume,
+                            onPickPlayer = vm::pickPlayer,
+                            showVolume = false,
+                        )
+                    }
+                }
+            }
         }
 
         if (pairing.isNotEmpty()) {
@@ -174,78 +205,6 @@ fun HomeScreen(
 
         if (connected.isEmpty() && pairing.isEmpty() && available.isEmpty()) {
             item(key = "searching") { SearchingCard(Modifier.animateItem()) }
-        }
-    }
-}
-
-@Composable
-private fun DeviceHeroCard(
-    state: DeviceState,
-    nowPlaying: NowPlaying?,
-    onClick: () -> Unit,
-    onPlayPause: () -> Unit,
-    actions: List<Triple<ImageVector, String, () -> Unit>>,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier.fillMaxWidth().pressable(pressedScale = 0.975f, onClick = onClick),
-        shape = MaterialTheme.shapes.extraLarge,
-        color = MaterialTheme.colorScheme.surfaceContainerLowest,
-    ) {
-        Column(Modifier.padding(20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier
-                        .size(56.dp)
-                        .clip(MaterialTheme.shapes.medium)
-                        .background(MaterialTheme.colorScheme.primaryContainer),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(state.identity.deviceType.icon(), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp))
-                }
-                Spacer(Modifier.width(16.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(state.identity.deviceName, style = MaterialTheme.typography.titleLarge)
-                    Spacer(Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        ConnectionOrb(OrbState.CONNECTED, size = 8.dp)
-                        Text(transportLabel(state), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-            if (nowPlaying != null) {
-                Spacer(Modifier.height(16.dp))
-                MiniPlayer(nowPlaying, onPlayPause)
-            }
-            Spacer(Modifier.height(16.dp))
-            ActionGrid(actions)
-        }
-    }
-}
-
-@Composable
-private fun MiniPlayer(np: NowPlaying, onPlayPause: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(48.dp).clip(MaterialTheme.shapes.small).background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
-            val art = np.art
-            if (art != null) {
-                androidx.compose.foundation.Image(art.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            } else {
-                Icon(Icons.Rounded.MusicNote, null, tint = MaterialTheme.colorScheme.primary)
-            }
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(np.player.title.ifBlank { np.player.name }, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (np.player.artist.isNotBlank()) {
-                Text(np.player.artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-        IconButton(onClick = onPlayPause) {
-            Icon(if (np.player.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (np.player.isPlaying) "Pause" else "Play", tint = MaterialTheme.colorScheme.primary)
         }
     }
 }

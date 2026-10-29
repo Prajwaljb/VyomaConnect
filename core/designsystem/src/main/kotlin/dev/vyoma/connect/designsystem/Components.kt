@@ -67,6 +67,7 @@ fun CollapsingHeaderScaffold(
     modifier: Modifier = Modifier,
     navigation: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
+    hero: (@Composable () -> Unit)? = null,
     content: LazyListScope.() -> Unit,
 ) {
     val listState = rememberLazyListState()
@@ -106,7 +107,17 @@ fun CollapsingHeaderScaffold(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Spacer(Modifier.height(32.dp))
-                    Text(title, style = MaterialTheme.typography.displayMedium, color = MaterialTheme.colorScheme.onBackground)
+                    if (hero != null) {
+                        hero()
+                        Spacer(Modifier.height(14.dp))
+                    }
+                    Text(
+                        title,
+                        style = if (hero != null) MaterialTheme.typography.headlineLarge else MaterialTheme.typography.displayMedium,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                     if (subtitle != null) {
                         Spacer(Modifier.height(6.dp))
                         Text(subtitle, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -120,7 +131,7 @@ fun CollapsingHeaderScaffold(
         Row(
             Modifier
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.background.copy(alpha = if (collapse > 0.98f) 0.96f else 0f))
+                .background(MaterialTheme.colorScheme.background.copy(alpha = if (collapse > 0.98f) 1f else 0f))
                 .windowInsetsPadding(WindowInsets.statusBars)
                 .height(56.dp)
                 .padding(horizontal = 8.dp),
