@@ -1,5 +1,12 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.shape.RoundedCornerShape
+import dev.vyoma.connect.designsystem.glassCard
+import dev.vyoma.connect.designsystem.SystemColor
+import dev.vyoma.connect.designsystem.Glass
 import kotlin.math.roundToInt
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.input.pointer.positionChange
@@ -111,14 +118,18 @@ private fun rememberPcState(vm: AppViewModel, state: DeviceState): PcState {
 @Composable
 fun DeviceGlyph(state: DeviceState, size: Dp = 76.dp) {
     Box(Modifier.size(size)) {
+        val accent = MaterialTheme.colorScheme.primary
         Box(
-            Modifier.fillMaxSize().clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
+            Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(size * 0.3f))
+                .background(Brush.linearGradient(listOf(accent.copy(alpha = 0.7f).compositeOver(Color.White), accent))),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(state.identity.deviceType.icon(), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(size * 0.48f))
+            Icon(state.identity.deviceType.icon(), null, tint = Color.White, modifier = Modifier.size(size * 0.5f))
         }
         Box(
-            Modifier.align(Alignment.BottomEnd).padding(2.dp).size(22.dp).clip(CircleShape).background(MaterialTheme.colorScheme.background),
+            Modifier.align(Alignment.BottomEnd).offset(4.dp, 4.dp).size(22.dp).clip(CircleShape).background(MaterialTheme.colorScheme.background),
             contentAlignment = Alignment.Center,
         ) {
             ConnectionOrb(if (state.isReachable) OrbState.CONNECTED else OrbState.OFFLINE, size = 12.dp)
@@ -196,23 +207,25 @@ fun PcDashboard(
         }
         DashboardSection.CONTROLS -> ControlGrid(
             listOf(
-                Control(Icons.Rounded.UploadFile, "Files") { vm.pickFiles(context) },
-                Control(Icons.Rounded.TouchApp, "Touchpad", onClick = onTouchpad),
-                Control(Icons.Rounded.ContentPaste, "Clipboard", onClick = onClipboard),
+                Control(Icons.Rounded.UploadFile, "Files", SystemColor.BLUE) { vm.pickFiles(context) },
+                Control(Icons.Rounded.TouchApp, "Touchpad", SystemColor.TEAL, onClick = onTouchpad),
+                Control(Icons.Rounded.ContentPaste, "Clipboard", SystemColor.ORANGE, onClick = onClipboard),
                 Control(
                     if (pc.locked == true) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
                     if (pc.locked == true) "Locked" else "Lock",
+                    SystemColor.BLUE,
                     active = pc.locked == true,
                 ) { vm.setPcLocked(id, pc.locked != true) },
                 Control(
                     if (pc.sink?.muted == true) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
                     if (pc.sink?.muted == true) "Muted" else "Mute",
+                    SystemColor.RED,
                     active = pc.sink?.muted == true,
                 ) { pc.sink?.let { vm.setSinkMuted(id, it.name, !it.muted) } ?: toast(context, "Volume control isn't on for this PC") },
-                Control(Icons.Rounded.NotificationsActive, "Find PC") { vm.ringPc(id) },
-                Control(Icons.Rounded.Sensors, "Ping") { vm.ping(id) },
-                if (inDetails) Control(Icons.Rounded.Terminal, "Commands") { vm.openCommandSetup(id) }
-                else Control(Icons.Rounded.MoreHoriz, "More", onClick = onOpenDevice),
+                Control(Icons.Rounded.NotificationsActive, "Find PC", SystemColor.YELLOW) { vm.ringPc(id) },
+                Control(Icons.Rounded.Sensors, "Ping", SystemColor.GREEN) { vm.ping(id) },
+                if (inDetails) Control(Icons.Rounded.Terminal, "Commands", SystemColor.GRAY) { vm.openCommandSetup(id) }
+                else Control(Icons.Rounded.MoreHoriz, "More", SystemColor.GRAY, onClick = onOpenDevice),
             ),
             modifier,
         )
@@ -228,19 +241,15 @@ private fun toast(context: Context, text: String) =
 @Composable
 private fun BatteryTile(pc: BatteryState?, stale: Boolean, phone: BatteryState?, modifier: Modifier, onClick: () -> Unit) {
     // A cached reading shows dimmed until the PC sends a fresh one.
-    val accent = MaterialTheme.colorScheme.primary.copy(alpha = if (stale) 0.45f else 1f)
-    val second = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
-    val track = MaterialTheme.colorScheme.surfaceContainerHigh
-    val low = MaterialTheme.colorScheme.error
+    val accent = SystemColor.GREEN.color.copy(alpha = if (stale) 0.45f else 1f)
+    val second = SystemColor.CYAN.color
+    val track = Glass.raised
+    val low = SystemColor.RED.color
     val pcSweep by animateFloatAsState((pc?.charge ?: 0) / 100f, VyomaMotion.spatialSlow(), label = "pcRing")
     val phoneSweep by animateFloatAsState((phone?.charge ?: 0) / 100f, VyomaMotion.spatialSlow(), label = "phoneRing")
     val pcColor by animateColorAsState(if (pc != null && pc.charge <= 15 && !pc.charging) low else accent, VyomaMotion.effects(), label = "pcColor")
 
-    Surface(
-        modifier.aspectRatio(1f).pressable(pressedScale = 0.97f, onClick = onClick),
-        shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surfaceContainerLowest,
-    ) {
+    Box(modifier.aspectRatio(1f).pressable(pressedScale = 0.97f, onClick = onClick).glassCard(MaterialTheme.shapes.large)) {
         Column(Modifier.padding(16.dp)) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Canvas(Modifier.fillMaxHeight().aspectRatio(1f)) {
@@ -285,14 +294,10 @@ private fun BatteryLegend(label: String, b: BatteryState?, color: Color) {
 /** Square tile: the latest clip, where it came from, and a one-tap send. */
 @Composable
 private fun ClipboardTile(clip: ClipEntry?, modifier: Modifier, onOpen: () -> Unit, onSend: () -> Unit) {
-    Surface(
-        modifier.aspectRatio(1f).pressable(pressedScale = 0.97f, onClick = onOpen),
-        shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surfaceContainerLowest,
-    ) {
+    Box(modifier.aspectRatio(1f).pressable(pressedScale = 0.97f, onClick = onOpen).glassCard(MaterialTheme.shapes.large)) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.ContentPaste, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                Icon(Icons.Rounded.ContentPaste, null, tint = SystemColor.ORANGE.color, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("Clipboard", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -345,10 +350,10 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
     val shown by animateFloatAsState(level, if (dragging) snap() else VyomaMotion.spatial(), label = "vol")
     val haptics = LocalHapticFeedback.current
     val fill by animateColorAsState(
-        if (sink.muted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+        if (sink.muted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
         VyomaMotion.effects(), label = "volFill",
     )
-    val onFill = MaterialTheme.colorScheme.onPrimary
+    val onFill = MaterialTheme.colorScheme.background
 
     fun set(v: Float) {
         val n = v.coerceIn(0f, 1f)
@@ -363,8 +368,7 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
             Modifier
                 .weight(1f)
                 .fillMaxHeight()
-                .clip(MaterialTheme.shapes.large)
-                .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                .glassCard(MaterialTheme.shapes.large)
                 .pointerInput(sink.name) {
                     // Relative drag like iOS: the bar follows the finger's movement and never jumps
                     // to where it landed, and a vertical swipe still scrolls the page.
@@ -420,12 +424,18 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
 
 private const val ECHO_QUIET_MS = 700L
 
-private class Control(val icon: ImageVector, val label: String, val active: Boolean = false, val onClick: () -> Unit)
+private class Control(
+    val icon: ImageVector,
+    val label: String,
+    val color: SystemColor,
+    val active: Boolean = false,
+    val onClick: () -> Unit,
+)
 
-/** Four across, Control Center style: round toggles that fill with the accent while on. */
+/** Four across, Control Center style: colored glyphs on glass; toggles fill with their color while on. */
 @Composable
 private fun ControlGrid(controls: List<Control>, modifier: Modifier = Modifier) {
-    Surface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerLowest) {
+    Box(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.extraLarge)) {
         Column(Modifier.padding(vertical = 18.dp, horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             controls.chunked(4).forEach { row ->
                 Row(Modifier.fillMaxWidth()) {
@@ -439,14 +449,9 @@ private fun ControlGrid(controls: List<Control>, modifier: Modifier = Modifier) 
 
 @Composable
 private fun ControlButton(c: Control, modifier: Modifier) {
-    val bg by animateColorAsState(
-        if (c.active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
-        VyomaMotion.effects(), label = "ctlBg",
-    )
-    val fg by animateColorAsState(
-        if (c.active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-        VyomaMotion.effects(), label = "ctlFg",
-    )
+    val tone = c.color.color
+    val bg by animateColorAsState(if (c.active) tone else Glass.raised, VyomaMotion.effects(), label = "ctlBg")
+    val fg by animateColorAsState(if (c.active) Color.White else tone, VyomaMotion.effects(), label = "ctlFg")
     Column(modifier.pressable(pressedScale = 0.9f, onClick = c.onClick), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(56.dp).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) {
             Icon(c.icon, null, tint = fg, modifier = Modifier.size(24.dp))
@@ -469,7 +474,7 @@ internal fun OutputPicker(sinks: List<AudioSink>, onDefault: (AudioSink) -> Unit
     Row(modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         sinks.sortedByDescending { it.isDefault }.forEach { sink ->
             val bg by animateColorAsState(
-                if (sink.isDefault) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+                if (sink.isDefault) MaterialTheme.colorScheme.primary else Glass.raised,
                 VyomaMotion.effects(), label = "outBg",
             )
             Text(

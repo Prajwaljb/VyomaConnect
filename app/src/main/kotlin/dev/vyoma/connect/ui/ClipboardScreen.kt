@@ -1,5 +1,8 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.glassCard
+import androidx.compose.foundation.layout.Box
+import dev.vyoma.connect.designsystem.SystemColor
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -39,7 +42,7 @@ import androidx.compose.material.icons.rounded.Sync
 
 /** Shared clipboard: what's on it now, recent history from both sides, and how sync is running. */
 @Composable
-fun ClipboardScreen(vm: AppViewModel, onBack: () -> Unit) {
+fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
     val history by vm.clipHistory.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val background = vm.backgroundClipboardSync()
@@ -47,7 +50,7 @@ fun ClipboardScreen(vm: AppViewModel, onBack: () -> Unit) {
     CollapsingHeaderScaffold(
         title = "Clipboard",
         subtitle = if (background) "Syncing automatically" else "Syncs while Vyoma is open",
-        navigation = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+        navigation = onBack?.let { back -> { IconButton(onClick = back) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } } },
         actions = { if (history.isNotEmpty()) IconButton(onClick = vm::clearClipHistory) { Icon(Icons.Rounded.DeleteSweep, "Clear history") } },
     ) {
         item(key = "send") {
@@ -71,19 +74,18 @@ fun ClipboardScreen(vm: AppViewModel, onBack: () -> Unit) {
                         title = "Turn on automatic sync",
                         subtitle = "Android blocks background clipboard reading. A one-time ADB grant lifts that, no root needed. See Settings → Clipboard.",
                         icon = Icons.Rounded.Sync,
+                        iconTint = SystemColor.ORANGE.color,
                     )
                 }
             }
         }
         if (history.isNotEmpty()) item(key = "label") { SectionLabel("Recent") }
         items(history, key = { it.timestamp.toString() + it.text.hashCode() }) { clip ->
-            Surface(
+            Box(
                 Modifier.fillMaxWidth().animateItem().pressable(pressedScale = 0.98f) {
                     vm.copyClip(clip.text)
                     Toast.makeText(context, "Copied, and sent to your PC", Toast.LENGTH_SHORT).show()
-                },
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                }.glassCard(MaterialTheme.shapes.large),
             ) {
                 Column(Modifier.padding(16.dp)) {
                     Text(clip.text, style = MaterialTheme.typography.bodyMedium, maxLines = 4, overflow = TextOverflow.Ellipsis)

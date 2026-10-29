@@ -1,5 +1,9 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.MutableState
+import androidx.activity.compose.BackHandler
 import android.Manifest
 import android.content.Intent
 import android.os.Build
@@ -44,16 +48,16 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 sealed interface Screen {
+    /** The tabs (Home, Clipboard, Settings) under the floating bar. */
     data object Home : Screen
     data class DeviceDetail(val id: String) : Screen
-    data object Settings : Screen
     data class Touchpad(val deviceId: String?, val keyboard: Boolean) : Screen
-    data object Clipboard : Screen
 }
 
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels()
     private val backStack = mutableStateListOf<Screen>(Screen.Home)
+    private val tab = mutableStateOf(Tab.HOME)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
@@ -78,7 +82,7 @@ class MainActivity : ComponentActivity() {
                         true -> OnboardingScreen(vm, onDone = { vm.finishOnboarding() })
                         false -> {
                             PermissionGate { vm.startService() }
-                            AppNavigation(backStack, vm)
+                            AppNavigation(backStack, tab, vm)
                         }
                         // Still reading settings: just the themed background, no flash of Home.
                         null -> Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
@@ -106,9 +110,13 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         intent ?: return
+        if (intent.getStringExtra(EXTRA_SCREEN) == SCREEN_CLIPBOARD) {
+            backStack.retainAll { it == Screen.Home }
+            tab.value = Tab.CLIPBOARD
+            return
+        }
         val target = when (intent.getStringExtra(EXTRA_SCREEN)) {
             SCREEN_TOUCHPAD -> Screen.Touchpad(intent.getStringExtra(EXTRA_DEVICE), keyboard = false)
-            SCREEN_CLIPBOARD -> Screen.Clipboard
             else -> intent.getStringExtra(EXTRA_DEVICE)?.let { Screen.DeviceDetail(it) }
         } ?: return
         if (backStack.lastOrNull() != target) backStack.add(target)
@@ -140,9 +148,14 @@ private fun PermissionGate(onReady: () -> Unit) {
  * back shrinks and rounds the current page under your thumb before it leaves.
  */
 @Composable
-private fun AppNavigation(backStack: MutableList<Screen>, vm: AppViewModel) {
+private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState<Tab>, vm: AppViewModel) {
     val scope = rememberCoroutineScope()
     val backProgress = remember { Animatable(0f) }
+    var tab by tabState
+    val toTab: (Tab) -> Unit = { t -> backStack.retainAll { it == Screen.Home }; tab = t }
+
+    // At the root, back on another tab goes Home first, like One UI apps.
+    BackHandler(enabled = backStack.size == 1 && tab != Tab.HOME) { tab = Tab.HOME }
 
     if (backStack.size > 1) {
         PredictiveBackHandler { events ->
@@ -190,22 +203,29 @@ private fun AppNavigation(backStack: MutableList<Screen>, vm: AppViewModel) {
                 },
         ) {
             when (screen) {
-                Screen.Home -> HomeScreen(
-                    vm = vm,
-                    onOpenDevice = { backStack.add(Screen.DeviceDetail(it)) },
-                    onOpenSettings = { backStack.add(Screen.Settings) },
-                    onTouchpad = { id -> backStack.add(Screen.Touchpad(id, keyboard = false)) },
-                    onClipboard = { backStack.add(Screen.Clipboard) },
-                )
+                Screen.Home -> TabsRoot(
+                    tab = tab,
+                    onTab = toTab,
+                    onTouchpad = { backStack.add(Screen.Touchpad(null, keyboard = false)) },
+                ) { t ->
+                    when (t) {
+                        Tab.HOME -> HomeScreen(
+                            vm = vm,
+                            onOpenDevice = { backStack.add(Screen.DeviceDetail(it)) },
+                            onTouchpad = { id -> backStack.add(Screen.Touchpad(id, keyboard = false)) },
+                            onClipboard = { toTab(Tab.CLIPBOARD) },
+                        )
+                        Tab.CLIPBOARD -> ClipboardScreen(vm)
+                        Tab.SETTINGS -> SettingsScreen(vm)
+                    }
+                }
                 is Screen.DeviceDetail -> DeviceScreen(
                     vm, screen.id,
                     onBack = pop,
                     onTouchpad = { kb -> backStack.add(Screen.Touchpad(screen.id, kb)) },
-                    onClipboard = { backStack.add(Screen.Clipboard) },
+                    onClipboard = { toTab(Tab.CLIPBOARD) },
                 )
-                Screen.Settings -> SettingsScreen(vm, onBack = pop)
                 is Screen.Touchpad -> RemoteInputScreen(vm, screen.deviceId, screen.keyboard, onBack = pop)
-                Screen.Clipboard -> ClipboardScreen(vm, onBack = pop)
             }
         }
     }
