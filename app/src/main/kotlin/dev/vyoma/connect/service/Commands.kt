@@ -32,6 +32,8 @@ object Commands {
     const val LOCK_PC = "dev.vyoma.connect.cmd.LOCK_PC"
     const val PING = "dev.vyoma.connect.cmd.PING"
     const val MUTE_PC = "dev.vyoma.connect.cmd.MUTE_PC"
+    const val VOLUME_UP = "dev.vyoma.connect.cmd.VOLUME_UP"
+    const val VOLUME_DOWN = "dev.vyoma.connect.cmd.VOLUME_DOWN"
     const val STOP_RINGING = "dev.vyoma.connect.cmd.STOP_RINGING"
     const val DISMISS_TRANSFERS = "dev.vyoma.connect.cmd.DISMISS_TRANSFERS"
     const val EXTRA_DEVICE = "device"
@@ -68,9 +70,17 @@ object Commands {
             RING_PC -> device.plugin<FindMyPhonePlugin>(FindMyPhonePlugin.ID)?.ringPeer()
             LOCK_PC -> device.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(true)
             PING -> device.plugin<PingPlugin>(PingPlugin.ID)?.ping("Ping from Vyoma")
-            MUTE_PC -> device.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.let { volume ->
+            MUTE_PC, VOLUME_UP, VOLUME_DOWN -> device.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.let { volume ->
                 val sink = volume.sinks.value.let { list -> list.firstOrNull { it.isDefault } ?: list.firstOrNull() } ?: return
-                volume.setMuted(sink.name, !sink.muted)
+                when (action) {
+                    MUTE_PC -> volume.setMuted(sink.name, !sink.muted)
+                    // 5% steps like the PC's own volume keys; unmute so the change is heard.
+                    else -> {
+                        val step = sink.maxVolume / 20 * if (action == VOLUME_UP) 1 else -1
+                        volume.setVolume(sink.name, (sink.volume + step).coerceIn(0, sink.maxVolume))
+                        if (sink.muted) volume.setMuted(sink.name, false)
+                    }
+                }
             }
         }
     }

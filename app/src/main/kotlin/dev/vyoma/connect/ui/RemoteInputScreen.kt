@@ -75,6 +75,8 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -276,17 +278,20 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             }
         }
 
-        if (keyboard) key(keyboardSession) { KeyboardSink(onText = { t -> act { type(t) } }, onBackspace = { act { key(SpecialKey.BACKSPACE) } }, onEnter = { act { key(SpecialKey.ENTER) } }) }
+        if (keyboard) key(keyboardSession) { TypingBar(onText = { t -> act { type(t) } }, onBackspace = { act { key(SpecialKey.BACKSPACE) } }, onEnter = { act { key(SpecialKey.ENTER) } }) }
         Spacer(Modifier.navigationBarsPadding())
     }
 }
 
 /**
- * An invisible text field that turns IME input into keystrokes. It keeps one sentinel char so
- * backspace on an "empty" field is still observable, and works with swipe/voice typing too.
+ * A real text field for the phone keyboard, so Gboard keeps autocorrect, suggestions, swipe and
+ * voice typing. The field keeps what was typed and every change is sent to the PC as a diff
+ * against the last state: new characters are typed, removed ones become backspaces, so an
+ * autocorrected word is erased and retyped on the PC too. A leading sentinel space lets us see
+ * backspace when the field looks empty. Enter sends Enter and starts afresh.
  */
 @Composable
-private fun KeyboardSink(onText: (String) -> Unit, onBackspace: () -> Unit, onEnter: () -> Unit) {
+private fun TypingBar(onText: (String) -> Unit, onBackspace: () -> Unit, onEnter: () -> Unit) {
     val sentinel = " "
     var value by remember { mutableStateOf(TextFieldValue(sentinel, TextRange(1))) }
     val focus = remember { FocusRequester() }
@@ -295,27 +300,66 @@ private fun KeyboardSink(onText: (String) -> Unit, onBackspace: () -> Unit, onEn
         focus.requestFocus()
         ime?.show()
     }
+    fun typed(text: String) = text.split('\n').forEachIndexed { i, part ->
+        if (i > 0) onEnter()
+        if (part.isNotEmpty()) onText(part)
+    }
     BasicTextField(
         value = value,
         onValueChange = { new ->
-            val text = new.text
-            when {
-                text.length < sentinel.length -> repeat(sentinel.length - text.length) { onBackspace() }
-                text.startsWith(sentinel) && text.length > sentinel.length -> {
-                    val typed = text.substring(sentinel.length)
-                    typed.split('\n').forEachIndexed { i, part ->
-                        if (i > 0) onEnter()
-                        if (part.isNotEmpty()) onText(part)
-                    }
-                }
-                text != sentinel -> onText(text)
+            if (!new.text.startsWith(sentinel)) {
+                // The sentinel went too: backspace on an empty field, or everything was replaced.
+                val shown = value.text.length - sentinel.length
+                repeat(if (shown > 0) shown else 1) { onBackspace() }
+                typed(new.text.trimStart())
+                value = TextFieldValue(sentinel, TextRange(1))
+                return@BasicTextField
             }
-            value = TextFieldValue(sentinel, TextRange(1))
+            val old = value.text.substring(sentinel.length)
+            val cur = new.text.substring(sentinel.length)
+            val common = old.commonPrefixWith(cur).length
+            repeat(old.length - common) { onBackspace() }
+            typed(cur.substring(common))
+            // Keep the caret at the end: edits mid-text can't be mirrored by end-of-line diffs.
+            value = when {
+                cur.endsWith('\n') -> TextFieldValue(sentinel, TextRange(1))
+                // Trim long runs at a word break so the field stays light.
+                cur.length > 400 && cur.endsWith(' ') -> TextFieldValue(sentinel, TextRange(1))
+                new.selection.end != new.text.length && new.composition == null -> new.copy(selection = TextRange(new.text.length))
+                else -> new
+            }
         },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Send, autoCorrectEnabled = false),
-        keyboardActions = KeyboardActions(onSend = { onEnter() }),
-        modifier = Modifier.size(1.dp).focusRequester(focus),
-        textStyle = MaterialTheme.typography.bodySmall.copy(color = Color.Transparent),
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Text,
+            capitalization = KeyboardCapitalization.Sentences,
+            autoCorrectEnabled = true,
+            imeAction = ImeAction.Send,
+        ),
+        keyboardActions = KeyboardActions(onSend = {
+            onEnter()
+            value = TextFieldValue(sentinel, TextRange(1))
+        }),
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .focusRequester(focus),
+        decorationBox = { field ->
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                if (value.text == sentinel) {
+                    Text("Type on your PC…", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                field()
+            }
+        },
     )
 }
 

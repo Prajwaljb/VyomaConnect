@@ -32,6 +32,7 @@ import androidx.glance.GlanceTheme
 import androidx.glance.Image
 import androidx.glance.ImageProvider
 import androidx.glance.LocalContext
+import androidx.glance.LocalGlanceId
 import androidx.glance.LocalSize
 import androidx.glance.action.Action
 import androidx.glance.action.clickable
@@ -357,7 +358,7 @@ private fun RoundButton(icon: Int, desc: String, action: Action, size: Dp = 44.d
     }
 }
 
-private class Act(val icon: Int, val label: String, val action: Action, val accent: Boolean = false)
+internal class Act(val icon: Int, val label: String, val action: Action, val accent: Boolean = false)
 
 /** Buttons spread evenly across the full width, labels optional; null slots keep columns aligned. */
 @Composable
@@ -458,19 +459,6 @@ private fun Header(s: WidgetSnapshot, titleSize: TextUnit = 17.sp, modifier: Gla
         }
     }
 }
-
-/**
- * The one-tap actions, most useful first; widgets show as many as fit. The touchpad screen has its
- * own keyboard toggle, so there's no separate keyboard button.
- */
-private fun quickActions(context: Context, s: WidgetSnapshot) = listOf(
-    Act(R.drawable.ic_w_clipboard, "Clipboard", Widgets.sendClipboard(context)),
-    Act(R.drawable.ic_w_upload, "Files", Widgets.pickFiles(context)),
-    Act(R.drawable.ic_w_mouse, "Touchpad", Widgets.openApp(context, MainActivity.SCREEN_TOUCHPAD)),
-    Act(if (s.playing) R.drawable.ic_pause else R.drawable.ic_play, if (s.playing) "Pause" else "Play", Widgets.command(context, Commands.PLAY_PAUSE), accent = true),
-    Act(R.drawable.ic_w_mute, "Mute PC", Widgets.command(context, Commands.MUTE_PC)),
-    Act(R.drawable.ic_w_lock, "Lock PC", Widgets.command(context, Commands.LOCK_PC)),
-)
 
 /**
  * Common shape of our widgets: exact sizes on the home screen, and on API 35+ a generated
@@ -595,9 +583,9 @@ class StatusWidget : VyomaWidget() {
     }
 
     /** [n] buttons: play/pause always (last, so the accent ends the row), then clipboard, files, touchpad, lock. */
-    private fun statusActions(context: Context, s: WidgetSnapshot, n: Int) = quickActions(context, s).let { a ->
-        listOf(a[0], a[1], a[2], a[5]).take(n - 1) + a[3]
-    }
+    private fun statusActions(context: Context, s: WidgetSnapshot, n: Int) =
+        (listOf(QuickAction.CLIPBOARD, QuickAction.FILES, QuickAction.TOUCHPAD, QuickAction.LOCK).take(n - 1) + QuickAction.PLAY_PAUSE)
+            .map { it.button(context, s) }
 
     @Composable
     private fun NowPlaying(context: Context, s: WidgetSnapshot, modifier: GlanceModifier) {
@@ -624,6 +612,10 @@ class ActionsWidget : VyomaWidget() {
     override fun Content(context: Context) {
         val s = Widgets.snapshot(context)
         val d = dims()
+        val picked = if (LocalPreview.current != null) QuickAction.DEFAULT else {
+            val glanceId = LocalGlanceId.current
+            QuickActionStore.get(context, remember(glanceId) { GlanceAppWidgetManager(context).getAppWidgetId(glanceId) })
+        }
         Glass {
             // Two candidate grids: labelled (58dp columns, 76dp rows) and icon-only. Labels win
             // only when they don't cost buttons, so a 2x2 shows four icons, not one labelled button.
@@ -632,7 +624,7 @@ class ActionsWidget : VyomaWidget() {
             val iconRows = ((d.innerH.value + 8) / (iconSize.value + 8)).toInt().coerceIn(1, 4)
             val labelCols = (d.innerW.value / 58).toInt().coerceIn(1, 6)
             val labelRows = ((d.innerH.value + 12) / 76).toInt().coerceIn(0, 4)
-            val count = quickActions(context, s).size
+            val count = picked.size.coerceAtLeast(1)
             val labels = !d.oneRow && labelRows > 0 && labelCols * labelRows >= minOf(iconCols * iconRows, count)
             val size = if (labels) 44.dp else iconSize
             val maxCols = if (labels) labelCols else iconCols
@@ -640,7 +632,8 @@ class ActionsWidget : VyomaWidget() {
             val rows = minOf(if (labels) labelRows else iconRows, (count + maxCols - 1) / maxCols)
             val cols = minOf(maxCols, (count + rows - 1) / rows)
             // Play/pause leads when space is tight: it's the one people reach for most.
-            val all = quickActions(context, s).let { a -> if (cols * rows < 4) listOf(a[3]) + a.minus(a[3]) else a }
+            val all = (if (cols * rows < 4 && QuickAction.PLAY_PAUSE in picked) listOf(QuickAction.PLAY_PAUSE) + (picked - QuickAction.PLAY_PAUSE) else picked)
+                .map { it.button(context, s) }
             val items = all.take(cols * rows)
             Column(GlanceModifier.fillMaxSize()) {
                 // Rows spaced evenly, including above the first and below the last.
@@ -903,7 +896,14 @@ class DropWidget : VyomaWidget() {
 }
 
 class StatusWidgetReceiver : GlanceAppWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = StatusWidget() }
-class ActionsWidgetReceiver : GlanceAppWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = ActionsWidget() }
+class ActionsWidgetReceiver : GlanceAppWidgetReceiver() {
+    override val glanceAppWidget: GlanceAppWidget = ActionsWidget()
+
+    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+        super.onDeleted(context, appWidgetIds)
+        QuickActionStore.remove(context, appWidgetIds)
+    }
+}
 class MediaWidgetReceiver : GlanceAppWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = MediaWidget() }
 class ClipboardWidgetReceiver : GlanceAppWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = ClipboardWidget() }
 class DropWidgetReceiver : GlanceAppWidgetReceiver() { override val glanceAppWidget: GlanceAppWidget = DropWidget() }
