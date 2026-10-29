@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -58,6 +59,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     val nowPlaying: StateFlow<NowPlaying?> get() = container.media.nowPlaying
     val clipHistory: StateFlow<List<ClipEntry>> get() = container.clipboard.history
+
+    /**
+     * Whether to show first-run setup; null until known. People who already paired a PC (before
+     * setup existed, or after reinstalling with data kept) skip it.
+     */
+    val showOnboarding: StateFlow<Boolean?> = settings.onboarded.map { !it }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    init {
+        viewModelScope.launch {
+            if (!settings.onboarded.first() && container.obtainHub().trustStore.all().isNotEmpty()) settings.setOnboarded()
+        }
+    }
+
+    fun finishOnboarding() = viewModelScope.launch { settings.setOnboarded() }
 
     fun startService() = LinkService.start(getApplication())
 

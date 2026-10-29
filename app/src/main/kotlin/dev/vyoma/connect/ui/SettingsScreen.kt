@@ -240,28 +240,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
         }
     }
 
-    if (showAdbHelp) {
-        val cmd = "adb shell pm grant ${context.packageName} android.permission.READ_LOGS && " +
-            "adb shell appops set ${context.packageName} SYSTEM_ALERT_WINDOW allow"
-        AlertDialog(
-            onDismissRequest = { showAdbHelp = false },
-            title = { Text("Automatic clipboard sync") },
-            text = {
-                Column {
-                    Text("Android only lets the app in front read the clipboard. Run this once from a computer with USB debugging on, then reopen Vyoma and tap Allow when Android asks about log access:")
-                    Spacer(Modifier.height(12.dp))
-                    Text(cmd, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("adb", cmd))
-                    showAdbHelp = false
-                }) { Text("Copy command") }
-            },
-            dismissButton = { TextButton(onClick = { showAdbHelp = false }) { Text("Close") } },
-        )
-    }
+    if (showAdbHelp) ClipboardAdbDialog { showAdbHelp = false }
 
     if (addingHost) {
         var draft by rememberSaveable { mutableStateOf("") }
@@ -340,7 +319,33 @@ private fun PaletteSwatch(palette: Palette, selected: Boolean, onClick: () -> Un
 }
 
 @SuppressLint("BatteryLife") // Core function: the app must stay connected in the background.
-private fun requestUnrestricted(context: android.content.Context) {
+internal fun requestUnrestricted(context: android.content.Context) {
     val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
     runCatching { context.startActivity(intent) }
+}
+
+/** How to grant automatic clipboard sync once over ADB (no root). */
+@Composable
+internal fun ClipboardAdbDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val cmd = "adb shell pm grant ${context.packageName} android.permission.READ_LOGS && " +
+        "adb shell appops set ${context.packageName} SYSTEM_ALERT_WINDOW allow"
+    AlertDialog(
+        onDismissRequest = { onDismiss() },
+        title = { Text("Automatic clipboard sync") },
+        text = {
+            Column {
+                Text("Android only lets the app in front read the clipboard. Run this once from a computer with USB debugging on, then reopen Vyoma and tap Allow when Android asks about log access:")
+                Spacer(Modifier.height(12.dp))
+                Text(cmd, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("adb", cmd))
+                onDismiss()
+            }) { Text("Copy command") }
+        },
+        dismissButton = { TextButton(onClick = { onDismiss() }) { Text("Close") } },
+    )
 }

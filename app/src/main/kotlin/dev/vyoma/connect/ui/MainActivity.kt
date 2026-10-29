@@ -13,6 +13,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -21,6 +22,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -70,8 +72,18 @@ class MainActivity : ComponentActivity() {
                     val style = if (darkUi) SystemBarStyle.dark(clear) else SystemBarStyle.light(clear, clear)
                     enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
                 }
-                PermissionGate { vm.startService() }
-                AppNavigation(backStack, vm)
+                val onboarding by vm.showOnboarding.collectAsStateWithLifecycle()
+                Crossfade(onboarding, animationSpec = VyomaMotion.effects(), label = "onboarding") { show ->
+                    when (show) {
+                        true -> OnboardingScreen(vm, onDone = { vm.finishOnboarding() })
+                        false -> {
+                            PermissionGate { vm.startService() }
+                            AppNavigation(backStack, vm)
+                        }
+                        // Still reading settings: just the themed background, no flash of Home.
+                        null -> Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
+                    }
+                }
             }
         }
     }
