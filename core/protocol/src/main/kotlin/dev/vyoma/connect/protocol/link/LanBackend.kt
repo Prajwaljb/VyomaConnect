@@ -51,6 +51,8 @@ class LanBackend(
         val tuneSocket: (Socket) -> Unit = { it.keepAlive = true; it.tcpNoDelay = true },
     )
 
+    private val payloads = LanPayloads(tls, config.tuneSocket)
+
     @Volatile var tcpPort: Int = -1
         private set
 
@@ -215,7 +217,7 @@ class LanBackend(
         }
         ssl.soTimeout = 0
         VLog.i(TAG, "link up: ${identity.deviceName} (${identity.deviceId}) v${identity.protocolVersion} via ${ssl.inetAddress.hostAddress}")
-        onLink(DeviceLink(identity, peerCert, TransportKind.LAN, ssl))
+        onLink(DeviceLink(identity, peerCert, TransportKind.LAN, ssl, payloads))
     }
 
     private fun bindFirstFree(range: IntRange): ServerSocket {

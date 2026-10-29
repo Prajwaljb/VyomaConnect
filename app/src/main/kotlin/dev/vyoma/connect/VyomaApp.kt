@@ -11,7 +11,24 @@ import dev.vyoma.connect.protocol.crypto.FileCredentialStore
 import dev.vyoma.connect.protocol.crypto.LocalCredentials
 import dev.vyoma.connect.protocol.device.DeviceHub
 import dev.vyoma.connect.protocol.device.FileTrustStore
+import dev.vyoma.connect.platform.AndroidClipboard
+import dev.vyoma.connect.platform.AndroidShareSink
+import dev.vyoma.connect.platform.BatteryMonitor
+import dev.vyoma.connect.platform.MediaHub
+import dev.vyoma.connect.platform.NotificationBridge
+import dev.vyoma.connect.platform.Ringer
+import dev.vyoma.connect.protocol.plugin.builtin.BatteryPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.FindMyPhonePlugin
+import dev.vyoma.connect.protocol.plugin.builtin.LockPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.MousePadPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.MprisPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.NotificationsPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.PingPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.SharePlugin
+import dev.vyoma.connect.protocol.plugin.builtin.SystemVolumePlugin
+import dev.vyoma.connect.service.Notifications
 import dev.vyoma.connect.service.AndroidNetwork
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +68,10 @@ class AppContainer(private val app: Application) {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val settings by lazy { SettingsRepository(app) }
     val network by lazy { AndroidNetwork(app) }
+    val battery by lazy { BatteryMonitor(app) }
+    val clipboard by lazy { AndroidClipboard(app, appScope) }
+    val shareSink by lazy { AndroidShareSink(app, clipboard) }
+    val media by lazy { MediaHub(hub, appScope) }
 
     private val hubLock = Mutex()
     private val _hub = MutableStateFlow<DeviceHub?>(null)
@@ -66,7 +87,7 @@ class AppContainer(private val app: Application) {
             DeviceHub(
                 credentials = credentials,
                 trustStore = FileTrustStore(File(keyDir, "trusted.json")),
-                pluginSpecs = listOf(PingPlugin.spec),
+                pluginSpecs = pluginSpecs(),
                 scope = appScope,
                 deviceName = name,
                 deviceType = if (app.resources.configuration.smallestScreenWidthDp >= 600) DeviceType.TABLET else DeviceType.PHONE,
@@ -74,6 +95,23 @@ class AppContainer(private val app: Application) {
             )
         }.also { _hub.value = it }
     }
+
+    private fun pluginSpecs() = listOf(
+        PingPlugin.spec,
+        BatteryPlugin.spec(battery.state),
+        ClipboardPlugin.spec(clipboard),
+        SharePlugin.spec(shareSink),
+        NotificationsPlugin.spec(NotificationBridge),
+        MprisPlugin.spec,
+        FindMyPhonePlugin.spec { from ->
+            Ringer.start(app, from)
+            Notifications.ringing(app, from)
+        },
+        LockPlugin.spec,
+        RunCommandPlugin.spec,
+        SystemVolumePlugin.spec,
+        MousePadPlugin.spec,
+    )
 
     fun defaultDeviceName(): String =
         Settings.Global.getString(app.contentResolver, Settings.Global.DEVICE_NAME)

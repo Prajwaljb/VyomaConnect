@@ -7,7 +7,19 @@ import dev.vyoma.connect.protocol.device.FileTrustStore
 import dev.vyoma.connect.protocol.device.HubEvent
 import dev.vyoma.connect.protocol.device.PairState
 import dev.vyoma.connect.protocol.link.LanBackend
+import dev.vyoma.connect.protocol.device.Device
+import dev.vyoma.connect.protocol.plugin.builtin.BatteryPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.BatteryState
+import dev.vyoma.connect.protocol.plugin.builtin.IncomingFile
+import dev.vyoma.connect.protocol.plugin.builtin.MprisPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.OutgoingFile
 import dev.vyoma.connect.protocol.plugin.builtin.PingPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.SharePlugin
+import dev.vyoma.connect.protocol.plugin.builtin.ShareSink
+import dev.vyoma.connect.protocol.plugin.builtin.SystemVolumePlugin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +53,19 @@ class InteropTest {
     private val stateDir = File("build/interop").apply { mkdirs() }
     private lateinit var desktopId: String
 
+    /** Collects files the desktop shares with us. */
+    private val received = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
+    private val sink = object : ShareSink {
+        override fun onText(from: Device, text: String) = Unit
+        override fun onUrl(from: Device, url: String) = Unit
+        override fun createFile(from: Device, name: String, size: Long, lastModified: Long?) = object : IncomingFile {
+            val buffer = java.io.ByteArrayOutputStream()
+            override val output = buffer
+            override fun complete(): String { received[name] = buffer.toByteArray(); return name }
+            override fun abort() = Unit
+        }
+    }
+
     @Before
     fun setUp() {
         assumeTrue("interop disabled", System.getenv("VYOMA_INTEROP") == "1")
@@ -52,7 +77,14 @@ class InteropTest {
         hub = DeviceHub(
             credentials = creds,
             trustStore = FileTrustStore(File(stateDir, "trusted.json")),
-            pluginSpecs = listOf(PingPlugin.spec),
+            pluginSpecs = listOf(
+                PingPlugin.spec,
+                BatteryPlugin.spec(MutableStateFlow(BatteryState(77, charging = true))),
+                SharePlugin.spec(sink),
+                MprisPlugin.spec,
+                SystemVolumePlugin.spec,
+                RunCommandPlugin.spec,
+            ),
             scope = scope,
             deviceName = "Vyoma Interop Test",
             deviceType = DeviceType.PHONE,
@@ -118,6 +150,57 @@ class InteropTest {
         }
         assertEquals(8, desktop.identity.protocolVersion)
         assertTrue(desktop.identity.incomingCapabilities.isNotEmpty(), "full identity received over TLS")
+    }
+
+    /** Payload transfers both ways plus read-only plugin state. Pairs a throwaway identity, unpairs at the end. */
+    @Test
+    fun payloadsAndPlugins() = runBlocking {
+        val ourId = hub.localIdentity().deviceId
+        hub.start()
+        val desktop = withTimeout(15_000) {
+            hub.devices.first { desktopId in it }.getValue(desktopId).also { d -> d.state.first { it.isReachable } }
+        }
+        if (!desktop.state.value.isPaired) {
+            desktop.requestPairing()
+            waitUntil { dbus(ourId, "isPairRequestedByPeer") == "true" }
+            dbus(ourId, "acceptPairing")
+            withTimeout(5_000) { desktop.state.first { it.pairState == PairState.PAIRED } }
+        }
+        withTimeout(5_000) { desktop.state.first { SharePlugin.ID in it.plugins } }
+        try {
+            // Phone -> PC: 3 MiB random file lands in the desktop's download folder intact.
+            val data = ByteArray(3 * 1024 * 1024).also { java.util.Random(7).nextBytes(it) }
+            val name = "vyoma-interop-${System.currentTimeMillis()}.bin"
+            val share = desktop.plugin<SharePlugin>(SharePlugin.ID)!!
+            val started = System.nanoTime()
+            val sent = share.sendFiles(listOf(OutgoingFile(name, data.size.toLong(), null) { data.inputStream() }))
+            assertEquals(1, sent)
+            println("upload: ${data.size / 1024} KiB in ${(System.nanoTime() - started) / 1_000_000} ms")
+            val downloads = File(ProcessBuilder("xdg-user-dir", "DOWNLOAD").start().inputStream.bufferedReader().readText().trim())
+            val landed = File(downloads, name)
+            waitUntil { landed.exists() && landed.length() == data.size.toLong() }
+            assertTrue(landed.readBytes().contentEquals(data), "desktop received identical bytes")
+            landed.delete()
+
+            // PC -> phone.
+            val outgoing = File(stateDir, "from-desktop-${System.currentTimeMillis()}.bin")
+            val payload = ByteArray(2 * 1024 * 1024).also { java.util.Random(11).nextBytes(it) }
+            outgoing.writeBytes(payload)
+            cli("-d", ourId, "--share", outgoing.absolutePath)
+            waitUntil(20_000) { received.containsKey(outgoing.name) }
+            assertTrue(received.getValue(outgoing.name).contentEquals(payload), "we received identical bytes")
+            outgoing.delete()
+
+            // Read-only state from desktop plugins.
+            delay(1500)
+            desktop.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.sinks?.value?.let { println("sinks: ${it.map { s -> s.description }}") }
+            desktop.plugin<MprisPlugin>(MprisPlugin.ID)?.players?.value?.let { println("players: ${it.values.map { p -> p.name + " / " + p.title }}") }
+            desktop.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands?.value?.let { println("commands: ${it.map { c -> c.name }}") }
+            println("desktop battery: ${desktop.plugin<BatteryPlugin>(BatteryPlugin.ID)?.remote?.value}")
+        } finally {
+            desktop.unpair()
+            waitUntil { dbus(ourId, "isPaired") == "false" }
+        }
     }
 
     private fun desktopKey(ourId: String) = dbus(ourId, "verificationKey").trim().uppercase()

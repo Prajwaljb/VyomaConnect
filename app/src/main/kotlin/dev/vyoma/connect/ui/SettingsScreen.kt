@@ -1,6 +1,15 @@
 package dev.vyoma.connect.ui
 
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
+import androidx.compose.material.icons.rounded.ContentPaste
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.text.font.FontFamily
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import dev.vyoma.connect.platform.NotificationBridge
 import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
@@ -68,6 +77,13 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
     val name by vm.deviceName.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var editingName by rememberSaveable { mutableStateOf(false) }
+    var showAdbHelp by rememberSaveable { mutableStateOf(false) }
+    // Re-check permission state whenever we come back from system settings.
+    var resumeTick by remember { mutableIntStateOf(0) }
+    LifecycleResumeEffect(Unit) {
+        resumeTick++
+        onPauseOrDispose { }
+    }
     val power = context.getSystemService(PowerManager::class.java)
     val unrestricted = power.isIgnoringBatteryOptimizations(context.packageName)
 
@@ -120,6 +136,30 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
             }
         }
 
+        item(key = "sync-label") { SectionLabel("Sync") }
+        item(key = "sync") {
+            val notifOn = remember(resumeTick) { NotificationBridge.isEnabled(context) }
+            val clipOn = remember(resumeTick) { vm.backgroundClipboardSync() }
+            SectionCard {
+                ListRow(
+                    title = "Notifications on PC",
+                    subtitle = if (notifOn) "On: reply and dismiss from your PC" else "Allow notification access to mirror them",
+                    icon = Icons.Rounded.Notifications,
+                    iconTint = if (notifOn) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+                    showDivider = true,
+                    onClick = { runCatching { context.startActivity(NotificationBridge.settingsIntent(context)) } },
+                )
+                ListRow(
+                    title = "Automatic clipboard sync",
+                    subtitle = if (clipOn) "On: copies sync even while Vyoma is closed"
+                    else "Needs a one-time ADB grant (no root). Tap for the command.",
+                    icon = Icons.Rounded.ContentPaste,
+                    iconTint = if (clipOn) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+                    onClick = { if (!clipOn) showAdbHelp = true },
+                )
+            }
+        }
+
         item(key = "bg-label") { SectionLabel("Staying connected") }
         item(key = "bg") {
             SectionCard {
@@ -142,6 +182,29 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                 )
             }
         }
+    }
+
+    if (showAdbHelp) {
+        val cmd = "adb shell pm grant ${context.packageName} android.permission.READ_LOGS && " +
+            "adb shell appops set ${context.packageName} SYSTEM_ALERT_WINDOW allow"
+        AlertDialog(
+            onDismissRequest = { showAdbHelp = false },
+            title = { Text("Automatic clipboard sync") },
+            text = {
+                Column {
+                    Text("Android only lets the app in front read the clipboard. Run this once from a computer with USB debugging on, then reopen Vyoma and tap Allow when Android asks about log access:")
+                    Spacer(Modifier.height(12.dp))
+                    Text(cmd, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("adb", cmd))
+                    showAdbHelp = false
+                }) { Text("Copy command") }
+            },
+            dismissButton = { TextButton(onClick = { showAdbHelp = false }) { Text("Close") } },
+        )
     }
 
     if (editingName) {

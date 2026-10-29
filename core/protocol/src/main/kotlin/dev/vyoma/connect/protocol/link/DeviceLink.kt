@@ -27,6 +27,8 @@ class DeviceLink internal constructor(
     val peerCertificate: X509Certificate,
     val transport: TransportKind,
     private val socket: SSLSocket,
+    /** How binary payloads travel for this link; null if the transport can't carry them. */
+    val payloads: PayloadTransport? = null,
 ) {
     private val input = BufferedInputStream(socket.inputStream, 64 * 1024)
     private val output = BufferedOutputStream(socket.outputStream, 64 * 1024)
