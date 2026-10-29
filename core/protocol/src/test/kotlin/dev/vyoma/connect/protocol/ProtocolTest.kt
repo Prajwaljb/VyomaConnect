@@ -52,4 +52,16 @@ class ProtocolTest {
         assertEquals(ab, ba, "both sides must compute the same code")
         assertTrue(ab.matches(Regex("[0-9A-F]{8}")))
     }
+
+    @Test
+    fun linkedVCardsMergeIntoOne() {
+        val raw = "BEGIN:VCARD\r\nVERSION:2.1\r\nN:Doe;Jane;;;\r\nFN:Jane Doe\r\nTEL;CELL:+91 98765 43210\r\nEND:VCARD\r\n" +
+            "BEGIN:VCARD\r\nVERSION:2.1\r\nN:Doe;Jane;;;\r\nFN:Jane D\r\nTEL;TYPE=CELL:09876543210\r\nEMAIL:Jane@Example.com\r\nEND:VCARD\r\n"
+        val merged = dev.vyoma.connect.protocol.plugin.builtin.ContactsPlugin.mergeVCards(raw).lines()
+        assertEquals(1, merged.count { it == "BEGIN:VCARD" })
+        assertEquals(1, merged.count { it.startsWith("FN:") })
+        assertEquals(1, merged.count { it.startsWith("TEL") }, "same number in two formats counts once")
+        assertTrue("EMAIL:Jane@Example.com" in merged)
+        assertEquals("END:VCARD", merged.last())
+    }
 }

@@ -13,12 +13,20 @@ import dev.vyoma.connect.protocol.device.DeviceHub
 import dev.vyoma.connect.protocol.device.FileTrustStore
 import dev.vyoma.connect.platform.AndroidClipboard
 import dev.vyoma.connect.platform.AndroidShareSink
+import dev.vyoma.connect.platform.AndroidContacts
+import dev.vyoma.connect.platform.AndroidSms
+import dev.vyoma.connect.platform.CallMonitor
+import dev.vyoma.connect.platform.SignalMonitor
 import dev.vyoma.connect.platform.BatteryMonitor
 import dev.vyoma.connect.platform.MediaHub
 import dev.vyoma.connect.platform.NotificationBridge
 import dev.vyoma.connect.platform.Ringer
 import dev.vyoma.connect.protocol.plugin.builtin.BatteryPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.ConnectivityReportPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.ContactsPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.SmsPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.TelephonyPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.FindMyPhonePlugin
 import dev.vyoma.connect.protocol.plugin.builtin.LockPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.MousePadPlugin
@@ -72,6 +80,10 @@ class AppContainer(private val app: Application) {
     val clipboard by lazy { AndroidClipboard(app, appScope) }
     val shareSink by lazy { AndroidShareSink(app, clipboard) }
     val media by lazy { MediaHub(hub, appScope) }
+    val sms by lazy { AndroidSms(app) }
+    val contacts by lazy { AndroidContacts(app) }
+    val calls by lazy { CallMonitor(app, contacts) }
+    val signal by lazy { SignalMonitor(app) }
 
     private val hubLock = Mutex()
     private val _hub = MutableStateFlow<DeviceHub?>(null)
@@ -111,6 +123,10 @@ class AppContainer(private val app: Application) {
         RunCommandPlugin.spec,
         SystemVolumePlugin.spec,
         MousePadPlugin.spec,
+        SmsPlugin.spec(sms),
+        TelephonyPlugin.spec(calls),
+        ContactsPlugin.spec(contacts),
+        ConnectivityReportPlugin.spec(signal.states),
     )
 
     fun defaultDeviceName(): String =

@@ -55,7 +55,10 @@ class LinkService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
-            ACTION_REFRESH -> hub?.refresh()
+            ACTION_REFRESH -> {
+                hub?.refresh()
+                startPhoneMonitors() // permissions may have just been granted
+            }
             ACTION_SEND -> handleSend(intent)
         }
         return START_STICKY
@@ -129,6 +132,7 @@ class LinkService : LifecycleService() {
 
         mediaSession = PcMediaSession(this, container.media).also { it.start(lifecycleScope) }
         container.clipboard.startBackgroundSync()
+        startPhoneMonitors()
 
         // Widgets and tiles read a snapshot; refresh it whenever something they show changes.
         lifecycleScope.launch {
@@ -139,6 +143,12 @@ class LinkService : LifecycleService() {
                 .sample(500)
                 .collect { Widgets.refresh(this@LinkService) }
         }
+    }
+
+    /** Each is a no-op without its permission, and idempotent. */
+    private fun startPhoneMonitors() {
+        container.calls.start()
+        container.signal.start()
     }
 
     private fun handleSend(intent: Intent) {
@@ -179,6 +189,8 @@ class LinkService : LifecycleService() {
 
     override fun onDestroy() {
         mediaSession?.stop()
+        container.calls.stop()
+        container.signal.stop()
         network.unwatch()
         network.releaseMulticast()
         hub?.stop()
