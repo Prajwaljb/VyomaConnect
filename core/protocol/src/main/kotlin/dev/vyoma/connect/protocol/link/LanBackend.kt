@@ -49,9 +49,14 @@ class LanBackend(
         val isConnected: (deviceId: String) -> Boolean = { false },
         /** Platform socket tuning (keep-alive intervals etc.); called on connected sockets. */
         val tuneSocket: (Socket) -> Unit = { it.keepAlive = true; it.tcpNoDelay = true },
+        /**
+         * Pins an outgoing socket to the right network before it connects or sends. On Android a
+         * VPN (e.g. Tailscale) otherwise captures LAN traffic too; LAN peers must go over Wi-Fi.
+         */
+        val route: (socket: Any, target: InetAddress) -> Unit = { _, _ -> },
     )
 
-    private val payloads = LanPayloads(tls, config.tuneSocket)
+    private val payloads = LanPayloads(tls, config.tuneSocket, config.route)
 
     @Volatile var tcpPort: Int = -1
         private set
@@ -91,12 +96,15 @@ class LanBackend(
     fun broadcastIdentity() {
         val payload = localIdentity().toPacket(tcpPort).serialize().toByteArray(Charsets.UTF_8)
         scope.launch(Dispatchers.IO) {
-            DatagramSocket().use { socket ->
-                socket.broadcast = true
-                for (target in config.broadcastTargets()) {
-                    runCatching { socket.send(DatagramPacket(payload, payload.size, target, config.udpPort)) }
-                        .onFailure { VLog.d(TAG, "UDP to ${target.hostAddress} failed: ${it.message}") }
-                }
+            // One socket per target: each may need a different network (Wi-Fi vs VPN).
+            for (target in config.broadcastTargets()) {
+                runCatching {
+                    DatagramSocket().use { socket ->
+                        socket.broadcast = true
+                        config.route(socket, target)
+                        socket.send(DatagramPacket(payload, payload.size, target, config.udpPort))
+                    }
+                }.onFailure { VLog.d(TAG, "UDP to ${target.hostAddress} failed: ${it.message}") }
             }
         }
     }
@@ -132,6 +140,8 @@ class LanBackend(
                 continue
             }
             if (identity.deviceId == localIdentity().deviceId) continue
+            // Another KDE Connect app on this same device (e.g. the official one during migration).
+            if (isLocalAddress(datagram.address)) continue
             if (identity.protocolVersion < DeviceIdentity.MIN_PROTOCOL_VERSION) continue
             if (config.isConnected(identity.deviceId)) continue
             val port = identity.tcpPort ?: continue
@@ -142,6 +152,7 @@ class LanBackend(
     private suspend fun connectOutgoing(address: InetAddress, port: Int, peer: DeviceIdentity?) {
         val plain = Socket()
         try {
+            config.route(plain, address)
             plain.connect(InetSocketAddress(address, port), CONNECT_TIMEOUT_MS)
             config.tuneSocket(plain)
             plain.soTimeout = HANDSHAKE_TIMEOUT_MS
@@ -174,6 +185,7 @@ class LanBackend(
                         ?: throw IOException("closed before identity")
                     val identity = DeviceIdentity.fromPacket(NetworkPacket.parse(line))
                     if (identity.deviceId == localIdentity().deviceId) throw ProtocolException("Connected to self")
+                    if (config.listenUdp && isLocalAddress(plain.inetAddress)) throw ProtocolException("Peer runs on this device")
                     if (identity.protocolVersion < DeviceIdentity.MIN_PROTOCOL_VERSION) {
                         throw ProtocolException("Unsupported protocol ${identity.protocolVersion}")
                     }
@@ -219,6 +231,9 @@ class LanBackend(
         VLog.i(TAG, "link up: ${identity.deviceName} (${identity.deviceId}) v${identity.protocolVersion} via ${ssl.inetAddress.hostAddress}")
         onLink(DeviceLink(identity, peerCert, TransportKind.LAN, ssl, payloads))
     }
+
+    private fun isLocalAddress(address: InetAddress): Boolean =
+        address.isLoopbackAddress || runCatching { java.net.NetworkInterface.getByInetAddress(address) != null }.getOrDefault(false)
 
     private fun bindFirstFree(range: IntRange): ServerSocket {
         for (port in range) {

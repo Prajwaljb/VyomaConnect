@@ -197,6 +197,21 @@ class InteropTest {
             desktop.plugin<MprisPlugin>(MprisPlugin.ID)?.players?.value?.let { println("players: ${it.values.map { p -> p.name + " / " + p.title }}") }
             desktop.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands?.value?.let { println("commands: ${it.map { c -> c.name }}") }
             println("desktop battery: ${desktop.plugin<BatteryPlugin>(BatteryPlugin.ID)?.remote?.value}")
+
+            // Media control round trip, when a desktop player is around (play then restore).
+            val mpris = desktop.plugin<MprisPlugin>(MprisPlugin.ID)!!
+            val player = mpris.players.value.values.firstOrNull { it.hasMedia && !it.name.contains("kdeconnect", true) }
+            if (player != null) {
+                val wasPlaying = player.isPlaying
+                mpris.action(player.name, MprisPlugin.MediaAction.PLAY_PAUSE)
+                withTimeout(5_000) { mpris.players.first { it[player.name]?.isPlaying == !wasPlaying && System.currentTimeMillis() - it[player.name]!!.positionAt < 4_000 } }
+                delay(800)
+                val desktopState = ProcessBuilder("playerctl", "-a", "metadata", "--format", "{{status}}|{{title}}").start()
+                    .inputStream.bufferedReader().readLines().firstOrNull { it.substringAfter('|') == player.title }?.substringBefore('|').orEmpty()
+                mpris.action(player.name, MprisPlugin.MediaAction.PLAY_PAUSE)
+                println("mpris: '${player.title}' toggled; desktop reported '$desktopState' (was playing=$wasPlaying)")
+                assertEquals(if (wasPlaying) "Paused" else "Playing", desktopState)
+            }
         } finally {
             desktop.unpair()
             waitUntil { dbus(ourId, "isPaired") == "false" }

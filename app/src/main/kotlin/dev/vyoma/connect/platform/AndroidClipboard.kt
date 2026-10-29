@@ -77,10 +77,12 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
         // Respect apps that mark copies as sensitive (password managers): keep them local.
         if (clip.description?.extras?.getBoolean(ClipDescription.EXTRA_IS_SENSITIVE) == true) return null
         record(ClipEntry(text, System.currentTimeMillis(), origin = null))
+        VLog.i(TAG, "local copy picked up: ${text.length} chars")
         return text
     }
 
     override fun applyRemote(text: String, fromDeviceId: String) {
+        VLog.i(TAG, "clipboard from peer: ${text.length} chars")
         record(ClipEntry(text, System.currentTimeMillis(), origin = fromDeviceId))
         main.post { runCatching { cm.setPrimaryClip(ClipData.newPlainText("Vyoma", text)) } }
     }

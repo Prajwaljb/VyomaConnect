@@ -6,6 +6,7 @@ import android.app.RemoteInput
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Bundle
@@ -14,6 +15,7 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.core.graphics.createBitmap
 import dev.vyoma.connect.protocol.VLog
+import dev.vyoma.connect.service.LinkService
 import dev.vyoma.connect.protocol.plugin.builtin.NotificationEvent
 import dev.vyoma.connect.protocol.plugin.builtin.NotificationSource
 import dev.vyoma.connect.protocol.plugin.builtin.PhoneNotification
@@ -28,7 +30,11 @@ import java.util.concurrent.ConcurrentHashMap
 
 /** Receives the system's notification stream while the user has granted notification access. */
 class VyomaNotificationListener : NotificationListenerService() {
-    override fun onListenerConnected() = NotificationBridge.attach(this)
+    override fun onListenerConnected() {
+        NotificationBridge.attach(this)
+        // The system rebinds us after updates and reboots: a good moment to bring the link back.
+        runCatching { LinkService.start(this) }.onFailure { VLog.w("Notifications", "can't start link service: ${it.message}") }
+    }
     override fun onListenerDisconnected() = NotificationBridge.detach(this)
     override fun onNotificationPosted(sbn: StatusBarNotification) = NotificationBridge.posted(this, sbn)
     override fun onNotificationRemoved(sbn: StatusBarNotification) = NotificationBridge.removed(sbn)
@@ -37,6 +43,8 @@ class VyomaNotificationListener : NotificationListenerService() {
 /** Bridges the listener service to the protocol's [NotificationSource]. */
 object NotificationBridge : NotificationSource {
     private const val TAG = "Notifications"
+    /** Notification.EXTRA_BUILDER_APPLICATION_INFO, hidden from the SDK but set on every notification. */
+    private const val EXTRA_APP_INFO = "android.appInfo"
     @Volatile private var listener: NotificationListenerService? = null
 
     private val _events = MutableSharedFlow<NotificationEvent>(extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -132,11 +140,13 @@ object NotificationBridge : NotificationSource {
         }
         actionsByKey[key] = plainActions
 
-        val icon = iconFor(context, sbn.packageName)
+        // Android 11+ hides other packages from us; the notification carries its app's info.
+        val appInfo = extras.getParcelable(EXTRA_APP_INFO, ApplicationInfo::class.java)
+        val icon = iconFor(context, sbn.packageName, appInfo)
         val update = !seen.add(key)
         return PhoneNotification(
             id = key,
-            appName = appLabel(context, sbn.packageName),
+            appName = appLabel(context, sbn.packageName, appInfo),
             title = title,
             text = text,
             time = sbn.postTime,
@@ -161,13 +171,15 @@ object NotificationBridge : NotificationSource {
 
     private val labels = ConcurrentHashMap<String, String>()
 
-    private fun appLabel(context: Context, pkg: String) = labels.getOrPut(pkg) {
-        runCatching { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
+    private fun appLabel(context: Context, pkg: String, info: ApplicationInfo?) = labels.getOrPut(pkg) {
+        val pm = context.packageManager
+        runCatching { pm.getApplicationLabel(info ?: pm.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
     }
 
     /** App icon as a 96px PNG plus its MD5, the cache key KDE Connect expects. */
-    private fun iconFor(context: Context, pkg: String): Pair<ByteArray, String>? = icons[pkg] ?: runCatching {
-        val drawable = context.packageManager.getApplicationIcon(pkg)
+    private fun iconFor(context: Context, pkg: String, info: ApplicationInfo?): Pair<ByteArray, String>? = icons[pkg] ?: runCatching {
+        val pm = context.packageManager
+        val drawable = if (info != null) pm.getApplicationIcon(info) else pm.getApplicationIcon(pkg)
         val size = 96
         val bitmap = createBitmap(size, size, Bitmap.Config.ARGB_8888)
         drawable.setBounds(0, 0, size, size)
