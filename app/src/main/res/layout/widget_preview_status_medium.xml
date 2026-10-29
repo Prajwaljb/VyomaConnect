@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated widget-picker preview (One UI medium slot). Static sample content. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="125dp" android:layout_height="130dp"
+    android:background="@drawable/widget_preview_bg" android:orientation="vertical" android:gravity="top" android:padding="12dp">
+<TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="My PC" android:textColor="@color/widget_ink" android:textSize="14sp" android:textStyle="bold" android:maxLines="1" android:ellipsize="end" />
+<TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="● Online" android:textColor="@color/widget_online" android:textSize="10sp" android:maxLines="1" android:ellipsize="end" />
+<FrameLayout android:layout_width="1dp" android:layout_height="0dp" android:layout_weight="1" />
+<LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center">
+<TextView android:layout_width="52dp" android:layout_height="52dp" android:gravity="center" android:background="@drawable/widget_preview_ring" android:text="82" android:textColor="@color/widget_ink" android:textSize="15sp" android:textStyle="bold" />
+</LinearLayout>
+<LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:layout_marginTop="2dp">
+<TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="PC" android:textColor="@color/widget_ink_soft" android:textSize="10sp" android:maxLines="1" android:ellipsize="end" />
+</LinearLayout>
+<FrameLayout android:layout_width="1dp" android:layout_height="0dp" android:layout_weight="1" />
+</LinearLayout>

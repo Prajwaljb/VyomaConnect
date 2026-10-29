@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One UI Home: blur style and one picker preview per size (see values/attrs.xml). -->
+<samsung-appwidget-info xmlns:app="http://schemas.android.com/apk/res-auto"
+    app:widgetStyle="colorful"
+    app:widgetSize="small|wideSmall|medium|large"
+    app:previewSize="small|wideSmall|medium|large"
+    app:targetHost="home"
+    app:previewLayoutSmall="@layout/widget_preview_actions_small"
+    app:previewLayoutWideSmall="@layout/widget_preview_actions_wide_small"
+    app:previewLayoutMedium="@layout/widget_preview_actions_medium"
+    app:previewLayoutLarge="@layout/widget_preview_actions_large" />

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated widget-picker preview (One UI small slot). Static sample content. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="125dp" android:layout_height="52dp"
+    android:background="@drawable/widget_preview_bg" android:orientation="horizontal" android:gravity="center_vertical" android:padding="6dp">
+<FrameLayout android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+<ImageView android:layout_width="34dp" android:layout_height="34dp" android:background="@drawable/widget_preview_button" android:padding="9dp" android:src="@drawable/ic_w_clipboard" android:tint="@color/widget_ink" />
+<FrameLayout android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+<ImageView android:layout_width="34dp" android:layout_height="34dp" android:background="@drawable/widget_preview_button" android:padding="9dp" android:src="@drawable/ic_w_upload" android:tint="@color/widget_ink" />
+<FrameLayout android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+<ImageView android:layout_width="34dp" android:layout_height="34dp" android:background="@drawable/widget_preview_accent_button" android:padding="9dp" android:src="@drawable/ic_play" android:tint="@android:color/white" />
+<FrameLayout android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+</LinearLayout>

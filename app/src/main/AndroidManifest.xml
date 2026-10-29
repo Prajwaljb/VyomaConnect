@@ -125,22 +125,27 @@
         <receiver android:name=".widget.StatusWidgetReceiver" android:exported="true" android:label="@string/widget_status">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_status" />
+            <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_status_colorful" />
         </receiver>
         <receiver android:name=".widget.ActionsWidgetReceiver" android:exported="true" android:label="@string/widget_actions">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_actions" />
+            <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_actions_colorful" />
         </receiver>
         <receiver android:name=".widget.MediaWidgetReceiver" android:exported="true" android:label="@string/widget_media">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_media" />
+            <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_media_colorful" />
         </receiver>
         <receiver android:name=".widget.ClipboardWidgetReceiver" android:exported="true" android:label="@string/widget_clipboard">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_clipboard" />
+            <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_clipboard_colorful" />
         </receiver>
         <receiver android:name=".widget.DropWidgetReceiver" android:exported="true" android:label="@string/widget_drop">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_drop" />
+            <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_drop_colorful" />
         </receiver>
 
         <service

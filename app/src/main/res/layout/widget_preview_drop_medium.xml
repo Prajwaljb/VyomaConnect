@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated widget-picker preview (One UI medium slot). Static sample content. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="125dp" android:layout_height="130dp"
+    android:background="@drawable/widget_accent" android:orientation="vertical" android:gravity="center" android:padding="12dp">
+<ImageView android:layout_width="46dp" android:layout_height="46dp" android:background="@drawable/widget_preview_glass_circle" android:padding="12dp" android:src="@drawable/ic_w_upload" android:tint="@android:color/white" />
+<TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Send files" android:textColor="@android:color/white" android:textSize="11sp" android:textStyle="bold" android:maxLines="1" android:ellipsize="end" android:layout_marginTop="8dp" />
+</LinearLayout>

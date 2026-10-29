@@ -38,6 +38,7 @@ import dev.vyoma.connect.protocol.plugin.builtin.SharePlugin
 import dev.vyoma.connect.protocol.plugin.builtin.SystemVolumePlugin
 import dev.vyoma.connect.service.Notifications
 import dev.vyoma.connect.service.AndroidNetwork
+import dev.vyoma.connect.widget.Widgets
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -45,6 +46,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -65,6 +67,7 @@ class VyomaApp : Application() {
             }
         }
         container = AppContainer(this)
+        container.appScope.launch { Widgets.publishPreviews(this@VyomaApp) }
     }
 }
 
