@@ -56,6 +56,8 @@ class LanBackend(
         val route: (socket: Any, target: InetAddress) -> Unit = { _, _ -> },
         /** User-added PCs (Tailscale, other subnets): dialled directly on refresh. Called off the main thread. */
         val manualHosts: () -> Collection<InetAddress> = { emptyList() },
+        /** What carries a link, from its socket's local and remote addresses. */
+        val transportOf: (local: InetAddress, remote: InetAddress) -> TransportKind = ::defaultTransport,
     )
 
     private val payloads = LanPayloads(tls, config.tuneSocket, config.route)
@@ -231,7 +233,7 @@ class LanBackend(
         }
         ssl.soTimeout = 0
         VLog.i(TAG, "link up: ${identity.deviceName} (${identity.deviceId}) v${identity.protocolVersion} via ${ssl.inetAddress.hostAddress}")
-        onLink(DeviceLink(identity, peerCert, TransportKind.LAN, ssl, payloads))
+        onLink(DeviceLink(identity, peerCert, config.transportOf(ssl.localAddress, ssl.inetAddress), ssl, payloads))
     }
 
     private fun isLocalAddress(address: InetAddress): Boolean =
@@ -251,9 +253,24 @@ class LanBackend(
         throw IOException("No free TCP port in $range")
     }
 
-    private companion object {
-        const val TAG = "LanBackend"
-        const val CONNECT_TIMEOUT_MS = 5_000
-        const val HANDSHAKE_TIMEOUT_MS = 10_000
+    companion object {
+        private const val TAG = "LanBackend"
+        private const val CONNECT_TIMEOUT_MS = 5_000
+        private const val HANDSHAKE_TIMEOUT_MS = 10_000
+
+        /**
+         * Phone-side port for `adb reverse tcp:1765 tcp:1716`: the PC's KDE Connect reached over
+         * the USB cable. Outside 1716..1764 because our own listener holds those ports.
+         */
+        const val USB_REVERSE_PORT = 1765
+
+        private val tetherInterface = Regex("^(rndis|ncm|usb)\\d*$")
+
+        /** USB for loopback (an adb reverse tunnel) and USB-tethering interfaces; LAN otherwise. */
+        fun defaultTransport(local: InetAddress, remote: InetAddress): TransportKind {
+            if (remote.isLoopbackAddress) return TransportKind.USB
+            val name = runCatching { java.net.NetworkInterface.getByInetAddress(local)?.name }.getOrNull()
+            return if (name != null && tetherInterface.matches(name)) TransportKind.USB else TransportKind.LAN
+        }
     }
 }

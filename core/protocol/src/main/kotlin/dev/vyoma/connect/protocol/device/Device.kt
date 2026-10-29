@@ -102,10 +102,13 @@ class Device internal constructor(
         if (isPaired()) {
             // Peer may have renamed itself; keep the offline listing current.
             env.trustStore.get(id)?.let {
+                // A loopback peer is an adb tunnel: keep the network address for reconnecting later.
+                val tunnel = link.remoteAddress.isLoopbackAddress
                 env.trustStore.put(
                     it.copy(
                         name = link.identity.deviceName, type = link.identity.deviceType,
-                        lastAddress = link.remoteAddress.hostAddress, lastPort = link.identity.tcpPort ?: it.lastPort,
+                        lastAddress = if (tunnel) it.lastAddress else link.remoteAddress.hostAddress,
+                        lastPort = if (tunnel) it.lastPort else link.identity.tcpPort ?: it.lastPort,
                     ),
                 )
             }

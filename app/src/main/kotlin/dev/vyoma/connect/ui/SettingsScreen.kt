@@ -11,6 +11,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import dev.vyoma.connect.platform.NotificationBridge
 import dev.vyoma.connect.platform.PhonePermissions
+import dev.vyoma.connect.protocol.link.LanBackend
 import dev.vyoma.connect.service.LinkService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Lan
+import androidx.compose.material.icons.rounded.Usb
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import android.content.Intent
@@ -88,6 +90,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     var editingName by rememberSaveable { mutableStateOf(false) }
     var showAdbHelp by rememberSaveable { mutableStateOf(false) }
+    var showUsbHelp by rememberSaveable { mutableStateOf(false) }
     var addingHost by rememberSaveable { mutableStateOf(false) }
     val hosts by vm.manualHosts.collectAsStateWithLifecycle()
     // Re-check permission state whenever we come back from system settings.
@@ -211,7 +214,14 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     title = "Add a PC by IP or name",
                     subtitle = "For Tailscale, or when your PC isn't found automatically",
                     icon = Icons.Rounded.Add,
+                    showDivider = true,
                     onClick = { addingHost = true },
+                )
+                ListRow(
+                    title = "Over a USB cable",
+                    subtitle = "Faster and steadier than Wi-Fi; works with no network at all",
+                    icon = Icons.Rounded.Usb,
+                    onClick = { showUsbHelp = true },
                 )
             }
         }
@@ -241,6 +251,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
     }
 
     if (showAdbHelp) ClipboardAdbDialog { showAdbHelp = false }
+    if (showUsbHelp) UsbHelpDialog { showUsbHelp = false }
 
     if (addingHost) {
         var draft by rememberSaveable { mutableStateOf("") }
@@ -347,5 +358,45 @@ internal fun ClipboardAdbDialog(onDismiss: () -> Unit) {
             }) { Text("Copy command") }
         },
         dismissButton = { TextButton(onClick = { onDismiss() }) { Text("Close") } },
+    )
+}
+
+/** The two ways to link over the cable; Vyoma picks either up on its own and prefers it to Wi-Fi. */
+@Composable
+private fun UsbHelpDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val cmd = "adb reverse tcp:${LanBackend.USB_REVERSE_PORT} tcp:1716"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Connect over USB") },
+        text = {
+            Column {
+                Text("Plug in the cable, then either:", style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(12.dp))
+                Text("USB tethering", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Turn it on in Settings › Connections › Mobile Hotspot and Tethering. Your PC finds Vyoma over the cable like on Wi-Fi.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(12.dp))
+                Text("USB debugging", style = MaterialTheme.typography.titleSmall)
+                Text("If your PC already has adb, run this on the PC once per plug-in:", style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(6.dp))
+                Text(cmd, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Either way, Vyoma switches to the cable by itself and back to Wi-Fi when you unplug.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("adb", cmd))
+                onDismiss()
+            }) { Text("Copy command") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
 }
