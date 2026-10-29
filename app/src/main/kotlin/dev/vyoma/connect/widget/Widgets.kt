@@ -245,9 +245,6 @@ object Widgets {
 
     internal fun pickFiles(context: Context): Action =
         actionStartActivity(Intent(context, ShareActivity::class.java).setAction(ShareActivity.ACTION_PICK).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-
-    internal fun pickPhotos(context: Context): Action =
-        actionStartActivity(Intent(context, ShareActivity::class.java).setAction(ShareActivity.ACTION_PICK_PHOTOS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
 // ---- look -------------------------------------------------------------------------------------
@@ -471,8 +468,6 @@ private fun quickActions(context: Context, s: WidgetSnapshot) = listOf(
     Act(R.drawable.ic_w_upload, "Files", Widgets.pickFiles(context)),
     Act(R.drawable.ic_w_mouse, "Touchpad", Widgets.openApp(context, MainActivity.SCREEN_TOUCHPAD)),
     Act(if (s.playing) R.drawable.ic_pause else R.drawable.ic_play, if (s.playing) "Pause" else "Play", Widgets.command(context, Commands.PLAY_PAUSE), accent = true),
-    Act(R.drawable.ic_w_photo, "Photos", Widgets.pickPhotos(context)),
-    Act(R.drawable.ic_skip_next, "Next", Widgets.command(context, Commands.NEXT)),
     Act(R.drawable.ic_w_mute, "Mute PC", Widgets.command(context, Commands.MUTE_PC)),
     Act(R.drawable.ic_w_lock, "Lock PC", Widgets.command(context, Commands.LOCK_PC)),
 )
@@ -601,7 +596,7 @@ class StatusWidget : VyomaWidget() {
 
     /** [n] buttons: play/pause always (last, so the accent ends the row), then clipboard, files, touchpad, lock. */
     private fun statusActions(context: Context, s: WidgetSnapshot, n: Int) = quickActions(context, s).let { a ->
-        listOf(a[0], a[1], a[2], a[7]).take(n - 1) + a[3]
+        listOf(a[0], a[1], a[2], a[5]).take(n - 1) + a[3]
     }
 
     @Composable
@@ -637,11 +632,13 @@ class ActionsWidget : VyomaWidget() {
             val iconRows = ((d.innerH.value + 8) / (iconSize.value + 8)).toInt().coerceIn(1, 4)
             val labelCols = (d.innerW.value / 58).toInt().coerceIn(1, 6)
             val labelRows = ((d.innerH.value + 12) / 76).toInt().coerceIn(0, 4)
-            val labels = !d.oneRow && labelRows > 0 && labelCols * labelRows >= minOf(iconCols * iconRows, 8)
+            val count = quickActions(context, s).size
+            val labels = !d.oneRow && labelRows > 0 && labelCols * labelRows >= minOf(iconCols * iconRows, count)
             val size = if (labels) 44.dp else iconSize
-            val rows = if (labels) labelRows else iconRows
-            // Prefer full rows (4 + 4 rather than 5 + 3).
-            val cols = minOf(if (labels) labelCols else iconCols, (8 + rows - 1) / rows)
+            val maxCols = if (labels) labelCols else iconCols
+            // No more rows than the actions need, then full rows (3 + 3 rather than 4 + 2).
+            val rows = minOf(if (labels) labelRows else iconRows, (count + maxCols - 1) / maxCols)
+            val cols = minOf(maxCols, (count + rows - 1) / rows)
             // Play/pause leads when space is tight: it's the one people reach for most.
             val all = quickActions(context, s).let { a -> if (cols * rows < 4) listOf(a[3]) + a.minus(a[3]) else a }
             val items = all.take(cols * rows)
