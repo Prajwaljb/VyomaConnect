@@ -252,7 +252,7 @@ private fun MiniPlayer(np: NowPlaying, onPlayPause: () -> Unit) {
 
 /** Shown inline (and as a notification) so the code can be compared side by side with the PC. */
 @Composable
-private fun PairingCard(state: DeviceState, onAccept: () -> Unit, onReject: () -> Unit, modifier: Modifier = Modifier) {
+internal fun PairingCard(state: DeviceState, onAccept: () -> Unit, onReject: () -> Unit, modifier: Modifier = Modifier) {
     val incoming = state.pairState == PairState.REQUESTED_BY_PEER
     SectionCard(modifier.animateContentSize(), contentPadding = PaddingValues(20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -285,7 +285,7 @@ private fun PairingCard(state: DeviceState, onAccept: () -> Unit, onReject: () -
 
 /** Radar sweep while nothing is around, with the two tips that solve 90% of "not found". */
 @Composable
-private fun SearchingCard(modifier: Modifier = Modifier) {
+internal fun SearchingCard(modifier: Modifier = Modifier) {
     val color = MaterialTheme.colorScheme.primary
     val t = rememberInfiniteTransition(label = "radar")
     val wave by t.animateFloat(0f, 1f, infiniteRepeatable(tween(2400, easing = LinearEasing), RepeatMode.Restart), label = "wave")
