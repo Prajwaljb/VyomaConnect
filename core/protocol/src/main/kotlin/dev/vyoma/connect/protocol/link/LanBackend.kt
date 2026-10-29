@@ -47,7 +47,7 @@ class LanBackend(
         val broadcastTargets: () -> Collection<InetAddress> = { listOf(InetAddress.getByName("255.255.255.255")) },
         /** True if we already hold a live link to this device; avoids reconnect churn. */
         val isConnected: (deviceId: String) -> Boolean = { false },
-        /** Platform socket tuning (keep-alive intervals etc.). */
+        /** Platform socket tuning (keep-alive intervals etc.); called on connected sockets. */
         val tuneSocket: (Socket) -> Unit = { it.keepAlive = true; it.tcpNoDelay = true },
     )
 
@@ -140,8 +140,8 @@ class LanBackend(
     private suspend fun connectOutgoing(address: InetAddress, port: Int, peer: DeviceIdentity?) {
         val plain = Socket()
         try {
-            config.tuneSocket(plain)
             plain.connect(InetSocketAddress(address, port), CONNECT_TIMEOUT_MS)
+            config.tuneSocket(plain)
             plain.soTimeout = HANDSHAKE_TIMEOUT_MS
             plain.getOutputStream().apply {
                 write(localIdentity().toPacket(tcpPort).serialize().toByteArray(Charsets.UTF_8))
