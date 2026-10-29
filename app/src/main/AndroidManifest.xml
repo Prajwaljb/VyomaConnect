@@ -131,7 +131,17 @@
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_actions" />
             <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_actions_colorful" />
+            <!-- One UI reads this for the widget's long-press "Settings". -->
+            <meta-data android:name="android.appwidget.provider.semConfigureActivity" android:value="dev.vyoma.connect.ui.QuickActionsSettingsActivity" />
         </receiver>
+        <activity
+            android:name=".ui.QuickActionsSettingsActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Vyoma">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" /></intent-filter>
+        </activity>
         <receiver android:name=".widget.MediaWidgetReceiver" android:exported="true" android:label="@string/widget_media">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_media" />
