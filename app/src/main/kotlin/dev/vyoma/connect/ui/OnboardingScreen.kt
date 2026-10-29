@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.SystemColor
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -107,7 +108,7 @@ fun OnboardingScreen(vm: AppViewModel, onDone: () -> Unit) {
         item(key = "needed") {
             SectionCard(Modifier.padding(top = 8.dp)) {
                 Step(
-                    Icons.Rounded.Wifi, "Nearby devices",
+                    Icons.Rounded.Wifi, SystemColor.BLUE, "Nearby devices",
                     if (coreOn) "Vyoma can look for your PC on this network" else "Lets Vyoma find your PC on Wi-Fi and stay connected",
                     done = coreOn,
                 ) { askCore.launch(corePermissions) }
@@ -117,16 +118,16 @@ fun OnboardingScreen(vm: AppViewModel, onDone: () -> Unit) {
         item(key = "extras-label") { SectionLabel("Recommended") }
         item(key = "extras") {
             SectionCard(Modifier.padding(top = 8.dp)) {
-                Step(Icons.Rounded.BatteryChargingFull, "Stay connected", "Keeps One UI from putting Vyoma to sleep", batteryOn, divider = true) {
+                Step(Icons.Rounded.BatteryChargingFull, SystemColor.GREEN, "Stay connected", "Keeps One UI from putting Vyoma to sleep", batteryOn, divider = true) {
                     requestUnrestricted(context)
                 }
-                Step(Icons.Rounded.Notifications, "Notifications on PC", "See, reply to and dismiss them from your PC", notifOn, divider = true) {
+                Step(Icons.Rounded.Notifications, SystemColor.RED, "Notifications on PC", "See, reply to and dismiss them from your PC", notifOn, divider = true) {
                     runCatching { context.startActivity(NotificationBridge.settingsIntent(context)) }
                 }
-                Step(Icons.Rounded.Sms, "Calls & messages", "Text from your PC and see who's calling", phoneOn, divider = true) {
+                Step(Icons.Rounded.Sms, SystemColor.GREEN, "Calls & messages", "Text from your PC and see who's calling", phoneOn, divider = true) {
                     askPhone.launch(PhonePermissions.all)
                 }
-                Step(Icons.Rounded.ContentPaste, "Automatic clipboard", "One-time ADB grant, no root needed", clipOn, action = "How") {
+                Step(Icons.Rounded.ContentPaste, SystemColor.ORANGE, "Automatic clipboard", "One-time ADB grant, no root needed", clipOn, action = "How") {
                     showAdbHelp = true
                 }
             }
@@ -150,6 +151,7 @@ fun OnboardingScreen(vm: AppViewModel, onDone: () -> Unit) {
                             title = state.identity.deviceName,
                             subtitle = if (state.isPaired) "Paired" else transportLabel(state),
                             icon = state.identity.deviceType.icon(),
+                            iconTint = SystemColor.BLUE.color,
                             showDivider = i < rows.lastIndex,
                             trailing = {
                                 if (state.isPaired) Icon(Icons.Rounded.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
@@ -190,6 +192,7 @@ fun OnboardingScreen(vm: AppViewModel, onDone: () -> Unit) {
 @Composable
 private fun Step(
     icon: ImageVector,
+    color: SystemColor,
     title: String,
     subtitle: String,
     done: Boolean,
@@ -201,7 +204,7 @@ private fun Step(
         title = title,
         subtitle = subtitle,
         icon = icon,
-        iconTint = if (done) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        iconTint = color.color,
         showDivider = divider,
         trailing = {
             if (done) Icon(Icons.Rounded.CheckCircle, "Done", tint = MaterialTheme.colorScheme.primary)

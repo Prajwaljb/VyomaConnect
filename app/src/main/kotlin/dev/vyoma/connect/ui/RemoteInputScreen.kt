@@ -1,5 +1,8 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.glassCard
+import dev.vyoma.connect.designsystem.aurora
+import dev.vyoma.connect.designsystem.Glass
 import dev.vyoma.connect.designsystem.OrbState
 import dev.vyoma.connect.designsystem.ConnectionOrb
 import androidx.compose.material3.Surface
@@ -135,7 +138,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
     val imeVisible = WindowInsets.isImeVisible
 
     // Surface, not a bare background: it supplies onBackground as the content color for the bar.
-    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) { Column(
+    Surface(Modifier.fillMaxSize().aurora(), color = Color.Transparent, contentColor = MaterialTheme.colorScheme.onBackground) { Column(
         Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars).imePadding(),
     ) {
         Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -150,15 +153,13 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
         }
 
         // ---- touch surface ----
-        val surface = MaterialTheme.colorScheme.surfaceContainerHigh
         val dots = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
         Box(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
-                .clip(RoundedCornerShape(32.dp))
-                .background(surface)
+                .glassCard(RoundedCornerShape(32.dp))
                 .pointerInput(pad) {
                     val slop = viewConfiguration.touchSlop
                     awaitEachGesture {
@@ -383,7 +384,7 @@ private fun TypingBar(onText: (String) -> Unit, onKey: (SpecialKey) -> Unit) {
                 Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(20.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .background(Glass.raised)
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 if (value.text == sentinel) {
@@ -398,7 +399,7 @@ private fun TypingBar(onText: (String) -> Unit, onKey: (SpecialKey) -> Unit) {
 @Composable
 private fun MouseButton(label: String, modifier: Modifier, onClick: () -> Unit) {
     Box(
-        modifier.fillMaxSize().clip(RoundedCornerShape(20.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).pressable(onClick = onClick),
+        modifier.fillMaxSize().clip(RoundedCornerShape(20.dp)).background(Glass.raised).pressable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 }
@@ -419,7 +420,7 @@ private fun RowScope.Key(
         when {
             selected -> MaterialTheme.colorScheme.primary
             accent -> MaterialTheme.colorScheme.primaryContainer
-            else -> MaterialTheme.colorScheme.surfaceContainerHigh
+            else -> Glass.raised
         },
         label = "key",
     )
@@ -495,7 +496,7 @@ private fun ScrollStrip(modifier: Modifier, onScroll: (Float) -> Unit, onClick: 
         modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(20.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .background(Glass.raised)
             .pointerInput(Unit) {
                 val slop = viewConfiguration.touchSlop
                 awaitEachGesture {

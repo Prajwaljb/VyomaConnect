@@ -1,5 +1,10 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -81,13 +86,16 @@ fun CollapsingHeaderScaffold(
         }
     }
 
-    // Surface supplies onBackground as the content color, so bar icons and titles are legible.
-    Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) { Box(Modifier.fillMaxSize()) {
-        LazyColumn(
+    val backdrop = rememberBackdrop()
+    val bottomInset = LocalBottomBarInset.current
+    // Content color for everything on the canvas, so bar icons and titles are legible.
+    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) { Box(modifier.fillMaxSize()) {
+        // The backdrop records the canvas too: blurring only the cards would let sharp text show through.
+        Box(Modifier.fillMaxSize().backdropSource(backdrop).aurora()) { LazyColumn(
             state = listState,
             contentPadding = PaddingValues(
                 start = 16.dp, end = 16.dp,
-                bottom = 24.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
+                bottom = 24.dp + bottomInset + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.fillMaxSize(),
@@ -125,33 +133,38 @@ fun CollapsingHeaderScaffold(
                 }
             }
             content()
-        }
+        } }
 
-        // Compact bar: always present for navigation/actions; its title fades in as the hero fades out.
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.background.copy(alpha = if (collapse > 0.98f) 1f else 0f))
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .height(56.dp)
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (navigation != null) navigation() else Spacer(Modifier.width(8.dp))
-            Text(
-                title,
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 8.dp)
-                    .graphicsLayer {
-                        alpha = collapse
-                        translationY = (1f - collapse) * 12.dp.toPx()
-                    },
-            )
-            actions()
+        // Compact bar: always present for navigation/actions. Once the hero has scrolled away it
+        // turns into frosted glass over the list, and its title fades in.
+        val frosted by remember { derivedStateOf { collapse > 0.98f } }
+        Box(Modifier.fillMaxWidth()) {
+            // Only composed while collapsed, so the expanded page never pays for the blur.
+            if (frosted) Box(Modifier.matchParentSize().glassChrome(backdrop, RectangleShape, edge = false))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .height(56.dp)
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (navigation != null) navigation() else Spacer(Modifier.width(8.dp))
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 8.dp)
+                        .graphicsLayer {
+                            alpha = collapse
+                            translationY = (1f - collapse) * 12.dp.toPx()
+                        },
+                )
+                actions()
+            }
         }
     } }
 }
@@ -163,13 +176,7 @@ fun SectionCard(
     contentPadding: PaddingValues = PaddingValues(vertical = 6.dp),
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surfaceContainerLowest,
-    ) {
-        Column(Modifier.padding(contentPadding), content = content)
-    }
+    Column(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(contentPadding), content = content)
 }
 
 @Composable
@@ -218,23 +225,24 @@ fun ListRow(
         }
         if (showDivider) {
             HorizontalDivider(
-                Modifier.padding(start = if (icon != null) 72.dp else 20.dp, end = 20.dp),
+                Modifier.padding(start = if (icon != null) 70.dp else 20.dp, end = 20.dp),
                 color = MaterialTheme.colorScheme.outlineVariant,
             )
         }
     }
 }
 
+/** iOS / One UI settings icon: a white glyph on a filled, softly rounded square of [tint]. */
 @Composable
-fun IconBadge(icon: ImageVector, tint: Color, size: Dp = 40.dp) {
+fun IconBadge(icon: ImageVector, tint: Color, size: Dp = 34.dp) {
     Box(
         Modifier
             .size(size)
-            .clip(CircleShape)
-            .background(tint.copy(alpha = 0.14f)),
+            .clip(RoundedCornerShape(size * 0.28f))
+            .background(Brush.verticalGradient(listOf(tint.copy(alpha = 0.88f).compositeOver(Color.White), tint))),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(size * 0.52f))
+        Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(size * 0.6f))
     }
 }
 

@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.SystemColor
+import dev.vyoma.connect.designsystem.Glass
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
@@ -36,7 +38,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material.icons.rounded.Laptop
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tablet
 import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material3.FilledTonalButton
@@ -71,7 +72,6 @@ import dev.vyoma.connect.protocol.link.TransportKind
 fun HomeScreen(
     vm: AppViewModel,
     onOpenDevice: (String) -> Unit,
-    onOpenSettings: () -> Unit,
     onTouchpad: (String) -> Unit,
     onClipboard: () -> Unit,
 ) {
@@ -96,7 +96,6 @@ fun HomeScreen(
         hero = primary?.let { { DeviceGlyph(it) } },
         actions = {
             IconButton(onClick = vm::refresh) { Icon(Icons.Rounded.Refresh, "Refresh") }
-            IconButton(onClick = onOpenSettings) { Icon(Icons.Rounded.Settings, "Settings") }
         },
     ) {
         if (primary != null) {
@@ -111,7 +110,7 @@ fun HomeScreen(
                                 style = MaterialTheme.typography.labelLarge,
                                 color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.clip(CircleShape)
-                                    .background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
+                                    .background(if (on) MaterialTheme.colorScheme.primary else Glass.raised)
                                     .pressable { selected = d.identity.deviceId }
                                     .padding(horizontal = 14.dp, vertical = 8.dp),
                             )
@@ -174,6 +173,7 @@ fun HomeScreen(
                             title = state.identity.deviceName,
                             subtitle = transportLabel(state),
                             icon = state.identity.deviceType.icon(),
+                            iconTint = SystemColor.BLUE.color,
                             showDivider = i < available.lastIndex,
                             trailing = {
                                 FilledTonalButton(onClick = { vm.requestPair(state.identity.deviceId) }) { Text("Pair") }
@@ -193,7 +193,7 @@ fun HomeScreen(
                             title = state.identity.deviceName,
                             subtitle = "Open KDE Connect on it, or join the same network",
                             icon = state.identity.deviceType.icon(),
-                            iconTint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            iconTint = SystemColor.GRAY.color,
                             showDivider = i < offline.lastIndex,
                             trailing = { ConnectionOrb(OrbState.OFFLINE, size = 10.dp) },
                             onClick = { onOpenDevice(state.identity.deviceId) },

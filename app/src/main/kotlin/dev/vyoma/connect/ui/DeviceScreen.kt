@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.SystemColor
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -101,6 +102,7 @@ fun DeviceScreen(
                     onSeek = vm::seekTo,
                     onVolume = vm::setPlayerVolume,
                     onPickPlayer = vm::pickPlayer,
+                    showVolume = false,
                     modifier = Modifier.animateItem(),
                 )
             }
@@ -128,6 +130,7 @@ fun DeviceScreen(
                             title = "Add PC commands",
                             subtitle = "Shutdown, sleep, scripts… set them up on the PC and run them from here",
                             icon = Icons.Rounded.Terminal,
+                            iconTint = SystemColor.GRAY.color,
                             onClick = { vm.openCommandSetup(deviceId) },
                         )
                     }
@@ -142,6 +145,7 @@ fun DeviceScreen(
                         title = "Not paired",
                         subtitle = "Pair to share clipboard, files, media and more",
                         icon = Icons.Rounded.Wifi,
+                        iconTint = SystemColor.BLUE.color,
                         trailing = { FilledTonalButton(onClick = { vm.requestPair(deviceId) }) { Text("Pair") } },
                     )
                 }
@@ -155,7 +159,7 @@ fun DeviceScreen(
                     title = if (state.isReachable) transportLabel(state) else "Not reachable",
                     subtitle = if (state.isReachable) "${state.plugins.size} features active" else "Open KDE Connect on it, or join the same network",
                     icon = if (TransportKind.USB in state.transports) Icons.Rounded.Usb else Icons.Rounded.Wifi,
-                    iconTint = if (state.isReachable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    iconTint = if (state.isReachable) SystemColor.BLUE.color else SystemColor.GRAY.color,
                     showDivider = battery != null,
                 )
                 battery?.let { b ->
@@ -163,7 +167,7 @@ fun DeviceScreen(
                         title = "Battery ${b.charge}%",
                         subtitle = if (b.charging) "Charging" else if (b.low) "Low" else "On battery",
                         icon = if (b.charging) Icons.Rounded.BatteryChargingFull else Icons.Rounded.BatteryStd,
-                        iconTint = if (b.low) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        iconTint = if (b.low) SystemColor.RED.color else SystemColor.GREEN.color,
                     )
                 }
             }
@@ -176,6 +180,7 @@ fun DeviceScreen(
                     title = "Certificate fingerprint",
                     subtitle = fingerprint?.chunked(24)?.joinToString("\n") ?: "Unavailable",
                     icon = Icons.Rounded.Fingerprint,
+                    iconTint = SystemColor.TEAL.color,
                     showDivider = state.isPaired,
                 )
                 if (state.isPaired) {
@@ -183,7 +188,7 @@ fun DeviceScreen(
                         title = "Unpair",
                         subtitle = "Forget this device and its key",
                         icon = Icons.Rounded.LinkOff,
-                        iconTint = MaterialTheme.colorScheme.error,
+                        iconTint = SystemColor.RED.color,
                         onClick = { confirmUnpair = true },
                     )
                 }

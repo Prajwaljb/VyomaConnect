@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.SystemColor
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
@@ -261,6 +262,7 @@ fun CommandsCard(commands: List<RemoteCommand>, onRun: (RemoteCommand) -> Unit) 
                 title = cmd.name,
                 subtitle = cmd.command,
                 icon = Icons.Rounded.Terminal,
+                iconTint = SystemColor.GRAY.color,
                 showDivider = i < commands.lastIndex,
                 onClick = { onRun(cmd) },
             )

@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.SystemColor
 import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -84,7 +85,7 @@ import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.pressable
 
 @Composable
-fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
+fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
     val theme by vm.theme.collectAsStateWithLifecycle()
     val name by vm.deviceName.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -104,7 +105,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
 
     CollapsingHeaderScaffold(
         title = "Settings",
-        navigation = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+        navigation = onBack?.let { back -> { IconButton(onClick = back) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } } },
     ) {
         item(key = "device") {
             SectionCard {
@@ -112,6 +113,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     title = "Device name",
                     subtitle = name,
                     icon = Icons.Rounded.Edit,
+                    iconTint = SystemColor.BLUE.color,
                     onClick = { editingName = true },
                 )
             }
@@ -145,6 +147,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     title = "Pure black",
                     subtitle = "True black backgrounds in dark mode, easy on AMOLED",
                     icon = Icons.Rounded.DarkMode,
+                    iconTint = SystemColor.GRAY.color,
                     trailing = { Switch(checked = theme.amoled, onCheckedChange = vm::setAmoled) },
                     onClick = { vm.setAmoled(!theme.amoled) },
                 )
@@ -172,7 +175,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     title = "Notifications on PC",
                     subtitle = if (notifOn) "On: reply and dismiss from your PC" else "Allow notification access to mirror them",
                     icon = Icons.Rounded.Notifications,
-                    iconTint = if (notifOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    iconTint = SystemColor.RED.color,
                     showDivider = true,
                     onClick = { runCatching { context.startActivity(NotificationBridge.settingsIntent(context)) } },
                 )
@@ -181,7 +184,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     subtitle = if (phoneOn) "On: text from the PC, see who's calling, synced contacts"
                     else "Text from your PC and see who's calling",
                     icon = Icons.Rounded.Sms,
-                    iconTint = if (phoneOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    iconTint = SystemColor.GREEN.color,
                     showDivider = true,
                     onClick = { if (!phoneOn) askPhone.launch(PhonePermissions.all) },
                 )
@@ -190,7 +193,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     subtitle = if (clipOn) "On: copies sync even while Vyoma is closed"
                     else "Needs a one-time ADB grant (no root). Tap for the command.",
                     icon = Icons.Rounded.ContentPaste,
-                    iconTint = if (clipOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    iconTint = SystemColor.ORANGE.color,
                     onClick = { if (!clipOn) showAdbHelp = true },
                 )
             }
@@ -204,6 +207,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                         title = host,
                         subtitle = if (host.startsWith("100.") || host.endsWith(".ts.net")) "Tailscale" else "Added manually",
                         icon = Icons.Rounded.Lan,
+                        iconTint = SystemColor.TEAL.color,
                         showDivider = true,
                         trailing = {
                             IconButton(onClick = { vm.removeManualHost(host) }) { Icon(Icons.Rounded.Close, "Remove $host") }
@@ -214,6 +218,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     title = "Add a PC by IP or name",
                     subtitle = "For Tailscale, or when your PC isn't found automatically",
                     icon = Icons.Rounded.Add,
+                    iconTint = SystemColor.BLUE.color,
                     showDivider = true,
                     onClick = { addingHost = true },
                 )
@@ -221,6 +226,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     title = "Over a USB cable",
                     subtitle = "Faster and steadier than Wi-Fi; works with no network at all",
                     icon = Icons.Rounded.Usb,
+                    iconTint = SystemColor.CYAN.color,
                     onClick = { showUsbHelp = true },
                 )
             }
@@ -233,7 +239,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     title = if (unrestricted) "Background activity allowed" else "Allow background activity",
                     subtitle = if (unrestricted) "One UI won't put Vyoma to sleep" else "Recommended on Galaxy phones so devices stay connected",
                     icon = Icons.Rounded.BatteryChargingFull,
-                    iconTint = if (unrestricted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    iconTint = SystemColor.GREEN.color,
                     onClick = { if (!unrestricted) requestUnrestricted(context) },
                 )
             }
@@ -245,6 +251,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     title = "Vyoma",
                     subtitle = "Version ${context.packageManager.getPackageInfo(context.packageName, 0).versionName} · KDE Connect protocol v8",
                     icon = Icons.Rounded.Info,
+                    iconTint = SystemColor.GRAY.color,
                 )
             }
         }
