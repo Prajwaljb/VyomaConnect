@@ -73,6 +73,8 @@ class MprisPlugin(private val ctx: PluginContext) : Plugin {
         ctx.send(packet(PacketTypes.MPRIS_REQUEST) { put("requestPlayerList", true) })
     }
 
+    override suspend fun onLinkAdded() = onStart()
+
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         if (packet.has("playerList")) {
             supportsArtPayload = packet.bool("supportAlbumArtPayload") ?: false

@@ -36,6 +36,10 @@ class BatteryPlugin(private val ctx: PluginContext, private val local: StateFlow
         ctx.scope.launch { local.filterNotNull().distinctUntilChanged().collect(::report) }
     }
 
+    override suspend fun onLinkAdded() {
+        local?.value?.let { report(it) }
+    }
+
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         when (packet.type) {
             PacketTypes.BATTERY -> {
@@ -149,6 +153,8 @@ class LockPlugin(private val ctx: PluginContext) : Plugin {
         ctx.send(packet(PacketTypes.LOCK_REQUEST) { put("requestLocked", true) })
     }
 
+    override suspend fun onLinkAdded() = onStart()
+
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         packet.bool("isLocked")?.let { _locked.value = it }
         return true
@@ -173,6 +179,8 @@ class RunCommandPlugin(private val ctx: PluginContext) : Plugin {
     override suspend fun onStart() {
         ctx.send(packet(PacketTypes.RUNCOMMAND_REQUEST) { put("requestCommandList", true) })
     }
+
+    override suspend fun onLinkAdded() = onStart()
 
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         if (packet.type != PacketTypes.RUNCOMMAND) return true
@@ -224,6 +232,8 @@ class SystemVolumePlugin(private val ctx: PluginContext) : Plugin {
     override suspend fun onStart() {
         ctx.send(packet(PacketTypes.SYSTEMVOLUME_REQUEST) { put("requestSinks", true) })
     }
+
+    override suspend fun onLinkAdded() = onStart()
 
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         val list = packet.body["sinkList"]

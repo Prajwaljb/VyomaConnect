@@ -15,7 +15,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -28,9 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
-import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -68,7 +65,6 @@ import dev.vyoma.connect.designsystem.SectionCard
 import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.pressable
 import dev.vyoma.connect.platform.NowPlaying
-import dev.vyoma.connect.protocol.plugin.builtin.AudioSink
 import dev.vyoma.connect.protocol.plugin.builtin.RemoteCommand
 import kotlinx.coroutines.delay
 
@@ -244,47 +240,17 @@ fun formatTime(ms: Long): String {
     return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60) else "%d:%02d".format(s / 60, s % 60)
 }
 
-/** PC audio outputs: a slider each, tap the icon to mute, tap the name to make it the default. */
-@Composable
-fun VolumeCard(sinks: List<AudioSink>, onVolume: (AudioSink, Int) -> Unit, onMute: (AudioSink) -> Unit, onDefault: (AudioSink) -> Unit) {
-    SectionCard(contentPadding = PaddingValues(vertical = 8.dp)) {
-        sinks.sortedByDescending { it.isDefault }.forEach { sink ->
-            var value by remember(sink.name) { mutableFloatStateOf(sink.volume.toFloat()) }
-            LaunchedEffect(sink.volume) { value = sink.volume.toFloat() }
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.pressable(pressedScale = 0.99f) { onDefault(sink) }) {
-                    Text(
-                        prettySinkName(sink.description),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (sink.isDefault) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
-                    )
-                    if (sink.isDefault) Icon(Icons.Rounded.CheckCircle, "Default", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { onMute(sink) }) {
-                        Icon(
-                            if (sink.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
-                            if (sink.muted) "Unmute" else "Mute",
-                            tint = if (sink.muted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                    Slider(
-                        value = value, valueRange = 0f..sink.maxVolume.toFloat(),
-                        onValueChange = { value = it; onVolume(sink, it.toInt()) },
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text("${(value * 100 / sink.maxVolume).toInt()}%", style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(44.dp).padding(start = 8.dp))
-                }
-            }
-        }
-    }
-}
-
-/** PulseAudio descriptions are long ("500 Series Chipset ... Headphones"); keep the useful tail. */
+/** PulseAudio descriptions are long ("(HD Audio) HDMI / DisplayPort 3 Output (Stereo)"); keep the useful part. */
 fun prettySinkName(description: String): String {
-    val parts = description.split(" (HD Audio) ", " Audio ").map { it.trim() }
-    return parts.last().ifBlank { description }
+    // HDMI outputs carry the monitor's name in brackets; that's what people recognise.
+    Regex("""\[([^]]+)]""").find(description)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    val name = description
+        .replace(Regex("""\((HD Audio|Stereo|Mono|Analog Stereo|Digital Stereo[^)]*)\)"""), "")
+        .replace(Regex("""\[[^]]*]"""), "")
+        .substringAfterLast(" Audio ")
+        .replace(" Output", "")
+        .trim()
+    return name.ifBlank { description }
 }
 
 @Composable
@@ -310,7 +276,8 @@ private fun trimBars(bmp: Bitmap): Bitmap {
     val w = bmp.width
     val h = bmp.height
     if (w < 32 || h < 32) return bmp
-    fun dark(c: Int) = (c shr 16 and 0xFF) + (c shr 8 and 0xFF) + (c and 0xFF) < 54
+    // Bars are rarely pure black after compression; anything this dark and flat counts.
+    fun dark(c: Int) = (c shr 16 and 0xFF) + (c shr 8 and 0xFF) + (c and 0xFF) < 96
     fun darkColumn(x: Int) = (0 until 16).all { dark(bmp.getPixel(x, h * (2 * it + 1) / 32)) }
     fun darkRow(y: Int) = (0 until 16).all { dark(bmp.getPixel(w * (2 * it + 1) / 32, y)) }
     var l = 0; while (l < w / 3 && darkColumn(l)) l++

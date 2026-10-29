@@ -1,20 +1,18 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import dev.vyoma.connect.protocol.link.TransportKind
+import androidx.compose.material.icons.rounded.Usb
+import androidx.compose.material.icons.rounded.Terminal
 import android.widget.Toast
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.BatteryStd
-import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Fingerprint
-import androidx.compose.material.icons.rounded.ChatBubble
 import androidx.compose.material.icons.rounded.LinkOff
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.Mouse
-import androidx.compose.material.icons.rounded.NotificationsActive
-import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilledTonalButton
@@ -32,15 +30,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.vyoma.connect.designsystem.CollapsingHeaderScaffold
-import dev.vyoma.connect.designsystem.ConnectionOrb
 import dev.vyoma.connect.designsystem.ListRow
-import dev.vyoma.connect.designsystem.OrbState
 import dev.vyoma.connect.designsystem.SectionCard
 import dev.vyoma.connect.designsystem.SectionLabel
-import dev.vyoma.connect.protocol.device.PairState
 import dev.vyoma.connect.protocol.plugin.builtin.BatteryPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.LockPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
@@ -80,20 +74,21 @@ fun DeviceScreen(
         title = state?.identity?.deviceName ?: "Device",
         subtitle = subtitle,
         navigation = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
-        actions = {
-            if (state != null) {
-                ConnectionOrb(
-                    when {
-                        state.pairState == PairState.REQUESTED_BY_PEER || state.pairState == PairState.REQUESTED_BY_US -> OrbState.PENDING
-                        state.isReachable -> OrbState.CONNECTED
-                        else -> OrbState.OFFLINE
-                    },
-                )
-            }
-        },
+        hero = state?.let { { DeviceGlyph(it) } },
     ) {
         if (state == null) return@CollapsingHeaderScaffold
         val live = state.isPaired && state.isReachable
+
+        if (live) {
+            item(key = "actions") {
+                Staggered(0, Modifier.animateItem()) {
+                    PcDashboard(
+                        vm, state, DashboardSection.CONTROLS,
+                        onOpenDevice = {}, onTouchpad = { onTouchpad(false) }, onClipboard = onClipboard, inDetails = true,
+                    )
+                }
+            }
+        }
 
         val np = nowPlaying?.takeIf { it.deviceId == deviceId && it.player.hasMedia }
         if (live && np != null) {
@@ -111,38 +106,33 @@ fun DeviceScreen(
             }
         }
 
-        if (live) {
-            item(key = "actions") {
-                SectionCard(Modifier.animateItem(), contentPadding = PaddingValues(14.dp)) {
-                    ActionGrid(
-                        listOf(
-                            Triple(Icons.Rounded.UploadFile, "Send files") { vm.pickFiles(context) },
-                            Triple(Icons.Rounded.ContentPaste, "Clipboard") { onClipboard() },
-                            Triple(Icons.Rounded.Mouse, "Touchpad") { onTouchpad(false) },
-                            Triple(Icons.Rounded.NotificationsActive, "Ring PC") { vm.ringPc(deviceId); toast(context, "Ringing ${state.identity.deviceName}") },
-                            Triple(Icons.Rounded.Lock, if (locked == true) "Locked" else "Lock") { vm.lockPc(deviceId) },
-                            Triple(Icons.Rounded.ChatBubble, "Ping") { vm.ping(deviceId) },
-                        ),
-                    )
+        if (live && sinks.isNotEmpty()) {
+            item(key = "volume-label") { SectionLabel("PC sound", Modifier.animateItem()) }
+            item(key = "volume") {
+                val main = sinks.firstOrNull { it.isDefault } ?: sinks.first()
+                Column(Modifier.animateItem(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    VolumeBar(main, onVolume = { vm.setSinkVolume(deviceId, main.name, it) })
+                    if (sinks.size > 1) OutputPicker(sinks, onDefault = { vm.makeSinkDefault(deviceId, it.name) })
                 }
             }
         }
 
-        if (live && sinks.isNotEmpty()) {
-            item(key = "volume-label") { SectionLabel("PC sound", Modifier.animateItem()) }
-            item(key = "volume") {
-                VolumeCard(
-                    sinks,
-                    onVolume = { s, v -> vm.setSinkVolume(deviceId, s.name, v) },
-                    onMute = { s -> vm.setSinkMuted(deviceId, s.name, !s.muted) },
-                    onDefault = { s -> vm.makeSinkDefault(deviceId, s.name) },
-                )
-            }
-        }
-
-        if (live && commands.isNotEmpty()) {
+        if (live) {
             item(key = "commands-label") { SectionLabel("Commands", Modifier.animateItem()) }
-            item(key = "commands") { CommandsCard(commands) { vm.runCommand(deviceId, it.key); toast(context, "Running ${it.name}") } }
+            item(key = "commands") {
+                if (commands.isNotEmpty()) {
+                    CommandsCard(commands) { vm.runCommand(deviceId, it.key); toast(context, "Running ${it.name}") }
+                } else {
+                    SectionCard(Modifier.animateItem()) {
+                        ListRow(
+                            title = "Add PC commands",
+                            subtitle = "Shutdown, sleep, scripts… set them up on the PC and run them from here",
+                            icon = Icons.Rounded.Terminal,
+                            onClick = { vm.openCommandSetup(deviceId) },
+                        )
+                    }
+                }
+            }
         }
 
         if (!state.isPaired && state.isReachable) {
@@ -158,20 +148,28 @@ fun DeviceScreen(
             }
         }
 
-        if (battery != null) {
-            item(key = "battery") {
-                SectionCard(Modifier.animateItem()) {
+        item(key = "info-label") { SectionLabel("Connection", Modifier.animateItem()) }
+        item(key = "info") {
+            SectionCard(Modifier.animateItem()) {
+                ListRow(
+                    title = if (state.isReachable) transportLabel(state) else "Not reachable",
+                    subtitle = if (state.isReachable) "${state.plugins.size} features active" else "Open KDE Connect on it, or join the same network",
+                    icon = if (TransportKind.USB in state.transports) Icons.Rounded.Usb else Icons.Rounded.Wifi,
+                    iconTint = if (state.isReachable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    showDivider = battery != null,
+                )
+                battery?.let { b ->
                     ListRow(
-                        title = "Battery ${battery!!.charge}%",
-                        subtitle = if (battery!!.charging) "Charging" else if (battery!!.low) "Low" else "On battery",
-                        icon = if (battery!!.charging) Icons.Rounded.BatteryChargingFull else Icons.Rounded.BatteryStd,
-                        iconTint = if (battery!!.low) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        title = "Battery ${b.charge}%",
+                        subtitle = if (b.charging) "Charging" else if (b.low) "Low" else "On battery",
+                        icon = if (b.charging) Icons.Rounded.BatteryChargingFull else Icons.Rounded.BatteryStd,
+                        iconTint = if (b.low) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                     )
                 }
             }
         }
 
-        item(key = "security-label") { SectionLabel("Security") }
+        item(key = "security-label") { SectionLabel("Security", Modifier.animateItem()) }
         item(key = "security") {
             SectionCard {
                 ListRow(
@@ -188,13 +186,6 @@ fun DeviceScreen(
                         iconTint = MaterialTheme.colorScheme.error,
                         onClick = { confirmUnpair = true },
                     )
-                }
-            }
-        }
-        if (live && commands.isEmpty()) {
-            item(key = "commands-hint") {
-                TextButton(onClick = { vm.openCommandSetup(deviceId) }, modifier = Modifier.padding(horizontal = 8.dp)) {
-                    Text("Add PC commands (opens settings on the PC)")
                 }
             }
         }

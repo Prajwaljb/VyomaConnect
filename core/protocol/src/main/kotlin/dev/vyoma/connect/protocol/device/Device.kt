@@ -93,9 +93,13 @@ class Device internal constructor(
     // ---- links ----------------------------------------------------------------------------
 
     internal suspend fun addLink(link: DeviceLink) = withContext(serial) {
-        // A reconnect on the same transport means the old socket is dead or half-open; drop it.
-        links.filter { it.transport == link.transport }.forEach { it.close() }
+        // A reconnect on the same transport means the old socket is dying or half-open. Close it after
+        // a short grace period rather than at once: when both sides dial together the peer has often
+        // just sent its first packets (battery, sinks) down the old one.
         links.removeAll { it.isClosed }
+        links.filter { it.transport == link.transport }.forEach { old ->
+            env.scope.launch { delay(REPLACED_LINK_GRACE_MS); old.close() }
+        }
         links.add(link)
         linger?.cancel()
         _state.update { it.copy(identity = link.identity, transports = transports()) }
@@ -144,7 +148,8 @@ class Device internal constructor(
 
     /** Sends over the best live link: USB, then LAN, then Bluetooth. */
     suspend fun send(packet: NetworkPacket): Boolean {
-        val ordered = links.filterNot { it.isClosed }.sortedBy { it.transport.ordinal }
+        // Best transport first and, within one, the newest link: older ones are being replaced.
+        val ordered = links.filterNot { it.isClosed }.asReversed().sortedBy { it.transport.ordinal }
         for (link in ordered) if (link.send(packet)) return true
         return false
     }
@@ -298,7 +303,12 @@ class Device internal constructor(
         val caps = identity.incomingCapabilities to identity.outgoingCapabilities
         // An extra link to an already-connected peer (it dialled us back, or another transport came
         // up) must not restart plugins: that drops state peers only send once, like the PC's battery.
-        if (isPaired() && links.isNotEmpty() && loadedFor == caps) return
+        if (isPaired() && links.isNotEmpty() && loadedFor == caps) {
+            for ((pluginId, plugin) in plugins) {
+                runCatching { plugin.onLinkAdded() }.onFailure { VLog.e(TAG, "re-syncing plugin $pluginId failed", it) }
+            }
+            return
+        }
         stopPlugins()
         if (!isPaired() || links.isEmpty()) return
         loadedFor = caps
@@ -333,5 +343,6 @@ class Device internal constructor(
         const val TAG = "Device"
         const val PAIR_TIMEOUT_MS = 30_000L
         const val LINGER_MS = 10_000L
+        const val REPLACED_LINK_GRACE_MS = 2_000L
     }
 }

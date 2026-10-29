@@ -9,6 +9,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +39,7 @@ import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Sensors
+import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material3.Icon
@@ -85,7 +88,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /** Live plugin state for one PC; plugins come and go with the link, so this re-reads on every plugin change. */
-private class PcState(val battery: BatteryState?, val sink: AudioSink?, val locked: Boolean?)
+private class PcState(val battery: BatteryState?, val batteryStale: Boolean, val sink: AudioSink?, val locked: Boolean?)
 
 @Composable
 private fun rememberPcState(vm: AppViewModel, state: DeviceState): PcState {
@@ -93,7 +96,10 @@ private fun rememberPcState(vm: AppViewModel, state: DeviceState): PcState {
     val battery by (device?.plugin<BatteryPlugin>(BatteryPlugin.ID)?.remote ?: remember { MutableStateFlow(null) }).collectAsState()
     val sinks by (device?.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.sinks ?: remember { MutableStateFlow(emptyList()) }).collectAsState()
     val locked by (device?.plugin<LockPlugin>(LockPlugin.ID)?.locked ?: remember { MutableStateFlow(null) }).collectAsState()
-    return PcState(battery, sinks.firstOrNull { it.isDefault } ?: sinks.firstOrNull(), locked)
+    val id = state.identity.deviceId
+    LaunchedEffect(id, battery) { battery?.let { vm.cacheBattery(id, it) } }
+    val cached = remember(id) { vm.cachedBattery(id) }
+    return PcState(battery ?: cached, battery == null && cached != null, sinks.firstOrNull { it.isDefault } ?: sinks.firstOrNull(), locked)
 }
 
 /** Hero glyph: the PC in an accent disc, with the live orb pinned to its corner. */
@@ -156,6 +162,7 @@ fun PcDashboard(
     onTouchpad: () -> Unit,
     onClipboard: () -> Unit,
     modifier: Modifier = Modifier,
+    inDetails: Boolean = false,
 ) {
     val id = state.identity.deviceId
     val pc = rememberPcState(vm, state)
@@ -163,7 +170,7 @@ fun PcDashboard(
     when (section) {
         DashboardSection.BENTO -> Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             val phone by vm.phoneBattery.collectAsStateWithLifecycle()
-            BatteryTile(pc.battery, phone, Modifier.weight(1f), onClick = onOpenDevice)
+            BatteryTile(pc.battery, pc.batteryStale, phone, Modifier.weight(1f), onClick = onOpenDevice)
             val clips by vm.clipHistory.collectAsStateWithLifecycle()
             ClipboardTile(
                 clips.firstOrNull(),
@@ -199,7 +206,8 @@ fun PcDashboard(
                 ) { pc.sink?.let { vm.setSinkMuted(id, it.name, !it.muted) } ?: toast(context, "Volume control isn't on for this PC") },
                 Control(Icons.Rounded.NotificationsActive, "Find PC") { vm.ringPc(id) },
                 Control(Icons.Rounded.Sensors, "Ping") { vm.ping(id) },
-                Control(Icons.Rounded.MoreHoriz, "More", onClick = onOpenDevice),
+                if (inDetails) Control(Icons.Rounded.Terminal, "Commands") { vm.openCommandSetup(id) }
+                else Control(Icons.Rounded.MoreHoriz, "More", onClick = onOpenDevice),
             ),
             modifier,
         )
@@ -213,8 +221,9 @@ private fun toast(context: Context, text: String) =
 
 /** Square tile: PC battery as the outer ring, this phone as the inner one. */
 @Composable
-private fun BatteryTile(pc: BatteryState?, phone: BatteryState?, modifier: Modifier, onClick: () -> Unit) {
-    val accent = MaterialTheme.colorScheme.primary
+private fun BatteryTile(pc: BatteryState?, stale: Boolean, phone: BatteryState?, modifier: Modifier, onClick: () -> Unit) {
+    // A cached reading shows dimmed until the PC sends a fresh one.
+    val accent = MaterialTheme.colorScheme.primary.copy(alpha = if (stale) 0.45f else 1f)
     val second = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
     val track = MaterialTheme.colorScheme.surfaceContainerHigh
     val low = MaterialTheme.colorScheme.error
@@ -242,7 +251,10 @@ private fun BatteryTile(pc: BatteryState?, phone: BatteryState?, modifier: Modif
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     if (pc?.charging == true) Icon(Icons.Rounded.Bolt, "Charging", tint = accent, modifier = Modifier.size(16.dp))
-                    Text(pc?.let { "${it.charge}%" } ?: "–", style = MaterialTheme.typography.titleLarge)
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(pc?.let { "${it.charge}" } ?: "–", style = MaterialTheme.typography.titleLarge)
+                        if (pc != null) Text("%", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(bottom = 3.dp))
+                    }
                 }
             }
             Spacer(Modifier.height(10.dp))
@@ -284,16 +296,16 @@ private fun ClipboardTile(clip: ClipEntry?, modifier: Modifier, onOpen: () -> Un
                 clip?.text?.trim() ?: "Copy something and it shows up here",
                 style = MaterialTheme.typography.bodyMedium,
                 color = if (clip != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 4,
+                maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    clip?.let { (if (it.origin != null) "From PC · " else "") + ago(it.timestamp) } ?: "",
+                    clip?.let { (if (it.origin != null) "From PC\n" else "") + ago(it.timestamp) } ?: "",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
@@ -313,7 +325,7 @@ private fun ClipboardTile(clip: ClipEntry?, modifier: Modifier, onOpen: () -> Un
  * dragging and springs to the PC's value otherwise. A tick at both ends.
  */
 @Composable
-private fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modifier = Modifier) {
+internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modifier = Modifier) {
     val max = sink.maxVolume.coerceAtLeast(1).toFloat()
     var level by remember(sink.name) { mutableFloatStateOf(sink.volume / max) }
     var dragging by remember { mutableStateOf(false) }
@@ -425,4 +437,24 @@ private fun ago(time: Long): CharSequence {
     val now = System.currentTimeMillis()
     return if (now - time < DateUtils.MINUTE_IN_MILLIS) "Just now"
     else DateUtils.getRelativeTimeSpanString(time, now, DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE)
+}
+
+/** Where the PC's sound goes: one chip per output, the default one filled. */
+@Composable
+internal fun OutputPicker(sinks: List<AudioSink>, onDefault: (AudioSink) -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        sinks.sortedByDescending { it.isDefault }.forEach { sink ->
+            val bg by animateColorAsState(
+                if (sink.isDefault) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+                VyomaMotion.effects(), label = "outBg",
+            )
+            Text(
+                prettySinkName(sink.description),
+                style = MaterialTheme.typography.labelLarge,
+                color = if (sink.isDefault) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                modifier = Modifier.clip(CircleShape).background(bg).pressable { onDefault(sink) }.padding(horizontal = 14.dp, vertical = 9.dp),
+            )
+        }
+    }
 }
