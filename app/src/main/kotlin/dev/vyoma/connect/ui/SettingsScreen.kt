@@ -231,7 +231,7 @@ private fun PaletteSwatch(palette: Palette, selected: Boolean, onClick: () -> Un
     val inset by animateDpAsState(if (selected) 5.dp else 0.dp, VyomaMotion.spatial(), label = "inset")
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.pressable(onClick = onClick)) {
         Box(
-            Modifier.size(52.dp).clip(CircleShape).border(2.dp, ring, CircleShape).padding(inset),
+            Modifier.size(52.dp).clip(CircleShape).border(2.dp, ring, CircleShape).padding(inset.coerceAtLeast(0.dp)), // the spring overshoots below zero
             contentAlignment = Alignment.Center,
         ) {
             val fill = if (palette == Palette.DYNAMIC) {
