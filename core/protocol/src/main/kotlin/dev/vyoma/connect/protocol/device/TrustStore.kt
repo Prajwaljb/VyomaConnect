@@ -19,6 +19,9 @@ data class TrustedDevice(
     val name: String,
     val type: DeviceType,
     val certificate: X509Certificate,
+    /** Where we last reached it, so we can dial it directly when broadcasts don't get through. */
+    val lastAddress: String? = null,
+    val lastPort: Int? = null,
 )
 
 interface TrustStore {
@@ -53,7 +56,10 @@ class FileTrustStore(private val file: File) : TrustStore {
             Json.parseToJsonElement(file.readText()).jsonObject.mapNotNull { (id, value) ->
                 val o = value as? JsonObject ?: return@mapNotNull null
                 val cert = o.str("cert")?.let { Certificates.decode(Base64.getDecoder().decode(it)) } ?: return@mapNotNull null
-                id to TrustedDevice(id, o.str("name").orEmpty(), DeviceType.fromWire(o.str("type")), cert)
+                id to TrustedDevice(
+                    id, o.str("name").orEmpty(), DeviceType.fromWire(o.str("type")), cert,
+                    lastAddress = o.str("address"), lastPort = o.str("port")?.toIntOrNull(),
+                )
             }.toMap(LinkedHashMap())
         }.getOrElse { mutableMapOf() }
     }
@@ -65,6 +71,8 @@ class FileTrustStore(private val file: File) : TrustStore {
                     put("name", d.name)
                     put("type", d.type.wire)
                     put("cert", Base64.getEncoder().encodeToString(d.certificate.encoded))
+                    d.lastAddress?.let { put("address", it) }
+                    d.lastPort?.let { put("port", it) }
                 })
             }
         }

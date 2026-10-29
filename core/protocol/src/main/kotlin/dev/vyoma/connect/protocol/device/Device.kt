@@ -97,7 +97,14 @@ class Device internal constructor(
         _state.update { it.copy(identity = link.identity, transports = transports()) }
         if (isPaired()) {
             // Peer may have renamed itself; keep the offline listing current.
-            env.trustStore.get(id)?.let { env.trustStore.put(it.copy(name = link.identity.deviceName, type = link.identity.deviceType)) }
+            env.trustStore.get(id)?.let {
+                env.trustStore.put(
+                    it.copy(
+                        name = link.identity.deviceName, type = link.identity.deviceType,
+                        lastAddress = link.remoteAddress.hostAddress, lastPort = link.identity.tcpPort ?: it.lastPort,
+                    ),
+                )
+            }
         }
         reloadPlugins()
         env.scope.launch {
@@ -201,7 +208,8 @@ class Device internal constructor(
     private suspend fun becomePaired() {
         val cert = links.firstOrNull()?.peerCertificate ?: return
         val identity = _state.value.identity
-        env.trustStore.put(TrustedDevice(id, identity.deviceName, identity.deviceType, cert))
+        val link = links.firstOrNull()
+        env.trustStore.put(TrustedDevice(id, identity.deviceName, identity.deviceType, cert, link?.remoteAddress?.hostAddress, identity.tcpPort))
         setPairState(PairState.PAIRED)
         VLog.i(TAG, "$name: paired")
         reloadPlugins()
