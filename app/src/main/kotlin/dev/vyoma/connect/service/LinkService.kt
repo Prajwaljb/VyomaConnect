@@ -12,6 +12,7 @@ import dev.vyoma.connect.container
 import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.protocol.device.DeviceHub
 import dev.vyoma.connect.protocol.device.DeviceState
+import dev.vyoma.connect.protocol.plugin.builtin.BatteryPlugin
 import dev.vyoma.connect.protocol.device.HubEvent
 import dev.vyoma.connect.protocol.link.TransportKind
 import dev.vyoma.connect.protocol.plugin.builtin.OutgoingFile
@@ -146,9 +147,17 @@ class LinkService : LifecycleService() {
         startPhoneMonitors()
 
         // Widgets and tiles read a snapshot; refresh it whenever something they show changes.
+        // The PC's battery arrives after the link is up (once its plugin loads), then on every change.
+        val pcBattery = connectedFlow
+            .map { states -> states.map { it.identity.deviceId to it.plugins } }
+            .distinctUntilChanged()
+            .flatMapLatest { Commands.primary(container)?.plugin<BatteryPlugin>(BatteryPlugin.ID)?.remote ?: flowOf(null) }
         lifecycleScope.launch {
-            combine(connectedFlow, container.media.nowPlaying, Transfers.all.map { list -> list.count { it.state == Transfer.State.RUNNING } }) { c, np, running ->
-                Triple(c.map(::summary), np?.let { Triple(it.player.title, it.player.isPlaying, it.art) }, running)
+            combine(
+                connectedFlow, container.media.nowPlaying, Transfers.all.map { list -> list.count { it.state == Transfer.State.RUNNING } },
+                pcBattery, container.battery.state,
+            ) { c, np, running, pc, phone ->
+                listOf(c.map(::summary), np?.let { Triple(it.player.title, it.player.isPlaying, it.art) }, running, pc, phone)
             }
                 .distinctUntilChanged()
                 .sample(500)

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.LinearGradient
@@ -41,6 +42,7 @@ class WidgetLabActivity : androidx.activity.ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        setReceiversEnabled(true)
         host = AppWidgetHost(this, HOST_ID)
         host.deleteHost() // clear widgets left from an earlier run
         val which = intent.getStringExtra("widget") ?: "status"
@@ -125,7 +127,16 @@ class WidgetLabActivity : androidx.activity.ComponentActivity() {
     override fun onDestroy() {
         host.stopListening()
         ids.forEach(host::deleteAppWidgetId)
+        setReceiversEnabled(false)
         super.onDestroy()
+    }
+
+    /** The debug manifest disables our widget receivers so they don't double up in the launcher picker. */
+    private fun setReceiversEnabled(enabled: Boolean) {
+        val state = if (enabled) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
+        RECEIVERS.forEach {
+            packageManager.setComponentEnabledSetting(ComponentName(this, it), state, PackageManager.DONT_KILL_APP)
+        }
     }
 
     private fun label(text: String) = TextView(this).apply {
@@ -144,5 +155,9 @@ class WidgetLabActivity : androidx.activity.ComponentActivity() {
 
     private companion object {
         const val HOST_ID = 7701
+        val RECEIVERS = listOf(
+            StatusWidgetReceiver::class.java, ActionsWidgetReceiver::class.java, MediaWidgetReceiver::class.java,
+            ClipboardWidgetReceiver::class.java, DropWidgetReceiver::class.java,
+        )
     }
 }
