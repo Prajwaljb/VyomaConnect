@@ -1,5 +1,8 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.OrbState
+import dev.vyoma.connect.designsystem.ConnectionOrb
+import androidx.compose.material3.Surface
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
@@ -131,14 +134,18 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
     var keyboardSession by remember { mutableIntStateOf(0) }
     val imeVisible = WindowInsets.isImeVisible
 
-    Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).windowInsetsPadding(WindowInsets.statusBars).imePadding(),
+    // Surface, not a bare background: it supplies onBackground as the content color for the bar.
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) { Column(
+        Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars).imePadding(),
     ) {
         Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") }
             Column(Modifier.weight(1f)) {
                 Text("Touchpad", style = MaterialTheme.typography.titleLarge)
-                Text(target?.identity?.deviceName ?: "No PC connected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ConnectionOrb(if (target != null) OrbState.CONNECTED else OrbState.OFFLINE, size = 7.dp)
+                    Text(target?.identity?.deviceName ?: "No PC connected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
 
@@ -285,7 +292,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
 
         if (keyboard) key(keyboardSession) { TypingBar(onText = { t -> act { type(t) } }, onKey = { k -> act { key(k) } }) }
         Spacer(Modifier.navigationBarsPadding())
-    }
+    } }
 }
 
 /**

@@ -152,7 +152,7 @@ fun OnboardingScreen(vm: AppViewModel, onDone: () -> Unit) {
                             icon = state.identity.deviceType.icon(),
                             showDivider = i < rows.lastIndex,
                             trailing = {
-                                if (state.isPaired) Icon(Icons.Rounded.CheckCircle, null, tint = MaterialTheme.colorScheme.tertiary)
+                                if (state.isPaired) Icon(Icons.Rounded.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
                                 else FilledTonalButton(onClick = { vm.requestPair(state.identity.deviceId) }) { Text("Pair") }
                             },
                         )
@@ -201,10 +201,10 @@ private fun Step(
         title = title,
         subtitle = subtitle,
         icon = icon,
-        iconTint = if (done) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+        iconTint = if (done) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         showDivider = divider,
         trailing = {
-            if (done) Icon(Icons.Rounded.CheckCircle, "Done", tint = MaterialTheme.colorScheme.tertiary)
+            if (done) Icon(Icons.Rounded.CheckCircle, "Done", tint = MaterialTheme.colorScheme.primary)
             else FilledTonalButton(onClick = onClick) { Text(action) }
         },
     )
