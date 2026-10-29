@@ -45,6 +45,8 @@ sealed interface Screen {
     data object Home : Screen
     data class DeviceDetail(val id: String) : Screen
     data object Settings : Screen
+    data class Touchpad(val deviceId: String?, val keyboard: Boolean) : Screen
+    data object Clipboard : Screen
 }
 
 class MainActivity : ComponentActivity() {
@@ -79,13 +81,34 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        vm.onForeground()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Focus is what Android wants before it lets us read the clipboard.
+        if (hasFocus) vm.onForeground()
+    }
+
     private fun handleIntent(intent: Intent?) {
-        val id = intent?.getStringExtra(EXTRA_DEVICE) ?: return
-        if (backStack.lastOrNull() != Screen.DeviceDetail(id)) backStack.add(Screen.DeviceDetail(id))
+        intent ?: return
+        val target = when (intent.getStringExtra(EXTRA_SCREEN)) {
+            SCREEN_TOUCHPAD -> Screen.Touchpad(intent.getStringExtra(EXTRA_DEVICE), keyboard = false)
+            SCREEN_KEYBOARD -> Screen.Touchpad(intent.getStringExtra(EXTRA_DEVICE), keyboard = true)
+            SCREEN_CLIPBOARD -> Screen.Clipboard
+            else -> intent.getStringExtra(EXTRA_DEVICE)?.let { Screen.DeviceDetail(it) }
+        } ?: return
+        if (backStack.lastOrNull() != target) backStack.add(target)
     }
 
     companion object {
         const val EXTRA_DEVICE = "device"
+        const val EXTRA_SCREEN = "screen"
+        const val SCREEN_TOUCHPAD = "touchpad"
+        const val SCREEN_KEYBOARD = "keyboard"
+        const val SCREEN_CLIPBOARD = "clipboard"
     }
 }
 
@@ -124,6 +147,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, vm: AppViewModel) {
     }
 
     val current = backStack.last()
+    val pop: () -> Unit = { if (backStack.size > 1) backStack.removeAt(backStack.lastIndex) }
     AnimatedContent(
         targetState = current,
         transitionSpec = {
@@ -160,9 +184,18 @@ private fun AppNavigation(backStack: MutableList<Screen>, vm: AppViewModel) {
                     vm = vm,
                     onOpenDevice = { backStack.add(Screen.DeviceDetail(it)) },
                     onOpenSettings = { backStack.add(Screen.Settings) },
+                    onTouchpad = { id -> backStack.add(Screen.Touchpad(id, keyboard = false)) },
+                    onClipboard = { backStack.add(Screen.Clipboard) },
                 )
-                is Screen.DeviceDetail -> DeviceScreen(vm, screen.id, onBack = { backStack.removeAt(backStack.lastIndex) })
-                Screen.Settings -> SettingsScreen(vm, onBack = { backStack.removeAt(backStack.lastIndex) })
+                is Screen.DeviceDetail -> DeviceScreen(
+                    vm, screen.id,
+                    onBack = pop,
+                    onTouchpad = { kb -> backStack.add(Screen.Touchpad(screen.id, kb)) },
+                    onClipboard = { backStack.add(Screen.Clipboard) },
+                )
+                Screen.Settings -> SettingsScreen(vm, onBack = pop)
+                is Screen.Touchpad -> RemoteInputScreen(vm, screen.deviceId, screen.keyboard, onBack = pop)
+                Screen.Clipboard -> ClipboardScreen(vm, onBack = pop)
             }
         }
     }

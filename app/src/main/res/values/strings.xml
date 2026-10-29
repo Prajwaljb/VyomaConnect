@@ -1,4 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Vyoma</string>
+    <string name="share_label">Send to PC</string>
+    <string name="widget_status">Device</string>
+    <string name="widget_status_desc">Your PC\'s connection, battery and quick actions</string>
+    <string name="widget_actions">Quick actions</string>
+    <string name="widget_actions_desc">Clipboard, files, touchpad, media, lock and more</string>
+    <string name="widget_media">PC media</string>
+    <string name="widget_media_desc">What\'s playing on your PC, with controls</string>
+    <string name="widget_clipboard">Clipboard</string>
+    <string name="widget_clipboard_desc">Recent copies and one-tap send</string>
+    <string name="widget_drop">File drop</string>
+    <string name="widget_drop_desc">Tap to send files to your PC</string>
+    <string name="sc_touchpad">Touchpad</string>
+    <string name="sc_clipboard">Send clipboard</string>
+    <string name="sc_files">Send files</string>
 </resources>

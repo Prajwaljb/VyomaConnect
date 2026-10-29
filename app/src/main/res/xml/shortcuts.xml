@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="touchpad" android:enabled="true" android:icon="@drawable/ic_shortcut_touchpad"
+        android:shortcutShortLabel="@string/sc_touchpad">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="dev.vyoma.connect" android:targetClass="dev.vyoma.connect.ui.MainActivity">
+            <extra android:name="screen" android:value="touchpad" />
+        </intent>
+    </shortcut>
+    <shortcut android:shortcutId="clipboard" android:enabled="true" android:icon="@drawable/ic_shortcut_clipboard"
+        android:shortcutShortLabel="@string/sc_clipboard">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="dev.vyoma.connect" android:targetClass="dev.vyoma.connect.ui.ClipboardActivity" />
+    </shortcut>
+    <shortcut android:shortcutId="files" android:enabled="true" android:icon="@drawable/ic_shortcut_files"
+        android:shortcutShortLabel="@string/sc_files">
+        <intent android:action="dev.vyoma.connect.PICK_FILES" android:targetPackage="dev.vyoma.connect" android:targetClass="dev.vyoma.connect.ui.ShareActivity" />
+    </shortcut>
+</shortcuts>

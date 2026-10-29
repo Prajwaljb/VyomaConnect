@@ -6,6 +6,7 @@ import dev.vyoma.connect.protocol.PacketTypes
 import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.protocol.crypto.Certificates
 import dev.vyoma.connect.protocol.link.DeviceLink
+import dev.vyoma.connect.protocol.link.PayloadSource
 import dev.vyoma.connect.protocol.link.TransportKind
 import dev.vyoma.connect.protocol.packet
 import dev.vyoma.connect.protocol.plugin.Plugin
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.InputStream
 import java.security.cert.X509Certificate
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.serialization.json.put
@@ -36,6 +38,8 @@ data class DeviceState(
     val transports: Set<TransportKind>,
     /** 8-char code to compare on both screens while a pairing request is pending. */
     val verificationKey: String? = null,
+    /** Ids of the plugins currently loaded; empty while unpaired or offline. */
+    val plugins: Set<String> = emptySet(),
 ) {
     val isReachable: Boolean get() = transports.isNotEmpty()
     val isPaired: Boolean get() = pairState == PairState.PAIRED
@@ -120,6 +124,27 @@ class Device internal constructor(
         val ordered = links.filterNot { it.isClosed }.sortedBy { it.transport.ordinal }
         for (link in ordered) if (link.send(packet)) return true
         return false
+    }
+
+    /**
+     * Sends [packet] with a binary payload and streams it; suspends until the peer has
+     * downloaded it all (or [timeoutMs] passes without it connecting). Call off the device dispatcher.
+     */
+    suspend fun sendWithPayload(
+        packet: NetworkPacket,
+        source: PayloadSource,
+        timeoutMs: Int = 30_000,
+        onProgress: (Long) -> Unit = {},
+    ): Boolean {
+        val link = links.filterNot { it.isClosed }.sortedBy { it.transport.ordinal }.firstOrNull { it.payloads != null } ?: return false
+        return link.payloads!!.send(link, packet, source, timeoutMs, onProgress)
+    }
+
+    /** Opens the payload announced by an incoming [packet]; the caller must close it. */
+    suspend fun openPayload(packet: NetworkPacket): InputStream? {
+        if (!packet.hasPayload) return null
+        val link = links.filterNot { it.isClosed }.sortedBy { it.transport.ordinal }.firstOrNull { it.payloads != null } ?: return null
+        return link.payloads!!.open(link, packet)
     }
 
     fun disconnect() = links.forEach { it.close() }
@@ -258,6 +283,7 @@ class Device internal constructor(
         for ((pluginId, plugin) in plugins) {
             runCatching { plugin.onStart() }.onFailure { VLog.e(TAG, "starting plugin $pluginId failed", it) }
         }
+        _state.update { it.copy(plugins = plugins.keys.toSet()) }
         VLog.i(TAG, "$name: plugins ${plugins.keys.sorted()}")
     }
 
@@ -267,6 +293,7 @@ class Device internal constructor(
         plugins.values.forEach { runCatching { it.onStop() } }
         plugins.clear()
         packetRoutes.clear()
+        _state.update { if (it.plugins.isEmpty()) it else it.copy(plugins = emptySet()) }
     }
 
     private companion object {

@@ -1,19 +1,30 @@
 package dev.vyoma.connect.ui
 
 import android.app.Application
+import android.content.Context
+import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.vyoma.connect.container
 import dev.vyoma.connect.designsystem.DarkMode
 import dev.vyoma.connect.designsystem.Palette
 import dev.vyoma.connect.designsystem.ThemeSettings
+import dev.vyoma.connect.platform.NowPlaying
 import dev.vyoma.connect.protocol.crypto.Certificates
 import dev.vyoma.connect.protocol.device.Device
 import dev.vyoma.connect.protocol.device.DeviceState
 import dev.vyoma.connect.protocol.device.PairState
+import dev.vyoma.connect.protocol.plugin.builtin.ClipEntry
+import dev.vyoma.connect.protocol.plugin.builtin.FindMyPhonePlugin
+import dev.vyoma.connect.protocol.plugin.builtin.LockPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.MprisPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.PingPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.SystemVolumePlugin
 import dev.vyoma.connect.service.LinkService
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -45,18 +56,73 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         .flatMapLatest { hub -> settings.deviceName.map { it ?: hub.deviceName } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), container.defaultDeviceName())
 
+    val nowPlaying: StateFlow<NowPlaying?> get() = container.media.nowPlaying
+    val clipHistory: StateFlow<List<ClipEntry>> get() = container.clipboard.history
+
     fun startService() = LinkService.start(getApplication())
 
     fun refresh() = LinkService.start(getApplication(), refresh = true)
 
-    private fun device(id: String): Device? = container.hub.value?.device(id)
+    fun device(id: String): Device? = container.hub.value?.device(id)
+    fun deviceName(id: String): String = device(id)?.name ?: "PC"
 
     fun requestPair(id: String) = act(id) { it.requestPairing() }
     fun acceptPair(id: String) = act(id) { it.acceptPairing() }
     fun rejectPair(id: String) = act(id) { it.rejectPairing() }
     fun unpair(id: String) = act(id) { it.unpair() }
     fun ping(id: String) = act(id) { it.plugin<PingPlugin>(PingPlugin.ID)?.ping("Ping from Vyoma") }
+    fun ringPc(id: String) = act(id) { it.plugin<FindMyPhonePlugin>(FindMyPhonePlugin.ID)?.ringPeer() }
+    fun lockPc(id: String) = act(id) { it.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(true) }
+    fun runCommand(id: String, key: String) = act(id) { it.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.run(key) }
+    fun openCommandSetup(id: String) = act(id) { it.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.openSetup() }
     fun forget(id: String) { container.hub.value?.forget(id) }
+
+    fun pickFiles(context: Context) =
+        context.startActivity(Intent(context, ShareActivity::class.java).setAction(ShareActivity.ACTION_PICK))
+
+    // ---- media --------------------------------------------------------------------------------
+
+    fun playPause() = container.media.control { p, n -> p.action(n, MprisPlugin.MediaAction.PLAY_PAUSE) }
+    fun next() = container.media.control { p, n -> p.action(n, MprisPlugin.MediaAction.NEXT) }
+    fun previous() = container.media.control { p, n -> p.action(n, MprisPlugin.MediaAction.PREVIOUS) }
+    fun seekTo(ms: Long) = container.media.control { p, n -> p.seekTo(n, ms) }
+    fun pickPlayer(name: String) { container.media.preferredPlayer.value = name }
+
+    private var volumeJob: Job? = null
+
+    /** Slider drags fire constantly; send at most ~15 updates a second. */
+    fun setPlayerVolume(v: Int) {
+        volumeJob?.cancel()
+        volumeJob = viewModelScope.launch {
+            delay(60)
+            container.media.control { p, n -> p.setVolume(n, v) }
+        }
+    }
+
+    private var sinkJob: Job? = null
+
+    fun setSinkVolume(id: String, sink: String, v: Int) {
+        sinkJob?.cancel()
+        sinkJob = viewModelScope.launch {
+            delay(60)
+            device(id)?.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.setVolume(sink, v)
+        }
+    }
+
+    fun setSinkMuted(id: String, sink: String, muted: Boolean) = act(id) { it.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.setMuted(sink, muted) }
+    fun makeSinkDefault(id: String, sink: String) = act(id) { it.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.makeDefault(sink) }
+
+    // ---- clipboard ----------------------------------------------------------------------------
+
+    fun copyClip(text: String) = container.clipboard.copy(text)
+    fun clearClipHistory() = container.clipboard.clearHistory()
+    fun backgroundClipboardSync() = container.clipboard.backgroundSyncAvailable()
+
+    /** Called when the app comes to the front: read the clipboard and (re)start background sync. */
+    fun onForeground() {
+        container.clipboard.readNow()
+        container.clipboard.startBackgroundSync()
+    }
 
     fun fingerprint(id: String): String? = device(id)?.peerCertificate?.let(Certificates::sha256Fingerprint)
 

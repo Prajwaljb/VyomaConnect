@@ -26,6 +26,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.ContentPaste
+import androidx.compose.material.icons.rounded.Mouse
+import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.UploadFile
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import dev.vyoma.connect.platform.NowPlaying
 import androidx.compose.material.icons.rounded.Laptop
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.PhoneAndroid
@@ -64,8 +76,16 @@ import dev.vyoma.connect.protocol.device.PairState
 import dev.vyoma.connect.protocol.link.TransportKind
 
 @Composable
-fun HomeScreen(vm: AppViewModel, onOpenDevice: (String) -> Unit, onOpenSettings: () -> Unit) {
+fun HomeScreen(
+    vm: AppViewModel,
+    onOpenDevice: (String) -> Unit,
+    onOpenSettings: () -> Unit,
+    onTouchpad: (String) -> Unit,
+    onClipboard: () -> Unit,
+) {
     val devices by vm.devices.collectAsStateWithLifecycle()
+    val nowPlaying by vm.nowPlaying.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     val connected = devices.filter { it.isPaired && it.isReachable }
     val pairing = devices.filter { it.pairState == PairState.REQUESTED_BY_PEER || it.pairState == PairState.REQUESTED_BY_US }
     val available = devices.filter { !it.isPaired && it.isReachable && it !in pairing }
@@ -86,10 +106,18 @@ fun HomeScreen(vm: AppViewModel, onOpenDevice: (String) -> Unit, onOpenSettings:
         },
     ) {
         items(connected, key = { "c" + it.identity.deviceId }) { state ->
+            val id = state.identity.deviceId
             DeviceHeroCard(
                 state = state,
-                onClick = { onOpenDevice(state.identity.deviceId) },
-                onPing = { vm.ping(state.identity.deviceId) },
+                nowPlaying = nowPlaying?.takeIf { it.deviceId == id && it.player.hasMedia },
+                onClick = { onOpenDevice(id) },
+                onPlayPause = vm::playPause,
+                actions = listOf(
+                    Triple(Icons.Rounded.UploadFile, "Files") { vm.pickFiles(context) },
+                    Triple(Icons.Rounded.ContentPaste, "Clipboard", onClipboard),
+                    Triple(Icons.Rounded.Mouse, "Touchpad") { onTouchpad(id) },
+                    Triple(Icons.Rounded.NotificationsActive, "Ping") { vm.ping(id) },
+                ),
                 modifier = Modifier.animateItem(),
             )
         }
@@ -151,7 +179,14 @@ fun HomeScreen(vm: AppViewModel, onOpenDevice: (String) -> Unit, onOpenSettings:
 }
 
 @Composable
-private fun DeviceHeroCard(state: DeviceState, onClick: () -> Unit, onPing: () -> Unit, modifier: Modifier = Modifier) {
+private fun DeviceHeroCard(
+    state: DeviceState,
+    nowPlaying: NowPlaying?,
+    onClick: () -> Unit,
+    onPlayPause: () -> Unit,
+    actions: List<Triple<ImageVector, String, () -> Unit>>,
+    modifier: Modifier = Modifier,
+) {
     Surface(
         modifier = modifier.fillMaxWidth().pressable(pressedScale = 0.975f, onClick = onClick),
         shape = MaterialTheme.shapes.extraLarge,
@@ -178,27 +213,40 @@ private fun DeviceHeroCard(state: DeviceState, onClick: () -> Unit, onPing: () -
                     }
                 }
             }
-            Spacer(Modifier.height(16.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QuickAction(Icons.Rounded.NotificationsActive, "Ping", onPing)
+            if (nowPlaying != null) {
+                Spacer(Modifier.height(16.dp))
+                MiniPlayer(nowPlaying, onPlayPause)
             }
+            Spacer(Modifier.height(16.dp))
+            ActionGrid(actions)
         }
     }
 }
 
 @Composable
-private fun QuickAction(icon: ImageVector, label: String, onClick: () -> Unit) {
-    Column(
-        Modifier
-            .clip(MaterialTheme.shapes.medium)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .pressable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+private fun MiniPlayer(np: NowPlaying, onPlayPause: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.height(4.dp))
-        Text(label, style = MaterialTheme.typography.labelMedium)
+        Box(Modifier.size(48.dp).clip(MaterialTheme.shapes.small).background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
+            val art = np.art
+            if (art != null) {
+                androidx.compose.foundation.Image(art.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            } else {
+                Icon(Icons.Rounded.MusicNote, null, tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(np.player.title.ifBlank { np.player.name }, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (np.player.artist.isNotBlank()) {
+                Text(np.player.artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        IconButton(onClick = onPlayPause) {
+            Icon(if (np.player.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (np.player.isPlaying) "Pause" else "Play", tint = MaterialTheme.colorScheme.primary)
+        }
     }
 }
 
