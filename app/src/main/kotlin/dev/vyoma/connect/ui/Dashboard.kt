@@ -433,7 +433,8 @@ private fun ControlButton(c: Control, modifier: Modifier) {
     }
 }
 
-private fun ago(time: Long): CharSequence {
+/** "Just now" for the first minute, then "5 min. ago" and so on. */
+internal fun ago(time: Long): CharSequence {
     val now = System.currentTimeMillis()
     return if (now - time < DateUtils.MINUTE_IN_MILLIS) "Just now"
     else DateUtils.getRelativeTimeSpanString(time, now, DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE)

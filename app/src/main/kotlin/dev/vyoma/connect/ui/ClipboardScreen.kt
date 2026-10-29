@@ -1,6 +1,5 @@
 package dev.vyoma.connect.ui
 
-import android.text.format.DateUtils
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -96,7 +95,7 @@ fun ClipboardScreen(vm: AppViewModel, onBack: () -> Unit) {
                         )
                         Text(
                             (if (clip.origin == null) "This phone" else vm.deviceName(clip.origin!!)) + " · " +
-                                DateUtils.getRelativeTimeSpanString(clip.timestamp, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS),
+                                ago(clip.timestamp),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

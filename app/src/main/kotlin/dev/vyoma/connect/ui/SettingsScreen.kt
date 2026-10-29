@@ -172,7 +172,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     title = "Notifications on PC",
                     subtitle = if (notifOn) "On: reply and dismiss from your PC" else "Allow notification access to mirror them",
                     icon = Icons.Rounded.Notifications,
-                    iconTint = if (notifOn) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+                    iconTint = if (notifOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     showDivider = true,
                     onClick = { runCatching { context.startActivity(NotificationBridge.settingsIntent(context)) } },
                 )
@@ -181,7 +181,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     subtitle = if (phoneOn) "On: text from the PC, see who's calling, synced contacts"
                     else "Text from your PC and see who's calling",
                     icon = Icons.Rounded.Sms,
-                    iconTint = if (phoneOn) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+                    iconTint = if (phoneOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     showDivider = true,
                     onClick = { if (!phoneOn) askPhone.launch(PhonePermissions.all) },
                 )
@@ -190,7 +190,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     subtitle = if (clipOn) "On: copies sync even while Vyoma is closed"
                     else "Needs a one-time ADB grant (no root). Tap for the command.",
                     icon = Icons.Rounded.ContentPaste,
-                    iconTint = if (clipOn) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+                    iconTint = if (clipOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     onClick = { if (!clipOn) showAdbHelp = true },
                 )
             }
@@ -233,7 +233,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     title = if (unrestricted) "Background activity allowed" else "Allow background activity",
                     subtitle = if (unrestricted) "One UI won't put Vyoma to sleep" else "Recommended on Galaxy phones so devices stay connected",
                     icon = Icons.Rounded.BatteryChargingFull,
-                    iconTint = if (unrestricted) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+                    iconTint = if (unrestricted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     onClick = { if (!unrestricted) requestUnrestricted(context) },
                 )
             }
