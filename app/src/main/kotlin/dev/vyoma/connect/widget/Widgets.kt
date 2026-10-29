@@ -110,6 +110,7 @@ object Widgets {
     suspend fun refresh(context: Context) {
         if (sampleMode) return
         val snap = read(context)
+        if (snap.pcBattery != state.value?.pcBattery) VLog.d("Widgets", "PC battery ${snap.pcBattery}% (connected=${snap.connected})")
         state.value = snap
         withContext(Dispatchers.IO) { runCatching { save(context, snap) } }
         listOf(StatusWidget(), ActionsWidget(), MediaWidget(), ClipboardWidget(), DropWidget()).forEach {
@@ -244,6 +245,9 @@ object Widgets {
 
     internal fun pickFiles(context: Context): Action =
         actionStartActivity(Intent(context, ShareActivity::class.java).setAction(ShareActivity.ACTION_PICK).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+
+    internal fun pickPhotos(context: Context): Action =
+        actionStartActivity(Intent(context, ShareActivity::class.java).setAction(ShareActivity.ACTION_PICK_PHOTOS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
 // ---- look -------------------------------------------------------------------------------------
@@ -458,15 +462,19 @@ private fun Header(s: WidgetSnapshot, titleSize: TextUnit = 17.sp, modifier: Gla
     }
 }
 
+/**
+ * The one-tap actions, most useful first; widgets show as many as fit. The touchpad screen has its
+ * own keyboard toggle, so there's no separate keyboard button.
+ */
 private fun quickActions(context: Context, s: WidgetSnapshot) = listOf(
     Act(R.drawable.ic_w_clipboard, "Clipboard", Widgets.sendClipboard(context)),
     Act(R.drawable.ic_w_upload, "Files", Widgets.pickFiles(context)),
     Act(R.drawable.ic_w_mouse, "Touchpad", Widgets.openApp(context, MainActivity.SCREEN_TOUCHPAD)),
     Act(if (s.playing) R.drawable.ic_pause else R.drawable.ic_play, if (s.playing) "Pause" else "Play", Widgets.command(context, Commands.PLAY_PAUSE), accent = true),
-    Act(R.drawable.ic_w_ring, "Ring PC", Widgets.command(context, Commands.RING_PC)),
+    Act(R.drawable.ic_w_photo, "Photos", Widgets.pickPhotos(context)),
+    Act(R.drawable.ic_skip_next, "Next", Widgets.command(context, Commands.NEXT)),
+    Act(R.drawable.ic_w_mute, "Mute PC", Widgets.command(context, Commands.MUTE_PC)),
     Act(R.drawable.ic_w_lock, "Lock PC", Widgets.command(context, Commands.LOCK_PC)),
-    Act(R.drawable.ic_w_keyboard, "Keyboard", Widgets.openApp(context, MainActivity.SCREEN_KEYBOARD)),
-    Act(R.drawable.ic_w_ping, "Ping", Widgets.command(context, Commands.PING)),
 )
 
 /**
@@ -492,10 +500,9 @@ abstract class VyomaWidget : GlanceAppWidget() {
     }
 
     private companion object {
-        // One UI 5x6 home grid cells, 1x1 to 5x4.
-        val PREVIEW_SIZES = buildSet {
-            for (c in 1..5) for (r in 1..4) add(DpSize((71.1f * c - 13f).dp, (99.2f * r - 41f).dp))
-        }
+        // One UI 5x6 home grid cells a picker offers. RemoteViews caps a size map at 16 entries.
+        val PREVIEW_SIZES = listOf(1 to 1, 2 to 1, 4 to 1, 2 to 2, 3 to 2, 4 to 2, 5 to 2, 2 to 3, 4 to 3, 4 to 4)
+            .mapTo(mutableSetOf()) { (c, r) -> DpSize((71.1f * c - 13f).dp, (99.2f * r - 41f).dp) }
     }
 }
 
@@ -592,9 +599,9 @@ class StatusWidget : VyomaWidget() {
         }
     }
 
-    /** [n] buttons: play/pause always (last, so the accent ends the row), then clipboard, files, touchpad, ring. */
+    /** [n] buttons: play/pause always (last, so the accent ends the row), then clipboard, files, touchpad, lock. */
     private fun statusActions(context: Context, s: WidgetSnapshot, n: Int) = quickActions(context, s).let { a ->
-        listOf(a[0], a[1], a[2], a[4]).take(n - 1) + a[3]
+        listOf(a[0], a[1], a[2], a[7]).take(n - 1) + a[3]
     }
 
     @Composable

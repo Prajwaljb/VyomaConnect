@@ -11,7 +11,7 @@
 <FrameLayout android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
 <ImageView android:layout_width="36dp" android:layout_height="36dp" android:background="@drawable/widget_preview_button" android:padding="9dp" android:src="@drawable/ic_w_mouse" android:tint="@color/widget_ink" />
 <FrameLayout android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
-<ImageView android:layout_width="36dp" android:layout_height="36dp" android:background="@drawable/widget_preview_button" android:padding="9dp" android:src="@drawable/ic_w_ring" android:tint="@color/widget_ink" />
+<ImageView android:layout_width="36dp" android:layout_height="36dp" android:background="@drawable/widget_preview_button" android:padding="9dp" android:src="@drawable/ic_w_lock" android:tint="@color/widget_ink" />
 <FrameLayout android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
 <ImageView android:layout_width="36dp" android:layout_height="36dp" android:background="@drawable/widget_preview_accent_button" android:padding="9dp" android:src="@drawable/ic_play" android:tint="@android:color/white" />
 <FrameLayout android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />

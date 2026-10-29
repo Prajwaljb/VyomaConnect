@@ -97,6 +97,7 @@ class Device internal constructor(
         links.filter { it.transport == link.transport }.forEach { it.close() }
         links.removeAll { it.isClosed }
         links.add(link)
+        linger?.cancel()
         _state.update { it.copy(identity = link.identity, transports = transports()) }
         if (isPaired()) {
             // Peer may have renamed itself; keep the offline listing current.
@@ -123,9 +124,18 @@ class Device internal constructor(
             if (_state.value.pairState == PairState.REQUESTED_BY_PEER || _state.value.pairState == PairState.REQUESTED_BY_US) {
                 setPairState(PairState.UNPAIRED)
             }
-            stopPlugins()
+            // Peers often swap links (both sides dial at once and one socket wins), leaving us with
+            // none for a moment. Keep plugins through that gap: restarting them loses state peers
+            // send only once per connection, like the PC's battery.
+            linger?.cancel()
+            linger = env.scope.launch(serial) {
+                delay(LINGER_MS)
+                if (links.isEmpty()) stopPlugins()
+            }
         }
     }
+
+    private var linger: Job? = null
 
     private fun transports(): Set<TransportKind> = links.filterNot { it.isClosed }.mapTo(mutableSetOf()) { it.transport }
 
@@ -319,5 +329,6 @@ class Device internal constructor(
     private companion object {
         const val TAG = "Device"
         const val PAIR_TIMEOUT_MS = 30_000L
+        const val LINGER_MS = 10_000L
     }
 }

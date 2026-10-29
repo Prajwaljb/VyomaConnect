@@ -10,7 +10,6 @@ import androidx.compose.material.icons.rounded.BatteryStd
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.ChatBubble
-import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Mouse
@@ -120,7 +119,6 @@ fun DeviceScreen(
                             Triple(Icons.Rounded.UploadFile, "Send files") { vm.pickFiles(context) },
                             Triple(Icons.Rounded.ContentPaste, "Clipboard") { onClipboard() },
                             Triple(Icons.Rounded.Mouse, "Touchpad") { onTouchpad(false) },
-                            Triple(Icons.Rounded.Keyboard, "Keyboard") { onTouchpad(true) },
                             Triple(Icons.Rounded.NotificationsActive, "Ring PC") { vm.ringPc(deviceId); toast(context, "Ringing ${state.identity.deviceName}") },
                             Triple(Icons.Rounded.Lock, if (locked == true) "Locked" else "Lock") { vm.lockPc(deviceId) },
                             Triple(Icons.Rounded.ChatBubble, "Ping") { vm.ping(deviceId) },

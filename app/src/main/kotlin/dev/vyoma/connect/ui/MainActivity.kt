@@ -96,7 +96,6 @@ class MainActivity : ComponentActivity() {
         intent ?: return
         val target = when (intent.getStringExtra(EXTRA_SCREEN)) {
             SCREEN_TOUCHPAD -> Screen.Touchpad(intent.getStringExtra(EXTRA_DEVICE), keyboard = false)
-            SCREEN_KEYBOARD -> Screen.Touchpad(intent.getStringExtra(EXTRA_DEVICE), keyboard = true)
             SCREEN_CLIPBOARD -> Screen.Clipboard
             else -> intent.getStringExtra(EXTRA_DEVICE)?.let { Screen.DeviceDetail(it) }
         } ?: return
@@ -107,7 +106,6 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_DEVICE = "device"
         const val EXTRA_SCREEN = "screen"
         const val SCREEN_TOUCHPAD = "touchpad"
-        const val SCREEN_KEYBOARD = "keyboard"
         const val SCREEN_CLIPBOARD = "clipboard"
     }
 }
@@ -184,7 +182,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, vm: AppViewModel) {
                     vm = vm,
                     onOpenDevice = { backStack.add(Screen.DeviceDetail(it)) },
                     onOpenSettings = { backStack.add(Screen.Settings) },
-                    onTouchpad = { id, keyboard -> backStack.add(Screen.Touchpad(id, keyboard)) },
+                    onTouchpad = { id -> backStack.add(Screen.Touchpad(id, keyboard = false)) },
                     onClipboard = { backStack.add(Screen.Clipboard) },
                 )
                 is Screen.DeviceDetail -> DeviceScreen(
