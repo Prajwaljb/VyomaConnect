@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import androidx.core.content.edit
 import android.app.Application
 import android.content.Context
 import android.content.Intent
@@ -61,6 +62,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     val nowPlaying: StateFlow<NowPlaying?> get() = container.media.nowPlaying
     val phoneBattery: StateFlow<BatteryState?> get() = container.battery.state
+
+    private val batteryCache by lazy { getApplication<Application>().getSharedPreferences("pc_battery", Context.MODE_PRIVATE) }
+
+    /** Last battery a PC reported. Peers send it once per connection, so a quick reconnect can miss it. */
+    fun cachedBattery(id: String): BatteryState? =
+        batteryCache.getString(id, null)?.split(',')?.let { (c, ch) -> BatteryState(c.toInt(), ch.toBoolean()) }
+
+    fun cacheBattery(id: String, b: BatteryState) = batteryCache.edit { putString(id, "${b.charge},${b.charging}") }
 
     /** Pushes this phone's clipboard to every connected PC; returns who got it, or null if nothing was sent. */
     fun sendClipboard(): String? {

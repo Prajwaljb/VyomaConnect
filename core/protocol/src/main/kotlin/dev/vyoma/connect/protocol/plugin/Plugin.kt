@@ -30,6 +30,12 @@ interface Plugin {
     /** Called once the device is paired and reachable. */
     suspend fun onStart() {}
 
+    /**
+     * Another link to an already-connected peer came up (both sides dialled at once, or a second
+     * transport). Anything sent on the link it replaces may be lost, so re-ask for state here.
+     */
+    suspend fun onLinkAdded() {}
+
     /** Return true if handled. Only packets whose type is in the spec's [PluginSpec.incoming] are delivered. */
     suspend fun onPacket(packet: NetworkPacket): Boolean
 
