@@ -138,6 +138,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    val manualHosts: StateFlow<Set<String>> = settings.manualHosts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    /** Accepts an IP or host name, optionally with a :port we ignore (KDE Connect is always 1716). Returns false if invalid. */
+    fun addManualHost(input: String): Boolean {
+        val host = input.trim().removePrefix("http://").removePrefix("https://").substringBefore('/').let {
+            if (it.count { c -> c == ':' } == 1) it.substringBefore(':') else it
+        }
+        if (host.isEmpty() || host.length > 253 || !host.all { it.isLetterOrDigit() || it in ".-:_" }) return false
+        viewModelScope.launch { settings.addManualHost(host) }
+        return true
+    }
+
+    fun removeManualHost(host: String) = viewModelScope.launch { settings.removeManualHost(host) }
+
     private fun act(id: String, block: suspend (Device) -> Unit) {
         viewModelScope.launch { device(id)?.let { block(it) } }
     }

@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dev.vyoma.connect.designsystem.DarkMode
 import dev.vyoma.connect.designsystem.Palette
@@ -22,6 +23,7 @@ class SettingsRepository(private val context: Context) {
         val amoled = booleanPreferencesKey("amoled")
         val deviceName = stringPreferencesKey("device_name")
         val onboarded = booleanPreferencesKey("onboarded")
+        val manualHosts = stringSetPreferencesKey("manual_hosts")
     }
 
     private val prefs: Flow<Preferences> get() = context.dataStore.data
@@ -41,5 +43,10 @@ class SettingsRepository(private val context: Context) {
     suspend fun setDarkMode(mode: DarkMode) = context.dataStore.edit { it[Keys.darkMode] = mode.name }
     suspend fun setAmoled(enabled: Boolean) = context.dataStore.edit { it[Keys.amoled] = enabled }
     suspend fun setDeviceName(name: String) = context.dataStore.edit { it[Keys.deviceName] = name }
+    /** PCs added by address (Tailscale IP, MagicDNS name, another subnet). */
+    val manualHosts: Flow<Set<String>> = prefs.map { it[Keys.manualHosts].orEmpty() }.distinctUntilChanged()
+    suspend fun addManualHost(host: String) = context.dataStore.edit { it[Keys.manualHosts] = it[Keys.manualHosts].orEmpty() + host }
+    suspend fun removeManualHost(host: String) = context.dataStore.edit { it[Keys.manualHosts] = it[Keys.manualHosts].orEmpty() - host }
+
     suspend fun setOnboarded() = context.dataStore.edit { it[Keys.onboarded] = true }
 }

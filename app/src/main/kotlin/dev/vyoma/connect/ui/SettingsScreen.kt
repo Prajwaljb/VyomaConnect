@@ -15,6 +15,11 @@ import dev.vyoma.connect.service.LinkService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.rounded.Sms
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Lan
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
@@ -83,6 +88,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     var editingName by rememberSaveable { mutableStateOf(false) }
     var showAdbHelp by rememberSaveable { mutableStateOf(false) }
+    var addingHost by rememberSaveable { mutableStateOf(false) }
+    val hosts by vm.manualHosts.collectAsStateWithLifecycle()
     // Re-check permission state whenever we come back from system settings.
     var resumeTick by remember { mutableIntStateOf(0) }
     LifecycleResumeEffect(Unit) {
@@ -186,6 +193,29 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
             }
         }
 
+        item(key = "hosts-label") { SectionLabel("Connect by address") }
+        item(key = "hosts") {
+            SectionCard {
+                hosts.forEach { host ->
+                    ListRow(
+                        title = host,
+                        subtitle = if (host.startsWith("100.") || host.endsWith(".ts.net")) "Tailscale" else "Added manually",
+                        icon = Icons.Rounded.Lan,
+                        showDivider = true,
+                        trailing = {
+                            IconButton(onClick = { vm.removeManualHost(host) }) { Icon(Icons.Rounded.Close, "Remove $host") }
+                        },
+                    )
+                }
+                ListRow(
+                    title = "Add a PC by IP or name",
+                    subtitle = "For Tailscale, or when your PC isn't found automatically",
+                    icon = Icons.Rounded.Add,
+                    onClick = { addingHost = true },
+                )
+            }
+        }
+
         item(key = "bg-label") { SectionLabel("Staying connected") }
         item(key = "bg") {
             SectionCard {
@@ -230,6 +260,40 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit) {
                 }) { Text("Copy command") }
             },
             dismissButton = { TextButton(onClick = { showAdbHelp = false }) { Text("Close") } },
+        )
+    }
+
+    if (addingHost) {
+        var draft by rememberSaveable { mutableStateOf("") }
+        var invalid by rememberSaveable { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { addingHost = false },
+            title = { Text("Add a PC") },
+            text = {
+                Column {
+                    Text(
+                        "Its IP address (for Tailscale, the 100.x address shown in the Tailscale app) or host name. " +
+                            "Vyoma will keep trying it alongside automatic discovery.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        draft,
+                        { draft = it; invalid = false },
+                        singleLine = true,
+                        isError = invalid,
+                        placeholder = { Text("192.168.1.20 or my-pc") },
+                        supportingText = if (invalid) ({ Text("That doesn't look like an address") }) else null,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (vm.addManualHost(draft)) addingHost = false else invalid = true
+                }) { Text("Add") }
+            },
+            dismissButton = { TextButton(onClick = { addingHost = false }) { Text("Cancel") } },
         )
     }
 

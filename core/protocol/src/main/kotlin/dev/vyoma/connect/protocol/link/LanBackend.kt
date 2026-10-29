@@ -54,6 +54,8 @@ class LanBackend(
          * VPN (e.g. Tailscale) otherwise captures LAN traffic too; LAN peers must go over Wi-Fi.
          */
         val route: (socket: Any, target: InetAddress) -> Unit = { _, _ -> },
+        /** User-added PCs (Tailscale, other subnets): dialled directly on refresh. Called off the main thread. */
+        val manualHosts: () -> Collection<InetAddress> = { emptyList() },
     )
 
     private val payloads = LanPayloads(tls, config.tuneSocket, config.route)

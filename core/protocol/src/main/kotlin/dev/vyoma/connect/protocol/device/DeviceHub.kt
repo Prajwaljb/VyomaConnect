@@ -8,6 +8,7 @@ import dev.vyoma.connect.protocol.crypto.TlsContext
 import dev.vyoma.connect.protocol.link.DeviceLink
 import dev.vyoma.connect.protocol.link.LanBackend
 import dev.vyoma.connect.protocol.plugin.PluginSpec
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -36,7 +37,7 @@ class DeviceHub(
     override val scope: CoroutineScope,
     deviceName: String,
     private val deviceType: DeviceType,
-    lanConfig: LanBackend.Config = LanBackend.Config(),
+    private val lanConfig: LanBackend.Config = LanBackend.Config(),
 ) : DeviceEnvironment {
 
     @Volatile var deviceName: String = DeviceIdentity.sanitizeName(deviceName)
@@ -101,10 +102,27 @@ class DeviceHub(
             val ip = runCatching { java.net.InetAddress.getByName(address) }.getOrNull() ?: continue
             lan.connectTo(ip, trusted.lastPort ?: 1716)
         }
+        // Manual hosts (often Tailscale) are a fallback: dialling one while the PC is already up
+        // over Wi-Fi would swap the fast LAN link for the VPN. Names need DNS, so resolve off-thread.
+        if (trustStore.all().isNotEmpty() && !anyPairedOffline()) return
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            for (host in runCatching { lanConfig.manualHosts() }.getOrDefault(emptyList())) dial(host, DEFAULT_PORT)
+        }
+    }
+
+    /**
+     * Connects to a peer found out-of-band (mDNS, manual address) unless we already have a
+     * link from that address, or to that device id when it's known.
+     */
+    fun dial(address: java.net.InetAddress, port: Int, deviceId: String? = null) {
+        val devices = _devices.value.values
+        if (deviceId != null && devices.any { it.id == deviceId && it.state.value.isReachable }) return
+        if (devices.any { address in it.addresses }) return
+        lan.connectTo(address, port)
     }
 
     /** True while some paired device isn't connected; the service uses it to keep retrying. */
-    fun anyPairedOffline(): Boolean = _devices.value.values.any { it.state.value.isPaired && !it.state.value.isReachable }
+    fun anyPairedOffline(): Boolean = trustStore.all().any { _devices.value[it.deviceId]?.state?.value?.isReachable != true }
 
     fun device(id: String): Device? = _devices.value[id]
 
@@ -144,5 +162,6 @@ class DeviceHub(
 
     private companion object {
         const val TAG = "DeviceHub"
+        const val DEFAULT_PORT = 1716
     }
 }

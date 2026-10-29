@@ -68,6 +68,9 @@ class Device internal constructor(
 
     private val serial = Dispatchers.Default.limitedParallelism(1)
     private val links = CopyOnWriteArrayList<DeviceLink>()
+
+    /** Where we currently reach this device from; empty when offline. */
+    val addresses: List<java.net.InetAddress> get() = links.filter { !it.isClosed }.map { it.remoteAddress }
     private val _state = MutableStateFlow(
         DeviceState(initialIdentity, if (paired) PairState.PAIRED else PairState.UNPAIRED, emptySet()),
     )
