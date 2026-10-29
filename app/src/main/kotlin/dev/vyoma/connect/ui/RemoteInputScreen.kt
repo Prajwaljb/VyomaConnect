@@ -1,10 +1,38 @@
 package dev.vyoma.connect.ui
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Backspace
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -13,41 +41,12 @@ import androidx.compose.material.icons.automirrored.rounded.Redo
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ContentPaste
+import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.UnfoldMore
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.foundation.layout.isImeVisible
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -55,6 +54,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -62,11 +63,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -74,21 +79,21 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.pressable
 import dev.vyoma.connect.protocol.plugin.builtin.MousePadPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.SpecialKey
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.min
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
  * The phone as a precision touchpad and keyboard.
@@ -249,8 +254,8 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                 }
                 ClusterGap()
                 if (!fn) {
-                    Key(icon = Icons.AutoMirrored.Rounded.Backspace, desc = "Backspace") { act { key(SpecialKey.BACKSPACE) } }
-                    Key(icon = Icons.Rounded.KeyboardArrowUp, desc = "Up") { act { key(SpecialKey.UP) } }
+                    Key(icon = Icons.AutoMirrored.Rounded.Backspace, desc = "Backspace", onRepeat = { n -> act { key(SpecialKey.BACKSPACE, ctrl = n >= WORD_AFTER) } }) { act { key(SpecialKey.BACKSPACE) } }
+                    Key(icon = Icons.Rounded.KeyboardArrowUp, desc = "Up", onRepeat = { act { key(SpecialKey.UP) } }) { act { key(SpecialKey.UP) } }
                     Key(icon = Icons.AutoMirrored.Rounded.KeyboardReturn, desc = "Enter", accent = true) { act { key(SpecialKey.ENTER) } }
                 } else {
                     Key("Home") { act { key(SpecialKey.HOME) } }
@@ -271,61 +276,80 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                     Key(icon = Icons.Rounded.SelectAll, desc = "Select all") { act { chord("a", ctrl = true) } }
                 }
                 ClusterGap()
-                Key(icon = Icons.AutoMirrored.Rounded.KeyboardArrowLeft, desc = "Left") { act { key(SpecialKey.LEFT) } }
-                if (!fn) Key(icon = Icons.Rounded.KeyboardArrowDown, desc = "Down") { act { key(SpecialKey.DOWN) } }
+                Key(icon = Icons.AutoMirrored.Rounded.KeyboardArrowLeft, desc = "Left", onRepeat = { n -> act { key(SpecialKey.LEFT, ctrl = n >= WORD_AFTER) } }) { act { key(SpecialKey.LEFT) } }
+                if (!fn) Key(icon = Icons.Rounded.KeyboardArrowDown, desc = "Down", onRepeat = { act { key(SpecialKey.DOWN) } }) { act { key(SpecialKey.DOWN) } }
                 else Key("PgDn") { act { key(SpecialKey.PAGE_DOWN) } }
-                Key(icon = Icons.AutoMirrored.Rounded.KeyboardArrowRight, desc = "Right") { act { key(SpecialKey.RIGHT) } }
+                Key(icon = Icons.AutoMirrored.Rounded.KeyboardArrowRight, desc = "Right", onRepeat = { n -> act { key(SpecialKey.RIGHT, ctrl = n >= WORD_AFTER) } }) { act { key(SpecialKey.RIGHT) } }
             }
         }
 
-        if (keyboard) key(keyboardSession) { TypingBar(onText = { t -> act { type(t) } }, onBackspace = { act { key(SpecialKey.BACKSPACE) } }, onEnter = { act { key(SpecialKey.ENTER) } }) }
+        if (keyboard) key(keyboardSession) { TypingBar(onText = { t -> act { type(t) } }, onKey = { k -> act { key(k) } }) }
         Spacer(Modifier.navigationBarsPadding())
     }
 }
 
 /**
  * A real text field for the phone keyboard, so Gboard keeps autocorrect, suggestions, swipe and
- * voice typing. The field keeps what was typed and every change is sent to the PC as a diff
- * against the last state: new characters are typed, removed ones become backspaces, so an
- * autocorrected word is erased and retyped on the PC too. A leading sentinel space lets us see
- * backspace when the field looks empty. Enter sends Enter and starts afresh.
+ * voice typing. The field mirrors the text being typed on the PC, and every change is replayed
+ * there: the PC caret is moved to the edit with arrow keys, removed characters become
+ * backspaces and new ones are typed. Caret moves alone (Gboard's space-bar swipe, tapping in the
+ * field) become arrow presses, so the PC cursor follows. A leading sentinel space lets us see
+ * backspace when the field looks empty. Send presses Enter and starts afresh.
  */
 @Composable
-private fun TypingBar(onText: (String) -> Unit, onBackspace: () -> Unit, onEnter: () -> Unit) {
+private fun TypingBar(onText: (String) -> Unit, onKey: (SpecialKey) -> Unit) {
     val sentinel = " "
-    var value by remember { mutableStateOf(TextFieldValue(sentinel, TextRange(1))) }
+    val fresh = TextFieldValue(sentinel, TextRange(sentinel.length))
+    var value by remember { mutableStateOf(fresh) }
+    // Where the PC's caret is, in this field's coordinates. Starts after the sentinel.
+    var pcCaret by remember { mutableIntStateOf(sentinel.length) }
     val focus = remember { FocusRequester() }
     val ime = LocalSoftwareKeyboardController.current
     LaunchedEffect(Unit) {
         focus.requestFocus()
         ime?.show()
     }
+    fun moveTo(target: Int) {
+        val delta = target - pcCaret
+        repeat(kotlin.math.abs(delta)) { onKey(if (delta > 0) SpecialKey.RIGHT else SpecialKey.LEFT) }
+        pcCaret = target
+    }
     fun typed(text: String) = text.split('\n').forEachIndexed { i, part ->
-        if (i > 0) onEnter()
+        if (i > 0) onKey(SpecialKey.ENTER)
         if (part.isNotEmpty()) onText(part)
     }
     BasicTextField(
         value = value,
-        onValueChange = { new ->
-            if (!new.text.startsWith(sentinel)) {
-                // The sentinel went too: backspace on an empty field, or everything was replaced.
-                val shown = value.text.length - sentinel.length
-                repeat(if (shown > 0) shown else 1) { onBackspace() }
-                typed(new.text.trimStart())
-                value = TextFieldValue(sentinel, TextRange(1))
-                return@BasicTextField
+        onValueChange = { incoming ->
+            var new = incoming
+            val old = value.text
+            val cur = new.text
+            if (old != cur) {
+                // The edit replaced old[prefix, old.length - suffix) with cur[prefix, cur.length - suffix).
+                val prefix = old.commonPrefixWith(cur).length
+                val suffix = minOf(old.commonSuffixWith(cur).length, minOf(old.length, cur.length) - prefix)
+                val end = old.length - suffix
+                moveTo(end)
+                repeat(end - prefix) { onKey(SpecialKey.BACKSPACE) }
+                typed(cur.substring(prefix, cur.length - suffix))
+                pcCaret = cur.length - suffix
             }
-            val old = value.text.substring(sentinel.length)
-            val cur = new.text.substring(sentinel.length)
-            val common = old.commonPrefixWith(cur).length
-            repeat(old.length - common) { onBackspace() }
-            typed(cur.substring(common))
-            // Keep the caret at the end: edits mid-text can't be mirrored by end-of-line diffs.
+            // Backspace at the very start ate the sentinel (and so text before ours on the PC).
+            if (!new.text.startsWith(sentinel)) {
+                val shift = sentinel.length
+                new = new.copy(
+                    text = sentinel + new.text,
+                    selection = TextRange(new.selection.start + shift, new.selection.end + shift),
+                    composition = new.composition?.let { TextRange(it.start + shift, it.end + shift) },
+                )
+                pcCaret += shift
+            }
+            // Keep the caret off the sentinel, then follow it on the PC (only a plain caret, not a range).
+            if (new.selection.collapsed && new.selection.start < sentinel.length) new = new.copy(selection = TextRange(sentinel.length))
+            if (new.selection.collapsed) moveTo(new.selection.start)
             value = when {
-                cur.endsWith('\n') -> TextFieldValue(sentinel, TextRange(1))
-                // Trim long runs at a word break so the field stays light.
-                cur.length > 400 && cur.endsWith(' ') -> TextFieldValue(sentinel, TextRange(1))
-                new.selection.end != new.text.length && new.composition == null -> new.copy(selection = TextRange(new.text.length))
+                // Long runs reset at a word break when typing at the end, so the field stays light.
+                new.text.length > 400 && new.text.endsWith(' ') && new.selection.start == new.text.length -> fresh.also { pcCaret = sentinel.length }
                 else -> new
             }
         },
@@ -336,8 +360,9 @@ private fun TypingBar(onText: (String) -> Unit, onBackspace: () -> Unit, onEnter
             imeAction = ImeAction.Send,
         ),
         keyboardActions = KeyboardActions(onSend = {
-            onEnter()
-            value = TextFieldValue(sentinel, TextRange(1))
+            onKey(SpecialKey.ENTER)
+            value = fresh
+            pcCaret = sentinel.length
         }),
         singleLine = true,
         textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
@@ -379,6 +404,7 @@ private fun RowScope.Key(
     desc: String? = null,
     selected: Boolean = false,
     accent: Boolean = false,
+    onRepeat: ((Int) -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
@@ -401,15 +427,53 @@ private fun RowScope.Key(
             .fillMaxHeight()
             .clip(RoundedCornerShape(14.dp))
             .background(bg)
-            .pressable(pressedScale = 0.9f) {
-                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                onClick()
-            },
+            .then(
+                if (onRepeat == null) {
+                    Modifier.pressable(pressedScale = 0.9f) {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onClick()
+                    }
+                } else {
+                    Modifier.holdToRepeat(onRepeat) {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onClick()
+                    }
+                },
+            ),
         contentAlignment = Alignment.Center,
     ) {
         if (icon != null) Icon(icon, desc, Modifier.size(20.dp), tint = fg)
         else Text(label.orEmpty(), style = MaterialTheme.typography.labelLarge, color = fg, maxLines = 1)
     }
+}
+
+/**
+ * Fires [onClick] on touch, then, while held, [onRepeat] with a growing count: after 350 ms, at
+ * an accelerating rate (75 ms down to 30 ms), like a hardware key's auto-repeat.
+ */
+private fun Modifier.holdToRepeat(onRepeat: (Int) -> Unit, onClick: () -> Unit): Modifier = composed {
+    val scope = rememberCoroutineScope()
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (pressed) 0.9f else 1f, VyomaMotion.spatial(), label = "key")
+    this
+        .graphicsLayer { scaleX = scale; scaleY = scale }
+        .pointerInput(Unit) {
+            detectTapGestures(onPress = {
+                pressed = true
+                onClick()
+                val repeater = scope.launch {
+                    delay(350)
+                    var n = 0
+                    while (isActive) {
+                        onRepeat(n++)
+                        delay((75 - n * 3L).coerceAtLeast(30))
+                    }
+                }
+                tryAwaitRelease()
+                repeater.cancel()
+                pressed = false
+            })
+        }
 }
 
 /** Separates the arrow cluster from the shortcut keys. */
@@ -452,6 +516,9 @@ private fun ScrollStrip(modifier: Modifier, onScroll: (Float) -> Unit, onClick: 
 }
 
 private val KEY_HEIGHT = 46.dp
+
+/** Held arrows and backspace switch from characters to whole words after ~1 s of repeats. */
+private const val WORD_AFTER = 14
 private const val SCROLL_SCALE = 0.35f
 
 /** Gentle pointer acceleration: slow strokes stay precise, flicks cross the screen. */
