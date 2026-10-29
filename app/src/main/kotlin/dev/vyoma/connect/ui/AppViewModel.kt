@@ -26,8 +26,8 @@ import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.SystemVolumePlugin
 import dev.vyoma.connect.service.LinkService
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -127,26 +127,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun seekTo(ms: Long) = container.media.control { p, n -> p.seekTo(n, ms) }
     fun pickPlayer(name: String) { container.media.preferredPlayer.value = name }
 
-    private var volumeJob: Job? = null
-
-    /** Slider drags fire constantly; send at most ~15 updates a second. */
-    fun setPlayerVolume(v: Int) {
-        volumeJob?.cancel()
-        volumeJob = viewModelScope.launch {
-            delay(60)
-            container.media.control { p, n -> p.setVolume(n, v) }
-        }
+    /**
+     * Latest-value sender for slider drags: the first value goes out at once, then at most one
+     * every [gapMs] while the finger moves, and the final value is never dropped.
+     */
+    private fun <T : Any> throttled(gapMs: Long = 50, send: suspend (T) -> Unit): (T) -> Unit {
+        val latest = MutableStateFlow<T?>(null)
+        viewModelScope.launch { latest.filterNotNull().collect { send(it); delay(gapMs) } }
+        return { latest.value = it }
     }
 
-    private var sinkJob: Job? = null
-
-    fun setSinkVolume(id: String, sink: String, v: Int) {
-        sinkJob?.cancel()
-        sinkJob = viewModelScope.launch {
-            delay(60)
-            device(id)?.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.setVolume(sink, v)
-        }
+    private val playerVolume = throttled<Int> { v -> container.media.control { p, n -> p.setVolume(n, v) } }
+    private val sinkVolume = throttled<Triple<String, String, Int>> { (id, sink, v) ->
+        device(id)?.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.setVolume(sink, v)
     }
+
+    fun setPlayerVolume(v: Int) = playerVolume(v)
+    fun setSinkVolume(id: String, sink: String, v: Int) = sinkVolume(Triple(id, sink, v))
 
     fun setSinkMuted(id: String, sink: String, muted: Boolean) = act(id) { it.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.setMuted(sink, muted) }
     fun makeSinkDefault(id: String, sink: String) = act(id) { it.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.makeDefault(sink) }

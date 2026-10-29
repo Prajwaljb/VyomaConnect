@@ -1,5 +1,12 @@
 package dev.vyoma.connect.ui
 
+import kotlin.math.roundToInt
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.foundation.gestures.horizontalDrag
+import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
 import android.content.Context
 import android.text.format.DateUtils
 import android.widget.Toast
@@ -11,8 +18,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -329,7 +334,14 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
     val max = sink.maxVolume.coerceAtLeast(1).toFloat()
     var level by remember(sink.name) { mutableFloatStateOf(sink.volume / max) }
     var dragging by remember { mutableStateOf(false) }
-    LaunchedEffect(sink.volume) { if (!dragging) level = sink.volume / max }
+    var lastTouch by remember { mutableLongStateOf(0L) }
+    // The PC echoes every value we send, late. Ignore echoes while the finger is down and shortly
+    // after; once they stop, settle on whatever the PC really ended up at.
+    LaunchedEffect(sink.volume, dragging) {
+        if (dragging) return@LaunchedEffect
+        delay((ECHO_QUIET_MS - (System.currentTimeMillis() - lastTouch)).coerceAtLeast(0))
+        level = sink.volume / max
+    }
     val shown by animateFloatAsState(level, if (dragging) snap() else VyomaMotion.spatial(), label = "vol")
     val haptics = LocalHapticFeedback.current
     val fill by animateColorAsState(
@@ -341,8 +353,9 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
     fun set(v: Float) {
         val n = v.coerceIn(0f, 1f)
         if ((n == 0f || n == 1f) && n != level) haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+        if (n == level) return
         level = n
-        onVolume((n * max).toInt())
+        onVolume((n * max).roundToInt())
     }
 
     Row(modifier.fillMaxWidth().height(64.dp)) {
@@ -353,16 +366,24 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
                 .clip(MaterialTheme.shapes.large)
                 .background(MaterialTheme.colorScheme.surfaceContainerLowest)
                 .pointerInput(sink.name) {
-                    detectTapGestures { set(it.x / size.width) }
-                }
-                .pointerInput(sink.name) {
-                    detectHorizontalDragGestures(
-                        onDragStart = { dragging = true },
-                        onDragEnd = { dragging = false },
-                        onDragCancel = { dragging = false },
-                    ) { change, dx ->
-                        change.consume()
-                        set(level + dx / size.width)
+                    // Relative drag like iOS: the bar follows the finger's movement and never jumps
+                    // to where it landed, and a vertical swipe still scrolls the page.
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val start = awaitHorizontalTouchSlopOrCancellation(down.id) { change, over ->
+                            change.consume()
+                            dragging = true
+                            set(level + over / size.width)
+                        } ?: return@awaitEachGesture
+                        horizontalDrag(start.id) { change ->
+                            // Read the movement before consuming: consumed changes report zero.
+                            val dx = change.positionChange().x
+                            change.consume()
+                            lastTouch = System.currentTimeMillis()
+                            set(level + dx / size.width)
+                        }
+                        lastTouch = System.currentTimeMillis()
+                        dragging = false
                     }
                 },
         ) {
@@ -388,7 +409,7 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    if (sink.muted) "Muted" else "${(level * 100).toInt()}%",
+                    if (sink.muted) "Muted" else "${(level * 100).roundToInt()}%",
                     style = MaterialTheme.typography.titleSmall,
                     color = if (shown > 0.92f) onFill else MaterialTheme.colorScheme.onSurface,
                 )
@@ -396,6 +417,8 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
         }
     }
 }
+
+private const val ECHO_QUIET_MS = 700L
 
 private class Control(val icon: ImageVector, val label: String, val active: Boolean = false, val onClick: () -> Unit)
 
