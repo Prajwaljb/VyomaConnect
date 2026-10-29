@@ -29,7 +29,53 @@ class AndroidNetwork(private val context: Context) {
     fun lanConfig() = LanBackend.Config(
         broadcastTargets = ::broadcastTargets,
         tuneSocket = ::tuneSocket,
+        route = ::route,
     )
+
+    /**
+     * Sends LAN traffic over the physical network that owns the target's subnet, bypassing any
+     * VPN. Tailscale and other VPN addresses fall through to the default (VPN) route.
+     */
+    private fun route(socket: Any, target: InetAddress) {
+        val network = lanNetworkFor(target) ?: return
+        runCatching {
+            when (socket) {
+                is Socket -> network.bindSocket(socket)
+                is java.net.DatagramSocket -> network.bindSocket(socket)
+            }
+        }.onFailure { VLog.d(TAG, "can't bind to LAN for ${target.hostAddress}: ${it.message}") }
+    }
+
+    private fun lanNetworkFor(target: InetAddress): Network? {
+        @Suppress("DEPRECATION")
+        val candidates = connectivity.allNetworks.filter { n ->
+            val caps = connectivity.getNetworkCapabilities(n) ?: return@filter false
+            !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_USB))
+        }
+        if (target.hostAddress == "255.255.255.255") {
+            return candidates.firstOrNull { connectivity.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true }
+                ?: candidates.firstOrNull()
+        }
+        return candidates.firstOrNull { n ->
+            connectivity.getLinkProperties(n)?.linkAddresses?.any { la -> sameSubnet(la.address, target, la.prefixLength) } == true
+        }
+    }
+
+    private fun sameSubnet(a: InetAddress, b: InetAddress, prefix: Int): Boolean {
+        val x = a.address
+        val y = b.address
+        if (x.size != y.size) return false
+        var bits = prefix
+        for (i in x.indices) {
+            if (bits <= 0) return true
+            val mask = if (bits >= 8) 0xFF else (0xFF shl (8 - bits)) and 0xFF
+            if ((x[i].toInt() and mask) != (y[i].toInt() and mask)) return false
+            bits -= 8
+        }
+        return true
+    }
 
     /**
      * 255.255.255.255 doesn't leave every interface on Android (notably the hotspot AP), so

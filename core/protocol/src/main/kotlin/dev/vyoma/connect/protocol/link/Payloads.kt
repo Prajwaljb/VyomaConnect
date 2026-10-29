@@ -43,6 +43,7 @@ interface PayloadTransport {
 internal class LanPayloads(
     private val tls: TlsContext,
     private val tuneSocket: (Socket) -> Unit,
+    private val route: (Any, java.net.InetAddress) -> Unit,
 ) : PayloadTransport {
 
     override suspend fun send(
@@ -77,6 +78,7 @@ internal class LanPayloads(
             ?: throw ProtocolException("Payload without port")
         val plain = Socket()
         try {
+            route(plain, link.remoteAddress)
             plain.connect(InetSocketAddress(link.remoteAddress, port), CONNECT_TIMEOUT_MS)
             tuneSocket(plain)
             val ssl = tls.wrap(plain, asServer = false)

@@ -45,6 +45,7 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
             runCatching { LinkService.start(context) }
+                .onFailure { dev.vyoma.connect.protocol.VLog.w("Boot", "can't start link service: ${it.message}") }
         }
     }
 }
