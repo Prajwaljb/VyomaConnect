@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:description="@string/widget_media_desc"
     android:initialLayout="@layout/widget_loading"
-    android:previewLayout="@layout/widget_preview_media"
+    android:previewLayout="@layout/widget_preview_media_large"
     android:previewImage="@drawable/widget_preview_bg"
     android:minWidth="250dp"
     android:minHeight="110dp"
@@ -18,4 +18,6 @@
     android:widgetCategory="home_screen|keyguard"
     android:widgetFeatures="reconfigurable"
     app:widgetStyle="colorful"
-    app:widgetSize="small|wideSmall|medium|large" />
+    app:widgetSize="small|wideSmall|medium|large"
+    app:previewSize="small|wideSmall|medium|large"
+    app:targetHost="home" />

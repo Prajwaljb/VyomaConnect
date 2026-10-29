@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated widget-picker preview (One UI tiny slot). Static sample content. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="52dp" android:layout_height="52dp"
+    android:background="@drawable/widget_preview_bg" android:orientation="horizontal" android:gravity="center" android:padding="6dp">
+<TextView android:layout_width="40dp" android:layout_height="40dp" android:gravity="center" android:background="@drawable/widget_preview_ring" android:text="82" android:textColor="@color/widget_ink" android:textSize="12sp" android:textStyle="bold" />
+</LinearLayout>

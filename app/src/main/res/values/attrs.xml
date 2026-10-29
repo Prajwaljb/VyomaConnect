@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-      One UI Home reads these from the widget provider XML (by name, in our namespace).
-      With widgetStyle=colorful, a real widgetSize, and a translucent @android:id/background,
-      the launcher blurs the wallpaper behind the widget like its own widgets.
+      One UI Home's widget attributes, read by name in our namespace from the provider XML and from
+      the <samsung-appwidget-info> file under the receiver's samsung.appwidget.colorful.info
+      meta-data. With that file, widgetStyle=colorful and a translucent @android:id/background the
+      launcher blurs the wallpaper behind the widget, and its picker shows one preview layout per
+      size: tiny 1x1, small 2x1, wideSmall 4x1, medium 2x2, large 4x2.
     -->
     <attr name="widgetStyle" format="integer">
         <flag name="colorful" value="0x1" />
@@ -18,4 +20,21 @@
         <flag name="extraLarge" value="0x20" />
         <flag name="extraLargeLong" value="0x40" />
     </attr>
+    <attr name="previewSize" format="integer">
+        <flag name="tiny" value="0x1" />
+        <flag name="small" value="0x2" />
+        <flag name="wideSmall" value="0x4" />
+        <flag name="medium" value="0x8" />
+        <flag name="large" value="0x10" />
+    </attr>
+    <attr name="targetHost" format="integer">
+        <flag name="home" value="0x1" />
+        <flag name="lock_and_aod" value="0x2" />
+        <flag name="cover" value="0x4" />
+    </attr>
+    <attr name="previewLayoutTiny" format="reference" />
+    <attr name="previewLayoutSmall" format="reference" />
+    <attr name="previewLayoutWideSmall" format="reference" />
+    <attr name="previewLayoutMedium" format="reference" />
+    <attr name="previewLayoutLarge" format="reference" />
 </resources>

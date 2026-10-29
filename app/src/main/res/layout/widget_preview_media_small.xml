@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated widget-picker preview (One UI small slot). Static sample content. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="125dp" android:layout_height="52dp"
+    android:background="@drawable/widget_preview_bg" android:orientation="horizontal" android:gravity="center_vertical" android:padding="8dp">
+<FrameLayout android:layout_width="4dp" android:layout_height="1dp" />
+<LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:orientation="vertical">
+<TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Song title" android:textColor="@color/widget_ink" android:textSize="12sp" android:textStyle="bold" android:maxLines="1" android:ellipsize="end" />
+<TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Artist" android:textColor="@color/widget_ink_soft" android:textSize="10sp" android:maxLines="1" android:ellipsize="end" />
+</LinearLayout>
+<FrameLayout android:layout_width="4dp" android:layout_height="1dp" />
+<ImageView android:layout_width="34dp" android:layout_height="34dp" android:background="@drawable/widget_preview_accent_button" android:padding="9dp" android:src="@drawable/ic_pause" android:tint="@android:color/white" />
+</LinearLayout>
