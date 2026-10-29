@@ -277,10 +277,18 @@ class Device internal constructor(
         }
     }
 
+    /** Capabilities the running plugins were created for; null when none are running. */
+    private var loadedFor: Pair<Set<String>, Set<String>>? = null
+
     private suspend fun reloadPlugins() {
+        val identity = _state.value.identity
+        val caps = identity.incomingCapabilities to identity.outgoingCapabilities
+        // An extra link to an already-connected peer (it dialled us back, or another transport came
+        // up) must not restart plugins: that drops state peers only send once, like the PC's battery.
+        if (isPaired() && links.isNotEmpty() && loadedFor == caps) return
         stopPlugins()
         if (!isPaired() || links.isEmpty()) return
-        val identity = _state.value.identity
+        loadedFor = caps
         val scope = CoroutineScope(env.scope.coroutineContext + SupervisorJob() + serial)
         pluginScope = scope
         for (spec in env.pluginSpecs) {
@@ -299,6 +307,7 @@ class Device internal constructor(
     }
 
     private fun stopPlugins() {
+        loadedFor = null
         pluginScope?.cancel()
         pluginScope = null
         plugins.values.forEach { runCatching { it.onStop() } }

@@ -9,13 +9,13 @@ import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.BatteryStd
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Fingerprint
+import androidx.compose.material.icons.rounded.ChatBubble
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Mouse
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.UploadFile
-import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilledTonalButton
@@ -121,9 +121,9 @@ fun DeviceScreen(
                             Triple(Icons.Rounded.ContentPaste, "Clipboard") { onClipboard() },
                             Triple(Icons.Rounded.Mouse, "Touchpad") { onTouchpad(false) },
                             Triple(Icons.Rounded.Keyboard, "Keyboard") { onTouchpad(true) },
-                            Triple(Icons.AutoMirrored.Rounded.VolumeUp, "Ring PC") { vm.ringPc(deviceId); toast(context, "Ringing ${state.identity.deviceName}") },
+                            Triple(Icons.Rounded.NotificationsActive, "Ring PC") { vm.ringPc(deviceId); toast(context, "Ringing ${state.identity.deviceName}") },
                             Triple(Icons.Rounded.Lock, if (locked == true) "Locked" else "Lock") { vm.lockPc(deviceId) },
-                            Triple(Icons.Rounded.NotificationsActive, "Ping") { vm.ping(deviceId) },
+                            Triple(Icons.Rounded.ChatBubble, "Ping") { vm.ping(deviceId) },
                         ),
                     )
                 }

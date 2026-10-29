@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.ContentPaste
+import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.Mouse
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
@@ -39,7 +40,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import dev.vyoma.connect.platform.NowPlaying
 import androidx.compose.material.icons.rounded.Laptop
-import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
@@ -80,7 +80,7 @@ fun HomeScreen(
     vm: AppViewModel,
     onOpenDevice: (String) -> Unit,
     onOpenSettings: () -> Unit,
-    onTouchpad: (String) -> Unit,
+    onTouchpad: (id: String, keyboard: Boolean) -> Unit,
     onClipboard: () -> Unit,
 ) {
     val devices by vm.devices.collectAsStateWithLifecycle()
@@ -115,8 +115,8 @@ fun HomeScreen(
                 actions = listOf(
                     Triple(Icons.Rounded.UploadFile, "Files") { vm.pickFiles(context) },
                     Triple(Icons.Rounded.ContentPaste, "Clipboard", onClipboard),
-                    Triple(Icons.Rounded.Mouse, "Touchpad") { onTouchpad(id) },
-                    Triple(Icons.Rounded.NotificationsActive, "Ping") { vm.ping(id) },
+                    Triple(Icons.Rounded.Mouse, "Touchpad") { onTouchpad(id, false) },
+                    Triple(Icons.Rounded.Keyboard, "Keyboard") { onTouchpad(id, true) },
                 ),
                 modifier = Modifier.animateItem(),
             )
