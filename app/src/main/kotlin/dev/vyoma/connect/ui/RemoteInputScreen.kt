@@ -1,10 +1,29 @@
 package dev.vyoma.connect.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.automirrored.rounded.Backspace
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.KeyboardReturn
+import androidx.compose.material.icons.automirrored.rounded.Redo
+import androidx.compose.material.icons.automirrored.rounded.Undo
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.ContentPaste
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SelectAll
+import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.UnfoldMore
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,7 +39,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -156,7 +174,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                             } else if (pressed.size >= 2) {
                                 val d = pressed.map { it.positionChange() }.reduce { acc, o -> acc + o } / pressed.size.toFloat()
                                 travelled += hypot(d.x, d.y)
-                                if (travelled > slop) synchronized(motion) { motion[2] += -d.x * SCROLL_SCALE; motion[3] += -d.y * SCROLL_SCALE }
+                                if (travelled > slop) synchronized(motion) { motion[2] += d.x * SCROLL_SCALE; motion[3] += d.y * SCROLL_SCALE }
                             }
                             event.changes.forEach { it.consume() }
                             ended = event.changes.none { it.pressed }
@@ -202,34 +220,56 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             }
         }
 
-        // ---- mouse buttons ----
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(56.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // ---- mouse buttons: the middle one is also a scroll strip ----
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(52.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MouseButton("Left", Modifier.weight(2f)) { act { click() } }
-            MouseButton("Middle", Modifier.weight(1f)) { act { middleClick() } }
+            ScrollStrip(Modifier.weight(1f), onScroll = { dy -> synchronized(motion) { motion[3] += dy * SCROLL_SCALE } }) { act { middleClick() } }
             MouseButton("Right", Modifier.weight(2f)) { act { rightClick() } }
         }
 
-        // ---- special keys ----
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Key("Esc") { act { key(SpecialKey.ESCAPE) } }
-            Key("Tab") { act { key(SpecialKey.TAB) } }
-            Key("←") { act { key(SpecialKey.LEFT) } }
-            Key("↑") { act { key(SpecialKey.UP) } }
-            Key("↓") { act { key(SpecialKey.DOWN) } }
-            Key("→") { act { key(SpecialKey.RIGHT) } }
-            Key("⌫") { act { key(SpecialKey.BACKSPACE) } }
-            Key("Enter") { act { key(SpecialKey.ENTER) } }
-            Key("Copy") { act { chord("c", ctrl = true) } }
-            Key("Paste") { act { chord("v", ctrl = true) } }
-            Key("Undo") { act { chord("z", ctrl = true) } }
-            Key("Alt+Tab") { act { key(SpecialKey.TAB, alt = true) } }
-            Key("F5") { act { key(SpecialKey.F5) } }
-            Key("F11") { act { key(SpecialKey.F11) } }
-            Key("PrtSc") { act { key(SpecialKey.PRINT_SCREEN) } }
-            Key("Del") { act { key(SpecialKey.DELETE) } }
+        // ---- keys: two fixed rows, an arrow cluster, and an Fn layer for the rarer ones ----
+        var fn by rememberSaveable { mutableStateOf(false) }
+        Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth().height(KEY_HEIGHT), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (!fn) {
+                    Key("Esc") { act { key(SpecialKey.ESCAPE) } }
+                    Key("Tab") { act { key(SpecialKey.TAB) } }
+                    Key(icon = Icons.Rounded.ContentCopy, desc = "Copy") { act { chord("c", ctrl = true) } }
+                    Key(icon = Icons.Rounded.ContentPaste, desc = "Paste") { act { chord("v", ctrl = true) } }
+                } else {
+                    Key("F5") { act { key(SpecialKey.F5) } }
+                    Key("F11") { act { key(SpecialKey.F11) } }
+                    Key("PrtSc") { act { key(SpecialKey.PRINT_SCREEN) } }
+                    Key("Del") { act { key(SpecialKey.DELETE) } }
+                }
+                ClusterGap()
+                if (!fn) {
+                    Key(icon = Icons.AutoMirrored.Rounded.Backspace, desc = "Backspace") { act { key(SpecialKey.BACKSPACE) } }
+                    Key(icon = Icons.Rounded.KeyboardArrowUp, desc = "Up") { act { key(SpecialKey.UP) } }
+                    Key(icon = Icons.AutoMirrored.Rounded.KeyboardReturn, desc = "Enter", accent = true) { act { key(SpecialKey.ENTER) } }
+                } else {
+                    Key("Home") { act { key(SpecialKey.HOME) } }
+                    Key("PgUp") { act { key(SpecialKey.PAGE_UP) } }
+                    Key("End") { act { key(SpecialKey.END) } }
+                }
+            }
+            Row(Modifier.fillMaxWidth().height(KEY_HEIGHT), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Key("Fn", selected = fn) { fn = !fn }
+                if (!fn) {
+                    Key(icon = Icons.Rounded.SwapHoriz, desc = "Alt+Tab") { act { key(SpecialKey.TAB, alt = true) } }
+                    Key(icon = Icons.AutoMirrored.Rounded.Undo, desc = "Undo") { act { chord("z", ctrl = true) } }
+                    Key(icon = Icons.Rounded.SelectAll, desc = "Select all") { act { chord("a", ctrl = true) } }
+                } else {
+                    Key(icon = Icons.AutoMirrored.Rounded.Redo, desc = "Redo") { act { chord("z", ctrl = true, shift = true) } }
+                    Key(icon = Icons.Rounded.Search, desc = "Find") { act { chord("f", ctrl = true) } }
+                    Key(icon = Icons.Rounded.Close, desc = "Close tab") { act { chord("w", ctrl = true) } }
+                }
+                ClusterGap()
+                Key(icon = Icons.AutoMirrored.Rounded.KeyboardArrowLeft, desc = "Left") { act { key(SpecialKey.LEFT) } }
+                if (!fn) Key(icon = Icons.Rounded.KeyboardArrowDown, desc = "Down") { act { key(SpecialKey.DOWN) } }
+                else Key("PgDn") { act { key(SpecialKey.PAGE_DOWN) } }
+                Key(icon = Icons.AutoMirrored.Rounded.KeyboardArrowRight, desc = "Right") { act { key(SpecialKey.RIGHT) } }
+            }
         }
 
         if (keyboard) KeyboardSink(onText = { t -> act { type(t) } }, onBackspace = { act { key(SpecialKey.BACKSPACE) } }, onEnter = { act { key(SpecialKey.ENTER) } })
@@ -283,19 +323,87 @@ private fun MouseButton(label: String, modifier: Modifier, onClick: () -> Unit) 
     ) { Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 }
 
+/** A key that shares its row evenly; either a short label or an icon. */
 @Composable
-private fun Key(label: String, onClick: () -> Unit) {
-    Text(
-        label,
-        style = MaterialTheme.typography.labelLarge,
-        modifier = Modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .pressable(pressedScale = 0.92f, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+private fun RowScope.Key(
+    label: String? = null,
+    icon: ImageVector? = null,
+    desc: String? = null,
+    selected: Boolean = false,
+    accent: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val haptics = LocalHapticFeedback.current
+    val bg by animateColorAsState(
+        when {
+            selected -> MaterialTheme.colorScheme.primary
+            accent -> MaterialTheme.colorScheme.primaryContainer
+            else -> MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        label = "key",
     )
+    val fg = when {
+        selected -> MaterialTheme.colorScheme.onPrimary
+        accent -> MaterialTheme.colorScheme.onPrimaryContainer
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Box(
+        Modifier
+            .weight(1f)
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(14.dp))
+            .background(bg)
+            .pressable(pressedScale = 0.9f) {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onClick()
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (icon != null) Icon(icon, desc, Modifier.size(20.dp), tint = fg)
+        else Text(label.orEmpty(), style = MaterialTheme.typography.labelLarge, color = fg, maxLines = 1)
+    }
 }
 
+/** Separates the arrow cluster from the shortcut keys. */
+@Composable
+private fun RowScope.ClusterGap() = Spacer(Modifier.width(6.dp))
+
+/** Tap for a middle click; drag up or down to scroll, like a mouse wheel. */
+@Composable
+private fun ScrollStrip(modifier: Modifier, onScroll: (Float) -> Unit, onClick: () -> Unit) {
+    val haptics = LocalHapticFeedback.current
+    Box(
+        modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .pointerInput(Unit) {
+                val slop = viewConfiguration.touchSlop
+                awaitEachGesture {
+                    awaitFirstDown()
+                    var travelled = 0f
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.first()
+                        if (!change.pressed) break
+                        val d = change.positionChange()
+                        travelled += abs(d.y)
+                        if (travelled > slop) onScroll(d.y * 1.6f)
+                        change.consume()
+                    }
+                    if (travelled <= slop) {
+                        haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+                        onClick()
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Rounded.UnfoldMore, "Middle click or scroll", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+private val KEY_HEIGHT = 46.dp
 private const val SCROLL_SCALE = 0.35f
 
 /** Gentle pointer acceleration: slow strokes stay precise, flicks cross the screen. */
