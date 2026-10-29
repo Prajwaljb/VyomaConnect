@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
@@ -117,16 +118,18 @@ fun MediaCard(
     onVolume: (Int) -> Unit,
     onPickPlayer: (String) -> Unit,
     modifier: Modifier = Modifier,
+    showVolume: Boolean = true,
 ) {
     val p = np.player
-    val tint = remember(np.art) {
-        np.art?.let { bmp -> Palette.from(bmp).maximumColorCount(12).generate().let { it.getDarkMutedColor(it.getDominantColor(0xFF20242B.toInt())) } }
+    val art = remember(np.art) { np.art?.let(::trimBars) }
+    val tint = remember(art) {
+        art?.let { bmp -> Palette.from(bmp).maximumColorCount(12).generate().let { it.getDarkMutedColor(it.getDominantColor(0xFF20242B.toInt())) } }
             ?.let { Color(it) } ?: Color(0xFF20242B)
     }
     Surface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.extraLarge, color = tint) {
         Column {
             Box(Modifier.fillMaxWidth().aspectRatio(16f / 10f)) {
-                Crossfade(np.art, label = "art") { art ->
+                Crossfade(art, Modifier.fillMaxSize(), label = "art") { art ->
                     if (art != null) {
                         Image(art.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                     } else {
@@ -157,7 +160,7 @@ fun MediaCard(
                     }
                     MediaButton(Icons.Rounded.SkipNext, "Next", enabled = p.canNext, onClick = onNext)
                 }
-                if (p.volume >= 0) {
+                if (showVolume && p.volume >= 0) {
                     var vol by remember(p.name) { mutableFloatStateOf(p.volume.toFloat()) }
                     var dragging by remember { mutableStateOf(false) }
                     LaunchedEffect(p.volume) { if (!dragging) vol = p.volume.toFloat() }
@@ -297,4 +300,25 @@ fun CommandsCard(commands: List<RemoteCommand>, onRun: (RemoteCommand) -> Unit) 
             )
         }
     }
+}
+
+/**
+ * Video thumbnails often come letter- or pillarboxed. Crops near-black bars off the edges so the
+ * art can fill the card; leaves genuinely dark artwork alone by sampling across each line.
+ */
+private fun trimBars(bmp: Bitmap): Bitmap {
+    val w = bmp.width
+    val h = bmp.height
+    if (w < 32 || h < 32) return bmp
+    fun dark(c: Int) = (c shr 16 and 0xFF) + (c shr 8 and 0xFF) + (c and 0xFF) < 54
+    fun darkColumn(x: Int) = (0 until 16).all { dark(bmp.getPixel(x, h * (2 * it + 1) / 32)) }
+    fun darkRow(y: Int) = (0 until 16).all { dark(bmp.getPixel(w * (2 * it + 1) / 32, y)) }
+    var l = 0; while (l < w / 3 && darkColumn(l)) l++
+    var r = w - 1; while (r > w * 2 / 3 && darkColumn(r)) r--
+    var t = 0; while (t < h / 3 && darkRow(t)) t++
+    var b = h - 1; while (b > h * 2 / 3 && darkRow(b)) b--
+    if (l == 0 && t == 0 && r == w - 1 && b == h - 1) return bmp
+    // A whole dark third means a dark image, not bars.
+    if (l >= w / 3 || t >= h / 3) return bmp
+    return Bitmap.createBitmap(bmp, l, t, r - l + 1, b - t + 1)
 }

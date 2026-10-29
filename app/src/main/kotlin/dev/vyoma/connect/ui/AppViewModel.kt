@@ -14,7 +14,9 @@ import dev.vyoma.connect.protocol.crypto.Certificates
 import dev.vyoma.connect.protocol.device.Device
 import dev.vyoma.connect.protocol.device.DeviceState
 import dev.vyoma.connect.protocol.device.PairState
+import dev.vyoma.connect.protocol.plugin.builtin.BatteryState
 import dev.vyoma.connect.protocol.plugin.builtin.ClipEntry
+import dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.FindMyPhonePlugin
 import dev.vyoma.connect.protocol.plugin.builtin.LockPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.MprisPlugin
@@ -29,8 +31,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -58,6 +60,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), container.defaultDeviceName())
 
     val nowPlaying: StateFlow<NowPlaying?> get() = container.media.nowPlaying
+    val phoneBattery: StateFlow<BatteryState?> get() = container.battery.state
+
+    /** Pushes this phone's clipboard to every connected PC; returns who got it, or null if nothing was sent. */
+    fun sendClipboard(): String? {
+        container.clipboard.readNow()
+        val text = container.clipboard.current.value?.text?.takeIf { it.isNotBlank() } ?: return null
+        val targets = container.hub.value?.devices?.value?.values?.filter { it.state.value.isPaired && it.state.value.isReachable }.orEmpty()
+        if (targets.isEmpty()) return null
+        viewModelScope.launch { targets.forEach { it.plugin<ClipboardPlugin>(ClipboardPlugin.ID)?.push(text) } }
+        return targets.joinToString { it.name }
+    }
     val clipHistory: StateFlow<List<ClipEntry>> get() = container.clipboard.history
 
     /**
@@ -89,6 +102,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun ping(id: String) = act(id) { it.plugin<PingPlugin>(PingPlugin.ID)?.ping("Ping from Vyoma") }
     fun ringPc(id: String) = act(id) { it.plugin<FindMyPhonePlugin>(FindMyPhonePlugin.ID)?.ringPeer() }
     fun lockPc(id: String) = act(id) { it.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(true) }
+    fun setPcLocked(id: String, locked: Boolean) = act(id) { it.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(locked) }
     fun runCommand(id: String, key: String) = act(id) { it.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.run(key) }
     fun openCommandSetup(id: String) = act(id) { it.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.openSetup() }
     fun forget(id: String) { container.hub.value?.forget(id) }
