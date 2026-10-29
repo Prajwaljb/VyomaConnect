@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget-drawer preview. Static, so it uses sample content; the real widget is drawn by Glance. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_preview_bg"
+    android:orientation="vertical"
+    android:padding="16dp">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Clipboard" android:textColor="@color/widget_ink" android:textSize="16sp" android:textStyle="bold" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/widget_preview_pill" android:paddingHorizontal="14dp" android:paddingVertical="7dp" android:text="Send" android:textColor="@android:color/white" android:textSize="12sp" android:textStyle="bold" />
+    </LinearLayout>
+    <FrameLayout android:layout_width="1dp" android:layout_height="8dp" />
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingVertical="9dp" android:text="https://kde.org/connect" android:textColor="@color/widget_ink" android:textSize="13sp" android:maxLines="1" />
+    <FrameLayout android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/widget_button" />
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingVertical="9dp" android:text="Meeting at 4:30" android:textColor="@color/widget_ink_soft" android:textSize="13sp" android:maxLines="1" />
+    <FrameLayout android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/widget_button" />
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingVertical="9dp" android:text="Wi-Fi password" android:textColor="@color/widget_ink_soft" android:textSize="13sp" android:maxLines="1" />
+</LinearLayout>

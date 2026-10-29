@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Drawn over the blurred, tinted background: a soft top sheen and a hairline edge. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="@android:dimen/system_app_widget_background_radius" />
+            <gradient android:angle="270" android:startColor="#4DFFFFFF" android:centerColor="#00FFFFFF" android:endColor="#00FFFFFF" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="@android:dimen/system_app_widget_background_radius" />
+            <stroke android:width="1dp" android:color="#14000000" />
+        </shape>
+    </item>
+</layer-list>

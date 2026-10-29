@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Shown for the instant before a widget's first draw: the same glass card, empty. -->
+<!-- Shown for the instant before a widget's first draw: the same blurred glass, empty. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/widget_glass" />
+    android:background="@drawable/widget_preview_bg" />
