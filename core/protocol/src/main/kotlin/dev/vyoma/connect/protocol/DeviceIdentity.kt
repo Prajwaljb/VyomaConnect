@@ -24,6 +24,8 @@ data class DeviceIdentity(
     val incomingCapabilities: Set<String>,
     val outgoingCapabilities: Set<String>,
     val tcpPort: Int? = null,
+    /** Set when this peer is the Vyoma companion of another device (the PC's KDE Connect daemon). */
+    val companionOf: String? = null,
 ) {
     fun toPacket(tcpPort: Int? = this.tcpPort): NetworkPacket = packet(PacketTypes.IDENTITY) {
         put("deviceId", deviceId)
@@ -63,6 +65,7 @@ data class DeviceIdentity(
                 incomingCapabilities = packet.stringList("incomingCapabilities").toSet(),
                 outgoingCapabilities = packet.stringList("outgoingCapabilities").toSet(),
                 tcpPort = packet.int("tcpPort"),
+                companionOf = packet.string("vyomaHost")?.takeIf(::isValidDeviceId),
             )
         }
     }

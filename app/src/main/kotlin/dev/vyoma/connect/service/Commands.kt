@@ -46,7 +46,7 @@ object Commands {
     )
 
     fun primary(container: AppContainer): Device? = container.hub.value?.devices?.value?.values
-        ?.filter { it.state.value.isPaired && it.state.value.isReachable }
+        ?.filter { it.state.value.isPaired && it.state.value.isReachable && !it.state.value.isCompanion }
         ?.sortedBy { it.state.value.transports.minOf { t -> t.ordinal } }
         ?.firstOrNull()
 

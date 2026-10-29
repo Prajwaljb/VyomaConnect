@@ -168,7 +168,7 @@ object Widgets {
     private fun read(context: Context): WidgetSnapshot {
         val c = (context.applicationContext as Application).container
         val primary = Commands.primary(c)
-        val known = primary ?: c.hub.value?.devices?.value?.values?.firstOrNull { it.state.value.isPaired }
+        val known = primary ?: c.hub.value?.devices?.value?.values?.firstOrNull { it.state.value.isPaired && !it.state.value.isCompanion }
         val pcBattery = primary?.plugin<BatteryPlugin>(BatteryPlugin.ID)?.remote?.value
         val phone = c.battery.state.value
         val np = c.media.nowPlaying.value
