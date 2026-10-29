@@ -33,6 +33,8 @@ import androidx.glance.action.Action
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
+import androidx.glance.appwidget.LocalAppWidgetOptions
+import androidx.glance.appwidget.appWidgetBackground
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionSendBroadcast
 import androidx.glance.appwidget.action.actionStartActivity
@@ -205,7 +207,8 @@ object Widgets {
 }
 
 // ---- look -------------------------------------------------------------------------------------
-// One UI widgets: frosted card, high-contrast type, round glass buttons, accent used sparingly.
+// One UI widgets: launcher-blurred glass, high-contrast type, round glass buttons, accent used
+// sparingly. Spacing scale: 12/16dp outer padding, 6/8/12dp gaps.
 
 private object Ink {
     val primary = ColorProvider(day = Color(0xFF0B0B0F), night = Color(0xFFF5F5F7))
@@ -218,13 +221,55 @@ private object Ink {
     val online = ColorProvider(day = Color(0xFF1FA855), night = Color(0xFF30D158))
 }
 
+/** Size classes every widget lays out against (SizeMode.Exact gives the real size). */
+private class Dims(val w: Dp, val h: Dp) {
+    val compact = h < 100.dp      // one row tall
+    val narrow = w < 200.dp       // two columns wide
+    val tall = h >= 180.dp        // 3+ rows
+    val pad = if (compact || narrow) 12.dp else 16.dp
+    val innerW = w - pad * 2
+    val innerH = h - pad * 2
+}
+
 @Composable
-private fun Glass(modifier: GlanceModifier = GlanceModifier, padding: Dp = 16.dp, content: @Composable () -> Unit) {
-    Box(modifier.fillMaxSize().background(ImageProvider(R.drawable.widget_glass)).padding(padding)) { content() }
+private fun dims() = LocalSize.current.let { Dims(it.width, it.height) }
+
+/**
+ * The widget's root, tagged as @android:id/background with a translucent fill: One UI Home then
+ * blurs the wallpaper behind it like its own widgets (needs widgetStyle/widgetSize in the
+ * provider XML too). The launcher tells us per widget whether it will blur; elsewhere the glass is
+ * more opaque so text stays readable over a sharp wallpaper.
+ */
+@Composable
+private fun Glass(modifier: GlanceModifier = GlanceModifier, padding: Dp = dims().pad, content: @Composable () -> Unit) {
+    val context = LocalContext.current
+    val blur = LocalAppWidgetOptions.current.getBoolean("semIsWallpaperBlurSupported", false)
+    val night = (context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+        android.content.res.Configuration.UI_MODE_NIGHT_YES
+    // A plain colour (not day/night) so the launcher sees a ColorDrawable whose alpha it can read.
+    val tint = when {
+        night && blur -> Color(0x8C141416)
+        night -> Color(0xE6141416)
+        blur -> Color(0xB3F5F5F7)
+        else -> Color(0xEBF5F5F7)
+    }
+    Box(
+        modifier.fillMaxSize().appWidgetBackground().cornerRadius(android.R.dimen.system_app_widget_background_radius)
+            .background(ColorProvider(tint)),
+    ) {
+        Box(GlanceModifier.fillMaxSize().background(ImageProvider(R.drawable.widget_sheen))) {}
+        Box(GlanceModifier.fillMaxSize().padding(padding)) { content() }
+    }
 }
 
 private fun style(size: TextUnit, color: ColorProvider, weight: FontWeight = FontWeight.Normal) =
     TextStyle(fontSize = size, color = color, fontWeight = weight)
+
+@Composable
+private fun HGap(w: Dp) = Spacer(GlanceModifier.width(w))
+
+@Composable
+private fun VGap(h: Dp) = Spacer(GlanceModifier.height(h))
 
 /** Round glass button; [accent] fills it with the wallpaper accent for the main action. */
 @Composable
@@ -257,12 +302,21 @@ private fun RoundButton(icon: Int, desc: String, action: Action, size: Dp = 44.d
     }
 }
 
+private class Act(val icon: Int, val label: String, val action: Action, val accent: Boolean = false)
+
+/** Buttons spread evenly across the full width, labels optional. */
 @Composable
-private fun LabeledButton(icon: Int, label: String, action: Action, modifier: GlanceModifier, accent: Boolean = false, size: Dp = 48.dp) {
-    Column(modifier.clickable(action), horizontalAlignment = Alignment.CenterHorizontally, verticalAlignment = Alignment.CenterVertically) {
-        RoundButton(icon, label, action, size = size, accent = accent)
-        Spacer(GlanceModifier.height(6.dp))
-        Text(label, maxLines = 1, style = style(11.sp, Ink.secondary, FontWeight.Medium))
+private fun ButtonRow(items: List<Act>, size: Dp, labels: Boolean) {
+    Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        items.forEach { a ->
+            Column(GlanceModifier.defaultWeight().clickable(a.action), horizontalAlignment = Alignment.CenterHorizontally) {
+                RoundButton(a.icon, a.label, a.action, size = size, accent = a.accent)
+                if (labels) {
+                    VGap(6.dp)
+                    Text(a.label, maxLines = 1, style = style(11.sp, Ink.secondary, FontWeight.Medium))
+                }
+            }
+        }
     }
 }
 
@@ -273,11 +327,11 @@ private object Rings {
     }
 
     fun ring(context: Context, sizeDp: Int, fraction: Float, color: Int, track: Int): Bitmap = synchronized(cache) {
-        val px = (sizeDp * context.resources.displayMetrics.density).toInt()
+        val px = (sizeDp * context.resources.displayMetrics.density).toInt().coerceAtLeast(8)
         val key = "$px:${(fraction * 100).toInt()}:$color:$track"
         cache.getOrPut(key) {
             createBitmap(px, px).also { bmp ->
-                val stroke = px * 0.11f
+                val stroke = px * 0.1f
                 val r = RectF(stroke / 2, stroke / 2, px - stroke / 2, px - stroke / 2)
                 val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = stroke; strokeCap = Paint.Cap.ROUND }
                 Canvas(bmp).apply {
@@ -288,121 +342,152 @@ private object Rings {
         }
     }
 
-    fun accent(context: Context) = context.getColor(android.R.color.system_accent1_400)
-    fun low() = Color(0xFFFF453A).toArgb()
-    fun charging() = Color(0xFF30D158).toArgb()
-    fun track() = Color(0x33808080).toArgb()
+    fun color(context: Context, percent: Int?, charging: Boolean) = when {
+        charging -> Color(0xFF30D158).toArgb()
+        percent != null && percent <= 15 -> Color(0xFFFF453A).toArgb()
+        else -> context.getColor(android.R.color.system_accent1_400)
+    }
+
+    val track = Color(0x33808080).toArgb()
 }
 
 @Composable
 private fun BatteryRing(label: String, percent: Int?, charging: Boolean, sizeDp: Int) {
     val context = LocalContext.current
-    val color = when {
-        charging -> Rings.charging()
-        percent != null && percent <= 15 -> Rings.low()
-        else -> Rings.accent(context)
-    }
-    val bmp = remember(percent, charging, sizeDp) { Rings.ring(context, sizeDp, (percent ?: 0) / 100f, color, Rings.track()) }
+    val bmp = Rings.ring(context, sizeDp, (percent ?: 0) / 100f, Rings.color(context, percent, charging), Rings.track)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(GlanceModifier.size(sizeDp.dp), contentAlignment = Alignment.Center) {
             Image(ImageProvider(bmp), null, modifier = GlanceModifier.fillMaxSize())
-            Text(percent?.let { "$it" } ?: "–", style = style((sizeDp / 3.6f).sp, Ink.primary, FontWeight.Bold))
+            Text(percent?.let { "$it" } ?: "–", style = style((sizeDp / 3.4f).sp, Ink.primary, FontWeight.Bold))
         }
-        Spacer(GlanceModifier.height(4.dp))
+        VGap(4.dp)
         Text(if (charging) "$label ⚡" else label, maxLines = 1, style = style(11.sp, Ink.secondary, FontWeight.Medium))
     }
 }
 
+/** Compact battery readout for short layouts: small icon, bold percent. */
 @Composable
-private fun StatusLine(s: WidgetSnapshot) {
+private fun BatteryChip(icon: Int, percent: Int?, charging: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        if (s.connected) {
-            Box(GlanceModifier.size(7.dp).cornerRadius(4.dp).background(Ink.online)) {}
-            Spacer(GlanceModifier.width(5.dp))
-        }
-        Text(
-            when {
-                s.pcName == null -> "Open Vyoma to pair"
-                s.connected -> "Connected"
-                else -> "Not connected"
-            },
-            maxLines = 1,
-            style = style(12.sp, if (s.connected) Ink.online else Ink.secondary, FontWeight.Medium),
-        )
+        Image(ImageProvider(icon), null, colorFilter = ColorFilter.tint(Ink.secondary), modifier = GlanceModifier.size(16.dp))
+        HGap(4.dp)
+        Text((percent?.let { "$it%" } ?: "–") + if (charging) "⚡" else "", maxLines = 1, style = style(13.sp, Ink.primary, FontWeight.Bold))
     }
 }
+
+@Composable
+private fun Header(s: WidgetSnapshot, titleSize: TextUnit = 17.sp, modifier: GlanceModifier = GlanceModifier) {
+    Column(modifier) {
+        Text(s.pcName ?: "No PC", maxLines = 1, style = style(titleSize, Ink.primary, FontWeight.Bold))
+        VGap(2.dp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (s.connected) {
+                Box(GlanceModifier.size(7.dp).cornerRadius(4.dp).background(Ink.online)) {}
+                HGap(5.dp)
+            }
+            Text(
+                when {
+                    s.pcName == null -> "Open Vyoma to pair"
+                    s.connected -> "Connected"
+                    else -> "Not connected"
+                },
+                maxLines = 1,
+                style = style(12.sp, if (s.connected) Ink.online else Ink.secondary, FontWeight.Medium),
+            )
+        }
+    }
+}
+
+private fun quickActions(context: Context, s: WidgetSnapshot) = listOf(
+    Act(R.drawable.ic_w_clipboard, "Clipboard", Widgets.sendClipboard(context)),
+    Act(R.drawable.ic_w_upload, "Files", Widgets.pickFiles(context)),
+    Act(R.drawable.ic_w_mouse, "Touchpad", Widgets.openApp(context, MainActivity.SCREEN_TOUCHPAD)),
+    Act(if (s.playing) R.drawable.ic_pause else R.drawable.ic_play, if (s.playing) "Pause" else "Play", Widgets.command(context, Commands.PLAY_PAUSE), accent = true),
+    Act(R.drawable.ic_w_ring, "Ring PC", Widgets.command(context, Commands.RING_PC)),
+    Act(R.drawable.ic_w_lock, "Lock PC", Widgets.command(context, Commands.LOCK_PC)),
+    Act(R.drawable.ic_w_keyboard, "Keyboard", Widgets.openApp(context, MainActivity.SCREEN_KEYBOARD)),
+    Act(R.drawable.ic_w_bell, "Ping", Widgets.command(context, Commands.PING)),
+)
 
 // ---- 1. device status -------------------------------------------------------------------------
 
 class StatusWidget : GlanceAppWidget() {
-    override val sizeMode = SizeMode.Responsive(setOf(DpSize(140.dp, 140.dp), DpSize(260.dp, 120.dp), DpSize(260.dp, 200.dp)))
+    override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) = provideContent {
         GlanceTheme {
             val s = Widgets.snapshot(context)
-            val size = LocalSize.current
-            val wide = size.width >= 250.dp
-            val tall = size.height >= 190.dp
+            val d = dims()
+            val pc = s.pcBattery.takeIf { s.connected }
+            val pcCharging = s.pcCharging && s.connected
             Glass(GlanceModifier.clickable(Widgets.openApp(context))) {
-                Column(GlanceModifier.fillMaxSize()) {
-                    Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(GlanceModifier.defaultWeight()) {
-                            Text(s.pcName ?: "No PC", maxLines = 1, style = style(if (wide) 18.sp else 16.sp, Ink.primary, FontWeight.Bold))
-                            Spacer(GlanceModifier.height(2.dp))
-                            StatusLine(s)
-                        }
-                        if (wide && !tall) {
-                            BatteryRing("PC", s.pcBattery.takeIf { s.connected }, s.pcCharging && s.connected, 46)
-                            Spacer(GlanceModifier.width(10.dp))
-                            BatteryRing("Phone", s.phoneBattery, s.phoneCharging, 46)
+                when {
+                    // 1 row: name and status, batteries at the end if there's room.
+                    d.compact -> Row(GlanceModifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                        Header(s, 15.sp, GlanceModifier.defaultWeight())
+                        if (!d.narrow) {
+                            BatteryChip(R.drawable.ic_w_laptop, pc, pcCharging)
+                            HGap(12.dp)
+                            BatteryChip(R.drawable.ic_w_phone, s.phoneBattery, s.phoneCharging)
                         }
                     }
-                    Spacer(GlanceModifier.defaultWeight())
-                    if (!wide) {
-                        // 2x2: one big ring for the PC, the way One UI's battery widget leads with one device.
+                    // 2 columns: lead with one big ring for the PC, like One UI's battery widget.
+                    d.narrow -> Column(GlanceModifier.fillMaxSize()) {
+                        Header(s, 15.sp)
+                        Spacer(GlanceModifier.defaultWeight())
+                        val ring = minOf(d.innerW.value, d.innerH.value - 60).toInt().coerceIn(36, 76)
                         Row(GlanceModifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                            BatteryRing("PC", s.pcBattery.takeIf { s.connected }, s.pcCharging && s.connected, 58)
+                            BatteryRing("PC", pc, pcCharging, ring)
                         }
-                    } else {
-                        if (tall) {
-                            Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                BatteryRing("PC", s.pcBattery.takeIf { s.connected }, s.pcCharging && s.connected, 58)
-                                Spacer(GlanceModifier.width(14.dp))
-                                BatteryRing("Phone", s.phoneBattery, s.phoneCharging, 58)
-                                Spacer(GlanceModifier.defaultWeight())
-                                if (s.title != null) NowPlayingPill(context, s, GlanceModifier.width(130.dp))
-                            }
-                            Spacer(GlanceModifier.defaultWeight())
-                        }
+                    }
+                    // 4x2: header + battery chips, then the action row.
+                    !d.tall -> Column(GlanceModifier.fillMaxSize()) {
                         Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            RoundButton(R.drawable.ic_w_clipboard, "Send clipboard", Widgets.sendClipboard(context))
-                            Spacer(GlanceModifier.defaultWeight())
-                            RoundButton(R.drawable.ic_w_upload, "Send files", Widgets.pickFiles(context))
-                            Spacer(GlanceModifier.defaultWeight())
-                            RoundButton(R.drawable.ic_w_mouse, "Touchpad", Widgets.openApp(context, MainActivity.SCREEN_TOUCHPAD))
-                            Spacer(GlanceModifier.defaultWeight())
-                            RoundButton(R.drawable.ic_w_ring, "Ring PC", Widgets.command(context, Commands.RING_PC))
-                            Spacer(GlanceModifier.defaultWeight())
-                            RoundButton(
-                                if (s.playing) R.drawable.ic_pause else R.drawable.ic_play, if (s.playing) "Pause" else "Play",
-                                Widgets.command(context, Commands.PLAY_PAUSE), accent = true,
-                            )
+                            Header(s, modifier = GlanceModifier.defaultWeight())
+                            BatteryChip(R.drawable.ic_w_laptop, pc, pcCharging)
+                            HGap(12.dp)
+                            BatteryChip(R.drawable.ic_w_phone, s.phoneBattery, s.phoneCharging)
                         }
+                        Spacer(GlanceModifier.defaultWeight())
+                        val n = (d.innerW.value / 56).toInt().coerceIn(3, 5)
+                        ButtonRow(statusActions(context, s, n), size = 44.dp, labels = false)
+                    }
+                    // 4x3+: rings, now playing, actions with labels when there's height.
+                    else -> Column(GlanceModifier.fillMaxSize()) {
+                        Header(s, 18.sp)
+                        Spacer(GlanceModifier.defaultWeight())
+                        val labels = d.innerH >= 250.dp
+                        val ring = ((d.innerH.value - 42 - (if (labels) 66 else 48) - 40) * 0.9f).toInt().coerceIn(44, 84)
+                        Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            BatteryRing("PC", pc, pcCharging, ring)
+                            HGap(16.dp)
+                            BatteryRing("Phone", s.phoneBattery, s.phoneCharging, ring)
+                            Spacer(GlanceModifier.defaultWeight())
+                            if (s.title != null && d.innerW >= 260.dp) NowPlaying(context, s, GlanceModifier.width(d.innerW - (ring * 2 + 40).dp))
+                        }
+                        Spacer(GlanceModifier.defaultWeight())
+                        val n = (d.innerW.value / 56).toInt().coerceIn(3, 5)
+                        ButtonRow(statusActions(context, s, n), size = 44.dp, labels = labels)
                     }
                 }
             }
         }
     }
 
+    /** [n] buttons: play/pause always (last, so the accent ends the row), then clipboard, files, touchpad, ring. */
+    private fun statusActions(context: Context, s: WidgetSnapshot, n: Int) = quickActions(context, s).let { a ->
+        listOf(a[0], a[1], a[2], a[4]).take(n - 1) + a[3]
+    }
+
     @Composable
-    private fun NowPlayingPill(context: Context, s: WidgetSnapshot, modifier: GlanceModifier) {
+    private fun NowPlaying(context: Context, s: WidgetSnapshot, modifier: GlanceModifier) {
         Row(
             modifier.cornerRadius(18.dp).background(Ink.glassButton).padding(8.dp).clickable(Widgets.command(context, Commands.PLAY_PAUSE)),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (s.art != null) {
-                Image(ImageProvider(s.art), null, contentScale = ContentScale.Crop, modifier = GlanceModifier.size(34.dp).cornerRadius(10.dp))
-                Spacer(GlanceModifier.width(8.dp))
+                Image(ImageProvider(s.art), null, contentScale = ContentScale.Crop, modifier = GlanceModifier.size(36.dp).cornerRadius(10.dp))
+                HGap(8.dp)
             }
             Column(GlanceModifier.defaultWeight()) {
                 Text(s.title.orEmpty(), maxLines = 1, style = style(12.sp, Ink.primary, FontWeight.Medium))
@@ -415,44 +500,42 @@ class StatusWidget : GlanceAppWidget() {
 // ---- 2. quick actions -------------------------------------------------------------------------
 
 class ActionsWidget : GlanceAppWidget() {
-    override val sizeMode = SizeMode.Responsive(setOf(DpSize(260.dp, 100.dp), DpSize(260.dp, 190.dp)))
+    override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) = provideContent {
         GlanceTheme {
             val s = Widgets.snapshot(context)
-            val tall = LocalSize.current.height >= 180.dp
-            Glass(padding = 14.dp) {
+            val d = dims()
+            Glass {
+                // Fill the space: as many 64dp columns as fit, as many rows as fit, labels only when roomy.
+                val cols = (d.innerW.value / 64).toInt().coerceIn(2, 6)
+                val labeledRows = ((d.innerH.value + 12) / (48 + 6 + 14 + 12)).toInt()
+                val labels = labeledRows >= 1 && !d.compact
+                val rows = if (labels) labeledRows.coerceIn(1, 4) else ((d.innerH.value + 8) / (40 + 8)).toInt().coerceIn(1, 4)
+                val size = if (labels) 48.dp else minOf(44f, d.innerH.value).dp
+                val items = quickActions(context, s).take(cols * rows)
                 Column(GlanceModifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                    ButtonRow(
-                        listOf(
-                            Triple(R.drawable.ic_w_clipboard, "Clipboard", Widgets.sendClipboard(context)),
-                            Triple(R.drawable.ic_w_upload, "Files", Widgets.pickFiles(context)),
-                            Triple(R.drawable.ic_w_mouse, "Touchpad", Widgets.openApp(context, MainActivity.SCREEN_TOUCHPAD)),
-                            Triple(if (s.playing) R.drawable.ic_pause else R.drawable.ic_play, if (s.playing) "Pause" else "Play", Widgets.command(context, Commands.PLAY_PAUSE)),
-                        ),
-                        accentLast = true,
-                    )
-                    if (tall) {
-                        Spacer(GlanceModifier.defaultWeight())
-                        ButtonRow(
-                            listOf(
-                                Triple(R.drawable.ic_w_ring, "Ring PC", Widgets.command(context, Commands.RING_PC)),
-                                Triple(R.drawable.ic_w_lock, "Lock PC", Widgets.command(context, Commands.LOCK_PC)),
-                                Triple(R.drawable.ic_w_keyboard, "Keyboard", Widgets.openApp(context, MainActivity.SCREEN_KEYBOARD)),
-                                Triple(R.drawable.ic_w_bell, "Ping", Widgets.command(context, Commands.PING)),
-                            ),
-                        )
+                    items.chunked(cols).forEachIndexed { i, row ->
+                        if (i > 0) Spacer(GlanceModifier.defaultWeight())
+                        // Pad a short last row so columns stay aligned.
+                        val padded = row + List(cols - row.size) { null }
+                        Row(GlanceModifier.fillMaxWidth()) {
+                            padded.forEach { a ->
+                                if (a == null) {
+                                    Spacer(GlanceModifier.defaultWeight())
+                                } else {
+                                    Column(GlanceModifier.defaultWeight().clickable(a.action), horizontalAlignment = Alignment.CenterHorizontally) {
+                                        RoundButton(a.icon, a.label, a.action, size = size, accent = a.accent)
+                                        if (labels) {
+                                            VGap(6.dp)
+                                            Text(a.label, maxLines = 1, style = style(11.sp, Ink.secondary, FontWeight.Medium))
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-            }
-        }
-    }
-
-    @Composable
-    private fun ButtonRow(items: List<Triple<Int, String, Action>>, accentLast: Boolean = false) {
-        Row(GlanceModifier.fillMaxWidth()) {
-            items.forEachIndexed { i, (icon, label, action) ->
-                LabeledButton(icon, label, action, GlanceModifier.defaultWeight(), accent = accentLast && i == items.lastIndex)
             }
         }
     }
@@ -461,68 +544,131 @@ class ActionsWidget : GlanceAppWidget() {
 // ---- 3. PC media ------------------------------------------------------------------------------
 
 class MediaWidget : GlanceAppWidget() {
-    override val sizeMode = SizeMode.Responsive(setOf(DpSize(260.dp, 110.dp), DpSize(260.dp, 200.dp)))
+    override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) = provideContent {
         GlanceTheme {
             val s = Widgets.snapshot(context)
-            val tall = LocalSize.current.height >= 190.dp
-            if (s.art != null) ArtLayout(context, s, tall) else PlainLayout(context, s)
+            val d = dims()
+            when {
+                d.compact -> Compact(context, s, d)
+                s.art != null -> ArtLayout(context, s, d)
+                else -> PlainLayout(context, s, d)
+            }
         }
     }
 
     /** Album art full-bleed under a scrim, white type: the Now Bar look. */
     @Composable
-    private fun ArtLayout(context: Context, s: WidgetSnapshot, tall: Boolean) {
-        Box(GlanceModifier.fillMaxSize().cornerRadius(28.dp).clickable(Widgets.openApp(context))) {
+    private fun ArtLayout(context: Context, s: WidgetSnapshot, d: Dims) {
+        Box(
+            GlanceModifier.fillMaxSize().appWidgetBackground().cornerRadius(android.R.dimen.system_app_widget_background_radius)
+                .clickable(Widgets.openApp(context)),
+        ) {
             Image(ImageProvider(s.art!!), s.title, contentScale = ContentScale.Crop, modifier = GlanceModifier.fillMaxSize())
             Box(GlanceModifier.fillMaxSize().background(ImageProvider(R.drawable.widget_scrim))) {}
-            Column(GlanceModifier.fillMaxSize().padding(16.dp)) {
+            Column(GlanceModifier.fillMaxSize().padding(d.pad)) {
                 Text(s.pcName?.let { "On $it" } ?: "PC", maxLines = 1, style = style(11.sp, Ink.whiteSoft, FontWeight.Medium))
                 Spacer(GlanceModifier.defaultWeight())
-                Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-                    Column(GlanceModifier.defaultWeight()) {
-                        Text(s.title.orEmpty(), maxLines = if (tall) 2 else 1, style = style(if (tall) 20.sp else 16.sp, Ink.white, FontWeight.Bold))
-                        s.artist?.takeIf { it.isNotBlank() }?.let { Text(it, maxLines = 1, style = style(13.sp, Ink.whiteSoft)) }
+                if (d.narrow) {
+                    Text(s.title.orEmpty(), maxLines = 2, style = style(15.sp, Ink.white, FontWeight.Bold))
+                    VGap(8.dp)
+                    Row(GlanceModifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) { Controls(context, s, onArt = true, full = d.innerW >= 150.dp) }
+                } else {
+                    Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+                        Column(GlanceModifier.defaultWeight()) {
+                            Text(s.title.orEmpty(), maxLines = if (d.tall) 2 else 1, style = style(if (d.tall) 20.sp else 16.sp, Ink.white, FontWeight.Bold))
+                            s.artist?.takeIf { it.isNotBlank() }?.let { Text(it, maxLines = 1, style = style(13.sp, Ink.whiteSoft)) }
+                        }
+                        HGap(12.dp)
+                        Controls(context, s, onArt = true, full = true)
                     }
-                    Spacer(GlanceModifier.width(10.dp))
-                    Controls(context, s, onArt = true)
                 }
             }
         }
     }
 
     @Composable
-    private fun PlainLayout(context: Context, s: WidgetSnapshot) {
+    private fun PlainLayout(context: Context, s: WidgetSnapshot, d: Dims) {
+        Glass(GlanceModifier.clickable(Widgets.openApp(context))) {
+            if (d.narrow) {
+                Column(GlanceModifier.fillMaxSize()) {
+                    Thumb(s, 44.dp)
+                    Spacer(GlanceModifier.defaultWeight())
+                    Text(s.title ?: "Nothing playing", maxLines = 2, style = style(14.sp, Ink.primary, FontWeight.Bold))
+                    if (s.title != null) {
+                        VGap(8.dp)
+                        Controls(context, s, onArt = false, full = d.innerW >= 150.dp)
+                    }
+                }
+            } else {
+                Row(GlanceModifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                    Thumb(s, 64.dp)
+                    HGap(14.dp)
+                    Column(GlanceModifier.defaultWeight()) {
+                        Text(s.title ?: "Nothing playing", maxLines = 2, style = style(16.sp, Ink.primary, FontWeight.Bold))
+                        Text(
+                            s.artist?.takeIf { it.isNotBlank() } ?: s.pcName?.let { "on $it" } ?: "Play something on your PC",
+                            maxLines = 1, style = style(12.sp, Ink.secondary),
+                        )
+                    }
+                    if (s.title != null) {
+                        HGap(8.dp)
+                        Controls(context, s, onArt = false, full = d.innerW >= 280.dp)
+                    }
+                }
+            }
+        }
+    }
+
+    /** One row: thumbnail, title, play. */
+    @Composable
+    private fun Compact(context: Context, s: WidgetSnapshot, d: Dims) {
         Glass(GlanceModifier.clickable(Widgets.openApp(context))) {
             Row(GlanceModifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                Box(GlanceModifier.size(64.dp).cornerRadius(18.dp).background(Ink.glassButton), contentAlignment = Alignment.Center) {
-                    Image(ImageProvider(R.drawable.ic_w_music), null, colorFilter = ColorFilter.tint(Ink.secondary), modifier = GlanceModifier.size(28.dp))
+                if (!d.narrow) {
+                    Thumb(s, minOf(44f, d.innerH.value).dp)
+                    HGap(10.dp)
                 }
-                Spacer(GlanceModifier.width(14.dp))
                 Column(GlanceModifier.defaultWeight()) {
-                    Text(s.title ?: "Nothing playing", maxLines = 2, style = style(16.sp, Ink.primary, FontWeight.Bold))
-                    Text(
-                        s.artist?.takeIf { it.isNotBlank() } ?: s.pcName?.let { "on $it" } ?: "Play something on your PC",
-                        maxLines = 1, style = style(12.sp, Ink.secondary),
-                    )
+                    Text(s.title ?: "Nothing playing", maxLines = 1, style = style(14.sp, Ink.primary, FontWeight.Bold))
+                    s.artist?.takeIf { it.isNotBlank() && !d.narrow }?.let { Text(it, maxLines = 1, style = style(11.sp, Ink.secondary)) }
                 }
-                if (s.title != null) Controls(context, s, onArt = false)
+                if (s.title != null) {
+                    HGap(8.dp)
+                    Controls(context, s, onArt = false, full = d.innerW >= 260.dp, size = 40.dp)
+                }
             }
         }
     }
 
     @Composable
-    private fun Controls(context: Context, s: WidgetSnapshot, onArt: Boolean) {
+    private fun Thumb(s: WidgetSnapshot, size: Dp) {
+        if (s.art != null) {
+            Image(ImageProvider(s.art), null, contentScale = ContentScale.Crop, modifier = GlanceModifier.size(size).cornerRadius(size * 0.28f))
+        } else {
+            Box(GlanceModifier.size(size).cornerRadius(size * 0.28f).background(Ink.glassButton), contentAlignment = Alignment.Center) {
+                Image(ImageProvider(R.drawable.ic_w_music), null, colorFilter = ColorFilter.tint(Ink.secondary), modifier = GlanceModifier.size(size * 0.45f))
+            }
+        }
+    }
+
+    @Composable
+    private fun Controls(context: Context, s: WidgetSnapshot, onArt: Boolean, full: Boolean, size: Dp = 48.dp) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            RoundButton(R.drawable.ic_skip_previous, "Previous", Widgets.command(context, Commands.PREVIOUS), size = 38.dp, onArt = onArt)
-            Spacer(GlanceModifier.width(6.dp))
+            val side = size * 0.8f
+            if (full) {
+                RoundButton(R.drawable.ic_skip_previous, "Previous", Widgets.command(context, Commands.PREVIOUS), size = side, onArt = onArt)
+                HGap(6.dp)
+            }
             RoundButton(
                 if (s.playing) R.drawable.ic_pause else R.drawable.ic_play, if (s.playing) "Pause" else "Play",
-                Widgets.command(context, Commands.PLAY_PAUSE), size = 48.dp, accent = true, onArt = onArt,
+                Widgets.command(context, Commands.PLAY_PAUSE), size = size, accent = true, onArt = onArt,
             )
-            Spacer(GlanceModifier.width(6.dp))
-            RoundButton(R.drawable.ic_skip_next, "Next", Widgets.command(context, Commands.NEXT), size = 38.dp, onArt = onArt)
+            if (full) {
+                HGap(6.dp)
+                RoundButton(R.drawable.ic_skip_next, "Next", Widgets.command(context, Commands.NEXT), size = side, onArt = onArt)
+            }
         }
     }
 }
@@ -535,25 +681,43 @@ class ClipboardWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) = provideContent {
         GlanceTheme {
             val s = Widgets.snapshot(context)
-            val rows = ((LocalSize.current.height - 70.dp) / 36.dp).toInt().coerceIn(1, 4)
+            val d = dims()
             Glass {
+                if (d.compact) {
+                    // One row: the latest copy and a send button.
+                    Row(GlanceModifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            s.clips.firstOrNull() ?: "Clipboard", maxLines = 1,
+                            style = style(14.sp, Ink.primary, FontWeight.Medium),
+                            modifier = GlanceModifier.defaultWeight().clickable(Widgets.openApp(context, MainActivity.SCREEN_CLIPBOARD)),
+                        )
+                        HGap(8.dp)
+                        RoundButton(R.drawable.ic_w_send, "Send clipboard", Widgets.sendClipboard(context), size = 40.dp, accent = true)
+                    }
+                    return@Glass
+                }
                 Column(GlanceModifier.fillMaxSize()) {
                     Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Clipboard", style = style(16.sp, Ink.primary, FontWeight.Bold), modifier = GlanceModifier.defaultWeight())
-                        Row(
-                            GlanceModifier.cornerRadius(18.dp).background(GlanceTheme.colors.primary).padding(horizontal = 14.dp, vertical = 8.dp)
-                                .clickable(Widgets.sendClipboard(context)),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Image(ImageProvider(R.drawable.ic_w_send), null, colorFilter = ColorFilter.tint(GlanceTheme.colors.onPrimary), modifier = GlanceModifier.size(14.dp))
-                            Spacer(GlanceModifier.width(6.dp))
-                            Text("Send", style = style(12.sp, GlanceTheme.colors.onPrimary, FontWeight.Bold))
+                        Text("Clipboard", maxLines = 1, style = style(16.sp, Ink.primary, FontWeight.Bold), modifier = GlanceModifier.defaultWeight())
+                        if (d.narrow) {
+                            RoundButton(R.drawable.ic_w_send, "Send clipboard", Widgets.sendClipboard(context), size = 36.dp, accent = true)
+                        } else {
+                            Row(
+                                GlanceModifier.cornerRadius(18.dp).background(GlanceTheme.colors.primary).padding(horizontal = 14.dp, vertical = 8.dp)
+                                    .clickable(Widgets.sendClipboard(context)),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Image(ImageProvider(R.drawable.ic_w_send), null, colorFilter = ColorFilter.tint(GlanceTheme.colors.onPrimary), modifier = GlanceModifier.size(14.dp))
+                                HGap(6.dp)
+                                Text("Send", style = style(12.sp, GlanceTheme.colors.onPrimary, FontWeight.Bold))
+                            }
                         }
                     }
-                    Spacer(GlanceModifier.height(10.dp))
+                    VGap(8.dp)
                     if (s.clips.isEmpty()) {
                         Text("Copied text shows up here", style = style(12.sp, Ink.secondary))
                     }
+                    val rows = ((d.innerH.value - 44) / 37).toInt().coerceIn(1, 4)
                     s.clips.take(rows).forEachIndexed { i, clip ->
                         if (i > 0) Box(GlanceModifier.fillMaxWidth().height(1.dp).background(Ink.hairline)) {}
                         Text(
@@ -576,30 +740,35 @@ class DropWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) = provideContent {
         GlanceTheme {
             val s = Widgets.snapshot(context)
+            val d = dims()
+            val tiny = minOf(d.w, d.h) < 100.dp
             Box(
-                GlanceModifier.fillMaxSize().background(ImageProvider(R.drawable.widget_accent)).clickable(Widgets.pickFiles(context)).padding(12.dp),
+                GlanceModifier.fillMaxSize().appWidgetBackground().cornerRadius(android.R.dimen.system_app_widget_background_radius)
+                    .background(ImageProvider(R.drawable.widget_accent)).clickable(Widgets.pickFiles(context)).padding(10.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalAlignment = Alignment.CenterVertically) {
                     val fraction = s.transferFraction
-                    Box(GlanceModifier.size(52.dp), contentAlignment = Alignment.Center) {
+                    val circle = if (tiny) 40 else 52
+                    Box(GlanceModifier.size(circle.dp), contentAlignment = Alignment.Center) {
                         if (fraction != null) {
-                            val ring = Rings.ring(context, 52, fraction, android.graphics.Color.WHITE, 0x40FFFFFF)
-                            Image(ImageProvider(ring), null, modifier = GlanceModifier.fillMaxSize())
+                            Image(ImageProvider(Rings.ring(context, circle, fraction, android.graphics.Color.WHITE, 0x40FFFFFF)), null, modifier = GlanceModifier.fillMaxSize())
                         } else {
-                            Box(GlanceModifier.fillMaxSize().cornerRadius(26.dp).background(Ink.whiteGlass)) {}
+                            Box(GlanceModifier.fillMaxSize().cornerRadius((circle / 2).dp).background(Ink.whiteGlass)) {}
                         }
-                        Image(ImageProvider(R.drawable.ic_w_upload), "Send files", colorFilter = ColorFilter.tint(Ink.white), modifier = GlanceModifier.size(24.dp))
+                        Image(ImageProvider(R.drawable.ic_w_upload), "Send files", colorFilter = ColorFilter.tint(Ink.white), modifier = GlanceModifier.size((circle * 0.46f).dp))
                     }
-                    Spacer(GlanceModifier.height(8.dp))
-                    Text(
-                        when {
-                            fraction != null -> "${(fraction * 100).toInt()}%  ${s.transferLabel.orEmpty()}"
-                            s.connected && s.pcName != null -> "Send to ${s.pcName}"
-                            else -> "Send files"
-                        },
-                        maxLines = 1, style = style(12.sp, Ink.white, FontWeight.Bold),
-                    )
+                    if (!tiny || fraction != null) {
+                        VGap(8.dp)
+                        Text(
+                            when {
+                                fraction != null -> "${(fraction * 100).toInt()}%"
+                                s.connected && s.pcName != null -> "Send to ${s.pcName}"
+                                else -> "Send files"
+                            },
+                            maxLines = 1, style = style(12.sp, Ink.white, FontWeight.Bold),
+                        )
+                    }
                 }
             }
         }

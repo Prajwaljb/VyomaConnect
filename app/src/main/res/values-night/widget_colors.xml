@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="widget_tint">#A6161618</color>
+    <color name="widget_ink">#FFF5F5F7</color>
+    <color name="widget_ink_soft">#99FFFFFF</color>
+    <color name="widget_button">#1AFFFFFF</color>
+    <color name="widget_online">#FF30D158</color>
+</resources>

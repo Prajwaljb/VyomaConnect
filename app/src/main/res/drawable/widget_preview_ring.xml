@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Preview stand-in for the live battery ring (static layouts can't draw a partial arc). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="ring" android:useLevel="false"
+    android:innerRadiusRatio="2.6" android:thicknessRatio="9">
+    <solid android:color="@android:color/system_accent1_400" />
+</shape>
