@@ -1,0 +1,27 @@
+# VyomaConnect
+
+Android client for the KDE Connect protocol (Kotlin + Compose), plus a future Rust Linux companion.
+Package `dev.vyoma.connect` (debug: `.debug`). minSdk 31, target/compile 37. FOSS only (F-Droid): no GMS, Firebase,
+or proprietary SDKs. Roadmap and architecture: `docs/PLAN.md`.
+
+## Build
+```bash
+source scripts/env.sh            # user-local JDK 21 + Android SDK; required before gradlew
+./gradlew :app:assembleDebug
+./gradlew :core:protocol:test    # unit tests
+VYOMA_INTEROP=1 ./gradlew :core:protocol:test --rerun   # live test vs this PC's kdeconnectd
+scripts/deploy.sh debug          # install + launch on phone
+```
+
+## Modules
+- `core/protocol`: pure JVM (no Android). Packets, identity, crypto/TLS, LanBackend, Device (pairing, plugins), DeviceHub.
+  Keep it Android-free so it stays testable against kdeconnectd on the JVM; platform hooks go through `LanBackend.Config`
+  and interfaces like `CredentialStore`/`TrustStore`.
+- `core/designsystem`: theme, motion, One UI-style components.
+- `app`: Application/AppContainer (manual lazy DI), `LinkService` (single connectedDevice FGS), UI.
+
+## Conventions
+- Protocol details and extension rules: the `protocol-ref` skill. Design rules: the `oneui-design` skill.
+- Device/plugin state is mutated only on the device's serial dispatcher; never block in `Plugin.onPacket`.
+- Widgets and tiles never do network I/O; they read cached state and send intents to the service.
+- The user's real phone is paired with desktop KDE Connect; never unpair or alter it in tests.

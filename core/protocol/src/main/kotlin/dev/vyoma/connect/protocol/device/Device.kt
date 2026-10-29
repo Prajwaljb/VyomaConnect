@@ -86,6 +86,9 @@ class Device internal constructor(
     // ---- links ----------------------------------------------------------------------------
 
     internal suspend fun addLink(link: DeviceLink) = withContext(serial) {
+        // A reconnect on the same transport means the old socket is dead or half-open; drop it.
+        links.filter { it.transport == link.transport }.forEach { it.close() }
+        links.removeAll { it.isClosed }
         links.add(link)
         _state.update { it.copy(identity = link.identity, transports = transports()) }
         if (isPaired()) {
