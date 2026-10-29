@@ -45,6 +45,7 @@ class DeviceHub(
 
     val tls = TlsContext(credentials)
     override val localCertificate: X509Certificate get() = credentials.certificate
+    override val localDeviceId: String get() = credentials.deviceId
 
     fun localIdentity() = DeviceIdentity(
         deviceId = credentials.deviceId,
@@ -73,7 +74,7 @@ class DeviceHub(
         // Paired devices are listed even while offline.
         _devices.value = trustStore.all().associate { trusted ->
             trusted.deviceId to Device(
-                DeviceIdentity(trusted.deviceId, trusted.name, trusted.type, 0, emptySet(), emptySet()),
+                DeviceIdentity(trusted.deviceId, trusted.name, trusted.type, 0, emptySet(), emptySet(), companionOf = trusted.companionOf),
                 paired = true,
                 env = this,
             )

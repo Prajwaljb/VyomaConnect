@@ -113,7 +113,7 @@ import kotlinx.coroutines.launch
 fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Boolean, onBack: () -> Unit) {
     val devices by vm.devices.collectAsStateWithLifecycle()
     val target = devices.firstOrNull { it.identity.deviceId == deviceId && it.isReachable && it.isPaired }
-        ?: devices.firstOrNull { it.isPaired && it.isReachable }
+        ?: devices.firstOrNull { it.isPaired && it.isReachable && !it.isCompanion }
     val pad: MousePadPlugin? = remember(target?.plugins) { target?.let { vm.device(it.identity.deviceId)?.plugin(MousePadPlugin.ID) } }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current

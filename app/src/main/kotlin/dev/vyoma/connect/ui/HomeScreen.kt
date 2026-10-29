@@ -75,7 +75,10 @@ fun HomeScreen(
     onTouchpad: (String) -> Unit,
     onClipboard: () -> Unit,
 ) {
-    val devices by vm.devices.collectAsStateWithLifecycle()
+    val allDevices by vm.devices.collectAsStateWithLifecycle()
+    // Companions are part of their PC, never a separate computer.
+    val devices = allDevices.filter { it.identity.companionOf == null }
+    val companionOnline = allDevices.any { it.identity.companionOf != null && it.isPaired && it.isReachable }
     val nowPlaying by vm.nowPlaying.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val connected = devices.filter { it.isPaired && it.isReachable }
@@ -121,6 +124,13 @@ fun HomeScreen(
             item(key = "bento") {
                 Staggered(0, Modifier.animateItem()) {
                     PcDashboard(vm, primary, DashboardSection.BENTO, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard)
+                }
+            }
+            if (companionOnline) {
+                item(key = "vitals") {
+                    Staggered(1, Modifier.animateItem()) {
+                        PcDashboard(vm, primary, DashboardSection.VITALS, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard)
+                    }
                 }
             }
             item(key = "volume") {

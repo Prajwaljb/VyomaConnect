@@ -1,5 +1,10 @@
 package dev.vyoma.connect.ui
 
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.Lifecycle
+import dev.vyoma.connect.protocol.plugin.builtin.PcStats
+import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Brush
@@ -198,6 +203,27 @@ fun PcDashboard(
                 },
             )
         }
+        DashboardSection.VITALS -> {
+            val devices by vm.devices.collectAsStateWithLifecycle()
+            val companion = devices.firstOrNull { it.identity.companionOf == id && it.isPaired && it.isReachable }
+            val plugin = remember(companion?.identity?.deviceId, companion?.plugins) {
+                companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
+            }
+            if (plugin != null) {
+                // Renew the companion's stats lease only while this card is on screen and the app is visible.
+                val lifecycle = LocalLifecycleOwner.current.lifecycle
+                LaunchedEffect(plugin) {
+                    lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                        while (true) {
+                            plugin.requestStats()
+                            delay(STATS_RENEW_MS)
+                        }
+                    }
+                }
+                val stats by plugin.stats.collectAsStateWithLifecycle()
+                PcVitals(stats, modifier)
+            }
+        }
         DashboardSection.VOLUME -> pc.sink?.let { sink ->
             VolumeBar(
                 sink,
@@ -232,7 +258,7 @@ fun PcDashboard(
     }
 }
 
-enum class DashboardSection { BENTO, VOLUME, CONTROLS }
+enum class DashboardSection { BENTO, VITALS, VOLUME, CONTROLS }
 
 private fun toast(context: Context, text: String) =
     Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
@@ -423,6 +449,7 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
 }
 
 private const val ECHO_QUIET_MS = 700L
+private const val STATS_RENEW_MS = 5_000L
 
 private class Control(
     val icon: ImageVector,
@@ -485,5 +512,49 @@ internal fun OutputPicker(sinks: List<AudioSink>, onDefault: (AudioSink) -> Unit
                 modifier = Modifier.clip(CircleShape).background(bg).pressable { onDefault(sink) }.padding(horizontal = 14.dp, vertical = 9.dp),
             )
         }
+    }
+}
+
+/** CPU, memory, GPU and temperature as four small gauges, Control Center style. */
+@Composable
+private fun PcVitals(stats: PcStats?, modifier: Modifier = Modifier) {
+    val temp = stats?.cpuTemp
+    val tempColor = when {
+        temp == null -> SystemColor.GRAY
+        temp < 65f -> SystemColor.GREEN
+        temp < 85f -> SystemColor.YELLOW
+        else -> SystemColor.RED
+    }
+    val memFraction = stats?.takeIf { it.memTotal > 0 }?.let { it.memUsed.toFloat() / it.memTotal } ?: 0f
+    Row(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(vertical = 16.dp)) {
+        Gauge("CPU", stats?.let { "${it.cpu.roundToInt()}%" }, (stats?.cpu ?: 0f) / 100f, SystemColor.BLUE, Modifier.weight(1f))
+        Gauge(
+            "Memory", stats?.takeIf { it.memTotal > 0 }?.let { "%.1f".format(it.memUsed / 1e9) + "G" },
+            memFraction, SystemColor.MINT, Modifier.weight(1f),
+        )
+        Gauge("GPU", stats?.gpu?.let { "$it%" }, (stats?.gpu ?: 0) / 100f, SystemColor.ORANGE, Modifier.weight(1f))
+        Gauge("Temp", temp?.let { "${it.roundToInt()}°" }, (temp ?: 0f) / 100f, tempColor, Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun Gauge(label: String, value: String?, fraction: Float, color: SystemColor, modifier: Modifier) {
+    val tone = color.color
+    val track = Glass.raised
+    val sweep by animateFloatAsState(fraction.coerceIn(0f, 1f), VyomaMotion.spatialSlow(), label = "gauge")
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.size(58.dp), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.fillMaxSize()) {
+                val w = 6.dp.toPx()
+                val inset = Offset(w / 2, w / 2)
+                val arc = Size(size.width - w, size.height - w)
+                // A 270° arc open at the bottom, like a speedometer.
+                drawArc(track, 135f, 270f, false, inset, arc, style = Stroke(w, cap = StrokeCap.Round))
+                if (sweep > 0f) drawArc(tone, 135f, 270f * sweep, false, inset, arc, style = Stroke(w, cap = StrokeCap.Round))
+            }
+            Text(value ?: "–", style = MaterialTheme.typography.labelLarge, maxLines = 1)
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

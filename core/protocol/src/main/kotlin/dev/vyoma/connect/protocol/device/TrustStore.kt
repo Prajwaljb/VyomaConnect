@@ -22,6 +22,8 @@ data class TrustedDevice(
     /** Where we last reached it, so we can dial it directly when broadcasts don't get through. */
     val lastAddress: String? = null,
     val lastPort: Int? = null,
+    /** For a Vyoma companion: the PC it belongs to, so it stays folded into that PC while offline. */
+    val companionOf: String? = null,
 )
 
 interface TrustStore {
@@ -59,6 +61,7 @@ class FileTrustStore(private val file: File) : TrustStore {
                 id to TrustedDevice(
                     id, o.str("name").orEmpty(), DeviceType.fromWire(o.str("type")), cert,
                     lastAddress = o.str("address"), lastPort = o.str("port")?.toIntOrNull(),
+                    companionOf = o.str("companionOf"),
                 )
             }.toMap(LinkedHashMap())
         }.getOrElse { mutableMapOf() }
@@ -73,6 +76,7 @@ class FileTrustStore(private val file: File) : TrustStore {
                     put("cert", Base64.getEncoder().encodeToString(d.certificate.encoded))
                     d.lastAddress?.let { put("address", it) }
                     d.lastPort?.let { put("port", it) }
+                    d.companionOf?.let { put("companionOf", it) }
                 })
             }
         }

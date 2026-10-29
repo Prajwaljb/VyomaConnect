@@ -92,7 +92,7 @@ class LinkService : LifecycleService() {
         val connectedFlow = hub.devices
             .flatMapLatest { devices ->
                 if (devices.isEmpty()) flowOf(emptyList())
-                else combine(devices.values.map { it.state }) { states -> states.filter { it.isReachable && it.isPaired } }
+                else combine(devices.values.map { it.state }) { states -> states.filter { it.isReachable && it.isPaired && !it.isCompanion } }
             }
 
         // Keep the ongoing notification in sync with who's connected.

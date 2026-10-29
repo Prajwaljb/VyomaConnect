@@ -1,5 +1,6 @@
 package dev.vyoma.connect.protocol.device
 
+import dev.vyoma.connect.protocol.crypto.CompanionProof
 import dev.vyoma.connect.protocol.DeviceIdentity
 import dev.vyoma.connect.protocol.NetworkPacket
 import dev.vyoma.connect.protocol.PacketTypes
@@ -43,10 +44,13 @@ data class DeviceState(
 ) {
     val isReachable: Boolean get() = transports.isNotEmpty()
     val isPaired: Boolean get() = pairState == PairState.PAIRED
+    /** A Vyoma companion: part of another device (its PC), not a computer of its own. */
+    val isCompanion: Boolean get() = identity.companionOf != null
 }
 
 /** Services a [Device] needs from its owner, so it stays testable without the whole hub. */
 interface DeviceEnvironment {
+    val localDeviceId: String
     val localCertificate: X509Certificate
     val trustStore: TrustStore
     val pluginSpecs: List<PluginSpec>
@@ -218,6 +222,11 @@ class Device internal constructor(
             // Peer lost its trust (reinstall, cleared data) but we still trust it: re-confirm.
             PairState.PAIRED -> send(packet(PacketTypes.PAIR) { put("pair", true) })
             PairState.UNPAIRED, PairState.REQUESTED_BY_PEER -> {
+                if (isProvenCompanion(packet)) {
+                    VLog.i(TAG, "$name: companion of a trusted PC, pairing without a prompt")
+                    if (send(packet(PacketTypes.PAIR) { put("pair", true) })) becomePaired()
+                    return
+                }
                 pairingTimestamp = packet.long("timestamp")
                 setPairState(PairState.REQUESTED_BY_PEER)
                 armPairTimeout()
@@ -226,11 +235,24 @@ class Device internal constructor(
         }
     }
 
+    /** A pair request signed by the key of the PC this peer claims to belong to (see [CompanionProof]). */
+    private fun isProvenCompanion(packet: NetworkPacket): Boolean {
+        val host = _state.value.identity.companionOf ?: return false
+        if (packet.string("vyomaHost") != host) return false
+        val hostCert = env.trustStore.get(host)?.certificate ?: return false
+        val ownCert = links.firstOrNull()?.peerCertificate ?: return false
+        val ts = packet.long("timestamp") ?: return false
+        val proof = packet.string("vyomaHostProof") ?: return false
+        return CompanionProof.verify(hostCert, id, ownCert, env.localDeviceId, ts, proof)
+    }
+
     private suspend fun becomePaired() {
         val cert = links.firstOrNull()?.peerCertificate ?: return
         val identity = _state.value.identity
         val link = links.firstOrNull()
-        env.trustStore.put(TrustedDevice(id, identity.deviceName, identity.deviceType, cert, link?.remoteAddress?.hostAddress, identity.tcpPort))
+        env.trustStore.put(
+            TrustedDevice(id, identity.deviceName, identity.deviceType, cert, link?.remoteAddress?.hostAddress, identity.tcpPort, identity.companionOf),
+        )
         setPairState(PairState.PAIRED)
         VLog.i(TAG, "$name: paired")
         reloadPlugins()

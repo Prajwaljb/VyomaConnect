@@ -11,6 +11,7 @@ source scripts/env.sh            # user-local JDK 21 + Android SDK; required bef
 ./gradlew :core:protocol:test    # unit tests
 VYOMA_INTEROP=1 ./gradlew :core:protocol:test --rerun   # live test vs this PC's kdeconnectd
 scripts/deploy.sh debug          # install + launch on phone
+cargo build --release --manifest-path desktop/companion/Cargo.toml   # Linux companion (Rust)
 ```
 
 ## Modules
@@ -19,6 +20,9 @@ scripts/deploy.sh debug          # install + launch on phone
   and interfaces like `CredentialStore`/`TrustStore`.
 - `core/designsystem`: theme, motion, One UI-style components.
 - `app`: Application/AppContainer (manual lazy DI), `LinkService` (single connectedDevice FGS), UI.
+- `desktop/companion`: Rust daemon beside stock kdeconnectd. Dials only phones kdeconnectd trusts (mDNS), pairs with
+  no prompt via `CompanionProof` (signed with kdeconnectd's key; phone verifies against the pinned PC cert), speaks
+  `vyoma.*` packets. Phone folds it into its PC (`DeviceIdentity.companionOf`, `DeviceState.isCompanion`).
 
 ## Conventions
 - Protocol details and extension rules: the `protocol-ref` skill. Design rules: the `oneui-design` skill.

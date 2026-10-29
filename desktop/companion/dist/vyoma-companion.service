@@ -1,0 +1,15 @@
+[Unit]
+Description=Vyoma companion (extras for Vyoma on your phone, next to KDE Connect)
+After=graphical-session.target network-online.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/vyoma-companion
+Restart=on-failure
+RestartSec=5
+# Idle most of the time; keep it out of the way of interactive work.
+Nice=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,5 +1,6 @@
 package dev.vyoma.connect
 
+import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import android.app.Application
 import android.provider.Settings
 import android.util.Log
@@ -130,6 +131,7 @@ class AppContainer(private val app: Application) {
         TelephonyPlugin.spec(calls),
         ContactsPlugin.spec(contacts),
         ConnectivityReportPlugin.spec(signal.states),
+        CompanionPlugin.spec,
     )
 
     fun defaultDeviceName(): String =
