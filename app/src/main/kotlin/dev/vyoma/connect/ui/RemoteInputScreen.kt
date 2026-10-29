@@ -11,12 +11,10 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.KeyboardReturn
 import androidx.compose.material.icons.automirrored.rounded.Redo
 import androidx.compose.material.icons.automirrored.rounded.Undo
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
-import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.UnfoldMore
@@ -25,6 +23,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,6 +33,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -46,7 +48,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Keyboard
-import androidx.compose.material.icons.rounded.KeyboardHide
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -94,6 +95,7 @@ import kotlin.math.min
  * tap middle-clicks, two fingers scroll, and press-and-hold starts a drag. Motion is batched
  * into one packet per ~8 ms so a 120 Hz screen doesn't flood the link.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Boolean, onBack: () -> Unit) {
     val devices by vm.devices.collectAsStateWithLifecycle()
@@ -116,7 +118,11 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
     }
     fun act(block: suspend MousePadPlugin.() -> Unit) { pad?.let { scope.launch { it.block() } } }
 
+    // The phone keyboard types on the PC. Each tap of the key re-opens it, since the system can
+    // hide it (back gesture) without telling us.
     var keyboard by rememberSaveable { mutableStateOf(startWithKeyboard) }
+    var keyboardSession by remember { mutableIntStateOf(0) }
+    val imeVisible = WindowInsets.isImeVisible
 
     Column(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).windowInsetsPadding(WindowInsets.statusBars).imePadding(),
@@ -126,9 +132,6 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             Column(Modifier.weight(1f)) {
                 Text("Touchpad", style = MaterialTheme.typography.titleLarge)
                 Text(target?.identity?.deviceName ?: "No PC connected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            IconButton(onClick = { keyboard = !keyboard }) {
-                Icon(if (keyboard) Icons.Rounded.KeyboardHide else Icons.Rounded.Keyboard, if (keyboard) "Hide keyboard" else "Keyboard")
             }
         }
 
@@ -255,14 +258,15 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             }
             Row(Modifier.fillMaxWidth().height(KEY_HEIGHT), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Key("Fn", selected = fn) { fn = !fn }
+                Key(icon = Icons.Rounded.Keyboard, desc = "Keyboard", selected = keyboard && imeVisible) {
+                    if (keyboard && imeVisible) keyboard = false else { keyboard = true; keyboardSession++ }
+                }
                 if (!fn) {
                     Key(icon = Icons.Rounded.SwapHoriz, desc = "Alt+Tab") { act { key(SpecialKey.TAB, alt = true) } }
                     Key(icon = Icons.AutoMirrored.Rounded.Undo, desc = "Undo") { act { chord("z", ctrl = true) } }
-                    Key(icon = Icons.Rounded.SelectAll, desc = "Select all") { act { chord("a", ctrl = true) } }
                 } else {
                     Key(icon = Icons.AutoMirrored.Rounded.Redo, desc = "Redo") { act { chord("z", ctrl = true, shift = true) } }
-                    Key(icon = Icons.Rounded.Search, desc = "Find") { act { chord("f", ctrl = true) } }
-                    Key(icon = Icons.Rounded.Close, desc = "Close tab") { act { chord("w", ctrl = true) } }
+                    Key(icon = Icons.Rounded.SelectAll, desc = "Select all") { act { chord("a", ctrl = true) } }
                 }
                 ClusterGap()
                 Key(icon = Icons.AutoMirrored.Rounded.KeyboardArrowLeft, desc = "Left") { act { key(SpecialKey.LEFT) } }
@@ -272,7 +276,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             }
         }
 
-        if (keyboard) KeyboardSink(onText = { t -> act { type(t) } }, onBackspace = { act { key(SpecialKey.BACKSPACE) } }, onEnter = { act { key(SpecialKey.ENTER) } })
+        if (keyboard) key(keyboardSession) { KeyboardSink(onText = { t -> act { type(t) } }, onBackspace = { act { key(SpecialKey.BACKSPACE) } }, onEnter = { act { key(SpecialKey.ENTER) } }) }
         Spacer(Modifier.navigationBarsPadding())
     }
 }
