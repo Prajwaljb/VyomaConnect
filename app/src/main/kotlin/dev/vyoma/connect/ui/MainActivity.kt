@@ -184,7 +184,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, vm: AppViewModel) {
                     vm = vm,
                     onOpenDevice = { backStack.add(Screen.DeviceDetail(it)) },
                     onOpenSettings = { backStack.add(Screen.Settings) },
-                    onTouchpad = { id -> backStack.add(Screen.Touchpad(id, keyboard = false)) },
+                    onTouchpad = { id, keyboard -> backStack.add(Screen.Touchpad(id, keyboard)) },
                     onClipboard = { backStack.add(Screen.Clipboard) },
                 )
                 is Screen.DeviceDetail -> DeviceScreen(

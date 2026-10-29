@@ -466,7 +466,7 @@ private fun quickActions(context: Context, s: WidgetSnapshot) = listOf(
     Act(R.drawable.ic_w_ring, "Ring PC", Widgets.command(context, Commands.RING_PC)),
     Act(R.drawable.ic_w_lock, "Lock PC", Widgets.command(context, Commands.LOCK_PC)),
     Act(R.drawable.ic_w_keyboard, "Keyboard", Widgets.openApp(context, MainActivity.SCREEN_KEYBOARD)),
-    Act(R.drawable.ic_w_bell, "Ping", Widgets.command(context, Commands.PING)),
+    Act(R.drawable.ic_w_ping, "Ping", Widgets.command(context, Commands.PING)),
 )
 
 /**
