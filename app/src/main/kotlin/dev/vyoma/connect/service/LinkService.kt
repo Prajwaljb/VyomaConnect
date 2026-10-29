@@ -113,6 +113,20 @@ class LinkService : LifecycleService() {
             }
         }
 
+        // Keep trying paired devices that are offline: fast at first, then every minute.
+        lifecycleScope.launch {
+            var wait = 5_000L
+            while (true) {
+                delay(wait)
+                if (hub.anyPairedOffline()) {
+                    hub.refresh()
+                    wait = (wait * 2).coerceAtMost(60_000)
+                } else {
+                    wait = 5_000
+                }
+            }
+        }
+
         mediaSession = PcMediaSession(this, container.media).also { it.start(lifecycleScope) }
         container.clipboard.startBackgroundSync()
 

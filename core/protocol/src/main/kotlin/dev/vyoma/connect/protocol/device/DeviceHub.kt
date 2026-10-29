@@ -81,7 +81,7 @@ class DeviceHub(
 
     fun start() {
         lan.start()
-        lan.broadcastIdentity()
+        refresh()
     }
 
     fun stop() {
@@ -89,8 +89,22 @@ class DeviceHub(
         _devices.value.values.forEach { it.disconnect() }
     }
 
-    /** Re-announce and reconnect; call on network change or user pull-to-refresh. */
-    fun refresh() = lan.broadcastIdentity()
+    /**
+     * Re-announce, and dial paired devices that are offline at their last known address
+     * (UDP broadcasts get lost on busy Wi-Fi). Call on network change, refresh, or periodically.
+     */
+    fun refresh() {
+        lan.broadcastIdentity()
+        for (trusted in trustStore.all()) {
+            if (_devices.value[trusted.deviceId]?.state?.value?.isReachable == true) continue
+            val address = trusted.lastAddress ?: continue
+            val ip = runCatching { java.net.InetAddress.getByName(address) }.getOrNull() ?: continue
+            lan.connectTo(ip, trusted.lastPort ?: 1716)
+        }
+    }
+
+    /** True while some paired device isn't connected; the service uses it to keep retrying. */
+    fun anyPairedOffline(): Boolean = _devices.value.values.any { it.state.value.isPaired && !it.state.value.isReachable }
 
     fun device(id: String): Device? = _devices.value[id]
 
