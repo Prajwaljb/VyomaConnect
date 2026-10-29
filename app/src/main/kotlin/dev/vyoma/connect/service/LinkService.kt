@@ -25,6 +25,8 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -40,6 +42,7 @@ class LinkService : LifecycleService() {
     private val container get() = application.container
     private val network get() = container.network
     private var mediaSession: PcMediaSession? = null
+    private var mdns: MdnsDiscovery? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -69,7 +72,15 @@ class LinkService : LifecycleService() {
         val hub = container.obtainHub()
         this.hub = hub
         network.acquireMulticast()
+        network.customHosts = container.settings.manualHosts.first().toList()
         hub.start()
+        mdns = MdnsDiscovery(this, hub).also { it.start() }
+        lifecycleScope.launch {
+            container.settings.manualHosts.drop(1).collect { hosts ->
+                network.customHosts = hosts.toList()
+                hub.refresh()
+            }
+        }
         network.watch(
             onAvailable = { hub.refresh() },
             onLost = { hub.refresh() },
@@ -189,6 +200,7 @@ class LinkService : LifecycleService() {
 
     override fun onDestroy() {
         mediaSession?.stop()
+        mdns?.stop()
         container.calls.stop()
         container.signal.stop()
         network.unwatch()

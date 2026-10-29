@@ -23,14 +23,19 @@ class AndroidNetwork(private val context: Context) {
     private var multicastLock: WifiManager.MulticastLock? = null
     private var callback: ConnectivityManager.NetworkCallback? = null
 
-    /** Manual hosts (Tailscale IPs, hotspot peers); filled from settings later in Phase 1. */
+    /** Manual hosts (Tailscale IPs or names, other subnets), mirrored from settings by the service. */
     @Volatile var customHosts: List<String> = emptyList()
 
     fun lanConfig() = LanBackend.Config(
         broadcastTargets = ::broadcastTargets,
         tuneSocket = ::tuneSocket,
         route = ::route,
+        manualHosts = ::resolveCustomHosts,
     )
+
+    /** Blocking DNS for names like MagicDNS; called from the hub's IO scope. */
+    private fun resolveCustomHosts(): List<InetAddress> =
+        customHosts.mapNotNull { host -> runCatching { InetAddress.getByName(host) }.getOrNull() }
 
     /**
      * Sends LAN traffic over the physical network that owns the target's subnet, bypassing any
@@ -91,7 +96,7 @@ class AndroidNetwork(private val context: Context) {
                 }
             }
         }
-        customHosts.forEach { host -> runCatching { targets += InetAddress.getByName(host) } }
+        targets += resolveCustomHosts()
         return targets
     }
 
