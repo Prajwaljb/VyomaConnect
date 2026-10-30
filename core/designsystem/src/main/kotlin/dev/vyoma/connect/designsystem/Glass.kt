@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
@@ -158,9 +159,11 @@ val isAmoledUi: Boolean
 
 /**
  * How a card sits on the canvas, per theme. iOS-style grouped surfaces: one opaque, even tone that
- * stands clearly off the canvas (high contrast on true black), no gradient and no rim, which read
- * as cheap plastic. Only light mode gets a shadow, faint, since there's a pale canvas for it to
- * fall on. A rim is for glass that floats (chrome, raised controls), not for the page's paper.
+ * stands clearly off the canvas (high contrast on true black). Its edge is a faint specular
+ * hairline following the phone's tilt ([SpecularLight]), so the card reads as a lit object rather
+ * than painted plastic (a static gradient rim was rejected as cheap). A soft inner glow on the lit
+ * side was tried: invisible at a tasteful strength and 0.4 ms of GPU a frame. Only light mode gets
+ * a shadow, faint, since there's a pale canvas for it to fall on.
  */
 @Immutable
 class GlassDepth internal constructor(
@@ -176,13 +179,18 @@ class GlassDepth internal constructor(
 
 private val DarkDepth = GlassDepth(
     fill = Color(0xFF1C1C1E),
-    rimLit = Color.Transparent, rimBase = Color.Transparent,
+    rimLit = Color.White.copy(alpha = 0.2f), rimBase = Color.White.copy(alpha = 0.035f),
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
 )
-private val AmoledDepth = DarkDepth
+private val AmoledDepth = GlassDepth(
+    fill = Color(0xFF1C1C1E),
+    rimLit = Color.White.copy(alpha = 0.26f), rimBase = Color.White.copy(alpha = 0.05f),
+    shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
+)
 private val LightDepth = GlassDepth(
     fill = Color.White,
-    rimLit = Color.Transparent, rimBase = Color.Transparent,
+    // White on white can't show; a navy hairline gives the edge and the light lifts out of it.
+    rimLit = Color.White, rimBase = Color(0xFF1A2B4C).copy(alpha = 0.06f),
     shadow = Color(0xFF1A2B4C).copy(alpha = 0.05f), shadowBlur = 14f, shadowDrop = 3f,
 )
 
@@ -213,10 +221,31 @@ internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float =
 }
 
 /**
+ * [specularRim] for big panes: a linear gradient along the light's direction instead of a sweep,
+ * bright where the light enters, the base tone across the middle, a softer catch on the far side.
+ * On a card it reads the same, and the GPU does it far more cheaply than a per-pixel angle.
+ */
+internal fun cardRim(lit: Color, base: Color, size: Size, light: Float): Brush {
+    val a = Math.toRadians(light.toDouble())
+    val dir = Offset(cos(a).toFloat(), sin(a).toFloat())
+    val c = Offset(size.width / 2, size.height / 2)
+    // Reach of the shape along the light: the corner furthest that way.
+    val reach = abs(dir.x) * size.width / 2 + abs(dir.y) * size.height / 2
+    return Brush.linearGradient(
+        0f to lit,
+        0.3f to base,
+        0.7f to base,
+        1f to lerp(base, lit, 0.45f),
+        start = c + dir * reach,
+        end = c - dir * reach,
+    )
+}
+
+/**
  * Paints one glass pane of [outline]: soft shadow outside it (never under it, so the glass stays
  * clear), an even fill, and the specular rim. Cached per size by the callers (drawWithCache).
  */
-private class GlassPainter(private val d: GlassDepth, private val flat: Color?, density: Float) {
+private class GlassPainter(private val d: GlassDepth, private val flat: Color?, private val lit: Boolean, density: Float) {
     private val drop = d.shadowDrop * density
     private val stroke = 1f * density
     private val shadowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
@@ -224,28 +253,37 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
         if (d.shadow.alpha > 0f) maskFilter = android.graphics.BlurMaskFilter(d.shadowBlur * density, android.graphics.BlurMaskFilter.Blur.NORMAL)
     }
 
-    fun DrawScope.paint(path: Path, height: Float, width: Float) {
+    /** [outline] fills, [edge] (the same shape inset by half the hairline, at [inset]) is stroked. */
+    fun DrawScope.paint(outline: Outline, edge: Outline, inset: Float, height: Float, width: Float) {
         if (d.shadow.alpha > 0f) {
+            val path = Path().apply { addOutline(outline) }
             val shadow = path.asAndroidPath().let { android.graphics.Path(it).apply { offset(0f, drop) } }
             clipPath(path, ClipOp.Difference) { drawIntoCanvas { it.nativeCanvas.drawPath(shadow, shadowPaint) } }
         }
-        drawPath(path, flat ?: d.fill)
-        if (d.rimLit.alpha > 0f) drawPath(path, specularRim(d.rimLit, d.rimBase, Offset(width / 2, height / 2)), style = Stroke(stroke))
+        drawOutline(outline, flat ?: d.fill)
+        if (!lit || d.rimLit.alpha <= 0f) return
+        translate(inset, inset) {
+            // A sweep here cost ~0.35 ms of GPU a frame over a page of cards; this is ~free.
+            drawOutline(edge, cardRim(d.rimLit, d.rimBase, Size(width - 2 * inset, height - 2 * inset), SpecularLight.angle), style = Stroke(stroke))
+        }
     }
 }
 
 /**
- * Glass card: a lit, rimmed slab with a soft shadow, content clipped to [shape]. Static (no
- * blur), cached per size, so long lists scroll at full speed. [fill] replaces the gradient with
- * a solid color (e.g. a dialog over no backdrop).
+ * Card: an opaque slab with a tilt-lit hairline ([lit]; off for slices of a card) and, in light
+ * mode, a soft shadow, content clipped to [shape]. Static (no blur), cached per size, so long
+ * lists scroll at full speed. [fill] replaces the theme's card tone (e.g. a dialog).
  */
-fun Modifier.glassCard(shape: Shape, fill: Color? = null): Modifier = composed {
+fun Modifier.glassCard(shape: Shape, fill: Color? = null, lit: Boolean = true): Modifier = composed {
     val d = glassDepth
     this
         .drawWithCache {
-            val path = Path().apply { addOutline(shape.createOutline(size, layoutDirection, this@drawWithCache)) }
-            val painter = GlassPainter(d, fill, density)
-            onDrawBehind { with(painter) { paint(path, size.height, size.width) } }
+            val outline = shape.createOutline(size, layoutDirection, this)
+            // Inset by half the hairline so all of it shows inside the clip.
+            val half = 0.5f * density
+            val edge = shape.createOutline(Size(size.width - 2 * half, size.height - 2 * half), layoutDirection, this)
+            val painter = GlassPainter(d, fill, lit, density)
+            onDrawBehind { with(painter) { paint(outline, edge, half, size.height, size.width) } }
         }
         .clip(shape)
 }
@@ -261,7 +299,7 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
     val base = color
     this
         .drawWithCache {
-            val path = Path().apply { addOutline(shape.createOutline(size, layoutDirection, this@drawWithCache)) }
+            val outline = shape.createOutline(size, layoutDirection, this)
             val fill = base ?: if (dark) Color.White.copy(alpha = 0.12f) else Color(0xFF1A2B4C).copy(alpha = 0.06f)
             val lit = Color.White.copy(alpha = if (base != null) 0.5f else if (dark) 0.4f else 0.95f)
             val rimBase = when {
@@ -272,9 +310,9 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
             val stroke = Stroke(0.9.dp.toPx())
             val center = Offset(size.width / 2, size.height / 2)
             onDrawBehind {
-                drawPath(path, fill)
+                drawOutline(outline, fill)
                 // The light's angle is read here only, so tilting redraws the edge and nothing else.
-                drawPath(path, specularRim(lit, rimBase, center), style = stroke)
+                drawOutline(outline, specularRim(lit, rimBase, center), style = stroke)
             }
         }
         .clip(shape)
@@ -289,15 +327,12 @@ fun Modifier.specularEdge(shape: Shape, width: Dp = 1.dp, lit: Color = Color.Whi
     drawWithCache {
         val w = width.toPx()
         // Inset by half the stroke so all of it shows when the object is clipped to the same shape.
-        val path = Path().apply {
-            addOutline(shape.createOutline(Size(size.width - w, size.height - w), layoutDirection, this@drawWithCache))
-            translate(Offset(w / 2, w / 2))
-        }
+        val edge = shape.createOutline(Size(size.width - w, size.height - w), layoutDirection, this)
         val stroke = Stroke(w)
         val center = Offset(size.width / 2, size.height / 2)
         onDrawWithContent {
             drawContent()
-            drawPath(path, specularRim(lit, base, center), style = stroke)
+            translate(w / 2, w / 2) { drawOutline(edge, specularRim(lit, base, center - Offset(w / 2, w / 2)), style = stroke) }
         }
     }
 
@@ -312,7 +347,8 @@ fun Modifier.cardSegment(first: Boolean, last: Boolean, radius: Dp = 26.dp): Mod
         topStart = if (first) radius else 0.dp, topEnd = if (first) radius else 0.dp,
         bottomStart = if (last) radius else 0.dp, bottomEnd = if (last) radius else 0.dp,
     )
-    glassCard(shape, d.fill)
+    // Slices can't each catch the light: their edges would rule lines between the rows.
+    glassCard(shape, d.fill, lit = false)
 }
 
 /**
@@ -506,9 +542,12 @@ fun Modifier.glassChrome(
         .then(if (edge && lens == null) Modifier.border(0.75.dp, edgeBrush, shape) else Modifier)
 }
 
-/** How a lens bends: the rim as a share of the lens's short side, and the slab's depth in rims. */
+/**
+ * How a lens bends: the rim as a share of the lens's short side, and the slab's depth in rims.
+ * [milk] is the white mixed into the glass in dark and light themes.
+ */
 @Immutable
-class LensStyle(val rim: Float, val depth: Float, val disperse: Float) {
+class LensStyle(val rim: Float, val depth: Float, val disperse: Float, val milk: Pair<Float, Float> = 0.05f to 0.12f) {
     companion object {
         /** Bars and buttons (chrome): water-like, the rim shows what's across the element. */
         val Chrome = LensStyle(rim = 0.2f, depth = 6f, disperse = 0.04f)
@@ -520,8 +559,9 @@ class LensStyle(val rim: Float, val depth: Float, val disperse: Float) {
         /** Lifted drops that outgrow what they sit on (the tab bar's drop, slider, switch and
          *  segmented knobs). The rim looks outward (negative depth): the edge gathers in what's
          *  around, the way a drop of water on glass rims itself with its surroundings. Looking
-         *  inward, the rim replayed the track or bar as mirrored stripes. */
-        val Lift = LensStyle(rim = 0.22f, depth = -1.1f, disperse = 0.03f)
+         *  inward, the rim replayed the track or bar as mirrored stripes. Crystal clear: any milk
+         *  read as a dirty white haze as it grew. */
+        val Lift = LensStyle(rim = 0.22f, depth = -1.1f, disperse = 0.03f, milk = 0f to 0.02f)
     }
 }
 
@@ -632,7 +672,7 @@ internal class LensPainter(private val graphics: GraphicsContext) {
         drop.renderEffect = glass.effect(
             r.size, m.toFloat(), r.minDimension / 2, bevel = rim, refract = rim * style.depth, zoom = zoom, disperse = style.disperse,
             // Quantized so a frost animation rebuilds the shader a few dozen times, not every frame.
-            tint = Color.White.copy(alpha = androidx.compose.ui.util.lerp(if (dark) 0.05f else 0.12f, 0.97f, (frost * 32).roundToInt() / 32f)),
+            tint = Color.White.copy(alpha = androidx.compose.ui.util.lerp(if (dark) style.milk.first else style.milk.second, 0.97f, (frost * 32).roundToInt() / 32f)),
             spec = if (dark) 0.55f else 0.9f,
             shade = if (dark) 0f else 0.12f, blur = 0f,
         )

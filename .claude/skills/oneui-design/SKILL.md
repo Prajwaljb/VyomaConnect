@@ -14,8 +14,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   leaves the bottom true black). No decorative textures (stars were tried and rejected: too specific).
 - Depth tokens: `glassDepth` (`GlassDepth` Dark / Amoled / Light) drive every surface so the themes stay consistent.
 - Cards: `Modifier.glassCard(shape, fill?)` = iOS grouped surfaces: opaque, flat, high contrast (`#1C1C1E` on the dark
-  and true-black canvas, white on light with a faint shadow). No gradient, no rim, no translucency: translucent rimmed
-  panes were called cheap twice. Rims and refraction belong to things that float (chrome, raised controls, knobs).
+  and true-black canvas, white on light with a faint shadow). No gradient fill, no translucency (translucent rimmed
+  panes were called cheap twice). Edge: a faint tilt-lit hairline (`cardRim`, a LINEAR gradient along the light; a
+  sweep cost ~0.35 ms GPU/frame over a page of cards, an inner glow 0.4 ms and was invisible, so both are out).
+  Card slices (`cardSegment`) pass `lit = false`. Refraction belongs only to things that float.
 - Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a plain
   even fill plus a 0.9 dp specular hairline that follows the phone's tilt (a FIXED painted rim read as fake; the user
   asked for it back once it moved like iOS 26); pass `color` for accent/tinted or for chips over artwork (dark translucent).
@@ -42,8 +44,11 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   full-page blur was slower (replays the whole page). Every
   chrome element uses the tab bar's values: `blur = 8.dp, bevel = 16.dp`. The bar must not be inside
   the source. Compose/draw chrome only while visible.
-- Header (`CollapsingHeaderScaffold`): no slab. A soft status-bar fade; back in a 48 dp liquid circle; the title
-  appears in a liquid capsule once collapsed (> 0.6); actions share one capsule. Same blur/bevel as the tab bar.
+- Header (`CollapsingHeaderScaffold`): no slab. A soft status-bar fade; back in a 48 dp liquid circle; actions share
+  one capsule. The title is ONE travelling Text (the hero copy is an invisible placeholder): it scrolls 1:1 with the
+  page (no hero parallax, else it slid over the hero glyph), pins in the bar and shrinks to titleMedium; at collapse
+  > 0.72 a glass bubble forms around it (height leads, width wobbles out with `jelly()`). The hero fades by 75%.
+  A trailing "collapse-room" item lets any page that scrolls at all collapse fully (no half-faded stuck title).
 - Dialogs: `GlassDialog` (same API as AlertDialog): opaque `surfaceContainerHigh` slab with the card rim. Never
   Material `AlertDialog`.
 - Value bars (Apple's, `LiquidSlider`): with `knob` (default 24 dp) the iOS 26 slider: slim track, wide white

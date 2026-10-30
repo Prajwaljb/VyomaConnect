@@ -221,8 +221,9 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
             .liquidLens(backdrop, strength = { lift.value }, zoom = { 1f + 0.1f * lift.value.coerceIn(0f, 1f) }, style = LensStyle.Lift, rect = { pill() })
             .glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp)
             .drawBehind {
-                // The resting pill fades as the clear drop takes its place (where drops can be drawn).
-                val a = if (liquidGlassSupported) 1f - lift.value.coerceIn(0f, 1f) else 1f
+                // The resting pill is gone early in the lift: magnified inside the growing drop, its
+                // grey read as a white haze (where drops can be drawn).
+                val a = if (liquidGlassSupported) 1f - (lift.value * 3f).coerceIn(0f, 1f) else 1f
                 if (a < 0.01f) return@drawBehind
                 val r = pill()
                 val corner = CornerRadius(r.height / 2)
