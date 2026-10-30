@@ -155,7 +155,7 @@ fun MediaCard(
                             .align(Alignment.TopEnd)
                             .padding(12.dp)
                             .pressScale(0.92f)
-                            .glassChrome(behind, CircleShape, blur = 8.dp, tint = Color.Black.copy(alpha = 0.7f), bevel = 16.dp)
+                            .glassChrome(behind, CircleShape, blur = 8.dp, tint = Color.Black.copy(alpha = 0.95f), bevel = 16.dp)
                             .clip(CircleShape)
                             .pressable(pressedScale = 1f, onClick = onContinueHere)
                             .padding(start = 10.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),

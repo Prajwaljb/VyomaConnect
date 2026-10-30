@@ -66,6 +66,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.GraphicsContext
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.material3.LocalContentColor
 import kotlin.math.roundToInt
 
@@ -122,7 +123,7 @@ object Glass {
     /** Tint laid over real backdrop blur. */
     val chrome: Color
         @Composable @ReadOnlyComposable
-        get() = if (isDarkUi) Color(0xFF1C1D21).copy(alpha = 0.56f) else Color.White.copy(alpha = 0.6f)
+        get() = if (isDarkUi) Color(0xFF1C1D21).copy(alpha = 0.56f) else Color.White.copy(alpha = 0.72f)
 
     val edge: Brush
         @Composable @ReadOnlyComposable
@@ -139,35 +140,38 @@ val isAmoledUi: Boolean
     get() = MaterialTheme.colorScheme.background == Color.Black
 
 /**
- * How glass catches light, per theme. Fill runs lighter at the top than the bottom; the rim is
- * bright where light hits (top) and falls to a shaded underside, which is what makes a flat
- * translucent shape read as a raised slab; a soft shadow lifts it off the canvas.
+ * How glass catches light, per theme. The body is one even tone (a visible top-to-bottom gradient
+ * reads as cheap plastic); depth comes from the edge instead: a hairline that catches light at the
+ * top-left corner and, fainter, the bottom-right, like a real pane under a key light, and a soft
+ * shadow where there's a light canvas for it to fall on.
  */
 @Immutable
 class GlassDepth internal constructor(
-    val top: Color,
-    val bottom: Color,
+    val fill: Color,
+    /** The edge where the light hits it. */
     val rimLit: Color,
-    val rimShade: Color,
+    /** The edge everywhere else. */
+    val rimBase: Color,
     val shadow: Color,
-    val sheen: Color,
+    val shadowBlur: Float,
+    val shadowDrop: Float,
 )
 
 private val DarkDepth = GlassDepth(
-    top = Color.White.copy(alpha = 0.105f), bottom = Color.White.copy(alpha = 0.045f),
-    rimLit = Color.White.copy(alpha = 0.24f), rimShade = Color.Black.copy(alpha = 0.32f),
-    shadow = Color.Black.copy(alpha = 0.42f), sheen = Color.White.copy(alpha = 0.06f),
+    fill = Color.White.copy(alpha = 0.065f),
+    rimLit = Color.White.copy(alpha = 0.34f), rimBase = Color.White.copy(alpha = 0.07f),
+    shadow = Color.Black.copy(alpha = 0.32f), shadowBlur = 18f, shadowDrop = 6f,
 )
-// On true black a shadow is invisible, so the glass is darker inside and its rim does the lifting.
+// True black: no shadow can show, so the edge alone lifts it.
 private val AmoledDepth = GlassDepth(
-    top = Color.White.copy(alpha = 0.085f), bottom = Color.White.copy(alpha = 0.02f),
-    rimLit = Color.White.copy(alpha = 0.30f), rimShade = Color.White.copy(alpha = 0.05f),
-    shadow = Color.Transparent, sheen = Color.White.copy(alpha = 0.07f),
+    fill = Color.White.copy(alpha = 0.06f),
+    rimLit = Color.White.copy(alpha = 0.38f), rimBase = Color.White.copy(alpha = 0.075f),
+    shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
 )
 private val LightDepth = GlassDepth(
-    top = Color.White.copy(alpha = 0.94f), bottom = Color.White.copy(alpha = 0.70f),
-    rimLit = Color.White, rimShade = Color.Black.copy(alpha = 0.07f),
-    shadow = Color(0xFF1A2B4C).copy(alpha = 0.10f), sheen = Color.Transparent,
+    fill = Color.White.copy(alpha = 0.86f),
+    rimLit = Color.White, rimBase = Color(0xFF1A2B4C).copy(alpha = 0.07f),
+    shadow = Color(0xFF1A2B4C).copy(alpha = 0.09f), shadowBlur = 22f, shadowDrop = 8f,
 )
 
 /** The current theme's [GlassDepth]. */
@@ -180,17 +184,34 @@ val glassDepth: GlassDepth
     }
 
 /**
- * Paints one glass slab of [outline]: soft shadow outside it (never under it, so the glass stays
- * clear), lit gradient fill, a corner sheen, and the lit-to-shaded rim. Everything but the
- * shadow's blur is cached per size by the callers (drawWithCache).
+ * The specular edge: a sweep around the shape's centre, brightest at the top-left (where the
+ * light is), a softer catch at the bottom-right, the base tone between. Angles run clockwise from
+ * 3 o'clock.
+ */
+internal fun specularRim(lit: Color, base: Color, center: Offset): Brush {
+    val back = lerp(base, lit, 0.45f)
+    return Brush.sweepGradient(
+        0f to base,
+        0.125f to back, // bottom-right
+        0.3f to base,
+        0.5f to base,
+        0.625f to lit, // top-left
+        0.8f to base,
+        1f to base,
+        center = center,
+    )
+}
+
+/**
+ * Paints one glass pane of [outline]: soft shadow outside it (never under it, so the glass stays
+ * clear), an even fill, and the specular rim. Cached per size by the callers (drawWithCache).
  */
 private class GlassPainter(private val d: GlassDepth, private val flat: Color?, density: Float) {
-    private val shadowBlur = 14f * density
-    private val drop = 5f * density
-    private val stroke = 0.9f * density
+    private val drop = d.shadowDrop * density
+    private val stroke = 1f * density
     private val shadowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         color = d.shadow.toArgb()
-        if (d.shadow.alpha > 0f) maskFilter = android.graphics.BlurMaskFilter(shadowBlur, android.graphics.BlurMaskFilter.Blur.NORMAL)
+        if (d.shadow.alpha > 0f) maskFilter = android.graphics.BlurMaskFilter(d.shadowBlur * density, android.graphics.BlurMaskFilter.Blur.NORMAL)
     }
 
     fun DrawScope.paint(path: Path, height: Float, width: Float) {
@@ -198,16 +219,8 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
             val shadow = path.asAndroidPath().let { android.graphics.Path(it).apply { offset(0f, drop) } }
             clipPath(path, ClipOp.Difference) { drawIntoCanvas { it.nativeCanvas.drawPath(shadow, shadowPaint) } }
         }
-        if (flat != null) drawPath(path, flat)
-        else drawPath(path, Brush.verticalGradient(listOf(d.top, d.bottom), startY = 0f, endY = height))
-        if (d.sheen.alpha > 0f) {
-            drawPath(path, Brush.radialGradient(listOf(d.sheen, Color.Transparent), center = Offset(width * 0.18f, 0f), radius = width * 0.75f))
-        }
-        drawPath(
-            path,
-            Brush.verticalGradient(0f to d.rimLit, 0.35f to d.rimLit.copy(alpha = d.rimLit.alpha * 0.25f), 0.7f to Color.Transparent, 1f to d.rimShade, startY = 0f, endY = height),
-            style = Stroke(stroke),
-        )
+        drawPath(path, flat ?: d.fill)
+        drawPath(path, specularRim(d.rimLit, d.rimBase, Offset(width / 2, height / 2)), style = Stroke(stroke))
     }
 }
 
@@ -237,19 +250,17 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
     this
         .drawWithCache {
             val outline = shape.createOutline(size, layoutDirection, this)
-            val fill = if (base != null) {
-                Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.22f).compositeOver(base), base))
-            } else if (dark) {
-                Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.16f), Color.White.copy(alpha = 0.07f)))
-            } else {
-                Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.035f), Color.Black.copy(alpha = 0.075f)))
-            }
-            val rim = Brush.verticalGradient(
-                0f to Color.White.copy(alpha = if (dark || base != null) 0.38f else 0.9f),
-                0.5f to Color.Transparent,
-                1f to (if (dark) Color.Black.copy(alpha = 0.25f) else Color.Black.copy(alpha = 0.06f)),
+            val fill = base ?: if (dark) Color.White.copy(alpha = 0.12f) else Color(0xFF1A2B4C).copy(alpha = 0.06f)
+            val rim = specularRim(
+                lit = Color.White.copy(alpha = if (dark || base != null) 0.45f else 0.95f),
+                base = when {
+                    base != null -> Color.White.copy(alpha = 0.12f)
+                    dark -> Color.White.copy(alpha = 0.06f)
+                    else -> Color(0xFF1A2B4C).copy(alpha = 0.06f)
+                },
+                center = Offset(size.width / 2, size.height / 2),
             )
-            val stroke = Stroke(0.8.dp.toPx())
+            val stroke = Stroke(0.9.dp.toPx())
             onDrawBehind {
                 drawOutline(outline, fill)
                 drawOutline(outline, rim, style = stroke)
@@ -394,7 +405,7 @@ fun Modifier.glassChrome(
             blurred.renderEffect = lens.effect(
                 size, m.toFloat(), radius = size.minDimension / 2, bevel = rim, refract = depth, zoom = 1f,
                 // Clear in dark mode; light mode keeps more milk so dark labels stay legible over photos.
-                disperse = LensStyle.Chrome.disperse, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.85f), spec = if (dark) 0.42f else 0.8f,
+                disperse = LensStyle.Chrome.disperse, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.92f), spec = if (dark) 0.42f else 0.8f,
                 shade = if (dark) 0f else 0.1f, blur = r,
             )
             blurred.record(IntSize(size.width.roundToInt() + 2 * m, size.height.roundToInt() + 2 * m)) {
