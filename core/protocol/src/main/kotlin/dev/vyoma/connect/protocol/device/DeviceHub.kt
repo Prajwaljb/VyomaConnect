@@ -76,7 +76,10 @@ class DeviceHub(
             // call is a race with a cable link that just came up (refuse it), or a sign that an
             // older tunnel died on its side without us noticing (take it; onLink drops the tunnel).
             refuses = { id, transport, incoming ->
-                if (transport != TransportKind.USB && holdingWifi()) return@copy true
+                // Companions never come over the cable (they dial the phone's Wi-Fi address), so
+                // holding Wi-Fi back for the tunnel only delayed them after every app start.
+                val companion = _devices.value[id]?.identity?.companionOf != null
+                if (transport != TransportKind.USB && holdingWifi() && !companion) return@copy true
                 val usbAge = if (transport == TransportKind.USB) null else _devices.value[id]?.linkAge(TransportKind.USB)
                 usbAge != null && (!incoming || usbAge < FRESH_CABLE_MS)
             },

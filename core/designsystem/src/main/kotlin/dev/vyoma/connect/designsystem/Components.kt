@@ -1,5 +1,16 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.ui.window.Dialog
+import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.horizontalDrag
+import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.util.lerp
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.compositeOver
@@ -167,42 +178,61 @@ fun CollapsingHeaderScaffold(
             content()
         } }
 
-        // Compact bar: always present for navigation/actions. Once the hero has scrolled away it
-        // turns into frosted glass over the list, and its title fades in.
+        // The compact bar floats over the list in the same material as the tab bar: back and
+        // actions are liquid-glass buttons, and once the hero has scrolled away the title rises in
+        // a glass capsule of its own. Instead of a hard frosted strip, the status bar area fades
+        // softly to the canvas so content slips under it.
+        val edgeColor = MaterialTheme.colorScheme.background
         Box(Modifier.fillMaxWidth()) {
-            // Only drawn while collapsed, so the expanded page never pays for the blur. Gated in the
-            // draw phase: composing it on every crossing cost a frame and a fresh layer each time.
             Box(
-                Modifier
-                    .matchParentSize()
-                    .drawWithContent { if (collapse > 0.98f) drawContent() }
-                    .glassChrome(backdrop, RectangleShape, edge = false),
+                Modifier.matchParentSize().drawBehind {
+                    val a = collapse
+                    if (a < 0.01f) return@drawBehind
+                    drawRect(
+                        Brush.verticalGradient(
+                            0f to edgeColor.copy(alpha = a),
+                            0.45f to edgeColor.copy(alpha = 0.85f * a),
+                            1f to Color.Transparent,
+                        ),
+                    )
+                },
             )
-            Row(
+            Box(
                 Modifier
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.statusBars)
-                    .height(56.dp)
-                    .padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .height(64.dp)
+                    .padding(horizontal = 12.dp),
             ) {
-                if (navigation != null) navigation() else Spacer(Modifier.width(8.dp))
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 8.dp)
+                if (navigation != null) {
+                    Box(
+                        Modifier.align(Alignment.CenterStart).size(48.dp).glassChrome(backdrop, CircleShape, blur = 14.dp, bevel = 12.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { navigation() }
+                }
+                Box(
+                    Modifier
+                        .align(Alignment.Center)
+                        .padding(horizontal = 60.dp)
+                        // Only once the big title is mostly gone, so a small scroll never shows two titles.
                         .graphicsLayer {
-                            // Only once the big title is mostly gone, so a small scroll never shows two titles.
                             val t = ((collapse - 0.6f) / 0.4f).coerceIn(0f, 1f)
                             alpha = t
-                            translationY = (1f - t) * 12.dp.toPx()
-                        },
+                            translationY = (1f - t) * 10.dp.toPx()
+                            scaleX = 0.9f + 0.1f * t
+                            scaleY = 0.9f + 0.1f * t
+                        }
+                        .drawWithContent { if (collapse > 0.6f) drawContent() }
+                        .glassChrome(backdrop, CircleShape, blur = 14.dp, bevel = 12.dp)
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                ) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Row(
+                    Modifier.align(Alignment.CenterEnd).height(48.dp).glassChrome(backdrop, CircleShape, blur = 14.dp, bevel = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    content = actions,
                 )
-                actions()
             }
         }
     } }
@@ -424,8 +454,8 @@ fun PillButton(
         modifier
             .then(if (large) Modifier.fillMaxWidth().height(54.dp) else Modifier.height(40.dp))
             .pressable(enabled = enabled, pressedScale = if (large) 0.97f else 0.92f, haptic = haptic, onClick = onClick)
-            .clip(CircleShape)
-            .background(bg)
+            // Prominent pills are lit accent glass; the rest are raised glass with an accent label.
+            .glassRaised(CircleShape, bg.takeIf { prominent && enabled })
             .padding(horizontal = 20.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -489,6 +519,119 @@ fun SegmentedControl(options: List<String>, selected: Int, onSelect: (Int) -> Un
                     color = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                 )
+            }
+        }
+    }
+}
+
+/**
+ * The liquid bar: a slim capsule with no thumb. Under a finger it swells (springy, like a drop
+ * pressed flat) and follows the finger's movement relatively, iOS-style, so a touch never makes
+ * it jump; a tap without a drag changes nothing. [value] is read in the draw phase only.
+ */
+@Composable
+fun LiquidSlider(
+    value: () -> Float,
+    onChange: (Float) -> Unit,
+    onDone: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    fill: Color = Color.White,
+    track: Color = Color.White.copy(alpha = 0.22f),
+    rest: Dp = 6.dp,
+    swollen: Dp = 14.dp,
+) {
+    val swell = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
+    val change by rememberUpdatedState(onChange)
+    val done by rememberUpdatedState(onDone)
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(32.dp)
+            .then(
+                if (!enabled) Modifier else Modifier.pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        scope.launch { swell.animateTo(1f, VyomaMotion.spatial()) }
+                        var v = value()
+                        var moved = false
+                        val start = awaitHorizontalTouchSlopOrCancellation(down.id) { c, over ->
+                            c.consume()
+                            moved = true
+                            v = (v + over / size.width).coerceIn(0f, 1f)
+                            change(v)
+                        }
+                        if (start != null) {
+                            horizontalDrag(start.id) { c ->
+                                val dx = c.positionChange().x
+                                c.consume()
+                                val n = (v + dx / size.width).coerceIn(0f, 1f)
+                                if ((n == 0f || n == 1f) && n != v) haptics.perform(Haptic.Edge)
+                                v = n
+                                change(v)
+                            }
+                        }
+                        if (moved) done()
+                        scope.launch { swell.animateTo(0f, VyomaMotion.release()) }
+                    }
+                },
+            )
+            .drawBehind {
+                val h = lerp(rest.toPx(), swollen.toPx(), swell.value.coerceAtLeast(0f))
+                val top = (size.height - h) / 2
+                val r = CornerRadius(h / 2)
+                drawRoundRect(track, Offset(0f, top), Size(size.width, h), r)
+                val w = (value().coerceIn(0f, 1f) * size.width)
+                if (w <= 0f) return@drawBehind
+                val fw = w.coerceAtLeast(h)
+                drawRoundRect(fill, Offset(0f, top), Size(fw, h), r)
+                // A gloss along the top of the fill: lit liquid rather than flat paint.
+                drawRoundRect(
+                    Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.35f), Color.Transparent), startY = top, endY = top + h * 0.6f),
+                    Offset(0f, top), Size(fw, h), r,
+                )
+            },
+    )
+}
+
+/**
+ * A dialog in the app's material: an opaque glass slab (dialogs have no backdrop to blur) with
+ * the same lit rim and depth as the cards. Same shape of API as Material's AlertDialog.
+ */
+@Composable
+fun GlassDialog(
+    onDismissRequest: () -> Unit,
+    confirmButton: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    dismissButton: (@Composable () -> Unit)? = null,
+    title: (@Composable () -> Unit)? = null,
+    text: (@Composable () -> Unit)? = null,
+) {
+    Dialog(onDismissRequest) {
+        Column(
+            modifier
+                .fillMaxWidth()
+                .glassCard(MaterialTheme.shapes.extraLarge, fill = MaterialTheme.colorScheme.surfaceContainerHigh)
+                .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 12.dp),
+        ) {
+            CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+                if (title != null) {
+                    ProvideTextStyle(MaterialTheme.typography.headlineSmall) { title() }
+                    Spacer(Modifier.height(14.dp))
+                }
+                if (text != null) {
+                    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant) {
+                        ProvideTextStyle(MaterialTheme.typography.bodyMedium) { text() }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                    dismissButton?.invoke()
+                    Spacer(Modifier.width(4.dp))
+                    confirmButton()
+                }
             }
         }
     }

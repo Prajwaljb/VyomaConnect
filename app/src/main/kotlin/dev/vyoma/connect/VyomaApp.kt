@@ -1,7 +1,9 @@
 package dev.vyoma.connect
 
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
+import android.app.Activity
 import android.app.Application
+import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import dev.vyoma.connect.data.SettingsRepository
@@ -68,6 +70,23 @@ class VyomaApp : Application() {
             }
         }
         container = AppContainer(this)
+        // Whether any of our activities is started: background work scales down when it isn't.
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            private var started = 0
+            override fun onActivityStarted(activity: Activity) {
+                started++
+                container.uiVisible.value = true
+            }
+            override fun onActivityStopped(activity: Activity) {
+                started = (started - 1).coerceAtLeast(0)
+                if (started == 0) container.uiVisible.value = false
+            }
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+            override fun onActivityResumed(activity: Activity) = Unit
+            override fun onActivityPaused(activity: Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+            override fun onActivityDestroyed(activity: Activity) = Unit
+        })
         container.appScope.launch { Widgets.publishPreviews(this@VyomaApp) }
     }
 }
@@ -78,6 +97,8 @@ class VyomaApp : Application() {
  */
 class AppContainer(private val app: Application) {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** True while one of our activities is on screen. */
+    val uiVisible = MutableStateFlow(false)
     val settings by lazy { SettingsRepository(app) }
     val network by lazy { AndroidNetwork(app) }
     val battery by lazy { BatteryMonitor(app) }

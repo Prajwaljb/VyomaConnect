@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -11,6 +13,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.shape.RoundedCornerShape
+import dev.vyoma.connect.designsystem.glassRaised
 import dev.vyoma.connect.designsystem.glassCard
 import dev.vyoma.connect.designsystem.SystemColor
 import dev.vyoma.connect.designsystem.Glass
@@ -534,10 +537,10 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
     val shown by animateFloatAsState(level, if (dragging) snap() else VyomaMotion.spatial(), label = "vol")
     val haptics = LocalHapticFeedback.current
     val fill by animateColorAsState(
-        if (sink.muted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+        if (sink.muted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
         VyomaMotion.effects(), label = "volFill",
     )
-    val onFill = MaterialTheme.colorScheme.background
+    val onFill = if (sink.muted) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onPrimary
 
     fun set(v: Float) {
         val n = v.coerceIn(0f, 1f)
@@ -557,7 +560,7 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
         set(n)
     }
 
-    Row(modifier.fillMaxWidth().height(64.dp)) {
+    Row(modifier.fillMaxWidth().height(60.dp)) {
         BoxWithConstraints(
             Modifier
                 .weight(1f)
@@ -569,7 +572,24 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
                         scaleY = 1f - abs(pull) * 0.5f
                     }
                 }
-                .glassCard(MaterialTheme.shapes.large)
+                .glassCard(CircleShape)
+                // The level is a capsule of lit liquid inset in the glass, never narrower than round.
+                .drawBehind {
+                    val inset = 5.dp.toPx()
+                    val h = size.height - 2 * inset
+                    val w = shown.coerceIn(0f, 1f) * (size.width - 2 * inset)
+                    if (w <= 0.5f) return@drawBehind
+                    val fw = w.coerceAtLeast(h)
+                    val r = CornerRadius(h / 2)
+                    drawRoundRect(
+                        Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.18f).compositeOver(fill), fill), startY = inset, endY = inset + h),
+                        Offset(inset, inset), Size(fw, h), r,
+                    )
+                    drawRoundRect(
+                        Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.35f), Color.Transparent), startY = inset, endY = inset + h * 0.5f),
+                        Offset(inset, inset), Size(fw, h), r, style = Stroke(1.dp.toPx()),
+                    )
+                }
                 .pointerInput(sink.name) {
                     // Relative drag like iOS: the bar follows the finger's movement and never jumps
                     // to where it landed, and a vertical swipe still scrolls the page.
@@ -594,9 +614,8 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
                 },
         ) {
             val barWidth = maxWidth.value
-            Box(Modifier.fillMaxHeight().fillMaxWidth(shown.coerceIn(0f, 1f)).background(fill))
             Row(
-                Modifier.fillMaxSize().padding(horizontal = 18.dp),
+                Modifier.fillMaxSize().padding(horizontal = 22.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 // The icon sits on the fill once there's enough of it, so it flips color with it.
@@ -666,7 +685,7 @@ private fun ControlButton(c: Control, modifier: Modifier) {
         else -> Haptic.ToggleOn
     }
     Column(modifier.pressable(pressedScale = 0.88f, haptic = haptic, onClick = c.onClick), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.size(56.dp).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(56.dp).glassRaised(CircleShape, bg.takeIf { c.active || it != Glass.raised }), contentAlignment = Alignment.Center) {
             Icon(c.icon, null, tint = fg, modifier = Modifier.size(24.dp))
         }
         Spacer(Modifier.height(6.dp))
@@ -695,7 +714,7 @@ internal fun OutputPicker(sinks: List<AudioSink>, onDefault: (AudioSink) -> Unit
                 style = MaterialTheme.typography.labelLarge,
                 color = if (sink.isDefault) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
-                modifier = Modifier.clip(CircleShape).background(bg).pressable { onDefault(sink) }.padding(horizontal = 14.dp, vertical = 9.dp),
+                modifier = Modifier.glassRaised(CircleShape, bg.takeIf { sink.isDefault }).pressable { onDefault(sink) }.padding(horizontal = 14.dp, vertical = 9.dp),
             )
         }
     }

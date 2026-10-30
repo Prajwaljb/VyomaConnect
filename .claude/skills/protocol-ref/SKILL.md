@@ -51,7 +51,9 @@ body fields before implementing one.
   dedicated socket (UDP with AEAD for input, TLS/TCP for video).
 
 ### Companion packets (desktop/companion ⇄ CompanionPlugin)
-- `vyoma.stats.request` → 12 s lease of `vyoma.stats` every 2 s: `cpu, memUsed, memTotal, cpuTemp?, gpu?, uptime?`.
+- `vyoma.stats.request` → 12 s lease of `vyoma.stats` every 2 s: `cpu, memUsed, memTotal, cpuTemp?, gpu?, uptime?,
+  handoff?` (`handoff` = title of a web video the phone could continue; the phone shows "Continue on phone" only
+  when it matches the playing title, so local players like mpv never offer it).
   `gpu` = amdgpu `gpu_busy_percent`, else Intel `1 − Δrc6_residency/Δt` (no root; never wake the NVIDIA dGPU).
 - `vyoma.screenshot.request` → `vyoma.screenshot {format:"webp"}` + payload (companion listens on 1739..1764, is the
   TLS server, and only serves the pinned phone cert), or `{error}` with no payload. Phone saves to Pictures/Vyoma.
@@ -60,7 +62,7 @@ body fields before implementing one.
   first V4L2 node offering MJPEG (skips IR cams), largest size, after 15 warm-up frames. The PC always shows a
   notification ("<phone> took a photo with this PC's camera"). Phone: `CompanionPlugin.photo` (same `Capture` as
   `screenshot`), saved to Pictures/Vyoma.
-- `vyoma.handoff.request {pause?=true}` → `vyoma.handoff {url, title, position(ms)|null, exact}` or `{error}`; the
+- `vyoma.handoff.request {pause?=true}` (only players with an http(s) URL count) → `vyoma.handoff {url, title, position(ms)|null, exact}` or `{error}`; the
   companion pauses that player. Position: MPRIS `Position` when nonzero, else our own clock from signals (track
   change → 0 or the URL's `t=`, counts while Playing, reset on `Seeked`); null if we attached mid-play and the player
   never said. Phone opens `Handoff.at(url, pos)` (YouTube `watch?v=ID&t=Ns`). Phone→PC: sharing a YouTube link

@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
@@ -178,12 +179,15 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
         nav.animateTo(current, if (swiping) VyomaMotion.page() else null)
         swiping = false
     }
+    // Each screen's saved state (scroll positions, the open tab's lists) lives here while it's on
+    // the back stack, so coming back from a pushed page lands where you left; popped pages drop it.
+    val saved = rememberSaveableStateHolder()
     PredictiveBackHandler(enabled = backStack.size > 1) { events ->
         val previous = backStack[backStack.lastIndex - 1]
         try {
             swiping = true
             events.collect { e -> nav.seekTo(e.progress, previous) }
-            backStack.removeAt(backStack.lastIndex)
+            saved.removeState(backStack.removeAt(backStack.lastIndex).toString())
         } catch (e: CancellationException) {
             scope.launch {
                 nav.animateTo(nav.currentState, VyomaMotion.page())
@@ -193,7 +197,9 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
         }
     }
 
-    val pop: () -> Unit = { if (backStack.size > 1) backStack.removeAt(backStack.lastIndex) }
+    val pop: () -> Unit = {
+        if (backStack.size > 1) saved.removeState(backStack.removeAt(backStack.lastIndex).toString())
+    }
     rememberTransition(nav, label = "nav").AnimatedContent(
         transitionSpec = {
             // A swipe seeks through the animation, so it needs a linear timeline; buttons get springs.
@@ -208,7 +214,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
             }
         },
     ) { screen ->
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) { saved.SaveableStateProvider(screen.toString()) {
             when (screen) {
                 Screen.Home -> TabsRoot(
                     tab = tab,
@@ -237,6 +243,6 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                 is Screen.Touchpad -> RemoteInputScreen(vm, screen.deviceId, screen.keyboard, onBack = pop)
                 is Screen.Files -> FilesScreen(vm, screen.pcId, onBack = pop)
             }
-        }
+        } }
     }
 }

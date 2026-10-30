@@ -80,10 +80,7 @@ impl Media {
     }
 
     async fn handoff_where(&self, wanted: impl Fn(&Track) -> bool) -> Option<Handoff> {
-        let track = {
-            let tracks = self.tracks.lock().unwrap();
-            tracks.values().filter(|t| !t.url.is_empty() && wanted(t)).max_by_key(|t| (t.playing, t.touched)).cloned()?
-        };
+        let track = self.best(wanted)?;
         // Exact when the player reports it (anything but 0, which Firefox always says).
         let reported = self.position(&track.bus).await.filter(|&p| p > 0);
         Some(Handoff {
@@ -93,6 +90,18 @@ impl Media {
             title: track.title,
             bus: track.bus,
         })
+    }
+
+    /// Title of what [handoff] would hand over right now, for the phone to offer it. Cheap: no D-Bus.
+    pub fn offer(&self) -> Option<String> {
+        self.best(|_| true).map(|t| t.title)
+    }
+
+    /// Only web pages can continue on the phone: mpv/VLC playing a local file (`file://`, or no
+    /// URL at all) never qualifies, so the phone doesn't offer it.
+    fn best(&self, wanted: impl Fn(&Track) -> bool) -> Option<Track> {
+        let tracks = self.tracks.lock().unwrap();
+        tracks.values().filter(|t| is_web(&t.url) && wanted(t)).max_by_key(|t| (t.playing, t.touched)).cloned()
     }
 
     /// Pauses the player we just handed off, so it doesn't keep going on the PC.
@@ -181,6 +190,10 @@ impl Media {
         let props = self.props(name).await.ok()?;
         props.get("Position").and_then(int).map(|us| us / 1000)
     }
+}
+
+fn is_web(url: &str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://")
 }
 
 /// `xesam:url` and `xesam:title` from an MPRIS Metadata value.

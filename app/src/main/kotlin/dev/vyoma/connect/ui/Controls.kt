@@ -1,5 +1,10 @@
 package dev.vyoma.connect.ui
 
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import dev.vyoma.connect.designsystem.LiquidSlider
+import dev.vyoma.connect.designsystem.glassRaised
 import dev.vyoma.connect.designsystem.SystemColor
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedContent
@@ -19,6 +24,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -140,12 +146,14 @@ fun MediaCard(
                 }
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to tint)))
                 if (onContinueHere != null) {
+                    // Busy artwork: a soft top shade plus a darker raised capsule keeps the label legible.
+                    Box(Modifier.fillMaxWidth().fillMaxHeight(0.4f).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.35f), Color.Transparent))))
                     Row(
                         Modifier
                             .align(Alignment.TopEnd)
                             .padding(12.dp)
+                            .glassRaised(CircleShape, Color.Black.copy(alpha = 0.62f))
                             .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.45f))
                             .pressable(pressedScale = 0.92f, onClick = onContinueHere)
                             .padding(start = 10.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -182,12 +190,11 @@ fun MediaCard(
                     LaunchedEffect(p.volume) { if (!dragging) vol = p.volume.toFloat() }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.AutoMirrored.Rounded.VolumeUp, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
-                        Slider(
-                            value = vol, valueRange = 0f..100f,
-                            onValueChange = { dragging = true; vol = it; onVolume(it.toInt()) },
-                            onValueChangeFinished = { dragging = false },
-                            colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.White.copy(alpha = 0.25f)),
-                            modifier = Modifier.padding(start = 8.dp).weight(1f),
+                        LiquidSlider(
+                            value = { vol / 100f },
+                            onChange = { dragging = true; vol = it * 100f; onVolume(vol.toInt()) },
+                            onDone = { dragging = false },
+                            modifier = Modifier.padding(start = 10.dp).weight(1f),
                         )
                     }
                 }
@@ -221,36 +228,41 @@ private fun MediaButton(icon: ImageVector, label: String, enabled: Boolean, onCl
     }
 }
 
-/** Ticks locally between PC updates so the bar moves smoothly without network chatter. */
+/**
+ * Ticks locally between PC updates so the bar moves without network chatter, and only while the
+ * app is on screen: it used to keep a 4 Hz timer running in the background for as long as the PC
+ * played anything.
+ */
 @Composable
 private fun Scrubber(np: NowPlaying, onSeek: (Long) -> Unit) {
     val p = np.player
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(p.isPlaying, p.positionAt) {
-        while (p.isPlaying) {
-            now = System.currentTimeMillis()
-            delay(250)
-        }
         now = System.currentTimeMillis()
+        if (!p.isPlaying) return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                now = System.currentTimeMillis()
+                delay(500)
+            }
+        }
     }
     var dragValue by remember { mutableStateOf<Float?>(null) }
-    val position = dragValue ?: p.currentPosition(now).toFloat()
+    val length = p.lengthMs.coerceAtLeast(1).toFloat()
+    val position = dragValue?.let { it * length } ?: p.currentPosition(now).toFloat()
     Column {
-        Slider(
-            value = position.coerceIn(0f, p.lengthMs.toFloat()),
-            valueRange = 0f..p.lengthMs.toFloat(),
+        LiquidSlider(
+            value = { (dragValue ?: (p.currentPosition(now) / length)) },
+            onChange = { dragValue = it },
+            onDone = { dragValue?.let { onSeek((it * length).toLong()) }; dragValue = null },
             enabled = p.canSeek,
-            onValueChange = { dragValue = it },
-            onValueChangeFinished = { dragValue?.let { onSeek(it.toLong()) }; dragValue = null },
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.White.copy(alpha = 0.25f),
-                disabledThumbColor = Color.White.copy(alpha = 0.6f), disabledActiveTrackColor = Color.White.copy(alpha = 0.6f),
-            ),
+            fill = Color.White.copy(alpha = if (p.canSeek) 1f else 0.6f),
         )
         Row(Modifier.fillMaxWidth()) {
             Text(formatTime(position.toLong()), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
             Spacer(Modifier.weight(1f))
-            Text(formatTime(p.lengthMs), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
+            Text("-" + formatTime((p.lengthMs - position.toLong()).coerceAtLeast(0)), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
         }
     }
 }

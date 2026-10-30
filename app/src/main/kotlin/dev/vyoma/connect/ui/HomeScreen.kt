@@ -1,7 +1,9 @@
 package dev.vyoma.connect.ui
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import dev.vyoma.connect.designsystem.glassRaised
 import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.SystemColor
 import dev.vyoma.connect.designsystem.Haptic
@@ -56,6 +58,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.flowOf
 import dev.vyoma.connect.designsystem.CollapsingHeaderScaffold
 import dev.vyoma.connect.designsystem.ConnectionOrb
 import dev.vyoma.connect.designsystem.ListRow
@@ -113,8 +116,7 @@ fun HomeScreen(
                                 d.identity.deviceName,
                                 style = MaterialTheme.typography.labelLarge,
                                 color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.clip(CircleShape)
-                                    .background(if (on) MaterialTheme.colorScheme.primary else Glass.raised)
+                                modifier = Modifier.glassRaised(CircleShape, if (on) MaterialTheme.colorScheme.primary else null)
                                     .pressable { selected = d.identity.deviceId }
                                     .padding(horizontal = 14.dp, vertical = 8.dp),
                             )
@@ -137,6 +139,11 @@ fun HomeScreen(
             val np = nowPlaying?.takeIf { it.deviceId == id && it.player.hasMedia }
             if (np != null) {
                 item(key = "media") {
+                    // Only when the companion says this exact video can continue here (a web page,
+                    // not mpv playing a local file).
+                    val companionUp = allDevices.any { it.identity.companionOf == id && it.isPaired && it.isReachable }
+                    val stats by remember(companionUp, id) { vm.companionOf(id)?.stats ?: flowOf(null) }.collectAsStateWithLifecycle(null)
+                    val offered = stats?.handoff?.let { sameVideo(it, np.player.title) } == true
                     Staggered(2, Modifier.animateItem()) {
                         MediaCard(
                             np = np,
@@ -147,7 +154,7 @@ fun HomeScreen(
                             onVolume = vm::setPlayerVolume,
                             onPickPlayer = vm::pickPlayer,
                             showVolume = false,
-                            onContinueHere = if (allDevices.any { it.identity.companionOf == id && it.isPaired && it.isReachable }) { { vm.continueOnPhone(id) } } else null,
+                            onContinueHere = if (offered) { { vm.continueOnPhone(id) } } else null,
                         )
                     }
                 }
@@ -295,4 +302,11 @@ fun transportLabel(state: DeviceState): String = when {
     TransportKind.LAN in state.transports -> "Connected via Wi-Fi"
     TransportKind.BLUETOOTH in state.transports -> "Connected via Bluetooth"
     else -> "Not reachable"
+}
+
+/** MPRIS titles of the same video differ in suffixes (" - YouTube") between the two views of it. */
+private fun sameVideo(a: String, b: String): Boolean {
+    val x = a.trim().lowercase()
+    val y = b.trim().lowercase()
+    return x.isNotEmpty() && y.isNotEmpty() && (x == y || x.startsWith(y) || y.startsWith(x))
 }

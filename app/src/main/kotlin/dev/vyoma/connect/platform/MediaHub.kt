@@ -14,7 +14,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
@@ -41,7 +43,7 @@ data class NowPlaying(
  * Picks the one PC player worth showing (whatever is playing, else the user's pick, else the
  * last active) and resolves the best artwork we can get for it.
  */
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, kotlinx.coroutines.FlowPreview::class)
 class MediaHub(private val hub: StateFlow<DeviceHub?>, private val scope: CoroutineScope) {
     /** The player the user chose in the UI; playing players still win. */
     val preferredPlayer = MutableStateFlow<String?>(null)
@@ -66,17 +68,30 @@ class MediaHub(private val hub: StateFlow<DeviceHub?>, private val scope: Corout
 
     private fun pick(all: List<Triple<Device, MprisPlugin, Pair<Map<String, RemotePlayer>, Map<String, ByteArray>>>>, preferred: String?): Source? {
         val candidates = all.flatMap { (d, p, state) -> state.first.values.map { Triple(d, p, it) to state.second } }
+        // Stick with what's on screen while nothing plays, so a paused card doesn't jump players.
         val chosen = candidates.firstOrNull { it.first.third.isPlaying && it.first.third.hasMedia }
             ?: candidates.firstOrNull { it.first.third.name == preferred && it.first.third.hasMedia }
+            ?: candidates.firstOrNull { it.first.third.name == shown && it.first.third.hasMedia }
             ?: all.firstNotNullOfOrNull { (d, p, state) -> p.activePlayer?.let { Triple(d, p, it) to state.second } }
             ?: return null
         val (d, p, player) = chosen.first
+        shown = player.name
         return Source(d, p, player, chosen.second[player.artUrl], candidates.filter { it.first.third.hasMedia }.map { it.first.third.name })
     }
 
+    @Volatile private var shown: String? = null
+
+    /**
+     * Browsers churn: YouTube hover previews and autoplay flip play/pause and swap titles several
+     * times a second, and players vanish for a moment between videos. Bursts are collapsed to
+     * their final state, and a player that disappears keeps its card for a grace period, so the
+     * card, the media notification and the widgets don't flicker (or redraw ten times a second).
+     */
     val nowPlaying: StateFlow<NowPlaying?> = source
+        .debounce(SETTLE_MS)
         .transformLatest { s ->
             if (s == null) {
+                delay(GONE_GRACE_MS)
                 emit(null)
                 return@transformLatest
             }
@@ -139,6 +154,8 @@ class MediaHub(private val hub: StateFlow<DeviceHub?>, private val scope: Corout
 
     companion object {
         private const val MAX_ART_PX = 1024
+        private const val SETTLE_MS = 250L
+        private const val GONE_GRACE_MS = 2_500L
 
         /** Decodes at no more than 1024px on the long side: crisp on a widget, cheap in memory. */
         fun decode(bytes: ByteArray): Bitmap? {

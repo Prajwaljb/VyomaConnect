@@ -100,6 +100,12 @@ fn pick_address(mut ips: Vec<IpAddr>) -> Option<IpAddr> {
 
 /// Starts a session with [id] unless one is running or kdeconnectd doesn't trust it.
 fn dial(shared: &Arc<Shared>, id: &str) {
+    dial_attempt(shared, id, 0);
+}
+
+/// After a session fails or drops (the app restarting, an update), redial a few times quickly
+/// instead of waiting for the 30 s sweep: the phone is usually back within seconds.
+fn dial_attempt(shared: &Arc<Shared>, id: &str, attempt: u32) {
     let trusted = shared.host.trusted_phones();
     let Some(cert) = trusted.get(id).cloned() else { return };
     let Some(addr) = shared.seen.lock().unwrap().get(id).copied() else { return };
@@ -108,10 +114,12 @@ fn dial(shared: &Arc<Shared>, id: &str) {
     }
     let (shared, id) = (shared.clone(), id.to_string());
     tokio::spawn(async move {
-        if let Err(e) = session(&shared, &id, addr, &cert).await {
-            warn!("{id}: {e:#}");
-        }
+        let failed = session(&shared, &id, addr, &cert).await.inspect_err(|e| warn!("{id}: {e:#}")).is_err();
         shared.connected.lock().unwrap().remove(&id);
+        if failed && attempt < 3 {
+            tokio::time::sleep(Duration::from_secs(2 * (attempt as u64 + 1))).await;
+            dial_attempt(&shared, &id, attempt + 1);
+        }
     });
 }
 
@@ -161,7 +169,7 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
                 *lease.lock().unwrap() = Instant::now() + STATS_LEASE;
                 if stats_task.as_ref().is_none_or(|t| t.is_finished()) {
                     info!("{name}: streaming stats while the dashboard is open");
-                    stats_task = Some(tokio::spawn(stream_stats(link.sender.clone(), lease.clone())));
+                    stats_task = Some(tokio::spawn(stream_stats(link.sender.clone(), lease.clone(), shared.media.clone())));
                 }
             }
             "vyoma.screenshot.request" => {
@@ -242,7 +250,9 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
     result
 }
 
-async fn stream_stats(sender: Sender, lease: Arc<Mutex<Instant>>) {
+/// Stats, plus `handoff`: the title of a web video the phone could continue (absent otherwise),
+/// so the phone only offers "Continue on phone" when it would work.
+async fn stream_stats(sender: Sender, lease: Arc<Mutex<Instant>>, media: Option<Arc<media::Media>>) {
     let mut stats = match stats::Stats::new() {
         Ok(s) => s,
         Err(e) => return warn!("stats unavailable: {e:#}"),
@@ -250,7 +260,11 @@ async fn stream_stats(sender: Sender, lease: Arc<Mutex<Instant>>) {
     let mut tick = tokio::time::interval(STATS_EVERY);
     while Instant::now() < *lease.lock().unwrap() {
         tick.tick().await;
-        if sender.send(&packet("vyoma.stats", stats.sample())).await.is_err() {
+        let mut body = stats.sample();
+        if let Some(title) = media.as_ref().and_then(|m| m.offer()) {
+            body["handoff"] = json!(title);
+        }
+        if sender.send(&packet("vyoma.stats", body)).await.is_err() {
             return;
         }
     }

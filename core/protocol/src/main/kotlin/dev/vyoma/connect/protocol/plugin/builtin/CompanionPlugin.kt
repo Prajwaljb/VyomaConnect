@@ -45,6 +45,8 @@ data class PcStats(
     val cpuTemp: Float?,
     val gpu: Int?,
     val uptimeSeconds: Long?,
+    /** Title of a web video the PC could hand off right now; null when nothing qualifies (mpv, local files). */
+    val handoff: String? = null,
 )
 
 /** Where a screenshot or camera photo request is. [Done.location] is something the UI can open. */
@@ -311,6 +313,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                 cpuTemp = packet.double("cpuTemp")?.toFloat(),
                 gpu = packet.int("gpu"),
                 uptimeSeconds = packet.long("uptime"),
+                handoff = packet.string("handoff"),
             )
         }
         return true
