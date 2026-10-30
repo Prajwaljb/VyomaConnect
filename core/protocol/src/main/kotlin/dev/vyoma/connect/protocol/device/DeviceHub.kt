@@ -76,6 +76,7 @@ class DeviceHub(
             // call is a race with a cable link that just came up (refuse it), or a sign that an
             // older tunnel died on its side without us noticing (take it; onLink drops the tunnel).
             refuses = { id, transport, incoming ->
+                if (transport != TransportKind.USB && holdingWifi()) return@copy true
                 val usbAge = if (transport == TransportKind.USB) null else _devices.value[id]?.linkAge(TransportKind.USB)
                 usbAge != null && (!incoming || usbAge < FRESH_CABLE_MS)
             },
@@ -109,16 +110,22 @@ class DeviceHub(
      * (UDP broadcasts get lost on busy Wi-Fi). Call on network change, refresh, or periodically.
      */
     fun refresh() {
+        if (holdingWifi()) return // cablePlugged() refreshes when the head start ends
         lan.broadcastIdentity()
-        for (trusted in trustStore.all()) {
+        val trusted = trustStore.all()
+        val onCable = onCableAddresses()
+        for (trusted in trusted) {
             if (_devices.value[trusted.deviceId]?.state?.value?.isReachable == true) continue
+            // Companions have no listener; they always dial us. Their address + 1716 is kdeconnectd.
+            if (trusted.companionOf != null) continue
             val address = trusted.lastAddress ?: continue
+            if (address in onCable) continue
             val ip = runCatching { java.net.InetAddress.getByName(address) }.getOrNull() ?: continue
             lan.connectTo(ip, trusted.lastPort ?: 1716, expectedId = trusted.deviceId)
         }
         // Manual hosts (often Tailscale) are a fallback: dialling one while the PC is already up
         // over Wi-Fi would swap the fast LAN link for the VPN. Names need DNS, so resolve off-thread.
-        if (trustStore.all().isNotEmpty() && !anyPairedOffline()) return
+        if (trusted.isNotEmpty() && !anyPairedOffline()) return
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             for (host in runCatching { lanConfig.manualHosts() }.getOrDefault(emptyList())) dial(host, DEFAULT_PORT)
         }
@@ -132,11 +139,39 @@ class DeviceHub(
         val devices = _devices.value.values
         if (deviceId != null && devices.any { it.id == deviceId && it.state.value.isReachable }) return
         if (devices.any { address in it.addresses }) return
-        lan.connectTo(address, port)
+        if (!address.isLoopbackAddress && (holdingWifi() || address.hostAddress in onCableAddresses())) return
+        lan.connectTo(address, port, expectedId = deviceId)
     }
+
+    /**
+     * The cable is in: hold Wi-Fi back briefly so the USB tunnel connects first. Dialling both at
+     * once races, and the PC keeps whichever link finishes last. With no tunnel (a charging-only
+     * cable) Wi-Fi just starts a few seconds later.
+     */
+    fun cablePlugged() {
+        wifiHeldUntil = now() + CABLE_HEAD_START_MS
+        scope.launch {
+            delay(CABLE_HEAD_START_MS)
+            refresh()
+        }
+    }
+
+    /**
+     * Network addresses of paired devices that are on the cable right now. Nothing is dialled
+     * there over Wi-Fi, under any name (a companion shares its PC's address): kdeconnectd would
+     * take the call and drop the cable link.
+     */
+    private fun onCableAddresses(): Set<String> = trustStore.all()
+        .filter { TransportKind.USB in (_devices.value[it.deviceId]?.state?.value?.transports ?: emptySet()) }
+        .mapNotNullTo(mutableSetOf()) { it.lastAddress }
+
+    @Volatile private var wifiHeldUntil = 0L
+    private fun holdingWifi() = now() < wifiHeldUntil
+    private fun now() = System.nanoTime() / 1_000_000
 
     /** The cable is out: drop USB links now (half-open tunnels can linger) and get back on the network. */
     fun cableUnplugged() {
+        wifiHeldUntil = 0
         _devices.value.values.forEach { it.disconnect(TransportKind.USB) }
         scope.launch {
             delay(CABLE_SETTLE_MS) // let the closed links register, so refresh dials what's now offline
@@ -191,5 +226,6 @@ class DeviceHub(
         const val DEFAULT_PORT = 1716
         const val CABLE_SETTLE_MS = 300L
         const val FRESH_CABLE_MS = 10_000L
+        const val CABLE_HEAD_START_MS = 4_000L
     }
 }

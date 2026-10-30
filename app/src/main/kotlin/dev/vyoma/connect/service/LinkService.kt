@@ -78,9 +78,12 @@ class LinkService : LifecycleService() {
         this.hub = hub
         network.acquireMulticast()
         network.customHosts = container.settings.manualHosts.first().toList()
+        val usb = UsbLink(this, hub, lifecycleScope).also { this.usb = it }
+        // Cable first: hold Wi-Fi back from the very first refresh, which hub.start() does.
+        if (usb.cableIn()) hub.cablePlugged()
         hub.start()
         mdns = MdnsDiscovery(this, hub).also { it.start() }
-        usb = UsbLink(this, hub, lifecycleScope).also { it.start() }
+        usb.start()
         lifecycleScope.launch {
             container.settings.manualHosts.drop(1).collect { hosts ->
                 network.customHosts = hosts.toList()
