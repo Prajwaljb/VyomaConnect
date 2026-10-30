@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
@@ -116,6 +117,8 @@ fun MediaCard(
     onPickPlayer: (String) -> Unit,
     modifier: Modifier = Modifier,
     showVolume: Boolean = true,
+    /** Shown as "Continue on phone" over the artwork when the PC can hand this off (companion). */
+    onContinueHere: (() -> Unit)? = null,
 ) {
     val p = np.player
     val art = remember(np.art) { np.art?.let(::trimBars) }
@@ -136,6 +139,22 @@ fun MediaCard(
                     }
                 }
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to tint)))
+                if (onContinueHere != null) {
+                    Row(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(12.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.45f))
+                            .pressable(pressedScale = 0.92f, onClick = onContinueHere)
+                            .padding(start = 10.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Rounded.PhoneAndroid, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Continue on phone", style = MaterialTheme.typography.labelLarge, color = Color.White)
+                    }
+                }
                 Column(Modifier.align(Alignment.BottomStart).padding(horizontal = 20.dp, vertical = 12.dp)) {
                     Text(p.title.ifBlank { p.name }, style = MaterialTheme.typography.titleLarge, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     val sub = listOf(p.artist, p.album).filter { it.isNotBlank() }.joinToString(" · ")

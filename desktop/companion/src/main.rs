@@ -1,5 +1,5 @@
 //! Vyoma companion: runs next to the stock KDE Connect daemon and gives Vyoma on the phone the
-//! extras kdeconnectd can't: PC stats, screenshots, camera photos, file browsing, and zero-setup USB (camera, screen view later).
+//! extras kdeconnectd can't: PC stats, screenshots, camera photos, handoff, file browsing, and zero-setup USB (camera, screen view later).
 //!
 //! It never listens for strangers: it only dials phones that kdeconnectd already trusts, found
 //! via their mDNS announcements, and proves to them that it belongs to this PC by signing with
@@ -10,6 +10,7 @@ mod files;
 mod identity;
 mod kde;
 mod link;
+mod media;
 mod payload;
 mod screenshot;
 mod stats;
@@ -39,6 +40,8 @@ struct Shared {
     connected: Mutex<HashSet<String>>,
     /// Last address each trusted phone announced, so we can redial without waiting for mDNS.
     seen: Mutex<HashMap<String, SocketAddr>>,
+    /// Tracks what's playing for handoff; None without a session bus.
+    media: Option<Arc<media::Media>>,
 }
 
 #[tokio::main]
@@ -50,7 +53,14 @@ async fn main() -> Result<()> {
     let host = KdeHost::load()?;
     let me = Identity::load_or_create()?;
     info!("companion {} for KDE Connect device {} ({})", me.device_id, host.device_id, host.name);
-    let shared = Arc::new(Shared { host, me, connected: Mutex::default(), seen: Mutex::default() });
+    let media = match media::Media::start().await {
+        Ok(m) => Some(m),
+        Err(e) => {
+            warn!("handoff unavailable: {e:#}");
+            None
+        }
+    };
+    let shared = Arc::new(Shared { host, me, connected: Mutex::default(), seen: Mutex::default(), media });
 
     tokio::spawn(usb::watch());
 
@@ -113,8 +123,8 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put"],
-            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved"],
+            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put"],
+            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
         }),
@@ -177,6 +187,22 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
                         }
                     }));
                 }
+            }
+            "vyoma.handoff.request" => {
+                let reply = match &shared.media {
+                    None => json!({ "error": "can't see the PC's media players" }),
+                    Some(media) => match media.handoff().await {
+                        None => json!({ "error": "nothing with a link is playing on the PC" }),
+                        Some(h) => {
+                            // The phone takes over: stop it here so they don't play over each other.
+                            if p["body"]["pause"].as_bool().unwrap_or(true) {
+                                media.pause(&h).await;
+                            }
+                            json!({ "url": h.url, "title": h.title, "position": h.position_ms, "exact": h.exact })
+                        }
+                    },
+                };
+                link.sender.send(&packet("vyoma.handoff", reply)).await?;
             }
             "vyoma.files.list" => {
                 let (sender, rel) = (link.sender.clone(), p["body"]["path"].as_str().unwrap_or_default().to_string());

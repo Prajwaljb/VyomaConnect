@@ -6,6 +6,7 @@ import androidx.core.content.edit
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import dev.vyoma.connect.platform.Handoff
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.vyoma.connect.container
@@ -169,6 +170,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun fingerprint(id: String): String? = device(id)?.peerCertificate?.let(Certificates::sha256Fingerprint)
 
     fun capture(capture: CompanionPlugin.Capture) = viewModelScope.launch { capture.request() }
+
+    /** The companion beside PC [pcId], when it's connected. */
+    fun companionOf(pcId: String): CompanionPlugin? =
+        devices.value.firstOrNull { it.identity.companionOf == pcId && it.isPaired && it.isReachable }
+            ?.let { device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
+
+    /**
+     * Carries on here with what PC [pcId] is playing: the PC pauses, and the link opens on the
+     * phone at the same moment (YouTube) or just opens (any other page).
+     */
+    fun continueOnPhone(pcId: String) = viewModelScope.launch {
+        val app = getApplication<android.app.Application>()
+        val plugin = companionOf(pcId) ?: return@launch toast(app, "Vyoma's companion isn't running on the PC")
+        plugin.handoff().fold(
+            onSuccess = { h ->
+                val open = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(h.positionMs?.let { Handoff.at(h.url, it) } ?: h.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                runCatching { app.startActivity(open) }.onFailure { toast(app, "No app here can open that link") }
+            },
+            onFailure = { toast(app, it.message ?: "Couldn't hand off") },
+        )
+    }
     fun listPcFiles(plugin: CompanionPlugin, path: String) = viewModelScope.launch { plugin.listFiles(path) }
     fun downloadPcFile(plugin: CompanionPlugin, path: String) = viewModelScope.launch { plugin.download(path) }
     // App scope: an upload keeps going if you leave the browser.
@@ -217,3 +239,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val deviceOrder = compareBy<DeviceState>(::rank).thenBy { it.identity.deviceName.lowercase() }
     }
 }
+
+private fun toast(context: android.content.Context, text: String) =
+    android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_SHORT).show()
