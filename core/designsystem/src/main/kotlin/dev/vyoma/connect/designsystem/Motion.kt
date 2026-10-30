@@ -42,6 +42,8 @@ object VyomaMotion {
     /** A gel that trails the leading edge, for the tab lens and the switch thumb. */
     fun <T> trailing() = spring<T>(dampingRatio = 0.7f, stiffness = 260f)
     fun <T> leading() = spring<T>(dampingRatio = 0.8f, stiffness = 900f)
+    /** The second axis of a released jelly: softer than [release], so width and height wobble out of step. */
+    fun <T> jelly() = spring<T>(dampingRatio = 0.42f, stiffness = 360f)
 }
 
 /**
@@ -91,7 +93,8 @@ fun Modifier.pressable(
 
 /**
  * Shrinks the moment a finger lands (no tap-timeout lag like interaction-based presses) and
- * springs back with a small overshoot when it lifts. Even a quick tap visibly dips first. If a
+ * springs back when it lifts like a drop of water: width and height settle on different springs,
+ * so it wobbles out of step instead of just scaling. Even a quick tap visibly dips first. If a
  * scrolling parent takes the gesture over, it eases back without the bounce.
  *
  * A modifier node that only touches its own graphics layer: presses never recompose or relayout.
@@ -111,7 +114,8 @@ private class PressScaleElement(val pressedScale: Float, val enabled: Boolean) :
 
 private class PressScaleNode(var pressedScale: Float, var enabled: Boolean) :
     Modifier.Node(), PointerInputModifierNode, LayoutModifierNode {
-    private val scale = Animatable(1f)
+    private val sx = Animatable(1f)
+    private val sy = Animatable(1f)
     private var held = false
     private var job: Job? = null
 
@@ -137,7 +141,11 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean) :
     private fun press() {
         held = true
         job?.cancel()
-        job = coroutineScope.launch { scale.animateTo(pressedScale, PRESS) }
+        // Height gives a beat later than width: a squash, not a shrink.
+        job = coroutineScope.launch {
+            launch { sy.animateTo(pressedScale, PRESS_SOFT) }
+            sx.animateTo(pressedScale, PRESS)
+        }
     }
 
     private fun release(bounce: Boolean) {
@@ -146,10 +154,16 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean) :
         job = coroutineScope.launch {
             if (bounce) {
                 val depth = 1f - pressedScale
-                if (scale.value > pressedScale + depth * 0.4f) scale.animateTo(pressedScale + depth * 0.25f, DIP)
-                scale.animateTo(1f, VyomaMotion.release())
+                val dip = pressedScale + depth * 0.25f
+                if (sx.value > pressedScale + depth * 0.4f) {
+                    launch { sy.animateTo(dip, DIP) }
+                    sx.animateTo(dip, DIP)
+                }
+                launch { sy.animateTo(1f, VyomaMotion.jelly()) }
+                sx.animateTo(1f, VyomaMotion.release())
             } else {
-                scale.animateTo(1f, VyomaMotion.effects())
+                launch { sy.animateTo(1f, VyomaMotion.effects()) }
+                sx.animateTo(1f, VyomaMotion.effects())
             }
         }
     }
@@ -158,15 +172,15 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean) :
         val placeable = measurable.measure(constraints)
         return layout(placeable.width, placeable.height) {
             placeable.placeWithLayer(0, 0) {
-                val s = scale.value
-                scaleX = s
-                scaleY = s
+                scaleX = sx.value
+                scaleY = sy.value
             }
         }
     }
 
     private companion object {
         val PRESS = spring<Float>(dampingRatio = 1f, stiffness = 1400f)
+        val PRESS_SOFT = spring<Float>(dampingRatio = 0.9f, stiffness = 800f)
         val DIP = tween<Float>(70, easing = FastOutLinearInEasing)
     }
 }
