@@ -436,7 +436,7 @@ private fun BatteryTile(pc: BatteryState?, stale: Boolean, phone: BatteryState?,
         Column(Modifier.padding(16.dp)) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Canvas(Modifier.fillMaxHeight().aspectRatio(1f)) {
-                    val w = size.minDimension * 0.11f
+                    val w = size.minDimension * 0.085f
                     fun ring(inset: Float, sweep: Float, color: Color) {
                         val topLeft = Offset(inset + w / 2, inset + w / 2)
                         val s = Size(size.width - 2 * inset - w, size.height - 2 * inset - w)
@@ -444,13 +444,17 @@ private fun BatteryTile(pc: BatteryState?, stale: Boolean, phone: BatteryState?,
                         if (sweep > 0f) drawArc(color, -90f, 360f * sweep.coerceIn(0f, 1f), false, topLeft, s, style = Stroke(w, cap = StrokeCap.Round))
                     }
                     ring(0f, pcSweep, pcColor)
-                    ring(w * 1.45f, phoneSweep, second)
+                    ring(w * 1.3f, phoneSweep, second)
                 }
+                // Sized to sit in the inner ring with air around it, digits not jumping as they change.
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (pc?.charging == true) Icon(Icons.Rounded.Bolt, "Charging", tint = accent, modifier = Modifier.size(16.dp))
+                    if (pc?.charging == true) Icon(Icons.Rounded.Bolt, "Charging", tint = accent, modifier = Modifier.size(14.dp))
                     Row(verticalAlignment = Alignment.Bottom) {
-                        Text(pc?.let { "${it.charge}" } ?: "–", style = MaterialTheme.typography.titleLarge)
-                        if (pc != null) Text("%", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(bottom = 3.dp))
+                        Text(
+                            pc?.let { "${it.charge}" } ?: "–",
+                            style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+                        )
+                        if (pc != null) Text("%", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 1.dp, bottom = 2.dp))
                     }
                 }
             }
