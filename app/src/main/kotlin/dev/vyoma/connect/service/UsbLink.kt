@@ -27,6 +27,10 @@ class UsbLink(private val context: Context, private val hub: DeviceHub, private 
     private var receiver: BroadcastReceiver? = null
     private var dialer: Job? = null
 
+    /** Whether a cable is in right now (the sticky USB state), for before the hub starts. */
+    fun cableIn(): Boolean =
+        context.registerReceiver(null, IntentFilter(ACTION_USB_STATE), Context.RECEIVER_NOT_EXPORTED)?.getBooleanExtra("connected", false) == true
+
     fun start() {
         if (receiver != null) return
         val r = object : BroadcastReceiver() {
@@ -55,6 +59,7 @@ class UsbLink(private val context: Context, private val hub: DeviceHub, private 
         }
         if (dialer?.isActive == true) return
         VLog.d(TAG, "cable in: trying the adb tunnel on ${LanBackend.USB_REVERSE_PORT}")
+        hub.cablePlugged()
         dialer = scope.launch {
             val loopback = InetAddress.getLoopbackAddress()
             val pluggedAt = System.currentTimeMillis()
