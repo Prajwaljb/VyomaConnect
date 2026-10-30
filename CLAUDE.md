@@ -26,6 +26,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   no prompt via `CompanionProof` (signed with kdeconnectd's key; phone verifies against the pinned PC cert), speaks
   `vyoma.*` packets. Phone folds it into its PC (`DeviceIdentity.companionOf`, `DeviceState.isCompanion`).
   Also watches sysfs for an adb USB interface and, for phones with Vyoma installed, runs `adb reverse tcp:1765 tcp:1716`
+  (+ payload mirrors phone 1839..1864 → PC 1739..1764)
   plus the READ_LOGS / SYSTEM_ALERT_WINDOW grants (src/usb.rs). Installed as a systemd user unit.
 
 ## Conventions

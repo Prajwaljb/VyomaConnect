@@ -13,12 +13,13 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Canvas: `Modifier.aurora()` (theme background + two cached accent glows; in pure black a tighter glow that
   leaves the bottom true black). No decorative textures (stars were tried and rejected: too specific).
 - Depth tokens: `glassDepth` (`GlassDepth` Dark / Amoled / Light) drive every surface so the themes stay consistent.
-- Cards: `Modifier.glassCard(shape, fill?)` = iOS grouped surfaces: opaque, flat, high contrast (`#1C1C1E` on the dark
-  and true-black canvas, white on light with a faint shadow). No gradient fill, no translucency (translucent rimmed
-  panes were called cheap twice). Edge: a faint tilt-lit SWEEP hairline (`specularRim`; the user found a
+- Cards: `Modifier.glassCard(shape, fill?)` = a translucent even sheet (white 8.5% dark / 9.5% true black / 72% light;
+  the user found opaque #1C1C1E "too grey" once cards had lit edges), faint shadow in light mode. Edge: a faint tilt-lit SWEEP hairline (`specularRim`; the user found a
   linear-gradient rim misaligned) plus, in the dark, a soft glow on the lit side baked INTO the fill as one radial
   gradient (a separate glow pass over the card cost 0.4 ms GPU/frame; in-fill is ~free). Measured ≈ +0.1–0.2 ms.
   Card slices (`cardSegment`) pass `lit = false`. Refraction belongs only to things that float.
+- Media card without artwork (mpv, failed art): compact Apple Music-style header (72 dp deep-accent tile with a note
+  or film glyph, title/artist/player) on `accent.toned(0.8f, 0.2f)`, never a big empty art frame.
 - Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a plain
   even fill plus a 0.9 dp specular hairline that follows the phone's tilt (a FIXED painted rim read as fake; the user
   asked for it back once it moved like iOS 26); pass `color` for accent/tinted or for chips over artwork (dark translucent).
@@ -47,7 +48,8 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Header (`CollapsingHeaderScaffold`): no slab. A soft status-bar fade; back in a 48 dp liquid circle; actions share
   one capsule. The title is ONE travelling Text (the hero copy is an invisible placeholder): it scrolls 1:1 with the
   page (no hero parallax, else it slid over the hero glyph), pins in the bar and shrinks to titleMedium; at collapse
-  > 0.72 a glass bubble forms around it (height leads, width wobbles out with `jelly()`). The hero fades by 75%.
+  > 0.72 a glass bubble forms around it (height leads, width wobbles out with `jelly()`). Leaving, it POPS (keeps
+  its size, swells 18% while fading in 220 ms); shrinking into a dot behind full-size text looked awkward. The hero fades by 75%.
   A trailing "collapse-room" item lets any page that scrolls at all collapse fully (no half-faded stuck title).
   A scroll that stops mid-collapse snaps open/closed; the snap runs in its own child job (run inline, a finger
   interrupting it threw a cancellation that killed the watcher, and nothing snapped again).

@@ -76,6 +76,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import kotlin.math.abs
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -178,12 +179,24 @@ fun CollapsingHeaderScaffold(
     var titleSize by remember { mutableStateOf(IntSize.Zero) }
     val bubbleW = remember { Animatable(0f) }
     val bubbleH = remember { Animatable(0f) }
+    // Leaving, the bubble pops: it keeps its size around the title and swells a little as it
+    // fades (shrinking into a dot behind full-size text looked wrong).
+    val bubblePop = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         snapshotFlow { collapse > 0.72f }.collect { on ->
-            // Forming, the drop swells to full height first and then spreads sideways with a wobble;
-            // leaving, it just shrinks away.
-            launch { bubbleH.animateTo(if (on) 1f else 0f, if (on) VyomaMotion.leading() else VyomaMotion.effects()) }
-            launch { bubbleW.animateTo(if (on) 1f else 0f, if (on) VyomaMotion.jelly() else VyomaMotion.effects()) }
+            if (on) {
+                // Forming, the drop swells to full height first and then spreads sideways with a
+                // wobble; after a pop it starts again from a drop.
+                if (bubblePop.value > 0f) {
+                    bubblePop.snapTo(0f)
+                    bubbleW.snapTo(0f)
+                    bubbleH.snapTo(0f)
+                }
+                launch { bubbleH.animateTo(1f, VyomaMotion.leading()) }
+                launch { bubbleW.animateTo(1f, VyomaMotion.jelly()) }
+            } else if (bubbleH.value > 0f) {
+                launch { bubblePop.animateTo(1f, tween(220, easing = FastOutSlowInEasing)) }
+            }
         }
     }
 
@@ -293,6 +306,13 @@ fun CollapsingHeaderScaffold(
                             val p = m.measure(Constraints.fixed(w.roundToInt(), h.roundToInt()))
                             layout(p.width, p.height) { p.place(0, 0) }
                         }
+                        .graphicsLayer {
+                            val pop = bubblePop.value
+                            alpha = 1f - pop
+                            scaleX = 1f + 0.18f * pop
+                            scaleY = 1f + 0.12f * pop
+                        }
+                        .drawWithContent { if (bubblePop.value < 1f) drawContent() }
                         .glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp),
                 )
                 Row(

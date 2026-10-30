@@ -172,11 +172,23 @@ class Device internal constructor(
         return link.payloads!!.send(link, packet, source, timeoutMs, onProgress)
     }
 
-    /** Opens the payload announced by an incoming [packet]; the caller must close it. */
+    /**
+     * Opens the payload announced by an incoming [packet]; the caller must close it. The sender
+     * listens on every interface, so if the preferred link can't reach it (an adb tunnel without
+     * the payload mirrors) another link to the same device is tried.
+     */
     suspend fun openPayload(packet: NetworkPacket): InputStream? {
         if (!packet.hasPayload) return null
-        val link = links.filterNot { it.isClosed }.sortedBy { it.transport.ordinal }.firstOrNull { it.payloads != null } ?: return null
-        return link.payloads!!.open(link, packet)
+        var failure: java.io.IOException? = null
+        for (link in links.filterNot { it.isClosed }.sortedBy { it.transport.ordinal }.filter { it.payloads != null }) {
+            try {
+                return link.payloads!!.open(link, packet)
+            } catch (e: java.io.IOException) {
+                failure = e
+            }
+        }
+        failure?.let { throw it }
+        return null
     }
 
     fun disconnect() = links.forEach { it.close() }

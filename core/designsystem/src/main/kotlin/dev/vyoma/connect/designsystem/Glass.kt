@@ -157,8 +157,8 @@ val isAmoledUi: Boolean
     get() = MaterialTheme.colorScheme.background == Color.Black
 
 /**
- * How a card sits on the canvas, per theme. iOS-style grouped surfaces: one opaque, even tone that
- * stands clearly off the canvas (high contrast on true black). Its edge is a faint specular
+ * How a card sits on the canvas, per theme: a sheet of glass, translucent so the page's accent glow
+ * shows through (an opaque grey slab read as dull), even in tone, no gradient. Its edge is a faint specular
  * hairline and, in the dark, a soft glow on the lit side, both following the phone's tilt
  * ([SpecularLight]), so the card reads as a lit object rather than painted plastic (a static
  * gradient rim was rejected as cheap). Only light mode gets a shadow, faint, since there's a pale
@@ -179,19 +179,19 @@ class GlassDepth internal constructor(
 )
 
 private val DarkDepth = GlassDepth(
-    fill = Color(0xFF1C1C1E),
+    fill = Color.White.copy(alpha = 0.085f),
     rimLit = Color.White.copy(alpha = 0.2f), rimBase = Color.White.copy(alpha = 0.035f),
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
     glow = Color.White.copy(alpha = 0.045f),
 )
 private val AmoledDepth = GlassDepth(
-    fill = Color(0xFF1C1C1E),
+    fill = Color.White.copy(alpha = 0.095f),
     rimLit = Color.White.copy(alpha = 0.26f), rimBase = Color.White.copy(alpha = 0.05f),
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
     glow = Color.White.copy(alpha = 0.05f),
 )
 private val LightDepth = GlassDepth(
-    fill = Color.White,
+    fill = Color.White.copy(alpha = 0.72f),
     // White on white can't show; a navy hairline gives the edge and the light lifts out of it.
     rimLit = Color.White, rimBase = Color(0xFF1A2B4C).copy(alpha = 0.06f),
     shadow = Color(0xFF1A2B4C).copy(alpha = 0.05f), shadowBlur = 14f, shadowDrop = 3f,
