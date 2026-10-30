@@ -14,12 +14,18 @@ const REVERSE: [&str; 2] = ["tcp:1765", "tcp:1716"];
 const POLL: Duration = Duration::from_secs(3);
 /// How long to keep retrying a phone that shows "unauthorized" (the RSA prompt is on its screen).
 const AUTH_WAIT: Duration = Duration::from_secs(90);
+/// While a phone is plugged in, check its tunnel every this many polls (12 s). The tunnel dies with
+/// the adb server (Android Studio and `adb kill-server` restart it), and while the server is down
+/// the phone's end stays open, so the phone would sit on a dead link instead of using Wi-Fi.
+/// Asking adb restarts the server, which makes the phone drop that link, and we re-create it.
+const TUNNEL_CHECK_POLLS: u32 = 4;
 
 pub async fn watch() {
     let Some(adb) = find_adb() else {
         return info!("adb not found; USB auto-setup is off");
     };
     let mut known: HashSet<String> = HashSet::new();
+    let mut polls = 0u32;
     loop {
         let now = adb_interfaces();
         for dev in now.difference(&known) {
@@ -28,6 +34,11 @@ pub async fn watch() {
             tokio::spawn(async move { setup_all(&adb).await });
         }
         known = now;
+        polls = polls.wrapping_add(1);
+        if !known.is_empty() && polls % TUNNEL_CHECK_POLLS == 0 {
+            let adb = adb.clone();
+            tokio::spawn(async move { recheck_tunnels(&adb).await });
+        }
         tokio::time::sleep(POLL).await;
     }
 }
@@ -66,6 +77,23 @@ async fn setup_all(adb: &PathBuf) {
     }
 }
 
+/// Re-creates the tunnel on any plugged-in Vyoma phone that has lost it.
+async fn recheck_tunnels(adb: &PathBuf) {
+    for (serial, state) in list_devices(adb).await {
+        if state != "device" || NOT_VYOMA.lock().unwrap().contains(&serial) {
+            continue;
+        }
+        let Some(list) = run(adb, &serial, &["reverse", "--list"]).await else { continue };
+        if !list.contains(REVERSE[0]) {
+            info!("{serial}: USB tunnel was gone (adb server restarted?); setting it up again");
+            setup(adb, &serial).await;
+        }
+    }
+}
+
+/// Phones seen without Vyoma installed, so the periodic check leaves them alone.
+static NOT_VYOMA: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 async fn setup(adb: &PathBuf, serial: &str) {
     let installed: Vec<&str> = {
         let mut v = Vec::new();
@@ -77,8 +105,10 @@ async fn setup(adb: &PathBuf, serial: &str) {
         v
     };
     if installed.is_empty() {
+        NOT_VYOMA.lock().unwrap().push(serial.to_string());
         return; // Not a Vyoma phone: leave it alone.
     }
+    NOT_VYOMA.lock().unwrap().retain(|s| s != serial);
     match run(adb, serial, &["reverse", REVERSE[0], REVERSE[1]]).await {
         Some(_) => info!("{serial}: USB tunnel ready"),
         None => warn!("{serial}: couldn't set up the USB tunnel"),

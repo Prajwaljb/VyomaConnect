@@ -181,6 +181,13 @@ class Device internal constructor(
 
     fun disconnect() = links.forEach { it.close() }
 
+    /** How long the oldest open link over [transport] has been up, or null if there's none. */
+    fun linkAge(transport: TransportKind): Long? =
+        links.filter { it.transport == transport && !it.isClosed }.minOfOrNull { it.since }?.let { System.nanoTime() / 1_000_000 - it }
+
+    /** Closes the links over [transport] (the cable was pulled: don't wait for them to time out). */
+    fun disconnect(transport: TransportKind) = links.filter { it.transport == transport }.forEach { it.close() }
+
     // ---- pairing --------------------------------------------------------------------------
 
     suspend fun requestPairing() = withContext(serial) {

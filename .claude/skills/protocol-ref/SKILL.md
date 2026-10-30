@@ -20,6 +20,12 @@ Peers mix up number and string types, so always use the lenient `NetworkPacket.s
 - v8: after TLS both sides resend identity; only the TLS copy is trusted; CN must equal deviceId.
 - Device ids: we generate UUID with `_` (36 chars). We accept `[a-zA-Z0-9_-]{16,64}` from peers.
 - Names: strip `"',;:.!?()[]<>`, max 32 chars.
+- USB = adb reverse tunnel (phone dials 127.0.0.1:1765 → PC 1716) or a tether interface. kdeconnectd keeps only its
+  **newest** connection per device and ignores broadcasts from devices it's linked to, so while on USB we never dial
+  Wi-Fi, and refuse its incoming Wi-Fi *before TLS* if our cable link is < 10 s old (a race). An incoming Wi-Fi call
+  on an older cable link means the tunnel died on its side: accept it and drop the USB link (`LanBackend.Config.refuses`,
+  `DeviceHub.onLink`). Unplug (USB_STATE) closes USB links at once and refreshes; the companion rechecks the
+  tunnel every 12 s (an adb server restart kills it while the phone's end stays half-open).
 
 ## Pairing (Device)
 - Request: `kdeconnect.pair {pair:true, timestamp:<unix seconds>}`; accept: `{pair:true}`; reject/unpair: `{pair:false}`.

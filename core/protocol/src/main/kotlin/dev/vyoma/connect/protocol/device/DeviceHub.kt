@@ -8,6 +8,8 @@ import dev.vyoma.connect.protocol.crypto.TlsContext
 import dev.vyoma.connect.protocol.link.DeviceLink
 import dev.vyoma.connect.protocol.link.LanBackend
 import dev.vyoma.connect.protocol.plugin.PluginSpec
+import dev.vyoma.connect.protocol.link.TransportKind
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
@@ -66,7 +68,18 @@ class DeviceHub(
         localIdentity = ::localIdentity,
         tls = tls,
         scope = scope,
-        config = lanConfig.copy(isConnected = { id -> _devices.value[id]?.state?.value?.isReachable == true }),
+        config = lanConfig.copy(
+            isConnected = { id -> _devices.value[id]?.state?.value?.isReachable == true },
+            // The cable wins. A PC (kdeconnectd) keeps only its newest connection per device, so a
+            // Wi-Fi link completing while we're on USB would knock the cable link out on its side.
+            // We never dial Wi-Fi then. The PC only dials a device it thinks is gone, so its Wi-Fi
+            // call is a race with a cable link that just came up (refuse it), or a sign that an
+            // older tunnel died on its side without us noticing (take it; onLink drops the tunnel).
+            refuses = { id, transport, incoming ->
+                val usbAge = if (transport == TransportKind.USB) null else _devices.value[id]?.linkAge(TransportKind.USB)
+                usbAge != null && (!incoming || usbAge < FRESH_CABLE_MS)
+            },
+        ),
         onLink = ::onLink,
     )
 
@@ -101,7 +114,7 @@ class DeviceHub(
             if (_devices.value[trusted.deviceId]?.state?.value?.isReachable == true) continue
             val address = trusted.lastAddress ?: continue
             val ip = runCatching { java.net.InetAddress.getByName(address) }.getOrNull() ?: continue
-            lan.connectTo(ip, trusted.lastPort ?: 1716)
+            lan.connectTo(ip, trusted.lastPort ?: 1716, expectedId = trusted.deviceId)
         }
         // Manual hosts (often Tailscale) are a fallback: dialling one while the PC is already up
         // over Wi-Fi would swap the fast LAN link for the VPN. Names need DNS, so resolve off-thread.
@@ -120,6 +133,15 @@ class DeviceHub(
         if (deviceId != null && devices.any { it.id == deviceId && it.state.value.isReachable }) return
         if (devices.any { address in it.addresses }) return
         lan.connectTo(address, port)
+    }
+
+    /** The cable is out: drop USB links now (half-open tunnels can linger) and get back on the network. */
+    fun cableUnplugged() {
+        _devices.value.values.forEach { it.disconnect(TransportKind.USB) }
+        scope.launch {
+            delay(CABLE_SETTLE_MS) // let the closed links register, so refresh dials what's now offline
+            refresh()
+        }
     }
 
     /** True while some paired device isn't connected; the service uses it to keep retrying. */
@@ -158,11 +180,16 @@ class DeviceHub(
                 map + (id to created)
             }
         }
+        // Only reachable with a cable link up if that link is stale (see `refuses`): drop it, or
+        // sends would keep going down the dead tunnel.
+        if (link.transport != TransportKind.USB) device!!.disconnect(TransportKind.USB)
         device!!.addLink(link)
     }
 
     private companion object {
         const val TAG = "DeviceHub"
         const val DEFAULT_PORT = 1716
+        const val CABLE_SETTLE_MS = 300L
+        const val FRESH_CABLE_MS = 10_000L
     }
 }

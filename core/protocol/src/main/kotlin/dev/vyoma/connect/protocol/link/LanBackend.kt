@@ -58,6 +58,12 @@ class LanBackend(
         val manualHosts: () -> Collection<InetAddress> = { emptyList() },
         /** What carries a link, from its socket's local and remote addresses. */
         val transportOf: (local: InetAddress, remote: InetAddress) -> TransportKind = ::defaultTransport,
+        /**
+         * True to turn away a new connection with [deviceId] over [transport] before TLS, because the
+         * device is already on a better one. Peers keep only their newest link per device, so a
+         * second link that completed would replace the better one on their side. [incoming]: they dialled us.
+         */
+        val refuses: (deviceId: String, transport: TransportKind, incoming: Boolean) -> Boolean = { _, _, _ -> false },
     )
 
     private val payloads = LanPayloads(tls, config.tuneSocket, config.route)
@@ -113,13 +119,16 @@ class LanBackend(
         }
     }
 
-    /** Connect directly to a peer we learned about out-of-band (mDNS, UDP, manual). */
-    fun connectTo(address: InetAddress, port: Int, peer: DeviceIdentity? = null) {
-        val key = peer?.deviceId ?: "${address.hostAddress}:$port"
+    /**
+     * Connect directly to a peer we learned about out-of-band (mDNS, UDP, manual). [expectedId] is
+     * who we think is there (a paired device's last address), for [Config.refuses].
+     */
+    fun connectTo(address: InetAddress, port: Int, peer: DeviceIdentity? = null, expectedId: String? = peer?.deviceId) {
+        val key = expectedId ?: "${address.hostAddress}:$port"
         if (!connecting.add(key)) return
         scope.launch(Dispatchers.IO) {
             try {
-                connectOutgoing(address, port, peer)
+                connectOutgoing(address, port, peer, expectedId)
             } catch (e: Exception) {
                 VLog.d(TAG, "connect to ${address.hostAddress}:$port failed: ${e.message}")
             } finally {
@@ -153,11 +162,14 @@ class LanBackend(
         }
     }
 
-    private suspend fun connectOutgoing(address: InetAddress, port: Int, peer: DeviceIdentity?) {
+    private suspend fun connectOutgoing(address: InetAddress, port: Int, peer: DeviceIdentity?, expectedId: String?) {
         val plain = Socket()
         try {
             config.route(plain, address)
             plain.connect(InetSocketAddress(address, port), CONNECT_TIMEOUT_MS)
+            if (expectedId != null && config.refuses(expectedId, config.transportOf(plain.localAddress, plain.inetAddress), false)) {
+                throw ProtocolException("already linked over a better transport")
+            }
             config.tuneSocket(plain)
             plain.soTimeout = HANDSHAKE_TIMEOUT_MS
             plain.getOutputStream().apply {
@@ -192,6 +204,9 @@ class LanBackend(
                     if (config.listenUdp && isLocalAddress(plain.inetAddress)) throw ProtocolException("Peer runs on this device")
                     if (identity.protocolVersion < DeviceIdentity.MIN_PROTOCOL_VERSION) {
                         throw ProtocolException("Unsupported protocol ${identity.protocolVersion}")
+                    }
+                    if (config.refuses(identity.deviceId, config.transportOf(plain.localAddress, plain.inetAddress), true)) {
+                        throw ProtocolException("already linked over a better transport")
                     }
                     val ssl = tls.wrap(plain, asServer = false)
                     finishHandshake(ssl, identity)
