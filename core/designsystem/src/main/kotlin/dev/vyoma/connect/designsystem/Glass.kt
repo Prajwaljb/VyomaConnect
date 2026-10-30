@@ -160,10 +160,10 @@ val isAmoledUi: Boolean
 /**
  * How a card sits on the canvas, per theme. iOS-style grouped surfaces: one opaque, even tone that
  * stands clearly off the canvas (high contrast on true black). Its edge is a faint specular
- * hairline following the phone's tilt ([SpecularLight]), so the card reads as a lit object rather
- * than painted plastic (a static gradient rim was rejected as cheap). A soft inner glow on the lit
- * side was tried: invisible at a tasteful strength and 0.4 ms of GPU a frame. Only light mode gets
- * a shadow, faint, since there's a pale canvas for it to fall on.
+ * hairline and, in the dark, a soft glow on the lit side, both following the phone's tilt
+ * ([SpecularLight]), so the card reads as a lit object rather than painted plastic (a static
+ * gradient rim was rejected as cheap). Only light mode gets a shadow, faint, since there's a pale
+ * canvas for it to fall on.
  */
 @Immutable
 class GlassDepth internal constructor(
@@ -175,17 +175,21 @@ class GlassDepth internal constructor(
     val shadow: Color,
     val shadowBlur: Float,
     val shadowDrop: Float,
+    /** Light caught inside the card near its lit edge; transparent for none. */
+    val glow: Color = Color.Transparent,
 )
 
 private val DarkDepth = GlassDepth(
     fill = Color(0xFF1C1C1E),
     rimLit = Color.White.copy(alpha = 0.2f), rimBase = Color.White.copy(alpha = 0.035f),
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
+    glow = Color.White.copy(alpha = 0.045f),
 )
 private val AmoledDepth = GlassDepth(
     fill = Color(0xFF1C1C1E),
     rimLit = Color.White.copy(alpha = 0.26f), rimBase = Color.White.copy(alpha = 0.05f),
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
+    glow = Color.White.copy(alpha = 0.05f),
 )
 private val LightDepth = GlassDepth(
     fill = Color.White,
@@ -221,27 +225,6 @@ internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float =
 }
 
 /**
- * [specularRim] for big panes: a linear gradient along the light's direction instead of a sweep,
- * bright where the light enters, the base tone across the middle, a softer catch on the far side.
- * On a card it reads the same, and the GPU does it far more cheaply than a per-pixel angle.
- */
-internal fun cardRim(lit: Color, base: Color, size: Size, light: Float): Brush {
-    val a = Math.toRadians(light.toDouble())
-    val dir = Offset(cos(a).toFloat(), sin(a).toFloat())
-    val c = Offset(size.width / 2, size.height / 2)
-    // Reach of the shape along the light: the corner furthest that way.
-    val reach = abs(dir.x) * size.width / 2 + abs(dir.y) * size.height / 2
-    return Brush.linearGradient(
-        0f to lit,
-        0.3f to base,
-        0.7f to base,
-        1f to lerp(base, lit, 0.45f),
-        start = c + dir * reach,
-        end = c - dir * reach,
-    )
-}
-
-/**
  * Paints one glass pane of [outline]: soft shadow outside it (never under it, so the glass stays
  * clear), an even fill, and the specular rim. Cached per size by the callers (drawWithCache).
  */
@@ -260,11 +243,21 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
             val shadow = path.asAndroidPath().let { android.graphics.Path(it).apply { offset(0f, drop) } }
             clipPath(path, ClipOp.Difference) { drawIntoCanvas { it.nativeCanvas.drawPath(shadow, shadowPaint) } }
         }
-        drawOutline(outline, flat ?: d.fill)
+        val fill = flat ?: d.fill
+        val light = SpecularLight.angle
+        if (lit && d.glow.alpha > 0f) {
+            // The glow is part of the fill (one gradient pass, not a second layer over the card):
+            // brightest at the edge point facing the light, spreading in from there.
+            val a = Math.toRadians(light.toDouble())
+            val at = Offset(width / 2 + cos(a).toFloat() * width / 2, height / 2 + sin(a).toFloat() * height / 2)
+            drawOutline(outline, Brush.radialGradient(listOf(d.glow.compositeOver(fill), fill), at, minOf(width, height) * 1.1f))
+        } else {
+            drawOutline(outline, fill)
+        }
         if (!lit || d.rimLit.alpha <= 0f) return
         translate(inset, inset) {
-            // A sweep here cost ~0.35 ms of GPU a frame over a page of cards; this is ~free.
-            drawOutline(edge, cardRim(d.rimLit, d.rimBase, Size(width - 2 * inset, height - 2 * inset), SpecularLight.angle), style = Stroke(stroke))
+            val c = Offset(width / 2 - inset, height / 2 - inset)
+            drawOutline(edge, specularRim(d.rimLit, d.rimBase, c, light), style = Stroke(stroke))
         }
     }
 }

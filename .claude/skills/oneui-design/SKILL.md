@@ -15,8 +15,9 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Depth tokens: `glassDepth` (`GlassDepth` Dark / Amoled / Light) drive every surface so the themes stay consistent.
 - Cards: `Modifier.glassCard(shape, fill?)` = iOS grouped surfaces: opaque, flat, high contrast (`#1C1C1E` on the dark
   and true-black canvas, white on light with a faint shadow). No gradient fill, no translucency (translucent rimmed
-  panes were called cheap twice). Edge: a faint tilt-lit hairline (`cardRim`, a LINEAR gradient along the light; a
-  sweep cost ~0.35 ms GPU/frame over a page of cards, an inner glow 0.4 ms and was invisible, so both are out).
+  panes were called cheap twice). Edge: a faint tilt-lit SWEEP hairline (`specularRim`; the user found a
+  linear-gradient rim misaligned) plus, in the dark, a soft glow on the lit side baked INTO the fill as one radial
+  gradient (a separate glow pass over the card cost 0.4 ms GPU/frame; in-fill is ~free). Measured ≈ +0.1–0.2 ms.
   Card slices (`cardSegment`) pass `lit = false`. Refraction belongs only to things that float.
 - Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a plain
   even fill plus a 0.9 dp specular hairline that follows the phone's tilt (a FIXED painted rim read as fake; the user
