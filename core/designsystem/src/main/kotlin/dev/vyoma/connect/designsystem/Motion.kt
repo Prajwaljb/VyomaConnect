@@ -33,6 +33,13 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.node.invalidateDraw
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.geometry.isSpecified
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.material3.LocalContentColor
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -90,7 +97,9 @@ fun Modifier.pressable(
     pressedScale: Float = 0.96f,
     role: Role? = Role.Button,
     haptic: Haptic? = Haptic.Tap,
-    /** Capsules and circles only: turns into a clear drop of liquid glass while held. */
+    /** Capsules and circles only: iOS 26 interactive glass. Instead of dipping it swells under the
+     *  finger, clears into a drop of liquid glass and lights up where it's touched. [pressedScale]
+     *  is ignored then. */
     glass: Boolean = false,
     onClick: () -> Unit,
 ): Modifier = composed {
@@ -133,6 +142,9 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
     private var held = false
     private var job: Job? = null
     private var glassJob: Job? = null
+    /** Where the finger is, for the glow; and the node's size, for how much it may swell. */
+    private var touch = Offset.Unspecified
+    private var extent = 0f
 
     override fun ContentDrawScope.draw() {
         val a = if (glass) clear.value else 0f
@@ -143,6 +155,15 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
         val dark = currentValueOf(LocalContentColor).luminance() > 0.5f
         val p = painter ?: LensPainter(requireGraphicsContext()).also { painter = it }
         with(p) { paint(a, Rect(Offset.Zero, size), 1f + 0.06f * a, LensStyle.Drop, Color.Transparent, dark, null, Offset.Zero) }
+        // Light gathers under the finger and follows it, inside the capsule.
+        val at = if (touch.isSpecified) touch else center
+        val r = size.minDimension / 2
+        clipPath(Path().apply { addRoundRect(RoundRect(0f, 0f, size.width, size.height, CornerRadius(r))) }) {
+            drawCircle(
+                Brush.radialGradient(listOf(Color.White.copy(alpha = (if (dark) 0.22f else 0.4f) * a), Color.Transparent), at, size.maxDimension * 0.7f),
+                radius = size.maxDimension * 0.7f, center = at,
+            )
+        }
     }
 
     override fun onDetach() {
@@ -158,6 +179,12 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
 
     override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, bounds: IntSize) {
         if (!enabled) return
+        if (glass && pass == PointerEventPass.Initial) {
+            pointerEvent.changes.firstOrNull { it.pressed }?.let {
+                touch = it.position
+                if (held) invalidateDraw()
+            }
+        }
         when (pass) {
             PointerEventPass.Initial ->
                 if (!held && pointerEvent.changes.any { it.changedToDownIgnoreConsumed() }) press()
@@ -180,9 +207,16 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
         clearTo(1f)
         job?.cancel()
         // Height gives a beat later than width: a squash, not a shrink.
+        val target = if (glass) 1f + (GLASS_GROW_DP / extent.coerceAtLeast(1f)).coerceIn(0.03f, 0.13f) else pressedScale
         job = coroutineScope.launch {
-            launch { sy.animateTo(pressedScale, PRESS_SOFT) }
-            sx.animateTo(pressedScale, PRESS)
+            if (glass) {
+                // Swells like a drop being lifted: springy, a little ahead in width.
+                launch { sy.animateTo(target, VyomaMotion.spatial()) }
+                sx.animateTo(target, VyomaMotion.spatial())
+            } else {
+                launch { sy.animateTo(target, PRESS_SOFT) }
+                sx.animateTo(target, PRESS)
+            }
         }
     }
 
@@ -191,7 +225,11 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
         clearTo(0f)
         job?.cancel()
         job = coroutineScope.launch {
-            if (bounce) {
+            if (glass) {
+                // Set down: it settles back with a wobble, width and height out of step.
+                launch { sy.animateTo(1f, VyomaMotion.jelly()) }
+                sx.animateTo(1f, VyomaMotion.release())
+            } else if (bounce) {
                 val depth = 1f - pressedScale
                 val dip = pressedScale + depth * 0.25f
                 if (sx.value > pressedScale + depth * 0.4f) {
@@ -211,6 +249,7 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
 
     override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
         val placeable = measurable.measure(constraints)
+        extent = maxOf(placeable.width, placeable.height) / density
         return layout(placeable.width, placeable.height) {
             placeable.placeWithLayer(0, 0) {
                 scaleX = sx.value
@@ -223,5 +262,7 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
         val PRESS = spring<Float>(dampingRatio = 1f, stiffness = 1400f)
         val PRESS_SOFT = spring<Float>(dampingRatio = 0.9f, stiffness = 800f)
         val DIP = tween<Float>(70, easing = FastOutLinearInEasing)
+        /** How far interactive glass swells past its edges, in dp: a circle grows more than a wide pill. */
+        const val GLASS_GROW_DP = 7f
     }
 }
