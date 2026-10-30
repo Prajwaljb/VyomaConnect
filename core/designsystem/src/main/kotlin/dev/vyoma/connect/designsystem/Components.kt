@@ -69,7 +69,8 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.role
@@ -395,25 +396,30 @@ fun Pill(text: String, modifier: Modifier = Modifier, icon: ImageVector? = null,
 }
 
 /**
- * Switch: an accent track with a round white thumb that slides across with a little bounce and
- * squashes against the end. Touched, the thumb lifts into a clear drop of liquid glass, bigger
- * than the track, that magnifies the track under it, and frosts back into the white thumb when
- * let go (the same knob as the sliders). Everything moves in the draw phase.
+ * Switch: an accent track with a round white thumb. Tap it, or drag the thumb across (it follows
+ * the finger and lands on whichever side it's let go nearer); it bounces into place and squashes
+ * against the end. Touched, the thumb lifts into a clear drop of liquid glass, bigger than the
+ * track, that magnifies the track under it, and frosts back into the white thumb when let go
+ * (the same knob as the sliders). A vertical swipe that starts on it still scrolls the page.
  */
 @Composable
 fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     val haptics = LocalHapticFeedback.current
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val position = animateFloatAsState(if (checked) 1f else 0f, VyomaMotion.release(), label = "thumb")
-    val swell = animateFloatAsState(if (pressed) 1f else 0f, if (pressed) VyomaMotion.spatial() else VyomaMotion.release(), label = "swell")
+    val scope = rememberCoroutineScope()
+    val position = remember { Animatable(if (checked) 1f else 0f) }
+    var held by remember { mutableStateOf(false) }
+    val current by rememberUpdatedState(checked)
+    val change by rememberUpdatedState(onCheckedChange)
+    LaunchedEffect(checked) { if (!held) position.animateTo(if (checked) 1f else 0f, VyomaMotion.release()) }
+    val swell = animateFloatAsState(if (held) 1f else 0f, if (held) VyomaMotion.spatial() else VyomaMotion.release(), label = "swell")
     val track by animateColorAsState(
         if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f),
         VyomaMotion.effects(), label = "track",
     )
     val card = MaterialTheme.colorScheme.surfaceContainerLow
+    val padDp = 2.5.dp
     fun DrawScope.thumb(): Rect {
-        val pad = 2.5.dp.toPx()
+        val pad = padDp.toPx()
         val d = size.height - 2 * pad
         val k = swell.value.coerceAtLeast(0f)
         val raw = position.value
@@ -425,12 +431,48 @@ fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: 
         val cx = pad + d / 2 + (size.width - 2 * pad - d) * p
         return Rect(cx - w / 2, size.height / 2 - h / 2, cx + w / 2, size.height / 2 + h / 2)
     }
+    fun settle(on: Boolean) {
+        held = false
+        if (on != current) {
+            haptics.perform(if (on) Haptic.ToggleOn else Haptic.ToggleOff)
+            change(on)
+        }
+        scope.launch { position.animateTo(if (on) 1f else 0f, VyomaMotion.release()) }
+    }
     Spacer(
         modifier
             .size(52.dp, 32.dp)
-            .toggleable(checked, interaction, indication = null, role = Role.Switch) {
-                haptics.perform(if (it) Haptic.ToggleOn else Haptic.ToggleOff)
-                onCheckedChange(it)
+            .semantics {
+                role = Role.Switch
+                toggleableState = ToggleableState(checked)
+                onClick { settle(!checked); true }
+            }
+            .pointerInput(Unit) {
+                val travel = size.width - size.height.toFloat()
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    held = true
+                    var v = position.value
+                    val drag = awaitHorizontalTouchSlopOrCancellation(down.id) { c, over ->
+                        c.consume()
+                        v = (v + over / travel).coerceIn(0f, 1f)
+                        scope.launch { position.snapTo(v) }
+                    }
+                    if (drag != null) {
+                        val done = horizontalDrag(drag.id) { c ->
+                            // Read before consuming: a consumed change reports no movement.
+                            val dx = c.positionChange().x
+                            c.consume()
+                            v = (v + dx / travel).coerceIn(0f, 1f)
+                            scope.launch { position.snapTo(v) }
+                        }
+                        settle(if (done) v > 0.5f else current)
+                    } else {
+                        // Lifted in place: a tap. Taken by the page (a scroll): nothing changes.
+                        val c = currentEvent.changes.firstOrNull { it.id == down.id }
+                        settle(if (c != null && !c.pressed && !c.isConsumed) !current else current)
+                    }
+                }
             }
             .drawWithContent {
                 drawContent()
@@ -540,22 +582,27 @@ fun SegmentedControl(options: List<String>, selected: Int, onSelect: (Int) -> Un
             .pointerInput(options.size) {
                 fun indexAt(x: Float) = ((x - pad) / (size.width - 2 * pad) * options.size).toInt().coerceIn(0, options.lastIndex)
                 awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val down = awaitFirstDown()
                     var hover = indexAt(down.position.x)
                     scope.launch { lift.animateTo(1f, VyomaMotion.spatial()) }
                     if (hover != current) { haptics.perform(Haptic.Select); glide(hover) }
-                    var cancelled = false
-                    while (true) {
-                        // The Final pass: by then a scrolling parent has had its say (it consumes the
-                        // move in its own Main pass, after ours), so a vertical swipe that starts
-                        // here scrolls the page instead of picking whatever segment it started on.
-                        val e = awaitPointerEvent(PointerEventPass.Final)
-                        val c = e.changes.firstOrNull { it.id == down.id } ?: run { cancelled = true; null } ?: break
-                        if (!c.pressed) break
-                        val d = c.position - down.position
-                        if (c.isConsumed || (abs(d.y) > viewConfiguration.touchSlop && abs(d.y) > abs(d.x))) { cancelled = true; break }
-                        val i = indexAt(c.position.x)
+                    fun follow(x: Float) {
+                        val i = indexAt(x)
                         if (i != hover) { hover = i; haptics.perform(Haptic.Select); glide(i) }
+                    }
+                    // Sideways claims the gesture (the thumb follows); a vertical swipe belongs to the page.
+                    val drag = awaitHorizontalTouchSlopOrCancellation(down.id) { c, _ ->
+                        c.consume()
+                        follow(c.position.x)
+                    }
+                    val cancelled = if (drag != null) {
+                        !horizontalDrag(drag.id) { c ->
+                            c.consume()
+                            follow(c.position.x)
+                        }
+                    } else {
+                        val c = currentEvent.changes.firstOrNull { it.id == down.id }
+                        c == null || c.pressed || c.isConsumed
                     }
                     scope.launch { lift.animateTo(0f, VyomaMotion.release()) }
                     if (cancelled) glide(current) else if (hover != current) pick(hover) else glide(current)
