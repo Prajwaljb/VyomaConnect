@@ -14,7 +14,6 @@ import androidx.compose.material.icons.rounded.AddCircle
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.RemoveCircle
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -30,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.vyoma.connect.container
+import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.CollapsingHeaderScaffold
 import dev.vyoma.connect.designsystem.ListRow
 import dev.vyoma.connect.designsystem.SectionCard
@@ -69,7 +69,7 @@ class QuickActionsSettingsActivity : ComponentActivity() {
                 CollapsingHeaderScaffold(
                     title = "Quick actions",
                     subtitle = "Pick the buttons and their order. Bigger widgets show more of them.",
-                    navigation = { IconButton(onClick = ::finish) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+                    navigation = { BounceIconButton(onClick = ::finish) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
                     actions = {
                         TextButton(onClick = { save(QuickAction.DEFAULT) }) { Text("Reset") }
                     },
@@ -88,11 +88,11 @@ class QuickActionsSettingsActivity : ComponentActivity() {
                                     showDivider = i < picked.lastIndex,
                                     trailing = {
                                         if (i > 0) {
-                                            IconButton(onClick = { save(picked.toMutableList().apply { add(i - 1, removeAt(i)) }) }) {
+                                            BounceIconButton(onClick = { save(picked.toMutableList().apply { add(i - 1, removeAt(i)) }) }) {
                                                 Icon(Icons.Rounded.KeyboardArrowUp, "Move up")
                                             }
                                         }
-                                        IconButton(onClick = { save(picked - action) }) {
+                                        BounceIconButton(onClick = { save(picked - action) }) {
                                             Icon(Icons.Rounded.RemoveCircle, "Remove", tint = MaterialTheme.colorScheme.error)
                                         }
                                     },

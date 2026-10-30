@@ -395,7 +395,7 @@ fun Modifier.glassChrome(
  * rim. Drawn while [strength] > 0, faded by it; costs nothing otherwise. Android 13+ only
  * ([liquidGlassSupported]); callers keep their plain look below that.
  */
-fun Modifier.liquidLens(backdrop: Backdrop, strength: () -> Float, zoom: () -> Float, rect: DrawScope.() -> Rect): Modifier = composed {
+fun Modifier.liquidLens(backdrop: Backdrop?, strength: () -> Float, zoom: () -> Float, rect: DrawScope.() -> Rect): Modifier = composed {
     if (!liquidGlassSupported) return@composed this
     val self = rememberGraphicsLayer()
     val drop = rememberGraphicsLayer()
@@ -423,11 +423,13 @@ fun Modifier.liquidLens(backdrop: Backdrop, strength: () -> Float, zoom: () -> F
                 shade = if (dark) 0f else 0.12f, blur = 0f,
             )
             drop.alpha = a
-            val shift = backdrop.origin - position
             // A margin around the drop, so its rim can bend in what's just outside it.
             drop.record(IntSize(r.width.roundToInt() + 2 * m, r.height.roundToInt() + 2 * m)) {
                 translate(m - r.left, m - r.top) {
-                    translate(shift.x, shift.y) { drawLayer(backdrop.layer) }
+                    if (backdrop != null) {
+                        val shift = backdrop.origin - position
+                        translate(shift.x, shift.y) { drawLayer(backdrop.layer) }
+                    }
                     drawLayer(self)
                 }
             }
@@ -450,8 +452,7 @@ private class BlurCache {
 /**
  * The liquid glass pass (AGSL). The shape is a rounded rect given by its size and corner radius,
  * inset by `margin` in the layer it runs on; outside it the result is transparent, so it also clips.
- * The rim bends inward like a convex lens and mirrors at the very edge; the margin lets a lens drawn larger
- * than its source still show what's around it. A RenderEffect copies its shader's
+ * The rim samples outward into the margin: surroundings bend in at the edge, like a real lens. A RenderEffect copies its shader's
  * uniforms when built, so it's rebuilt only when an input actually changes.
  */
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -508,12 +509,11 @@ half4 main(float2 p) {
     // Outward normal of the rounded rect.
     float2 n = (q.x > 0.0 && q.y > 0.0) ? normalize(q) : (q.x > q.y ? float2(1.0, 0.0) : float2(0.0, 1.0));
     n *= sign(rel);
-    // 1 at the rim, 0 past the bevel. A convex surface (circular profile): flat in the middle, steepening
-    // to vertical at the edge, so light bends inward and, in the last pixels, past the edge pixel
-    // itself: what's under the rim shows up mirrored, like the edge of a water drop.
+    // 1 at the rim, 0 past the bevel; squared so the bend gathers at the very edge like a meniscus.
+    // The rim looks outward: what lies just beyond the edge is pulled in and compressed.
     float t = clamp(1.0 + d / bevel, 0.0, 1.0);
-    float bend = (1.0 - sqrt(max(1.0 - t * t, 0.0))) * bendBy;
-    float2 at = margin + c + rel / zoom - n * bend;
+    float bend = t * t * bendBy;
+    float2 at = margin + c + rel / zoom + n * bend;
     float2 k = n * bend * disperse * 0.3;
     half4 col = content.eval(at);
     col.r = content.eval(at + k).r;

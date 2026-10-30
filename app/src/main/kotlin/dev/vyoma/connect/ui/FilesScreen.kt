@@ -35,7 +35,6 @@ import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -52,6 +51,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.CollapsingHeaderScaffold
 import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.ListRow
@@ -128,9 +128,9 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
             shown.error != null -> pcName
             else -> "$pcName · ${itemCount(shown.entries.size)}"
         },
-        navigation = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+        navigation = { BounceIconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
         actions = {
-            if (plugin != null) IconButton(onClick = { vm.listPcFiles(plugin, path) }) { Icon(Icons.Rounded.Refresh, "Refresh") }
+            if (plugin != null) BounceIconButton(onClick = { vm.listPcFiles(plugin, path) }) { Icon(Icons.Rounded.Refresh, "Refresh") }
         },
     ) {
         if (plugin == null) {

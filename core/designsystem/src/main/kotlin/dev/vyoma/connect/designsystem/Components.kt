@@ -1,5 +1,6 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -206,7 +207,7 @@ fun CollapsingHeaderScaffold(
             ) {
                 if (navigation != null) {
                     Box(
-                        Modifier.align(Alignment.CenterStart).size(48.dp).glassChrome(backdrop, CircleShape, blur = 14.dp, bevel = 12.dp),
+                        Modifier.align(Alignment.CenterStart).size(48.dp).pressScale(0.86f).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp),
                         contentAlignment = Alignment.Center,
                     ) { navigation() }
                 }
@@ -223,13 +224,13 @@ fun CollapsingHeaderScaffold(
                             scaleY = 0.9f + 0.1f * t
                         }
                         .drawWithContent { if (collapse > 0.6f) drawContent() }
-                        .glassChrome(backdrop, CircleShape, blur = 14.dp, bevel = 12.dp)
+                        .glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp)
                         .padding(horizontal = 18.dp, vertical = 10.dp),
                 ) {
                     Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Row(
-                    Modifier.align(Alignment.CenterEnd).height(48.dp).glassChrome(backdrop, CircleShape, blur = 14.dp, bevel = 12.dp),
+                    Modifier.align(Alignment.CenterEnd).height(48.dp).pressScale(0.9f).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     content = actions,
                 )
@@ -578,6 +579,19 @@ fun LiquidSlider(
                     }
                 },
             )
+            // While held, a clear droplet rides the end of the fill and magnifies it (iOS 26-style).
+            .liquidLens(
+                null,
+                strength = { swell.value },
+                zoom = { 1f + 0.25f * swell.value.coerceIn(0f, 1f) },
+                rect = {
+                    val k = swell.value.coerceAtLeast(0f)
+                    val dh = lerp(swollen.toPx(), size.height * 1.1f, k)
+                    val dw = dh * 1.5f
+                    val x = (value().coerceIn(0f, 1f) * size.width).coerceIn(dw / 2, size.width - dw / 2)
+                    Rect(x - dw / 2, (size.height - dh) / 2, x + dw / 2, (size.height + dh) / 2)
+                },
+            )
             .drawBehind {
                 val h = lerp(rest.toPx(), swollen.toPx(), swell.value.coerceAtLeast(0f))
                 val top = (size.height - h) / 2
@@ -635,4 +649,22 @@ fun GlassDialog(
             }
         }
     }
+}
+
+/**
+ * An icon button that squishes and bounces like everything else (Material's IconButton only
+ * ripples). 48 dp target.
+ */
+@Composable
+fun BounceIconButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    size: Dp = 48.dp,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier.size(size).pressable(enabled = enabled, pressedScale = 0.8f, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { content() }
 }

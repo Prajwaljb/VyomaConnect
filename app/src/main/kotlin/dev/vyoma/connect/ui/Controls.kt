@@ -3,6 +3,7 @@ package dev.vyoma.connect.ui
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.LiquidSlider
 import dev.vyoma.connect.designsystem.backdropSource
 import dev.vyoma.connect.designsystem.glassChrome
@@ -45,7 +46,6 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -155,7 +155,7 @@ fun MediaCard(
                             .align(Alignment.TopEnd)
                             .padding(12.dp)
                             .pressScale(0.92f)
-                            .glassChrome(behind, CircleShape, blur = 14.dp, tint = Color.Black.copy(alpha = 0.7f), bevel = 12.dp)
+                            .glassChrome(behind, CircleShape, blur = 8.dp, tint = Color.Black.copy(alpha = 0.7f), bevel = 16.dp)
                             .clip(CircleShape)
                             .pressable(pressedScale = 1f, onClick = onContinueHere)
                             .padding(start = 10.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
@@ -229,7 +229,7 @@ fun MediaCard(
 
 @Composable
 private fun MediaButton(icon: ImageVector, label: String, enabled: Boolean, onClick: () -> Unit) {
-    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(56.dp)) {
+    BounceIconButton(onClick = onClick, enabled = enabled, size = 56.dp) {
         Icon(icon, label, tint = Color.White.copy(alpha = if (enabled) 1f else 0.35f), modifier = Modifier.size(34.dp))
     }
 }

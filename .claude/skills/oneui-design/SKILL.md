@@ -19,15 +19,18 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   smaller lit bead; pass `color` for accent/tinted or for chips over artwork (dark translucent).
 - Real blur only for chrome: record content with `backdropSource(backdrop)` (put it OUTSIDE `aurora()` in the
   modifier chain so the canvas is recorded too), then `glassChrome(backdrop, shape)` (AGSL liquid lens on 33+:
-  `LiquidGlass`/`liquidLens`: convex profile, the rim bends inward and mirrors in the last pixels like
-  Apple's glass; a recorded margin lets an enlarged lens still show its surroundings). The bar must not be inside
+  `LiquidGlass`/`liquidLens`: the rim samples outward into a recorded margin, so it bends in its surroundings;
+  the user rejected an inward/convex variant). Every chrome element uses the tab bar's values: `blur = 8.dp, bevel = 16.dp`. The bar must not be inside
   the source. Compose/draw chrome only while visible.
 - Header (`CollapsingHeaderScaffold`): no slab. A soft status-bar fade; back in a 48 dp liquid circle; the title
   appears in a liquid capsule once collapsed (> 0.6); actions share one capsule. Same blur/bevel as the tab bar.
 - Dialogs: `GlassDialog` (same API as AlertDialog): opaque `surfaceContainerHigh` slab with the card rim. Never
   Material `AlertDialog`.
 - Value bars: `LiquidSlider` (thumbless capsule that swells under the finger, relative drag) for scrubbers and
-  in-card volume; the big volume control is the inset liquid-fill capsule in `Dashboard.VolumeBar`.
+  in-card volume; the big volume control is the inset liquid-fill capsule in `Dashboard.VolumeBar`. Both grow a
+  clear `liquidLens(null, …)` droplet on the end of the fill while held.
+- Icon buttons: `BounceIconButton` (never Material `IconButton`); glass circles/capsules put `pressScale` BEFORE
+  `glassChrome` so the glass itself squishes, not just the glyph.
 - Feature colors: `SystemColor` (iOS system palette, light/dark tones, no indigo/purple). `IconBadge` is a filled
   squircle with a white glyph; give each feature a stable color (notifications RED, messages GREEN, clipboard ORANGE,
   files/connection BLUE, touchpad TEAL, find YELLOW, battery GREEN, destructive RED, info/neutral GRAY).
