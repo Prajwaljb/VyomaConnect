@@ -68,6 +68,13 @@ import androidx.compose.ui.graphics.GraphicsContext
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.animation.core.Animatable
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /*
@@ -140,15 +147,15 @@ val isAmoledUi: Boolean
     get() = MaterialTheme.colorScheme.background == Color.Black
 
 /**
- * How glass catches light, per theme. The body is one even tone (a visible top-to-bottom gradient
- * reads as cheap plastic); depth comes from the edge instead: a hairline that catches light at the
- * top-left corner and, fainter, the bottom-right, like a real pane under a key light, and a soft
- * shadow where there's a light canvas for it to fall on.
+ * How a card sits on the canvas, per theme. iOS-style grouped surfaces: one opaque, even tone that
+ * stands clearly off the canvas (high contrast on true black), no gradient and no rim, which read
+ * as cheap plastic. Only light mode gets a shadow, faint, since there's a pale canvas for it to
+ * fall on. A rim is for glass that floats (chrome, raised controls), not for the page's paper.
  */
 @Immutable
 class GlassDepth internal constructor(
     val fill: Color,
-    /** The edge where the light hits it. */
+    /** The edge where the light hits it; transparent for none. */
     val rimLit: Color,
     /** The edge everywhere else. */
     val rimBase: Color,
@@ -158,20 +165,15 @@ class GlassDepth internal constructor(
 )
 
 private val DarkDepth = GlassDepth(
-    fill = Color.White.copy(alpha = 0.065f),
-    rimLit = Color.White.copy(alpha = 0.34f), rimBase = Color.White.copy(alpha = 0.07f),
-    shadow = Color.Black.copy(alpha = 0.32f), shadowBlur = 18f, shadowDrop = 6f,
-)
-// True black: no shadow can show, so the edge alone lifts it.
-private val AmoledDepth = GlassDepth(
-    fill = Color.White.copy(alpha = 0.06f),
-    rimLit = Color.White.copy(alpha = 0.38f), rimBase = Color.White.copy(alpha = 0.075f),
+    fill = Color(0xFF1C1C1E),
+    rimLit = Color.Transparent, rimBase = Color.Transparent,
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
 )
+private val AmoledDepth = DarkDepth
 private val LightDepth = GlassDepth(
-    fill = Color.White.copy(alpha = 0.86f),
-    rimLit = Color.White, rimBase = Color(0xFF1A2B4C).copy(alpha = 0.07f),
-    shadow = Color(0xFF1A2B4C).copy(alpha = 0.09f), shadowBlur = 22f, shadowDrop = 8f,
+    fill = Color.White,
+    rimLit = Color.Transparent, rimBase = Color.Transparent,
+    shadow = Color(0xFF1A2B4C).copy(alpha = 0.05f), shadowBlur = 14f, shadowDrop = 3f,
 )
 
 /** The current theme's [GlassDepth]. */
@@ -220,7 +222,7 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
             clipPath(path, ClipOp.Difference) { drawIntoCanvas { it.nativeCanvas.drawPath(shadow, shadowPaint) } }
         }
         drawPath(path, flat ?: d.fill)
-        drawPath(path, specularRim(d.rimLit, d.rimBase, Offset(width / 2, height / 2)), style = Stroke(stroke))
+        if (d.rimLit.alpha > 0f) drawPath(path, specularRim(d.rimLit, d.rimBase, Offset(width / 2, height / 2)), style = Stroke(stroke))
     }
 }
 
@@ -270,37 +272,17 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
 }
 
 /**
- * A [glassCard] behind every visible item of [contentType] in a lazy list, for groups too long to
- * live in one item (a folder listing). Drawn by the list itself in the draw phase, so it's one
- * card with one highlight however many rows it holds, and it follows scrolling for free. Where
- * the group runs past the viewport its rounded end is pushed off-screen.
+ * One row's share of a card, for groups too long to live in one lazy item (a folder listing):
+ * each row paints its own slice, rounded only where the group starts or ends. Being part of the
+ * row, it moves with it: scrolling, the overscroll stretch, item animations.
  */
-fun Modifier.glassListGroup(state: LazyListState, contentType: Any, gutter: Dp = 16.dp, radius: Dp = 26.dp): Modifier = composed {
+fun Modifier.cardSegment(first: Boolean, last: Boolean, radius: Dp = 26.dp): Modifier = composed {
     val d = glassDepth
-    drawWithCache {
-        val painter = GlassPainter(d, null, density)
-        val path = Path()
-        onDrawBehind {
-            val visible = state.layoutInfo.visibleItemsInfo
-            val first = visible.firstOrNull { it.contentType == contentType } ?: return@onDrawBehind
-            val last = visible.last { it.contentType == contentType }
-            val r = radius.toPx()
-            // A neighbour of another type on screen means the group ends there; otherwise it continues off-screen.
-            val endsAbove = visible.any { it.index == first.index - 1 }
-            val endsBelow = visible.any { it.index == last.index + 1 } || last.index == state.layoutInfo.totalItemsCount - 1
-            val top = if (endsAbove) first.offset.toFloat() else minOf(first.offset.toFloat(), -2 * r)
-            val bottom = if (endsBelow) (last.offset + last.size).toFloat() else maxOf((last.offset + last.size).toFloat(), size.height + 2 * r)
-            val x = gutter.toPx()
-            val w = size.width - 2 * x
-            val h = bottom - top
-            // Brushes are laid out from the origin, so draw at the card's top for the highlight to start there.
-            translate(left = x, top = top) {
-                path.reset()
-                path.addRoundRect(RoundRect(0f, 0f, w, h, CornerRadius(r)))
-                with(painter) { paint(path, h, w) }
-            }
-        }
-    }
+    val shape = androidx.compose.foundation.shape.RoundedCornerShape(
+        topStart = if (first) radius else 0.dp, topEnd = if (first) radius else 0.dp,
+        bottomStart = if (last) radius else 0.dp, bottomEnd = if (last) radius else 0.dp,
+    )
+    glassCard(shape, d.fill)
 }
 
 /**
@@ -372,8 +354,16 @@ fun Modifier.glassChrome(
     tint: Color? = null,
     edge: Boolean = true,
     bevel: Dp = 0.dp,
+    /**
+     * A button made of this glass: under a finger it swells a little and magnifies what's behind
+     * it, in place. The glass never scales as a layer (that slid the blurred backdrop around
+     * inside it); the glyph inside squishes on its own.
+     */
+    interactive: Boolean = false,
 ): Modifier = composed {
     val blurred = rememberGraphicsLayer()
+    val press = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
     var position by remember { mutableStateOf(Offset.Zero) }
     val fill = tint ?: Glass.chrome
     val edgeBrush = Glass.edge
@@ -382,6 +372,19 @@ fun Modifier.glassChrome(
     val blurs = remember { BlurCache() }
     this
         .onGloballyPositioned { position = it.positionInRoot() }
+        .then(
+            if (!interactive || lens == null) Modifier else Modifier.pointerInput(Unit) {
+                // Watches the finger without taking it: the button inside still gets the click.
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    scope.launch { press.animateTo(1f, VyomaMotion.spatial()) }
+                    do {
+                        val e = awaitPointerEvent()
+                    } while (e.changes.any { it.pressed })
+                    scope.launch { press.animateTo(0f, VyomaMotion.release()) }
+                }
+            },
+        )
         // The shader clips to the shape itself, and its rim needs to reach past the edge.
         .then(if (lens == null) Modifier.clip(shape) else Modifier)
         .drawBehind {
@@ -401,17 +404,23 @@ fun Modifier.glassChrome(
             // A deep slab throws the edge's view across the element; the margin is what lies
             // beyond its far side.
             val depth = rim * LensStyle.Chrome.depth
+            val p = press.value
+            // Pressed, the glass grows past its bounds (drawn bigger, sampled bigger: nothing slides).
+            val grow = (size.minDimension * 0.08f * p).coerceAtLeast(0f)
+            val g = Size(size.width + 2 * grow, size.height + 2 * grow)
             val m = (rim * 2f).roundToInt() + 1
             blurred.renderEffect = lens.effect(
-                size, m.toFloat(), radius = size.minDimension / 2, bevel = rim, refract = depth, zoom = 1f,
+                g, m.toFloat(), radius = g.minDimension / 2, bevel = rim, refract = depth, zoom = 1f + 0.14f * p,
                 // Clear in dark mode; light mode keeps more milk so dark labels stay legible over photos.
-                disperse = LensStyle.Chrome.disperse, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.92f), spec = if (dark) 0.42f else 0.8f,
+                disperse = LensStyle.Chrome.disperse, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.92f),
+                spec = (if (dark) 0.42f else 0.8f) + 0.35f * p.coerceIn(0f, 1f),
                 shade = if (dark) 0f else 0.1f, blur = r,
             )
-            blurred.record(IntSize(size.width.roundToInt() + 2 * m, size.height.roundToInt() + 2 * m)) {
-                translate(shift.x + m, shift.y + m) { drawLayer(backdrop.layer) }
+            val o = m + grow
+            blurred.record(IntSize((g.width + 2 * m).roundToInt(), (g.height + 2 * m).roundToInt())) {
+                translate(shift.x + o, shift.y + o) { drawLayer(backdrop.layer) }
             }
-            translate(-m.toFloat(), -m.toFloat()) { drawLayer(blurred) }
+            translate(-o, -o) { drawLayer(blurred) }
         }
         .then(if (edge && lens == null) Modifier.border(0.75.dp, edgeBrush, shape) else Modifier)
 }
@@ -427,6 +436,10 @@ class LensStyle(val rim: Float, val depth: Float, val disperse: Float) {
         /** Drops that move or grow over content (tab lens, slider and press drops): a thinner,
          *  calmer rim so what's under the middle stays readable. */
         val Drop = LensStyle(rim = 0.18f, depth = 2.6f, disperse = 0.03f)
+        /** The tab bar's lifted drop. It outgrows the bar, and its rim looks outward (negative
+         *  depth): the edge gathers in the page around the bar, the way a drop of water on glass
+         *  rims itself with its surroundings. Looking inward, the rim only replayed the bar. */
+        val Lift = LensStyle(rim = 0.22f, depth = -1.1f, disperse = 0.03f)
     }
 }
 
@@ -443,8 +456,10 @@ fun Modifier.liquidLens(
     zoom: () -> Float = { 1f },
     underlay: Color = Color.Transparent,
     style: LensStyle = LensStyle.Drop,
+    /** 0 = clear water, 1 = frosted white (a slider knob at rest that clears as it's grabbed). */
+    frost: () -> Float = { 0f },
     rect: DrawScope.() -> Rect,
-): Modifier = if (!liquidGlassSupported) this else this then LiquidLensElement(backdrop, strength, zoom, underlay, style, rect)
+): Modifier = if (!liquidGlassSupported) this else this then LiquidLensElement(backdrop, strength, zoom, underlay, style, frost, rect)
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private data class LiquidLensElement(
@@ -453,15 +468,17 @@ private data class LiquidLensElement(
     val zoom: () -> Float,
     val underlay: Color,
     val style: LensStyle,
+    val frost: () -> Float,
     val rect: DrawScope.() -> Rect,
 ) : ModifierNodeElement<LiquidLensNode>() {
-    override fun create() = LiquidLensNode(backdrop, strength, zoom, underlay, style, rect)
+    override fun create() = LiquidLensNode(backdrop, strength, zoom, underlay, style, frost, rect)
     override fun update(node: LiquidLensNode) {
         node.backdrop = backdrop
         node.strength = strength
         node.zoom = zoom
         node.underlay = underlay
         node.style = style
+        node.frost = frost
         node.rect = rect
         node.invalidateDraw()
     }
@@ -474,6 +491,7 @@ private class LiquidLensNode(
     var zoom: () -> Float,
     var underlay: Color,
     var style: LensStyle,
+    var frost: () -> Float,
     var rect: DrawScope.() -> Rect,
 ) : Modifier.Node(), DrawModifierNode, GlobalPositionAwareModifierNode, CompositionLocalConsumerModifierNode {
     private var position = Offset.Zero
@@ -494,7 +512,7 @@ private class LiquidLensNode(
         val dark = currentValueOf(LocalContentColor).luminance() > 0.5f
         val p = painter ?: LensPainter(requireGraphicsContext()).also { painter = it }
         val shift = backdrop?.let { it.origin - position }
-        with(p) { paint(a, r, zoom(), style, underlay, dark, backdrop, shift ?: Offset.Zero) }
+        with(p) { paint(a, r, zoom(), style, underlay, dark, backdrop, shift ?: Offset.Zero, frost().coerceIn(0f, 1f)) }
     }
 
     override fun onDetach() {
@@ -513,15 +531,17 @@ internal class LensPainter(private val graphics: GraphicsContext) {
     private val drop = graphics.createGraphicsLayer()
     private val glass = LiquidGlass()
 
-    fun ContentDrawScope.paint(a: Float, r: Rect, zoom: Float, style: LensStyle, underlay: Color, dark: Boolean, backdrop: Backdrop?, shift: Offset) {
+    fun ContentDrawScope.paint(a: Float, r: Rect, zoom: Float, style: LensStyle, underlay: Color, dark: Boolean, backdrop: Backdrop?, shift: Offset, frost: Float = 0f) {
         self.record { this@paint.drawContent() }
         drawLayer(self)
         val rim = r.minDimension * style.rim
         // Room for the rim to look past the far edge.
-        val m = (r.minDimension * style.rim * 2f).roundToInt() + 1
+        val m = (r.minDimension * style.rim * (2f + abs(style.depth).coerceAtMost(4f) * 0.5f).coerceAtLeast(2f)).roundToInt() + 1
         drop.renderEffect = glass.effect(
             r.size, m.toFloat(), r.minDimension / 2, bevel = rim, refract = rim * style.depth, zoom = zoom, disperse = style.disperse,
-            tint = Color.White.copy(alpha = if (dark) 0.05f else 0.12f), spec = if (dark) 0.55f else 0.9f,
+            // Quantized so a frost animation rebuilds the shader a few dozen times, not every frame.
+            tint = Color.White.copy(alpha = androidx.compose.ui.util.lerp(if (dark) 0.05f else 0.12f, 0.97f, (frost * 32).roundToInt() / 32f)),
+            spec = if (dark) 0.55f else 0.9f,
             shade = if (dark) 0f else 0.12f, blur = 0f,
         )
         drop.alpha = a

@@ -43,7 +43,7 @@ data class ThemeSettings(
 private val LightCanvas = Color(0xFFF3F4F6)
 private val LightCard = Color(0xFFFFFFFF)
 private val DarkCanvas = Color(0xFF0E0F11)
-private val DarkCard = Color(0xFF1B1C1F)
+private val DarkCard = Color(0xFF1C1C1E)
 
 @Composable
 fun VyomaTheme(settings: ThemeSettings = ThemeSettings(), content: @Composable () -> Unit) {
@@ -72,7 +72,7 @@ fun VyomaTheme(settings: ThemeSettings = ThemeSettings(), content: @Composable (
 private fun buildScheme(settings: ThemeSettings, dark: Boolean, dynamic: ColorScheme?): ColorScheme {
     val accent = dynamic?.primary ?: if (dark) settings.palette.dark else settings.palette.light
     val canvas = if (dark) { if (settings.amoled) Color.Black else DarkCanvas } else LightCanvas
-    val card = if (dark) { if (settings.amoled) Color(0xFF111214) else DarkCard } else LightCard
+    val card = if (dark) DarkCard else LightCard
     val onSurface = if (dark) Color(0xFFF2F3F5) else Color(0xFF111316)
     val muted = if (dark) Color(0xFF9EA3AB) else Color(0xFF5F6670)
     val container = accent.blend(card, if (dark) 0.78f else 0.86f)

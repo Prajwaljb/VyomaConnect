@@ -180,9 +180,11 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
     ) {
         Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             // Same round glass back button as every other page.
-            Box(Modifier.size(48.dp).glassRaised(CircleShape), contentAlignment = Alignment.Center) {
-                BounceIconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") }
-            }
+            // The whole disc dips as one piece, like the header capsules; no glyph bouncing inside a still ring.
+            Box(
+                Modifier.size(48.dp).pressable(pressedScale = 0.88f, glass = true, onClick = onBack).glassRaised(CircleShape),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text("Touchpad", style = MaterialTheme.typography.titleLarge)

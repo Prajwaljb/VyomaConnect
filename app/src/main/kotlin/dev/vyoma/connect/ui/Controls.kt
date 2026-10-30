@@ -53,6 +53,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -76,6 +77,7 @@ import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.pressable
 import dev.vyoma.connect.platform.NowPlaying
 import dev.vyoma.connect.protocol.plugin.builtin.RemoteCommand
+import kotlin.math.abs
 import kotlinx.coroutines.delay
 
 /** One UI-style square action: tinted icon over a soft container, squishes on press. */
@@ -259,13 +261,30 @@ private fun Scrubber(np: NowPlaying, lengthMs: Long, underlay: Color, onSeek: (L
         }
     }
     var dragValue by remember { mutableStateOf<Float?>(null) }
+    // Where we last seeked to, and when. Browsers report a stale (often zero) position for a while
+    // after a seek, which flung the knob back to the start while the video played on further. Until
+    // the reported position agrees with the seek (or a few seconds pass), show the seek target,
+    // moving on with playback.
+    var seek by remember { mutableStateOf<Pair<Long, Long>?>(null) }
+    fun reported(at: Long) = p.currentPosition(at).coerceIn(0, lengthMs)
+    fun expected(at: Long): Long? = seek?.let { (target, t0) -> (target + if (p.isPlaying) at - t0 else 0).coerceIn(0, lengthMs) }
+    val settled = seek?.let { (_, t0) -> now - t0 > SEEK_SETTLE_MS || abs(reported(now) - expected(now)!!) < SEEK_AGREE_MS } == true
+    SideEffect { if (settled) seek = null }
+    fun shownAt(at: Long) = (if (settled) null else expected(at)) ?: reported(at)
     val length = lengthMs.toFloat()
-    val position = dragValue?.let { it * length } ?: p.currentPosition(now).coerceAtMost(lengthMs).toFloat()
+    val position = dragValue?.let { it * length } ?: shownAt(now).toFloat()
     Column {
         LiquidSlider(
-            value = { (dragValue ?: (p.currentPosition(now) / length).coerceAtMost(1f)) },
+            value = { (dragValue ?: (shownAt(now) / length).coerceAtMost(1f)) },
             onChange = { dragValue = it },
-            onDone = { dragValue?.let { onSeek((it * length).toLong()) }; dragValue = null },
+            onDone = {
+                dragValue?.let {
+                    val target = (it * length).toLong()
+                    seek = target to System.currentTimeMillis()
+                    onSeek(target)
+                }
+                dragValue = null
+            },
             enabled = p.canSeek,
             fill = Color.White.copy(alpha = if (p.canSeek) 1f else 0.6f),
             underlay = underlay,
@@ -277,6 +296,9 @@ private fun Scrubber(np: NowPlaying, lengthMs: Long, underlay: Color, onSeek: (L
         }
     }
 }
+
+private const val SEEK_SETTLE_MS = 5_000L
+private const val SEEK_AGREE_MS = 2_500L
 
 fun formatTime(ms: Long): String {
     val s = ms / 1000
