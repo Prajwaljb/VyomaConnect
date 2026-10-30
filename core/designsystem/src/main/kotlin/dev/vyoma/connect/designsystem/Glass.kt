@@ -249,8 +249,9 @@ fun Modifier.glassCard(shape: Shape, fill: Color? = null): Modifier = composed {
 }
 
 /**
- * Raised glass for controls sitting on a card (round buttons, chips): a smaller slab with a
- * glossy top edge. With [color] it's that color as lit glass instead (an active toggle).
+ * Raised controls sitting on a card (round buttons, chips, keys): a plain, even fill one step up
+ * from the card, no drawn rim (a painted highlight edge read as fake refraction). With [color]
+ * it's filled with that color instead (an active toggle, an accent pill).
  */
 fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = composed {
     val dark = isDarkUi
@@ -259,20 +260,7 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
         .drawWithCache {
             val outline = shape.createOutline(size, layoutDirection, this)
             val fill = base ?: if (dark) Color.White.copy(alpha = 0.12f) else Color(0xFF1A2B4C).copy(alpha = 0.06f)
-            val rim = specularRim(
-                lit = Color.White.copy(alpha = if (dark || base != null) 0.45f else 0.95f),
-                base = when {
-                    base != null -> Color.White.copy(alpha = 0.12f)
-                    dark -> Color.White.copy(alpha = 0.06f)
-                    else -> Color(0xFF1A2B4C).copy(alpha = 0.06f)
-                },
-                center = Offset(size.width / 2, size.height / 2),
-            )
-            val stroke = Stroke(0.9.dp.toPx())
-            onDrawBehind {
-                drawOutline(outline, fill)
-                drawOutline(outline, rim, style = stroke)
-            }
+            onDrawBehind { drawOutline(outline, fill) }
         }
         .clip(shape)
 }
