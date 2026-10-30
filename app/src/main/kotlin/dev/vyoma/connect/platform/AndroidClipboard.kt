@@ -164,7 +164,9 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
                 super.onWindowFocusChanged(hasWindowFocus)
                 if (hasWindowFocus) {
                     readNow()
-                    removeOverlay(wm)
+                    // Not from inside this callback: the framework is still dispatching the focus
+                    // change and touches the view right after we return, which crashed the app.
+                    main.post { removeOverlay(wm) }
                 }
             }
         }
@@ -184,7 +186,7 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
     private fun removeOverlay(wm: WindowManager) {
         val v = overlay ?: return
         overlay = null
-        runCatching { wm.removeViewImmediate(v) }
+        runCatching { wm.removeView(v) }
     }
 
     private companion object {
