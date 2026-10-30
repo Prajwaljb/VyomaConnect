@@ -27,9 +27,8 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   specular edge uses it: `specularRim(...)` (chrome stroke, raised controls) and the AGSL `light` uniform (lens rims).
   Read it only in draw lambdas, never in composition. A still phone renders ~0 frames; measured no jank cost.
   Coloured solid objects (IconBadge, DeviceGlyph) take `Modifier.specularEdge(shape, width)` like iOS 26 icon edges.
-  `SpecularLight.drift` (recent tilt, recentres in ~6 s) moves ONLY the aurora canvas (36 dp, wallpaper parallax);
-  never move cards, text or controls with tilt (iOS doesn't inside apps). The first samples after start set the rest
-  pose (else the recentring redrew for ~20 s after every launch).
+  Tilt moves LIGHT only. A canvas parallax (aurora drifting up to 36 dp) was built and removed: unnoticeable behind
+  such soft glows. Never move cards, text or controls with tilt (iOS doesn't inside apps).
 - Real blur only for chrome: record content with `backdropSource(backdrop)` (put it OUTSIDE `aurora()` in the
   modifier chain so the canvas is recorded too), then `glassChrome(backdrop, shape)` (AGSL liquid lens on 33+:
   `LiquidGlass`/`liquidLens`: physically based, like Telegram's/Apple's: Snell refraction (n≈1.5) through a
@@ -50,6 +49,8 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   page (no hero parallax, else it slid over the hero glyph), pins in the bar and shrinks to titleMedium; at collapse
   > 0.72 a glass bubble forms around it (height leads, width wobbles out with `jelly()`). The hero fades by 75%.
   A trailing "collapse-room" item lets any page that scrolls at all collapse fully (no half-faded stuck title).
+  A scroll that stops mid-collapse snaps open/closed; the snap runs in its own child job (run inline, a finger
+  interrupting it threw a cancellation that killed the watcher, and nothing snapped again).
 - Dialogs: `GlassDialog` (same API as AlertDialog): opaque `surfaceContainerHigh` slab with the card rim. Never
   Material `AlertDialog`.
 - Value bars (Apple's, `LiquidSlider`): with `knob` (default 24 dp) the iOS 26 slider: slim track, wide white
