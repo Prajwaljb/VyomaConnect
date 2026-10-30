@@ -16,8 +16,8 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Cards: `Modifier.glassCard(shape, fill?)` = iOS grouped surfaces: opaque, flat, high contrast (`#1C1C1E` on the dark
   and true-black canvas, white on light with a faint shadow). No gradient, no rim, no translucency: translucent rimmed
   panes were called cheap twice. Rims and refraction belong to things that float (chrome, raised controls, knobs).
-- Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a
-  smaller lit bead; pass `color` for accent/tinted or for chips over artwork (dark translucent).
+- Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a plain
+  even fill with NO drawn rim (a painted highlight edge read as fake refraction); pass `color` for accent/tinted or for chips over artwork (dark translucent).
 - Real blur only for chrome: record content with `backdropSource(backdrop)` (put it OUTSIDE `aurora()` in the
   modifier chain so the canvas is recorded too), then `glassChrome(backdrop, shape)` (AGSL liquid lens on 33+:
   `LiquidGlass`/`liquidLens`: physically based, like Telegram's/Apple's: Snell refraction (n≈1.5) through a
