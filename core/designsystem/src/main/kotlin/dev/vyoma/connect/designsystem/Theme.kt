@@ -39,8 +39,8 @@ data class ThemeSettings(
     val amoled: Boolean = false,
 )
 
-// One UI-like neutral surfaces: soft gray canvas, bright cards that float on it.
-private val LightCanvas = Color(0xFFF3F4F6)
+// One UI-like neutral surfaces: soft gray canvas, bright cards that stand clearly off it.
+private val LightCanvas = Color(0xFFEDEEF2)
 private val LightCard = Color(0xFFFFFFFF)
 private val DarkCanvas = Color(0xFF0E0F11)
 private val DarkCard = Color(0xFF1C1C1E)
@@ -71,11 +71,14 @@ fun VyomaTheme(settings: ThemeSettings = ThemeSettings(), content: @Composable (
 }
 
 private fun buildScheme(settings: ThemeSettings, dark: Boolean, dynamic: ColorScheme?): ColorScheme {
-    val accent = dynamic?.primary ?: if (dark) settings.palette.dark else settings.palette.light
+    // Material You's accents are muted; a little more colour at the same lightness reads crisper
+    // without changing how legible a label on it is.
+    val accent = dynamic?.primary?.saturate(1.35f) ?: if (dark) settings.palette.dark else settings.palette.light
     val canvas = if (dark) { if (settings.amoled) Color.Black else DarkCanvas } else LightCanvas
     val card = if (dark) DarkCard else LightCard
-    val onSurface = if (dark) Color(0xFFF2F3F5) else Color(0xFF111316)
-    val muted = if (dark) Color(0xFF9EA3AB) else Color(0xFF5F6670)
+    // Secondary text is where contrast was weakest: lifted toward the primary, still clearly second.
+    val onSurface = if (dark) Color(0xFFF7F8FA) else Color(0xFF0B0C0E)
+    val muted = if (dark) Color(0xFFAEB3BB) else Color(0xFF50565F)
     val container = accent.blend(card, if (dark) 0.78f else 0.86f)
     val onAccent = if (accent.luminance() > 0.45f) Color(0xFF0B0C0E) else Color.White
     val base = if (dark) darkColorScheme() else lightColorScheme()
@@ -119,6 +122,41 @@ private fun Color.blend(other: Color, otherWeight: Float) = Color(
     blue = blue * (1 - otherWeight) + other.blue * otherWeight,
     alpha = 1f,
 )
+
+/** More (or less) chroma at the same HSL lightness. */
+private fun Color.saturate(by: Float): Color = toned(saturation = by)
+
+/**
+ * The same hue with its HSL saturation scaled by [saturation] and, if given, its [lightness] set:
+ * e.g. a deep shade of the accent for a white glyph to sit on.
+ */
+fun Color.toned(saturation: Float = 1f, lightness: Float? = null): Color {
+    val max = maxOf(red, green, blue)
+    val min = minOf(red, green, blue)
+    val l = (max + min) / 2f
+    if (max == min) return lightness?.let { Color(it, it, it, alpha) } ?: this
+    val d = max - min
+    val s = if (l > 0.5f) d / (2f - max - min) else d / (max + min)
+    val h = when (max) {
+        red -> ((green - blue) / d + (if (green < blue) 6f else 0f))
+        green -> (blue - red) / d + 2f
+        else -> (red - green) / d + 4f
+    } / 6f
+    val s2 = (s * saturation).coerceAtMost(1f)
+    val l2 = lightness ?: l
+    val q = if (l2 < 0.5f) l2 * (1f + s2) else l2 + s2 - l2 * s2
+    val p = 2f * l2 - q
+    fun hue(t0: Float): Float {
+        val t = (t0 + 1f) % 1f
+        return when {
+            t < 1f / 6f -> p + (q - p) * 6f * t
+            t < 1f / 2f -> q
+            t < 2f / 3f -> p + (q - p) * (2f / 3f - t) * 6f
+            else -> p
+        }
+    }
+    return Color(hue(h + 1f / 3f), hue(h), hue(h - 1f / 3f), alpha)
+}
 
 private fun Color.luminance() = 0.2126f * red + 0.7152f * green + 0.0722f * blue
 

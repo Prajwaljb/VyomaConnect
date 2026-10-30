@@ -94,6 +94,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   `MINT`, `SAND`; DarkMode SYSTEM/LIGHT/DARK; `amoled` = true black.
 - Canvas `aurora()`, cards `glassCard`, raised chips `glassRaised`, dialogs `GlassDialog`.
 - Status colors via `Status.connected/pending/offline(dark)`, the same in every palette.
+- Contrast (user asked for more, 2026-10-31): text #F7F8FA / #0B0C0E, secondary #AEB3BB / #50565F, light canvas
+  #EDEEF2 under white cards. Wallpaper (dynamic) accents get `saturate(1.35)` at the same lightness (Material You
+  tones are muted). For a white glyph on the accent use a deep shade, `accent.toned(1.2f, 0.5..0.64f)` (the hero
+  `DeviceGlyph`), never the pastel dark-theme accent itself.
 - Shapes: cards `large` (26 dp), hero cards `extraLarge` (32 dp), chips/icons `medium` (20 dp).
 
 ## Layout
