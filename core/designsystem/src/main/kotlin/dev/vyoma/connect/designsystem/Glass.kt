@@ -282,9 +282,8 @@ fun Modifier.glassListGroup(state: LazyListState, contentType: Any, gutter: Dp =
 
 /**
  * The app canvas: the theme background with two soft glows of the accent near the top. Cached per
- * size, so it costs one bitmap-free draw of a few shapes. Pure black gets a night sky instead
- * (Vyoma means sky): a faint nebula of the accent and a sparse, fixed field of stars that thins
- * out down the screen. Nothing animates, so it costs nothing at rest.
+ * size, so it costs one bitmap-free draw of a few shapes. Pure black keeps true black below the
+ * fold; its glow is a little cooler and fades out sooner so the bottom stays ink.
  */
 fun Modifier.aurora(): Modifier = composed {
     val base = MaterialTheme.colorScheme.background
@@ -292,51 +291,25 @@ fun Modifier.aurora(): Modifier = composed {
     val dark = isDarkUi
     val amoled = base == Color.Black
     val strength = when {
-        amoled -> 0.13f
+        amoled -> 0.16f
         dark -> 0.24f
         else -> 0.20f
     }
     drawWithCache {
-        val r = size.maxDimension * 0.75f
+        val r = size.maxDimension * if (amoled) 0.6f else 0.75f
         val left = Brush.radialGradient(
-            listOf(accent.copy(alpha = strength), Color.Transparent),
+            listOf(accent.copy(alpha = strength), accent.copy(alpha = strength * 0.35f), Color.Transparent),
             center = Offset(size.width * 0.05f, size.height * 0.02f), radius = r,
         )
         val right = Brush.radialGradient(
             listOf(accent.copy(alpha = strength * 0.6f), Color.Transparent),
             center = Offset(size.width * 1.0f, size.height * 0.28f), radius = r * 0.8f,
         )
-        val stars = if (amoled) starField(size, density) else emptyList()
-        // A second, cooler hue under the accent so the nebula has some depth.
-        val haze = if (amoled) Brush.radialGradient(
-            listOf(Color(0xFF5AC8FA).copy(alpha = 0.05f), Color.Transparent),
-            center = Offset(size.width * 0.75f, size.height * 0.08f), radius = r * 0.55f,
-        ) else null
         onDrawBehind {
             drawRect(base)
             drawRect(left)
             drawRect(right)
-            if (haze != null) drawRect(haze)
-            for (s in stars) drawCircle(Color.White.copy(alpha = s.alpha), s.radius, s.center)
         }
-    }
-}
-
-private class Star(val center: Offset, val radius: Float, val alpha: Float)
-
-/** A fixed sky: the same stars every time (seeded), densest near the top, a few brighter ones. */
-private fun starField(size: Size, density: Float): List<Star> {
-    val rnd = java.util.Random(0x5EEDL)
-    return List(90) {
-        // Squared so they gather toward the top and thin out by the middle of the screen.
-        val y = rnd.nextFloat().let { it * it } * size.height * 0.6f
-        val bright = rnd.nextFloat() < 0.12f
-        val fade = 1f - y / (size.height * 0.6f)
-        Star(
-            Offset(rnd.nextFloat() * size.width, y),
-            radius = (if (bright) 1.1f else 0.55f + rnd.nextFloat() * 0.4f) * density,
-            alpha = ((if (bright) 0.85f else 0.25f + rnd.nextFloat() * 0.4f) * (0.35f + 0.65f * fade)).coerceIn(0f, 1f),
-        )
     }
 }
 
@@ -477,7 +450,8 @@ private class BlurCache {
 /**
  * The liquid glass pass (AGSL). The shape is a rounded rect given by its size and corner radius,
  * inset by `margin` in the layer it runs on; outside it the result is transparent, so it also clips.
- * The rim samples outward into the margin: surroundings bend in at the edge, like a real lens. A RenderEffect copies its shader's
+ * The rim bends inward like a convex lens and mirrors at the very edge; the margin lets a lens drawn larger
+ * than its source still show what's around it. A RenderEffect copies its shader's
  * uniforms when built, so it's rebuilt only when an input actually changes.
  */
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -534,11 +508,12 @@ half4 main(float2 p) {
     // Outward normal of the rounded rect.
     float2 n = (q.x > 0.0 && q.y > 0.0) ? normalize(q) : (q.x > q.y ? float2(1.0, 0.0) : float2(0.0, 1.0));
     n *= sign(rel);
-    // 1 at the rim, 0 past the bevel; squared so the bend gathers at the very edge like a meniscus.
-    // The rim looks outward: what lies just beyond the edge is pulled in and compressed.
+    // 1 at the rim, 0 past the bevel. A convex surface (circular profile): flat in the middle, steepening
+    // to vertical at the edge, so light bends inward and, in the last pixels, past the edge pixel
+    // itself: what's under the rim shows up mirrored, like the edge of a water drop.
     float t = clamp(1.0 + d / bevel, 0.0, 1.0);
-    float bend = t * t * bendBy;
-    float2 at = margin + c + rel / zoom + n * bend;
+    float bend = (1.0 - sqrt(max(1.0 - t * t, 0.0))) * bendBy;
+    float2 at = margin + c + rel / zoom - n * bend;
     float2 k = n * bend * disperse * 0.3;
     half4 col = content.eval(at);
     col.r = content.eval(at + k).r;

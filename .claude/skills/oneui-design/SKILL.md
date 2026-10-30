@@ -10,8 +10,8 @@ soft accent-tinted canvas, colorful feature icons, a floating glass tab bar. **P
 per-frame blur except on chrome that content scrolls under, and measure with `dumpsys gfxinfo` after visual changes.
 
 ## Glass (core/designsystem/Glass.kt)
-- Canvas: `Modifier.aurora()` (theme background + cached accent glows). In pure black (`isAmoledUi`) it is a seeded
-  star field with a faint cool haze instead: true black stays black.
+- Canvas: `Modifier.aurora()` (theme background + two cached accent glows; in pure black a tighter glow that
+  leaves the bottom true black). No decorative textures (stars were tried and rejected: too specific).
 - Depth tokens: `glassDepth` (`GlassDepth` Dark / Amoled / Light) drive every surface so the themes stay consistent.
 - Cards: `Modifier.glassCard(shape, fill?)` = a depth slab: soft shadow outside only, top-lit gradient fill, sheen,
   lit→shaded rim. No blur, cheap (all `drawWithCache`). `SectionCard`/`glassListGroup` use it. Never flat fills.
@@ -19,7 +19,8 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   smaller lit bead; pass `color` for accent/tinted or for chips over artwork (dark translucent).
 - Real blur only for chrome: record content with `backdropSource(backdrop)` (put it OUTSIDE `aurora()` in the
   modifier chain so the canvas is recorded too), then `glassChrome(backdrop, shape)` (AGSL liquid lens on 33+:
-  `LiquidGlass`/`liquidLens`; the rim samples outward so it refracts its surroundings). The bar must not be inside
+  `LiquidGlass`/`liquidLens`: convex profile, the rim bends inward and mirrors in the last pixels like
+  Apple's glass; a recorded margin lets an enlarged lens still show its surroundings). The bar must not be inside
   the source. Compose/draw chrome only while visible.
 - Header (`CollapsingHeaderScaffold`): no slab. A soft status-bar fade; back in a 48 dp liquid circle; the title
   appears in a liquid capsule once collapsed (> 0.6); actions share one capsule. Same blur/bevel as the tab bar.
@@ -36,6 +37,8 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   Lists get `LocalBottomBarInset` padding automatically via the scaffold.
 
 ## Theme (core/designsystem)
+- Type: bundled Inter variable (`res/font/inter.ttf`, OFL in `core/designsystem/licenses`): display optical size
+  for title/headline/display styles, text cut below; tight negative tracking on large sizes; `tnum` for live numbers.
 - `VyomaTheme(ThemeSettings)`: palettes `DYNAMIC` (wallpaper accent, neutral surfaces), `OCEAN`, `GRAPHITE`, `EMBER`,
   `MINT`, `SAND`; DarkMode SYSTEM/LIGHT/DARK; `amoled` = true black.
 - Canvas `aurora()`, cards `glassCard`, raised chips `glassRaised`, dialogs `GlassDialog`.

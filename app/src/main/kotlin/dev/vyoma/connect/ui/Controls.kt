@@ -4,7 +4,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import dev.vyoma.connect.designsystem.LiquidSlider
-import dev.vyoma.connect.designsystem.glassRaised
+import dev.vyoma.connect.designsystem.backdropSource
+import dev.vyoma.connect.designsystem.glassChrome
+import dev.vyoma.connect.designsystem.pressScale
+import dev.vyoma.connect.designsystem.rememberBackdrop
 import dev.vyoma.connect.designsystem.SystemColor
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedContent
@@ -24,7 +27,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -134,8 +136,9 @@ fun MediaCard(
     }
     Surface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.extraLarge, color = tint) {
         Column {
+            val behind = rememberBackdrop()
             Box(Modifier.fillMaxWidth().aspectRatio(16f / 10f)) {
-                Crossfade(art, Modifier.fillMaxSize(), label = "art") { art ->
+                Crossfade(art, Modifier.fillMaxSize().backdropSource(behind), label = "art") { art ->
                     if (art != null) {
                         Image(art.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                     } else {
@@ -146,15 +149,15 @@ fun MediaCard(
                 }
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to tint)))
                 if (onContinueHere != null) {
-                    // Busy artwork: a soft top shade plus a darker raised capsule keeps the label legible.
-                    Box(Modifier.fillMaxWidth().fillMaxHeight(0.4f).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.35f), Color.Transparent))))
+                    // Liquid glass over the artwork, smoked so white text reads on any thumbnail.
                     Row(
                         Modifier
                             .align(Alignment.TopEnd)
                             .padding(12.dp)
-                            .glassRaised(CircleShape, Color.Black.copy(alpha = 0.62f))
+                            .pressScale(0.92f)
+                            .glassChrome(behind, CircleShape, blur = 14.dp, tint = Color.Black.copy(alpha = 0.7f), bevel = 12.dp)
                             .clip(CircleShape)
-                            .pressable(pressedScale = 0.92f, onClick = onContinueHere)
+                            .pressable(pressedScale = 1f, onClick = onContinueHere)
                             .padding(start = 10.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -170,7 +173,10 @@ fun MediaCard(
                 }
             }
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                if (p.lengthMs > 0) Scrubber(np, onSeek)
+                // Browsers blank the length for a moment now and then (ads, hover previews): keep the track's last one.
+                val length = remember(p.name, p.title) { mutableLongStateOf(0L) }
+                if (p.lengthMs > 0 && length.longValue != p.lengthMs) length.longValue = p.lengthMs
+                if (length.longValue > 0) Scrubber(np, length.longValue, onSeek)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                     MediaButton(Icons.Rounded.SkipPrevious, "Previous", enabled = p.canPrevious, onClick = onPrevious)
                     val scale by animateFloatAsState(if (p.isPlaying) 1f else 1.06f, VyomaMotion.spatial(), label = "pp")
@@ -234,7 +240,7 @@ private fun MediaButton(icon: ImageVector, label: String, enabled: Boolean, onCl
  * played anything.
  */
 @Composable
-private fun Scrubber(np: NowPlaying, onSeek: (Long) -> Unit) {
+private fun Scrubber(np: NowPlaying, lengthMs: Long, onSeek: (Long) -> Unit) {
     val p = np.player
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -249,11 +255,11 @@ private fun Scrubber(np: NowPlaying, onSeek: (Long) -> Unit) {
         }
     }
     var dragValue by remember { mutableStateOf<Float?>(null) }
-    val length = p.lengthMs.coerceAtLeast(1).toFloat()
-    val position = dragValue?.let { it * length } ?: p.currentPosition(now).toFloat()
+    val length = lengthMs.toFloat()
+    val position = dragValue?.let { it * length } ?: p.currentPosition(now).coerceAtMost(lengthMs).toFloat()
     Column {
         LiquidSlider(
-            value = { (dragValue ?: (p.currentPosition(now) / length)) },
+            value = { (dragValue ?: (p.currentPosition(now) / length).coerceAtMost(1f)) },
             onChange = { dragValue = it },
             onDone = { dragValue?.let { onSeek((it * length).toLong()) }; dragValue = null },
             enabled = p.canSeek,
@@ -262,7 +268,7 @@ private fun Scrubber(np: NowPlaying, onSeek: (Long) -> Unit) {
         Row(Modifier.fillMaxWidth()) {
             Text(formatTime(position.toLong()), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
             Spacer(Modifier.weight(1f))
-            Text("-" + formatTime((p.lengthMs - position.toLong()).coerceAtLeast(0)), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
+            Text("-" + formatTime((lengthMs - position.toLong()).coerceAtLeast(0)), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
         }
     }
 }

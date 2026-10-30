@@ -159,8 +159,10 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean) :
                     launch { sy.animateTo(dip, DIP) }
                     sx.animateTo(dip, DIP)
                 }
-                launch { sy.animateTo(1f, VyomaMotion.jelly()) }
-                sx.animateTo(1f, VyomaMotion.release())
+                // Thrown back out: overshoots past full size, then wobbles in (width and height out of step).
+                val kick = depth * 34f
+                launch { sy.animateTo(1f, VyomaMotion.jelly(), initialVelocity = kick * 0.8f) }
+                sx.animateTo(1f, VyomaMotion.release(), initialVelocity = kick)
             } else {
                 launch { sy.animateTo(1f, VyomaMotion.effects()) }
                 sx.animateTo(1f, VyomaMotion.effects())
