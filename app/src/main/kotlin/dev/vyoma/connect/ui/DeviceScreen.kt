@@ -2,6 +2,7 @@ package dev.vyoma.connect.ui
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import dev.vyoma.connect.designsystem.GlassDialog
 import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.SystemColor
 import androidx.compose.ui.unit.dp
@@ -19,7 +20,6 @@ import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Wifi
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -214,7 +214,7 @@ fun DeviceScreen(
     }
 
     if (confirmUnpair) {
-        AlertDialog(
+        GlassDialog(
             onDismissRequest = { confirmUnpair = false },
             title = { Text("Unpair ${state?.identity?.deviceName}?") },
             text = { Text("You'll need to pair again and compare codes to reconnect.") },

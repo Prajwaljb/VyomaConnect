@@ -111,6 +111,8 @@ object Widgets {
     suspend fun refresh(context: Context) {
         if (sampleMode) return
         val snap = read(context)
+        // Nothing a widget shows changed: no disk write, no redraw of five widgets.
+        if (snap == state.value) return
         if (snap.pcBattery != state.value?.pcBattery) VLog.d("Widgets", "PC battery ${snap.pcBattery}% (connected=${snap.connected})")
         state.value = snap
         withContext(Dispatchers.IO) { runCatching { save(context, snap) } }
@@ -206,9 +208,16 @@ object Widgets {
             .put("title", s.title).put("artist", s.artist).put("playing", s.playing)
             .put("clips", JSONArray(s.clips))
         File(dir(context), "snapshot.json").writeText(json.toString())
-        val art = File(dir(context), "art.png")
-        if (s.art != null) art.outputStream().use { s.art.compress(Bitmap.CompressFormat.PNG, 100, it) } else art.delete()
+        // The art only when it's a different image: a lossless PNG of a 1024 px frame took most
+        // of the background CPU when it was re-encoded on every refresh.
+        if (s.art === savedArt) return
+        val art = File(dir(context), "art.webp")
+        if (s.art != null) art.outputStream().use { s.art.compress(Bitmap.CompressFormat.WEBP_LOSSY, 85, it) } else art.delete()
+        File(dir(context), "art.png").delete()
+        savedArt = s.art
     }
+
+    @Volatile private var savedArt: Bitmap? = null
 
     private fun load(context: Context): WidgetSnapshot? {
         val file = File(dir(context), "snapshot.json").takeIf { it.exists() } ?: return null
@@ -227,7 +236,7 @@ object Widgets {
             title = j.strOrNull("title"),
             artist = j.strOrNull("artist"),
             playing = false,
-            art = File(dir(context), "art.png").takeIf { it.exists() }?.let { BitmapFactory.decodeFile(it.path) },
+            art = File(dir(context), "art.webp").takeIf { it.exists() }?.let { BitmapFactory.decodeFile(it.path) },
             clips = clips,
         )
     }

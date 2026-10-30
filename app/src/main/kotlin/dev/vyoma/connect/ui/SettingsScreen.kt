@@ -2,6 +2,7 @@ package dev.vyoma.connect.ui
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import dev.vyoma.connect.designsystem.GlassDialog
 import dev.vyoma.connect.designsystem.SegmentedControl
 import dev.vyoma.connect.designsystem.VyomaSwitch
 import dev.vyoma.connect.designsystem.SystemColor
@@ -54,7 +55,6 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -256,7 +256,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
     if (addingHost) {
         var draft by rememberSaveable { mutableStateOf("") }
         var invalid by rememberSaveable { mutableStateOf(false) }
-        AlertDialog(
+        GlassDialog(
             onDismissRequest = { addingHost = false },
             title = { Text("Add a PC") },
             text = {
@@ -289,7 +289,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
 
     if (editingName) {
         var draft by rememberSaveable { mutableStateOf(name) }
-        AlertDialog(
+        GlassDialog(
             onDismissRequest = { editingName = false },
             title = { Text("Device name") },
             text = { OutlinedTextField(draft, { draft = it.take(32) }, singleLine = true) },
@@ -341,7 +341,7 @@ internal fun ClipboardAdbDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val cmd = "adb shell pm grant ${context.packageName} android.permission.READ_LOGS && " +
         "adb shell appops set ${context.packageName} SYSTEM_ALERT_WINDOW allow"
-    AlertDialog(
+    GlassDialog(
         onDismissRequest = { onDismiss() },
         title = { Text("Automatic clipboard sync") },
         text = {
@@ -374,7 +374,7 @@ internal fun ClipboardAdbDialog(onDismiss: () -> Unit) {
 private fun UsbHelpDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val cmd = "adb reverse tcp:${LanBackend.USB_REVERSE_PORT} tcp:1716"
-    AlertDialog(
+    GlassDialog(
         onDismissRequest = onDismiss,
         title = { Text("Connect over USB") },
         text = {

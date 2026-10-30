@@ -100,7 +100,10 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
 
     private fun record(entry: ClipEntry) {
         _current.value = entry
-        _history.update { old -> (listOf(entry) + old.filterNot { it.text == entry.text }).take(HISTORY_SIZE) }
+        // The same text copied again moves to the top; whitespace differences (a trailing newline
+        // from one app, not another) don't make it a second entry.
+        val key = entry.text.trim()
+        _history.update { old -> (listOf(entry) + old.filterNot { it.text.trim() == key }).take(HISTORY_SIZE) }
         persist()
     }
 
@@ -132,7 +135,9 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
         watcher = scope.launch(Dispatchers.IO) {
             val marker = "Denying clipboard access to ${context.packageName}"
             val process = runCatching {
-                ProcessBuilder("logcat", "-T", "1", "-v", "brief", "ClipboardService:E", "*:S").redirectErrorStream(true).start()
+                // ClipboardService logs through Slog, i.e. the system buffer: reading only that one keeps
+                // logcat from pulling the (much busier) main buffer through the kernel to filter it.
+                ProcessBuilder("logcat", "-b", "system", "-T", "1", "-v", "brief", "ClipboardService:E", "*:S").redirectErrorStream(true).start()
             }.getOrElse {
                 VLog.w(TAG, "can't read logcat: ${it.message}")
                 return@launch
@@ -206,6 +211,6 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
             val o = el as? JsonObject ?: return@mapNotNull null
             val t = (o["text"] as? JsonPrimitive)?.content ?: return@mapNotNull null
             ClipEntry(t, o["timestamp"]?.jsonPrimitive?.long ?: 0, (o["origin"] as? JsonPrimitive)?.content)
-        }
+        }.distinctBy { it.text.trim() } // newest first, so the latest copy of a repeat wins
     }
 }

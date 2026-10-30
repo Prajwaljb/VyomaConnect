@@ -10,32 +10,35 @@ soft accent-tinted canvas, colorful feature icons, a floating glass tab bar. **P
 per-frame blur except on chrome that content scrolls under, and measure with `dumpsys gfxinfo` after visual changes.
 
 ## Glass (core/designsystem/Glass.kt)
-- Canvas: `Modifier.aurora()` (theme background + two cached accent glows; faint in pure-black mode).
-- Cards: `Modifier.glassCard(shape)` = static glass (translucent `Glass.fill` + `Glass.edge` highlight). No blur, cheap.
-  Buttons on glass use `Glass.raised`. `SectionCard` already does this. Don't use `surfaceContainerLowest` for cards.
+- Canvas: `Modifier.aurora()` (theme background + cached accent glows). In pure black (`isAmoledUi`) it is a seeded
+  star field with a faint cool haze instead: true black stays black.
+- Depth tokens: `glassDepth` (`GlassDepth` Dark / Amoled / Light) drive every surface so the themes stay consistent.
+- Cards: `Modifier.glassCard(shape, fill?)` = a depth slab: soft shadow outside only, top-lit gradient fill, sheen,
+  lit→shaded rim. No blur, cheap (all `drawWithCache`). `SectionCard`/`glassListGroup` use it. Never flat fills.
+- Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a
+  smaller lit bead; pass `color` for accent/tinted or for chips over artwork (dark translucent).
 - Real blur only for chrome: record content with `backdropSource(backdrop)` (put it OUTSIDE `aurora()` in the
-  modifier chain so the canvas is recorded too), then `glassChrome(backdrop, shape)` on the bar, which must not be
-  inside the source. Gate chrome that comes and goes in the draw phase (`drawWithContent { if (shown) drawContent() }`),
-  not with `if` in composition: composing it on every threshold crossing costs a frame and a fresh layer.
-- Liquid glass (Android 13+, `liquidGlassSupported`): `glassChrome(..., bevel = 16.dp)` on pills/circles runs one AGSL
-  pass (`LiquidGlass`) over a lightly blurred (8 dp) layer recorded with a margin around the shape: the rim samples
-  outward, so what's just outside bends in at the edge; slight colour split; specular rim lit from the top left; tint
-  baked in (no border). Dark mode is clear (half tint); light mode keeps more milk (0.85) for legibility over photos
-  and adds a faint shaded underside (`shade`), since a white highlight vanishes on white. `Modifier.liquidLens(backdrop, strength, zoom, rect)` draws a clear
-  magnifying drop over an element's own drawing plus the backdrop around it, so it can spill past the edges; the tab
-  bar's selection lifts into one while dragged and briefly on each switch. Keep dispersion subtle (≤ 0.15): more
-  reads as a rainbow glitch. AGSL builtins (`refract`, `reflect`, …) can't be uniform names. Below 13: frosted fallback.
+  modifier chain so the canvas is recorded too), then `glassChrome(backdrop, shape)` (AGSL liquid lens on 33+:
+  `LiquidGlass`/`liquidLens`; the rim samples outward so it refracts its surroundings). The bar must not be inside
+  the source. Compose/draw chrome only while visible.
+- Header (`CollapsingHeaderScaffold`): no slab. A soft status-bar fade; back in a 48 dp liquid circle; the title
+  appears in a liquid capsule once collapsed (> 0.6); actions share one capsule. Same blur/bevel as the tab bar.
+- Dialogs: `GlassDialog` (same API as AlertDialog): opaque `surfaceContainerHigh` slab with the card rim. Never
+  Material `AlertDialog`.
+- Value bars: `LiquidSlider` (thumbless capsule that swells under the finger, relative drag) for scrubbers and
+  in-card volume; the big volume control is the inset liquid-fill capsule in `Dashboard.VolumeBar`.
 - Feature colors: `SystemColor` (iOS system palette, light/dark tones, no indigo/purple). `IconBadge` is a filled
   squircle with a white glyph; give each feature a stable color (notifications RED, messages GREEN, clipboard ORANGE,
   files/connection BLUE, touchpad TEAL, find YELLOW, battery GREEN, destructive RED, info/neutral GRAY).
-- Control Center tiles: colored glyph on `Glass.raised`; toggles fill with their color (white glyph) while on.
+- Control Center tiles: colored glyph on `glassRaised`; toggles fill with their color (white glyph) while on.
 - Root navigation: `TabsRoot` (app/ui/TabBar.kt): Home / Clipboard / Settings in a glass pill with a sliding lens,
-  touchpad as a separate round glass button. Lists get `LocalBottomBarInset` padding automatically via the scaffold.
+  touchpad as a separate round glass button. Tabs stay composed (keep-alive) and are only placed when shown.
+  Lists get `LocalBottomBarInset` padding automatically via the scaffold.
 
 ## Theme (core/designsystem)
 - `VyomaTheme(ThemeSettings)`: palettes `DYNAMIC` (wallpaper accent, neutral surfaces), `OCEAN`, `GRAPHITE`, `EMBER`,
   `MINT`, `SAND`; DarkMode SYSTEM/LIGHT/DARK; `amoled` = true black.
-- Canvas `aurora()`, cards `glassCard`, raised chips `Glass.raised`; dialogs keep opaque `surfaceContainerHigh`.
+- Canvas `aurora()`, cards `glassCard`, raised chips `glassRaised`, dialogs `GlassDialog`.
 - Status colors via `Status.connected/pending/offline(dark)`, the same in every palette.
 - Shapes: cards `large` (26 dp), hero cards `extraLarge` (32 dp), chips/icons `medium` (20 dp).
 
@@ -91,3 +94,10 @@ Same palette tokens; system widget corner radius; never show a spinner forever. 
 
 ## Copy
 Short, friendly, specific ("Connected via Wi-Fi", "Make sure this code matches on both screens"). No exclamation spam.
+
+## Battery (background is the default state)
+- Nothing ticks while the UI is hidden: tickers/progress clocks run under `repeatOnLifecycle(STARTED)`; no
+  `Flow.sample()` (its fixed-period ticker wakes forever), use the throttle in `LinkService` (`conflate` + delay).
+- Wi-Fi multicast lock only while `AppContainer.uiVisible`; otherwise rely on the PC's broadcasts and keep-alive.
+- Widgets: skip identical snapshots, re-encode art only when it changes (WebP). Never poll when a flow can say it.
+- Check: `/proc/<pid>/stat` ticks over 60 s in background (target ≲ 20 ticks), `dumpsys wifi` for locks.

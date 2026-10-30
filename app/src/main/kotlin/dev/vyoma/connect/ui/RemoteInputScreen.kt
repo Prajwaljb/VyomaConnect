@@ -2,6 +2,7 @@ package dev.vyoma.connect.ui
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import dev.vyoma.connect.designsystem.glassRaised
 import dev.vyoma.connect.designsystem.glassCard
 import dev.vyoma.connect.designsystem.aurora
 import dev.vyoma.connect.designsystem.Glass
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -176,8 +178,12 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
     Surface(Modifier.fillMaxSize().aurora(), color = Color.Transparent, contentColor = MaterialTheme.colorScheme.onBackground) { Column(
         Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars).imePadding(),
     ) {
-        Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") }
+        Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Same round glass back button as every other page.
+            Box(Modifier.size(48.dp).glassRaised(CircleShape), contentAlignment = Alignment.Center) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") }
+            }
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text("Touchpad", style = MaterialTheme.typography.titleLarge)
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -431,8 +437,7 @@ private fun TypingBar(caretMoved: Int, onText: (String) -> Unit, onKey: (Special
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(Glass.raised)
+                    .glassRaised(RoundedCornerShape(20.dp))
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 if (value.text == sentinel) {
@@ -447,7 +452,7 @@ private fun TypingBar(caretMoved: Int, onText: (String) -> Unit, onKey: (Special
 @Composable
 private fun MouseButton(label: String, modifier: Modifier, onClick: () -> Unit) {
     Box(
-        modifier.fillMaxSize().clip(RoundedCornerShape(20.dp)).background(Glass.raised).pressable(onClick = onClick),
+        modifier.fillMaxSize().glassRaised(RoundedCornerShape(20.dp)).pressable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 }
@@ -480,8 +485,7 @@ private fun RowScope.Key(
         Modifier
             .weight(1f)
             .fillMaxHeight()
-            .clip(RoundedCornerShape(14.dp))
-            .background(bg)
+            .glassRaised(RoundedCornerShape(14.dp), bg.takeIf { selected || accent })
             .then(
                 if (onRepeat == null) Modifier.pressable(pressedScale = 0.88f, haptic = Haptic.Key, onClick = onClick)
                 else Modifier.holdToRepeat(onRepeat, onClick),
@@ -535,8 +539,7 @@ private fun ScrollStrip(modifier: Modifier, onScroll: (Float) -> Unit, onClick: 
     Box(
         modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(20.dp))
-            .background(Glass.raised)
+            .glassRaised(RoundedCornerShape(20.dp))
             .pressScale(0.94f)
             .pointerInput(Unit) {
                 val slop = viewConfiguration.touchSlop

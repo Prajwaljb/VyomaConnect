@@ -8,6 +8,13 @@ import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.protocol.device.DeviceHub
 import dev.vyoma.connect.protocol.link.LanBackend
 import dev.vyoma.connect.protocol.link.TransportKind
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -65,19 +72,26 @@ class UsbLink(private val context: Context, private val hub: DeviceHub, private 
             val pluggedAt = System.currentTimeMillis()
             // Every 2 s while the companion is likely still setting the tunnel up (it takes a few
             // seconds after plug-in), then backing off to every 30 s if nothing answers.
+            // While the cable link is up, sleep until it drops instead of polling.
             var wait = 5_000L
             while (isActive) {
-                val overUsb = hub.devices.value.values.any { TransportKind.USB in it.state.value.transports }
-                if (overUsb) {
-                    wait = 5_000
-                } else {
-                    hub.dial(loopback, LanBackend.USB_REVERSE_PORT)
-                    wait = if (System.currentTimeMillis() - pluggedAt < FAST_DIAL_MS) 2_000 else (wait * 2).coerceAtMost(30_000)
+                if (usbLinked().first()) {
+                    usbLinked().first { !it }
+                    wait = 2_000
+                    continue
                 }
+                hub.dial(loopback, LanBackend.USB_REVERSE_PORT)
+                wait = if (System.currentTimeMillis() - pluggedAt < FAST_DIAL_MS) 2_000 else (wait * 2).coerceAtMost(30_000)
                 delay(wait)
             }
         }
     }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun usbLinked(): Flow<Boolean> = hub.devices.flatMapLatest { all ->
+        if (all.isEmpty()) flowOf(false)
+        else combine(all.values.map { it.state }) { states -> states.any { TransportKind.USB in it.transports } }
+    }.distinctUntilChanged()
 
     private companion object {
         const val TAG = "UsbLink"

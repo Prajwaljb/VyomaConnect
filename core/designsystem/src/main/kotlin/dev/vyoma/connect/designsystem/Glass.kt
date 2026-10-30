@@ -8,6 +8,17 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.addOutline
+import androidx.compose.ui.graphics.asAndroidPath
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.compositionLocalOf
@@ -110,13 +121,128 @@ object Glass {
         }
 }
 
-/** Static glass: translucent fill plus the edge highlight, content clipped to [shape]. */
+/** Pure-black (AMOLED) mode: the canvas is true black, so glass glows instead of casting shadows. */
+val isAmoledUi: Boolean
+    @Composable @ReadOnlyComposable
+    get() = MaterialTheme.colorScheme.background == Color.Black
+
+/**
+ * How glass catches light, per theme. Fill runs lighter at the top than the bottom; the rim is
+ * bright where light hits (top) and falls to a shaded underside, which is what makes a flat
+ * translucent shape read as a raised slab; a soft shadow lifts it off the canvas.
+ */
+@Immutable
+class GlassDepth internal constructor(
+    val top: Color,
+    val bottom: Color,
+    val rimLit: Color,
+    val rimShade: Color,
+    val shadow: Color,
+    val sheen: Color,
+)
+
+private val DarkDepth = GlassDepth(
+    top = Color.White.copy(alpha = 0.105f), bottom = Color.White.copy(alpha = 0.045f),
+    rimLit = Color.White.copy(alpha = 0.24f), rimShade = Color.Black.copy(alpha = 0.32f),
+    shadow = Color.Black.copy(alpha = 0.42f), sheen = Color.White.copy(alpha = 0.06f),
+)
+// On true black a shadow is invisible, so the glass is darker inside and its rim does the lifting.
+private val AmoledDepth = GlassDepth(
+    top = Color.White.copy(alpha = 0.085f), bottom = Color.White.copy(alpha = 0.02f),
+    rimLit = Color.White.copy(alpha = 0.30f), rimShade = Color.White.copy(alpha = 0.05f),
+    shadow = Color.Transparent, sheen = Color.White.copy(alpha = 0.07f),
+)
+private val LightDepth = GlassDepth(
+    top = Color.White.copy(alpha = 0.94f), bottom = Color.White.copy(alpha = 0.70f),
+    rimLit = Color.White, rimShade = Color.Black.copy(alpha = 0.07f),
+    shadow = Color(0xFF1A2B4C).copy(alpha = 0.10f), sheen = Color.Transparent,
+)
+
+/** The current theme's [GlassDepth]. */
+val glassDepth: GlassDepth
+    @Composable @ReadOnlyComposable
+    get() = when {
+        isAmoledUi -> AmoledDepth
+        isDarkUi -> DarkDepth
+        else -> LightDepth
+    }
+
+/**
+ * Paints one glass slab of [outline]: soft shadow outside it (never under it, so the glass stays
+ * clear), lit gradient fill, a corner sheen, and the lit-to-shaded rim. Everything but the
+ * shadow's blur is cached per size by the callers (drawWithCache).
+ */
+private class GlassPainter(private val d: GlassDepth, private val flat: Color?, density: Float) {
+    private val shadowBlur = 14f * density
+    private val drop = 5f * density
+    private val stroke = 0.9f * density
+    private val shadowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = d.shadow.toArgb()
+        if (d.shadow.alpha > 0f) maskFilter = android.graphics.BlurMaskFilter(shadowBlur, android.graphics.BlurMaskFilter.Blur.NORMAL)
+    }
+
+    fun DrawScope.paint(path: Path, height: Float, width: Float) {
+        if (d.shadow.alpha > 0f) {
+            val shadow = path.asAndroidPath().let { android.graphics.Path(it).apply { offset(0f, drop) } }
+            clipPath(path, ClipOp.Difference) { drawIntoCanvas { it.nativeCanvas.drawPath(shadow, shadowPaint) } }
+        }
+        if (flat != null) drawPath(path, flat)
+        else drawPath(path, Brush.verticalGradient(listOf(d.top, d.bottom), startY = 0f, endY = height))
+        if (d.sheen.alpha > 0f) {
+            drawPath(path, Brush.radialGradient(listOf(d.sheen, Color.Transparent), center = Offset(width * 0.18f, 0f), radius = width * 0.75f))
+        }
+        drawPath(
+            path,
+            Brush.verticalGradient(0f to d.rimLit, 0.35f to d.rimLit.copy(alpha = d.rimLit.alpha * 0.25f), 0.7f to Color.Transparent, 1f to d.rimShade, startY = 0f, endY = height),
+            style = Stroke(stroke),
+        )
+    }
+}
+
+/**
+ * Glass card: a lit, rimmed slab with a soft shadow, content clipped to [shape]. Static (no
+ * blur), cached per size, so long lists scroll at full speed. [fill] replaces the gradient with
+ * a solid color (e.g. a dialog over no backdrop).
+ */
 fun Modifier.glassCard(shape: Shape, fill: Color? = null): Modifier = composed {
-    val color = fill ?: Glass.fill
-    val edge = Glass.edge
+    val d = glassDepth
     this
-        .drawBehind { drawOutline(shape.createOutline(size, layoutDirection, this), color) }
-        .border(0.75.dp, edge, shape)
+        .drawWithCache {
+            val path = Path().apply { addOutline(shape.createOutline(size, layoutDirection, this@drawWithCache)) }
+            val painter = GlassPainter(d, fill, density)
+            onDrawBehind { with(painter) { paint(path, size.height, size.width) } }
+        }
+        .clip(shape)
+}
+
+/**
+ * Raised glass for controls sitting on a card (round buttons, chips): a smaller slab with a
+ * glossy top edge. With [color] it's that color as lit glass instead (an active toggle).
+ */
+fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = composed {
+    val dark = isDarkUi
+    val base = color
+    this
+        .drawWithCache {
+            val outline = shape.createOutline(size, layoutDirection, this)
+            val fill = if (base != null) {
+                Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.22f).compositeOver(base), base))
+            } else if (dark) {
+                Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.16f), Color.White.copy(alpha = 0.07f)))
+            } else {
+                Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.035f), Color.Black.copy(alpha = 0.075f)))
+            }
+            val rim = Brush.verticalGradient(
+                0f to Color.White.copy(alpha = if (dark || base != null) 0.38f else 0.9f),
+                0.5f to Color.Transparent,
+                1f to (if (dark) Color.Black.copy(alpha = 0.25f) else Color.Black.copy(alpha = 0.06f)),
+            )
+            val stroke = Stroke(0.8.dp.toPx())
+            onDrawBehind {
+                drawOutline(outline, fill)
+                drawOutline(outline, rim, style = stroke)
+            }
+        }
         .clip(shape)
 }
 
@@ -127,33 +253,38 @@ fun Modifier.glassCard(shape: Shape, fill: Color? = null): Modifier = composed {
  * the group runs past the viewport its rounded end is pushed off-screen.
  */
 fun Modifier.glassListGroup(state: LazyListState, contentType: Any, gutter: Dp = 16.dp, radius: Dp = 26.dp): Modifier = composed {
-    val color = Glass.fill
-    val edge = Glass.edge
-    drawBehind {
-        val visible = state.layoutInfo.visibleItemsInfo
-        val first = visible.firstOrNull { it.contentType == contentType } ?: return@drawBehind
-        val last = visible.last { it.contentType == contentType }
-        val r = radius.toPx()
-        // A neighbour of another type on screen means the group ends there; otherwise it continues off-screen.
-        val endsAbove = visible.any { it.index == first.index - 1 }
-        val endsBelow = visible.any { it.index == last.index + 1 } || last.index == state.layoutInfo.totalItemsCount - 1
-        val top = if (endsAbove) first.offset.toFloat() else minOf(first.offset.toFloat(), -2 * r)
-        val bottom = if (endsBelow) (last.offset + last.size).toFloat() else maxOf((last.offset + last.size).toFloat(), size.height + 2 * r)
-        val x = gutter.toPx()
-        val w = size.width - 2 * x
-        val stroke = 0.75.dp.toPx()
-        // Brushes are laid out from the origin, so draw at the card's top for the highlight to start there.
-        translate(left = x, top = top) {
+    val d = glassDepth
+    drawWithCache {
+        val painter = GlassPainter(d, null, density)
+        val path = Path()
+        onDrawBehind {
+            val visible = state.layoutInfo.visibleItemsInfo
+            val first = visible.firstOrNull { it.contentType == contentType } ?: return@onDrawBehind
+            val last = visible.last { it.contentType == contentType }
+            val r = radius.toPx()
+            // A neighbour of another type on screen means the group ends there; otherwise it continues off-screen.
+            val endsAbove = visible.any { it.index == first.index - 1 }
+            val endsBelow = visible.any { it.index == last.index + 1 } || last.index == state.layoutInfo.totalItemsCount - 1
+            val top = if (endsAbove) first.offset.toFloat() else minOf(first.offset.toFloat(), -2 * r)
+            val bottom = if (endsBelow) (last.offset + last.size).toFloat() else maxOf((last.offset + last.size).toFloat(), size.height + 2 * r)
+            val x = gutter.toPx()
+            val w = size.width - 2 * x
             val h = bottom - top
-            drawRoundRect(color, Offset.Zero, Size(w, h), CornerRadius(r))
-            drawRoundRect(edge, Offset(stroke / 2, stroke / 2), Size(w - stroke, h - stroke), CornerRadius(r - stroke / 2), style = Stroke(stroke))
+            // Brushes are laid out from the origin, so draw at the card's top for the highlight to start there.
+            translate(left = x, top = top) {
+                path.reset()
+                path.addRoundRect(RoundRect(0f, 0f, w, h, CornerRadius(r)))
+                with(painter) { paint(path, h, w) }
+            }
         }
     }
 }
 
 /**
  * The app canvas: the theme background with two soft glows of the accent near the top. Cached per
- * size, so it costs one bitmap-free draw of three shapes. Pure-black mode keeps the glow faint.
+ * size, so it costs one bitmap-free draw of a few shapes. Pure black gets a night sky instead
+ * (Vyoma means sky): a faint nebula of the accent and a sparse, fixed field of stars that thins
+ * out down the screen. Nothing animates, so it costs nothing at rest.
  */
 fun Modifier.aurora(): Modifier = composed {
     val base = MaterialTheme.colorScheme.background
@@ -161,7 +292,7 @@ fun Modifier.aurora(): Modifier = composed {
     val dark = isDarkUi
     val amoled = base == Color.Black
     val strength = when {
-        amoled -> 0.16f
+        amoled -> 0.13f
         dark -> 0.24f
         else -> 0.20f
     }
@@ -175,11 +306,37 @@ fun Modifier.aurora(): Modifier = composed {
             listOf(accent.copy(alpha = strength * 0.6f), Color.Transparent),
             center = Offset(size.width * 1.0f, size.height * 0.28f), radius = r * 0.8f,
         )
+        val stars = if (amoled) starField(size, density) else emptyList()
+        // A second, cooler hue under the accent so the nebula has some depth.
+        val haze = if (amoled) Brush.radialGradient(
+            listOf(Color(0xFF5AC8FA).copy(alpha = 0.05f), Color.Transparent),
+            center = Offset(size.width * 0.75f, size.height * 0.08f), radius = r * 0.55f,
+        ) else null
         onDrawBehind {
             drawRect(base)
             drawRect(left)
             drawRect(right)
+            if (haze != null) drawRect(haze)
+            for (s in stars) drawCircle(Color.White.copy(alpha = s.alpha), s.radius, s.center)
         }
+    }
+}
+
+private class Star(val center: Offset, val radius: Float, val alpha: Float)
+
+/** A fixed sky: the same stars every time (seeded), densest near the top, a few brighter ones. */
+private fun starField(size: Size, density: Float): List<Star> {
+    val rnd = java.util.Random(0x5EEDL)
+    return List(90) {
+        // Squared so they gather toward the top and thin out by the middle of the screen.
+        val y = rnd.nextFloat().let { it * it } * size.height * 0.6f
+        val bright = rnd.nextFloat() < 0.12f
+        val fade = 1f - y / (size.height * 0.6f)
+        Star(
+            Offset(rnd.nextFloat() * size.width, y),
+            radius = (if (bright) 1.1f else 0.55f + rnd.nextFloat() * 0.4f) * density,
+            alpha = ((if (bright) 0.85f else 0.25f + rnd.nextFloat() * 0.4f) * (0.35f + 0.65f * fade)).coerceIn(0f, 1f),
+        )
     }
 }
 
@@ -232,6 +389,8 @@ fun Modifier.glassChrome(
         // The shader clips to the shape itself, and its rim needs to reach past the edge.
         .then(if (lens == null) Modifier.clip(shape) else Modifier)
         .drawBehind {
+            // An empty slot (an actions row with nothing in it) draws nothing.
+            if (size.width < 1f || size.height < 1f) return@drawBehind
             val r = blur.toPx()
             val shift = backdrop.origin - position
             if (lens == null) {

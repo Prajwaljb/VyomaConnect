@@ -101,8 +101,9 @@ class AndroidNetwork(private val context: Context) {
     }
 
     /**
-     * Keep-alive tuned for a phone: probe after 60 s idle, every 10 s, give up after 3.
-     * Dead links surface within ~90 s without waking the radio constantly.
+     * Keep-alive tuned for a phone: probe after 2 min idle, every 10 s, give up after 3.
+     * Dead links surface within ~150 s without waking the radio constantly (network changes
+     * and our own sends catch most drops sooner).
      */
     private fun tuneSocket(socket: Socket) {
         socket.tcpNoDelay = true
@@ -110,14 +111,14 @@ class AndroidNetwork(private val context: Context) {
         runCatching {
             ParcelFileDescriptor.fromSocket(socket).use { pfd ->
                 val fd = pfd.fileDescriptor
-                Os.setsockoptInt(fd, OsConstants.IPPROTO_TCP, TCP_KEEPIDLE, 60)
+                Os.setsockoptInt(fd, OsConstants.IPPROTO_TCP, TCP_KEEPIDLE, 120)
                 Os.setsockoptInt(fd, OsConstants.IPPROTO_TCP, TCP_KEEPINTVL, 10)
                 Os.setsockoptInt(fd, OsConstants.IPPROTO_TCP, TCP_KEEPCNT, 3)
             }
         }.onFailure { VLog.d(TAG, "keep-alive tuning unavailable: ${it.message}") }
     }
 
-    /** Lets UDP broadcasts reach us while Wi-Fi power-saves. Held only while the service runs. */
+    /** Lets UDP broadcasts reach us while Wi-Fi power-saves. Held only while the app is on screen. */
     fun acquireMulticast() {
         if (multicastLock?.isHeld == true) return
         multicastLock = wifi.createMulticastLock("vyoma").apply {

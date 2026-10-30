@@ -31,7 +31,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.sample
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.launch
 
 /**
@@ -77,7 +79,6 @@ class LinkService : LifecycleService() {
     private suspend fun startHub() {
         val hub = container.obtainHub()
         this.hub = hub
-        network.acquireMulticast()
         network.customHosts = container.settings.manualHosts.first().toList()
         val usb = UsbLink(this, hub, lifecycleScope).also { this.usb = it }
         // Cable first: hold Wi-Fi back from the very first refresh, which hub.start() does.
@@ -95,6 +96,20 @@ class LinkService : LifecycleService() {
             onAvailable = { hub.refresh() },
             onLost = { hub.refresh() },
         )
+        // The multicast lock keeps Wi-Fi from filtering broadcasts in power save, which costs
+        // battery on every packet on the network. Only discovering new devices needs to hear the
+        // PC's broadcasts, and that happens with the app open; in the background, paired PCs are
+        // reached by our own broadcasts (no lock needed to send), mDNS, and network changes.
+        lifecycleScope.launch {
+            container.uiVisible.collect { visible ->
+                if (visible) {
+                    network.acquireMulticast()
+                    hub.refresh()
+                } else {
+                    network.releaseMulticast()
+                }
+            }
+        }
 
         val connectedFlow = hub.devices
             .flatMapLatest { devices ->
@@ -126,7 +141,7 @@ class LinkService : LifecycleService() {
         // Transfers: one live progress notification, then a result per file.
         lifecycleScope.launch {
             val announced = mutableSetOf<Long>()
-            Transfers.all.sample(400).collect { all ->
+            Transfers.all.throttleLatest(400).collect { all ->
                 Notifications.transfers(this@LinkService, all.filter { it.state == Transfer.State.RUNNING })
                 for (t in all) {
                     if (t.state != Transfer.State.RUNNING && announced.add(t.id)) {
@@ -169,7 +184,7 @@ class LinkService : LifecycleService() {
                 listOf(c.map(::summary), np?.let { Triple(it.player.title, it.player.isPlaying, it.art) }, running, pc, phone)
             }
                 .distinctUntilChanged()
-                .sample(500)
+                .throttleLatest(500)
                 .collect { Widgets.refresh(this@LinkService) }
         }
     }
@@ -195,6 +210,15 @@ class LinkService : LifecycleService() {
                 if (looksLikeUrl(text)) share.sendUrl(Handoff.continueOnPc(this@LinkService, text.trim())) else share.sendText(text)
             }
         }
+    }
+
+    /**
+     * At most one value per [ms], always ending on the latest. Unlike `sample`, which runs a
+     * timer forever (waking the main thread twice a second for nothing), idle costs nothing.
+     */
+    private fun <T> Flow<T>.throttleLatest(ms: Long): Flow<T> = conflate().transform {
+        emit(it)
+        delay(ms)
     }
 
     private fun summary(s: DeviceState) = Triple(s.identity.deviceId, s.identity.deviceName, s.transports.contains(TransportKind.USB))
