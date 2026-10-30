@@ -23,11 +23,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   `LiquidGlass`/`liquidLens`: physically based, like Telegram's/Apple's: Snell refraction (n≈1.5) through a
   quarter-circle rim (≤ 1/5 of the element) over a slab 6 rims deep, so the rim shows what's ACROSS the element and
   beyond it (the recorded margin), bent like water. Rejected: plain outward bend, weak inward/convex bend).
-  Current (my reading of "like iOS", pending the user's verdict): every `LensStyle` except `Tube` uses `wrap` instead of Snell: the rim
-  samples bevel*(t + wrap*t^3) along the normal, i.e. it gathers in what lies just OUTSIDE the edge, squeezed toward
-  the edge, monotonic (never mirrored). Inward Snell mirrored labels into rims and doubled text. Press drops
-  (`Drop`) have no colour split. Under a drop only the drop shows (`LensPainter` cuts the original out and
-  crossfades it while the drop forms); drawing both doubled labels on translucent pills.
+  The user wants THIS Snell refraction (the Telegram-studied one): chrome rim shows what's across the element.
+  A "wrap" variant that sampled outside the edge was tried and rejected ("you removed the refraction"). Knob,
+  switch, segmented and tab drops use `Lift` (outward Snell, negative depth). Under a drop only the drop shows
+  (`LensPainter` cuts the original out and crossfades it while the drop forms).
   Chrome rendering: one chained blur+refraction pass per element at quarter resolution (`CHROME_RES`), the
   shader's shape inflated 2 low-res px so the visible outline is a full-res anti-aliased clip, plus a full-res
   `specularRim` stroke (light mode: dark hairline base). Measured alternatives: full res +3 ms GPU; one shared
@@ -46,17 +45,18 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   % over the knobbed slider between quiet/loud speakers. The media `Scrubber` drives one `Animatable` progress (small
   drifts snap, jumps glide) and holds our seek target until MPRIS agrees (browsers report stale/zero after a seek).
 - Switches (`VyomaSwitch`): accent track (NOT iOS green: the user disliked it on pure black), round white thumb with a
-  squash at the ends; touched, it lifts into the same clear `Lift` lens as the slider knobs. `SegmentedControl`: grey thumb that lifts into a lens on touch
+  squash at the ends; tap or DRAG the thumb (lands on the nearer side); touched, it lifts into the `Lift` lens.
+  In drag callbacks read `positionChange()` BEFORE `consume()` (a consumed change reports zero movement). `SegmentedControl`: grey thumb that lifts into a lens on touch
   and can be slid to another option; release picks. Same drawn-at-rest / lens-while-held rule. Custom gestures inside
-  scrolling pages read moves in `PointerEventPass.Final` (the scroll consumes after a child's Main pass) and cancel on
-  vertical slop: a swipe starting on the segmented control once switched the app to Light.
+  scrolling pages use `awaitHorizontalTouchSlopOrCancellation` + `horizontalDrag` (consuming), and treat a null
+  slop result as a tap only if the pointer lifted unconsumed: a swipe starting on the segmented control once
+  switched the app to Light.
 - Header capsules and the touchpad button: `glassChrome(..., interactive = true)` flexes the glass itself on press
   (grows past its bounds, zooms, brightens); glyphs inside use `LocalOnChrome` so `BounceIconButton` doesn't add a
   second drop. Never scale a glyph inside a still ring.
-- Press glass = iOS 26 interactive glass: `pressable(glass = true)` / `pressScale(1f, glass = true)` SWELLS
-  (~7 dp past its edges, springy; `pressedScale` ignored), clears into a drop and lights up under the finger (a
-  radial glow that follows the touch). Use it on every glass button: quick actions, pills, touchpad buttons and keys.
-  Put it BEFORE the background modifiers so the drop sees them. Never a glyph scaling inside a still ring.
+- Press glass: `pressable(glass = true)` / `pressScale(1f, glass = true)` = the dip-and-bounce press plus a soft
+  glow under the finger. NO lens on button presses: refraction over a button's own label read as fake/glitchy
+  (user rejected it on quick actions, pills, touchpad keys). With `pressScale(1f, glass = true)` it still dips (0.9).
 - `liquidLens` is a Modifier.Node that allocates its layers only on first visible frame: cheap on every control.
 - Icon buttons: `BounceIconButton` (never Material `IconButton`); glass circles/capsules put `pressScale` BEFORE
   `glassChrome` so the glass itself squishes, not just the glyph.

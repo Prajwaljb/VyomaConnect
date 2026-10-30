@@ -200,7 +200,7 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
 
     // The pill in bar coordinates: resting it sits inside the padding; lifted it outgrows the bar.
     val pad = with(density) { 4.dp.toPx() }
-    val overflow = with(density) { 12.dp.toPx() }
+    val overflow = with(density) { 7.dp.toPx() }
     fun DrawScope.pill(): Rect {
         val l = left.value
         val w = right.value - l
