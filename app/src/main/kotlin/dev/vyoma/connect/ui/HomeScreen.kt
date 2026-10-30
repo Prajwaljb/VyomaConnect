@@ -147,6 +147,7 @@ fun HomeScreen(
                             onVolume = vm::setPlayerVolume,
                             onPickPlayer = vm::pickPlayer,
                             showVolume = false,
+                            onContinueHere = if (allDevices.any { it.identity.companionOf == id && it.isPaired && it.isReachable }) { { vm.continueOnPhone(id) } } else null,
                         )
                     }
                 }

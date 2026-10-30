@@ -107,6 +107,7 @@ fun DeviceScreen(
                     onPickPlayer = vm::pickPlayer,
                     showVolume = false,
                     modifier = Modifier.animateItem(),
+                    onContinueHere = if (companionOnline) { { vm.continueOnPhone(deviceId) } } else null,
                 )
             }
         }

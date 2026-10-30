@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.Uri
+import dev.vyoma.connect.platform.Handoff
 import dev.vyoma.connect.platform.outgoingFile
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
@@ -191,7 +192,7 @@ class LinkService : LifecycleService() {
             if (uris.isNotEmpty()) {
                 share.sendFiles(uris.map(contentResolver::outgoingFile))
             } else if (text != null) {
-                if (looksLikeUrl(text)) share.sendUrl(text.trim()) else share.sendText(text)
+                if (looksLikeUrl(text)) share.sendUrl(Handoff.continueOnPc(this@LinkService, text.trim())) else share.sendText(text)
             }
         }
     }

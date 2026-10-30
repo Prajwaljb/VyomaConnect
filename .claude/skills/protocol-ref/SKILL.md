@@ -60,6 +60,11 @@ body fields before implementing one.
   first V4L2 node offering MJPEG (skips IR cams), largest size, after 15 warm-up frames. The PC always shows a
   notification ("<phone> took a photo with this PC's camera"). Phone: `CompanionPlugin.photo` (same `Capture` as
   `screenshot`), saved to Pictures/Vyoma.
+- `vyoma.handoff.request {pause?=true}` → `vyoma.handoff {url, title, position(ms)|null, exact}` or `{error}`; the
+  companion pauses that player. Position: MPRIS `Position` when nonzero, else our own clock from signals (track
+  change → 0 or the URL's `t=`, counts while Playing, reset on `Seeked`); null if we attached mid-play and the player
+  never said. Phone opens `Handoff.at(url, pos)` (YouTube `watch?v=ID&t=Ns`). Phone→PC: sharing a YouTube link
+  while YouTube plays here appends the MediaSession position and pauses the phone (`Handoff.continueOnPc`).
 - `vyoma.files.list {path}` → `vyoma.files.listing {path, entries:[{name, dir, size, modified(ms)}], truncated, error?}`.
   `path` is relative to the PC user's home (`""` = home); `..`/absolute components are refused and the canonical
   path (symlinks resolved) must stay inside home. Dotfiles hidden, folders first, max 5000 entries.

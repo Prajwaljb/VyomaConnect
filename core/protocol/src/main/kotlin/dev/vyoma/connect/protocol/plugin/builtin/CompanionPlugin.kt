@@ -67,6 +67,12 @@ data class PcFolder(
     val truncated: Boolean = false,
 )
 
+/**
+ * Where the PC was in what it's playing, for carrying on here. [positionMs] is null when the PC
+ * couldn't tell; [exact] is false when it estimated it (Firefox reports no position).
+ */
+data class PcHandoff(val url: String, val title: String, val positionMs: Long?, val exact: Boolean)
+
 sealed interface PcFileEvent {
     data class Saved(val name: String, val location: String) : PcFileEvent
     data class Failed(val name: String, val reason: String) : PcFileEvent
@@ -260,6 +266,30 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         }
     }
 
+    private var pendingHandoff: CompletableDeferred<Result<PcHandoff>>? = null
+
+    /**
+     * Asks the PC what it's playing and where (and to pause it, so it doesn't play on over the
+     * phone). Fails with a message for the user if nothing with a link is playing.
+     */
+    suspend fun handoff(pause: Boolean = true): Result<PcHandoff> {
+        val reply = CompletableDeferred<Result<PcHandoff>>()
+        pendingHandoff = reply
+        if (!ctx.send(packet(HANDOFF_REQUEST) { put("pause", pause) })) return Result.failure(IllegalStateException("The PC isn't reachable"))
+        return withTimeoutOrNull(HANDOFF_TIMEOUT_MS) { reply.await() } ?: Result.failure(IllegalStateException("The PC didn't answer"))
+    }
+
+    private fun receiveHandoff(packet: NetworkPacket) {
+        val reply = pendingHandoff ?: return
+        pendingHandoff = null
+        val error = packet.string("error")
+        val url = packet.string("url")
+        reply.complete(
+            if (error != null || url == null) Result.failure(IllegalStateException(error ?: "The PC sent no link"))
+            else Result.success(PcHandoff(url, packet.string("title").orEmpty(), packet.long("position"), packet.bool("exact") == true)),
+        )
+    }
+
     /** The PC's whole desktop. */
     val screenshot = Capture(SCREENSHOT_REQUEST, "PC screenshot")
 
@@ -269,6 +299,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         if (packet.type == SCREENSHOT) screenshot.receive(packet)
         if (packet.type == CAMERA) photo.receive(packet)
+        if (packet.type == HANDOFF) receiveHandoff(packet)
         if (packet.type == FILES_LISTING) receiveListing(packet)
         if (packet.type == FILES_FILE) receiveFile(packet)
         if (packet.type == FILES_SAVED) receiveSaved(packet)
@@ -293,6 +324,9 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val SCREENSHOT_REQUEST = "vyoma.screenshot.request"
         const val CAMERA = "vyoma.camera"
         const val CAMERA_REQUEST = "vyoma.camera.request"
+        const val HANDOFF = "vyoma.handoff"
+        const val HANDOFF_REQUEST = "vyoma.handoff.request"
+        private const val HANDOFF_TIMEOUT_MS = 5_000L
         const val FILES_LIST = "vyoma.files.list"
         const val FILES_LISTING = "vyoma.files.listing"
         const val FILES_GET = "vyoma.files.get"
@@ -304,8 +338,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(STATS, SCREENSHOT, CAMERA, FILES_LISTING, FILES_FILE, FILES_SAVED),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, FILES_LIST, FILES_GET, FILES_PUT),
+            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED),
+            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT),
         ) { CompanionPlugin(it, sink) }
     }
 }
