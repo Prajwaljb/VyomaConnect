@@ -346,9 +346,17 @@ internal fun ClipboardAdbDialog(onDismiss: () -> Unit) {
         title = { Text("Automatic clipboard sync") },
         text = {
             Column {
-                Text("Android only lets the app in front read the clipboard. With the Vyoma companion on your PC, just plug in with USB debugging on and it's allowed for you. Otherwise run this once from a computer, then reopen Vyoma and tap Allow when Android asks about log access:")
+                Text("Android only lets the app in front read the clipboard. Two permissions lift that, and Android only lets a computer grant them, once.")
                 Spacer(Modifier.height(12.dp))
+                Text("With the Vyoma companion on your PC: turn on USB debugging, plug in, done. Without it, run this from any computer with adb:")
+                Spacer(Modifier.height(8.dp))
                 Text(cmd, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Then reopen Vyoma and tap Allow when Android asks about log access. The permissions stay until you uninstall, so you can turn USB debugging off again right after.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         },
         confirmButton = {
@@ -373,19 +381,22 @@ private fun UsbHelpDialog(onDismiss: () -> Unit) {
             Column {
                 Text("Plug in the cable, then either:", style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(12.dp))
-                Text("USB tethering", style = MaterialTheme.typography.titleSmall)
+                Text("USB tethering (no setup)", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "Turn it on in Settings › Connections › Mobile Hotspot and Tethering. Your PC finds Vyoma over the cable like on Wi-Fi.",
+                    "Turn it on in Settings › Connections › Mobile Hotspot and Tethering. Your PC finds Vyoma over the cable like on Wi-Fi. It also shares this phone's internet with the PC.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(12.dp))
                 Text("USB debugging", style = MaterialTheme.typography.titleSmall)
-                Text("With the Vyoma companion on your PC, that's all: it sets up the link when you plug in. Without it, run this on the PC once per plug-in:", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "For developers who keep it on anyway. With the Vyoma companion on your PC it connects by itself when you plug in; without it, run this on the PC once per plug-in:",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
                 Spacer(Modifier.height(6.dp))
                 Text(cmd, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "Either way, Vyoma switches to the cable by itself and back to Wi-Fi when you unplug.",
+                    "Either way, Vyoma switches to the cable by itself and back to Wi-Fi when you unplug. Neither is needed for Wi-Fi, which works on its own.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
