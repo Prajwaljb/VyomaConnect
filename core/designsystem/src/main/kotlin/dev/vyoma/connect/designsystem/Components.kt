@@ -1,6 +1,8 @@
 package dev.vyoma.connect.designsystem
 
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -20,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -209,9 +212,9 @@ fun CollapsingHeaderScaffold(
             ) {
                 if (navigation != null) {
                     Box(
-                        Modifier.align(Alignment.CenterStart).size(48.dp).pressScale(0.86f).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp),
+                        Modifier.align(Alignment.CenterStart).size(48.dp).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp, interactive = true),
                         contentAlignment = Alignment.Center,
-                    ) { navigation() }
+                    ) { CompositionLocalProvider(LocalOnChrome provides true) { navigation() } }
                 }
                 Box(
                     Modifier
@@ -233,10 +236,9 @@ fun CollapsingHeaderScaffold(
                     Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Row(
-                    Modifier.align(Alignment.CenterEnd).height(48.dp).pressScale(0.9f).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp),
+                    Modifier.align(Alignment.CenterEnd).height(48.dp).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp, interactive = true),
                     verticalAlignment = Alignment.CenterVertically,
-                    content = actions,
-                )
+                ) { CompositionLocalProvider(LocalOnChrome provides true) { actions() } }
             }
         }
     } }
@@ -584,19 +586,20 @@ fun LiquidSlider(
                     }
                 },
             )
-            // While held, a clear droplet rides the end of the fill and magnifies it (iOS 26-style).
+            // The knob is always there: a frosted bead at the end of the fill that, grabbed, swells
+            // and clears into a drop of water magnifying the fill, and frosts over again when let go.
+            // At rest it's a plain drawn bead; the lens takes over as it grows.
+            .drawWithContent {
+                drawContent()
+                frostedKnob(sliderKnob(value(), swell.value, swollen), 1f - swell.value)
+            }
             .liquidLens(
                 null,
                 strength = { swell.value },
                 zoom = { 1f + 0.18f * swell.value.coerceIn(0f, 1f) },
                 underlay = underlay,
-                rect = {
-                    val k = swell.value.coerceAtLeast(0f)
-                    val dh = lerp(swollen.toPx(), size.height * 1.1f, k)
-                    val dw = dh * 1.5f
-                    val x = (value().coerceIn(0f, 1f) * size.width).coerceIn(dw / 2, size.width - dw / 2)
-                    Rect(x - dw / 2, (size.height - dh) / 2, x + dw / 2, (size.height + dh) / 2)
-                },
+                frost = { 1f - swell.value },
+                rect = { sliderKnob(value(), swell.value, swollen) },
             )
             .drawBehind {
                 val h = lerp(rest.toPx(), swollen.toPx(), swell.value.coerceAtLeast(0f))
@@ -613,6 +616,30 @@ fun LiquidSlider(
                     Offset(0f, top), Size(fw, h), r,
                 )
             },
+    )
+}
+
+private fun DrawScope.sliderKnob(value: Float, swell: Float, swollen: Dp): Rect {
+    val k = swell.coerceAtLeast(0f)
+    val dh = lerp(swollen.toPx() + 2.dp.toPx(), size.height * 1.1f, k)
+    val dw = dh * lerp(1.2f, 1.5f, k.coerceAtMost(1f))
+    val x = (value.coerceIn(0f, 1f) * size.width).coerceIn(dw / 2, size.width - dw / 2)
+    return Rect(x - dw / 2, (size.height - dh) / 2, x + dw / 2, (size.height + dh) / 2)
+}
+
+/**
+ * A slider knob at rest: the frosted look of a [liquidLens] with full frost, drawn as a plain
+ * pill, so a resting slider costs no offscreen layers. Faded by [alpha] as the lens takes over.
+ */
+fun DrawScope.frostedKnob(r: Rect, alpha: Float) {
+    val a = alpha.coerceIn(0f, 1f)
+    if (a < 0.01f || r.width < 1f) return
+    val corner = CornerRadius(r.height / 2)
+    drawRoundRect(Color.Black.copy(alpha = 0.14f * a), r.topLeft + Offset(0f, 1.dp.toPx()), r.size, corner)
+    drawRoundRect(Color(0xFFF7F7F9), r.topLeft, r.size, corner, alpha = a)
+    drawRoundRect(
+        Brush.verticalGradient(listOf(Color.White, Color.Black.copy(alpha = 0.06f)), startY = r.top, endY = r.bottom),
+        r.topLeft, r.size, corner, alpha = a, style = Stroke(1.dp.toPx()),
     )
 }
 
@@ -657,6 +684,9 @@ fun GlassDialog(
     }
 }
 
+/** True inside an interactive [glassChrome] button: content shouldn't add its own glass. */
+val LocalOnChrome = staticCompositionLocalOf { false }
+
 /**
  * An icon button that squishes and bounces like everything else (Material's IconButton only
  * ripples). 48 dp target.
@@ -670,7 +700,8 @@ fun BounceIconButton(
     content: @Composable () -> Unit,
 ) {
     Box(
-        modifier.size(size).pressable(enabled = enabled, pressedScale = 0.8f, glass = true, onClick = onClick),
+        // On liquid chrome the chrome itself flexes, so only the glyph squishes here.
+        modifier.size(size).pressable(enabled = enabled, pressedScale = 0.8f, glass = !LocalOnChrome.current, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { content() }
 }

@@ -111,6 +111,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import dev.vyoma.connect.designsystem.frostedKnob
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -597,18 +599,21 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
                 scaleX = 1f + stretch + 0.015f * swell
                 scaleY = 1f - stretch * 0.5f + 0.06f * swell
             }
-            // While held, a clear drop rides the surface of the liquid and magnifies it.
+            // The knob is always there, riding the surface of the liquid: a frosted bead at rest
+            // that, grabbed, swells and clears into a drop magnifying the liquid, then frosts over
+            // again when let go. One object throughout, never a lens popping in. At rest it's a
+            // plain drawn bead (a lens there cost scroll frames); the lens takes over as it grows.
+            .drawWithContent {
+                drawContent()
+                frostedKnob(volumeKnob(shown, swell), 1f - swell)
+            }
             .liquidLens(
                 null,
                 strength = { swell },
                 zoom = { 1f + 0.16f * swell.coerceIn(0f, 1f) },
                 underlay = page,
-                rect = {
-                    val h = size.height * (0.72f + 0.38f * swell.coerceAtLeast(0f))
-                    val w = h * 1.55f
-                    val x = (shown.coerceIn(0f, 1f) * size.width).coerceIn(w / 2, size.width - w / 2)
-                    Rect(x - w / 2, (size.height - h) / 2, x + w / 2, (size.height + h) / 2)
-                },
+                frost = { 1f - swell },
+                rect = { volumeKnob(shown, swell) },
             )
             .draggable(
                 drag, Orientation.Horizontal,
@@ -632,20 +637,15 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
                 .drawBehind {
                     val w = shown.coerceIn(0f, 1f) * size.width
                     if (w < 0.5f) return@drawBehind
-                    // Full height with a straight leading edge: the surface of the liquid.
-                    drawRect(
+                    // Full height, its leading edge rounded like the knob riding it.
+                    val cap = CornerRadius(size.height / 2)
+                    drawRoundRect(
                         Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.2f).compositeOver(liquid), liquid)),
-                        size = Size(w, size.height),
+                        topLeft = Offset(-size.height, 0f), size = Size(w + size.height, size.height), cornerRadius = cap,
                     )
-                    drawRect(
+                    drawRoundRect(
                         Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.22f), Color.Transparent), endY = size.height * 0.5f),
-                        size = Size(w, size.height * 0.5f),
-                    )
-                    // The meniscus: light gathers at the surface.
-                    val band = 12.dp.toPx().coerceAtMost(w)
-                    drawRect(
-                        Brush.horizontalGradient(listOf(Color.Transparent, Color.White.copy(alpha = 0.3f)), startX = w - band, endX = w),
-                        topLeft = Offset(w - band, 0f), size = Size(band, size.height),
+                        topLeft = Offset(-size.height, 0f), size = Size(w + size.height, size.height), cornerRadius = cap,
                     )
                 },
         )
@@ -681,6 +681,15 @@ private fun VolumeLabels(sink: AudioSink, level: Float, strong: Color, soft: Col
 }
 
 private const val ECHO_QUIET_MS = 700L
+
+private fun DrawScope.volumeKnob(shown: Float, swell: Float): Rect {
+    val k = swell.coerceAtLeast(0f)
+    val h = size.height * (0.5f + 0.6f * k)
+    val w = h * (1.2f + 0.35f * k.coerceAtMost(1f))
+    val inset = (size.height - h) / 2
+    val x = (shown.coerceIn(0f, 1f) * size.width).coerceIn(w / 2 + inset, size.width - w / 2 - inset)
+    return Rect(x - w / 2, (size.height - h) / 2, x + w / 2, (size.height + h) / 2)
+}
 
 /** Diminishing stretch: the further you pull, the less it gives, topping out at 6%. */
 private fun rubberBand(excess: Float): Float = sign(excess) * 0.06f * (1f - 1f / (1f + abs(excess) * 4f))

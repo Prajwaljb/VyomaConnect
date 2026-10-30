@@ -58,7 +58,7 @@ import dev.vyoma.connect.designsystem.ListRow
 import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.SectionCard
 import dev.vyoma.connect.designsystem.SystemColor
-import dev.vyoma.connect.designsystem.glassListGroup
+import dev.vyoma.connect.designsystem.cardSegment
 import dev.vyoma.connect.designsystem.perform
 import dev.vyoma.connect.designsystem.pressable
 import dev.vyoma.connect.platform.AndroidShareSink
@@ -120,7 +120,6 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
     val listState = rememberLazyListState()
     CollapsingHeaderScaffold(
         listState = listState,
-        listModifier = Modifier.glassListGroup(listState, ENTRY),
         title = if (path.isEmpty()) "Home" else path.substringAfterLast('/'),
         subtitle = when {
             plugin == null -> pcName
@@ -190,7 +189,7 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
                             f,
                             busy = child in fetching,
                             showDivider = i != last,
-                            modifier = if (i != last) Modifier.joinNext() else Modifier,
+                            modifier = (if (i != last) Modifier.joinNext() else Modifier).cardSegment(first = i == 0, last = i == last),
                             onClick = { if (f.isDir) path = child else vm.downloadPcFile(plugin, child) },
                         )
                     }

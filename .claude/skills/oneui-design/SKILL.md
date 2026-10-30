@@ -13,27 +13,35 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Canvas: `Modifier.aurora()` (theme background + two cached accent glows; in pure black a tighter glow that
   leaves the bottom true black). No decorative textures (stars were tried and rejected: too specific).
 - Depth tokens: `glassDepth` (`GlassDepth` Dark / Amoled / Light) drive every surface so the themes stay consistent.
-- Cards: `Modifier.glassCard(shape, fill?)` = an even-toned pane (no visible top-to-bottom gradient: the user called
-  it cheap) with a specular hairline rim (`specularRim`: bright at the top-left, a softer catch bottom-right) and a
-  soft shadow only where the canvas is light enough to show one. `SectionCard`/`glassListGroup` use it.
+- Cards: `Modifier.glassCard(shape, fill?)` = iOS grouped surfaces: opaque, flat, high contrast (`#1C1C1E` on the dark
+  and true-black canvas, white on light with a faint shadow). No gradient, no rim, no translucency: translucent rimmed
+  panes were called cheap twice. Rims and refraction belong to things that float (chrome, raised controls, knobs).
 - Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a
   smaller lit bead; pass `color` for accent/tinted or for chips over artwork (dark translucent).
 - Real blur only for chrome: record content with `backdropSource(backdrop)` (put it OUTSIDE `aurora()` in the
   modifier chain so the canvas is recorded too), then `glassChrome(backdrop, shape)` (AGSL liquid lens on 33+:
   `LiquidGlass`/`liquidLens`: physically based, like Telegram's/Apple's: Snell refraction (n≈1.5) through a
   quarter-circle rim (≤ 1/5 of the element) over a slab 6 rims deep, so the rim shows what's ACROSS the element and
-  beyond it (the recorded margin), bent like water. Rejected: plain outward bend, weak inward/convex bend). Every
+  beyond it (the recorded margin), bent like water. Rejected: plain outward bend, weak inward/convex bend).
+  Exception: the tab bar's lifted drop (`LensStyle.Lift`, negative depth) overflows the bar 12 dp and its rim looks
+  OUTWARD, so the page around the bar bends into it; an inward rim there only replayed the bar and mirrored labels. Every
   chrome element uses the tab bar's values: `blur = 8.dp, bevel = 16.dp`. The bar must not be inside
   the source. Compose/draw chrome only while visible.
 - Header (`CollapsingHeaderScaffold`): no slab. A soft status-bar fade; back in a 48 dp liquid circle; the title
   appears in a liquid capsule once collapsed (> 0.6); actions share one capsule. Same blur/bevel as the tab bar.
 - Dialogs: `GlassDialog` (same API as AlertDialog): opaque `surfaceContainerHigh` slab with the card rim. Never
   Material `AlertDialog`.
-- Value bars: `LiquidSlider` (thumbless capsule that swells under the finger, relative drag) for scrubbers and
+- Value bars: `LiquidSlider` (capsule that swells under the finger, relative drag) for scrubbers and
   in-card volume; the big volume control is `Dashboard.VolumeBar`: a glass tube (`LensStyle.Tube` lens over the liquid
-  only, never over text: refracted text reads as a glitch) with a lit meniscus, a `LensStyle.Drop` drop riding the
-  surface while held, `draggable` relative drag, rubber-band ends, labels drawn twice and the second copy clipped
+  only, never over text: refracted text reads as a glitch) with a rounded liquid end. Both have ONE knob throughout
+  (continuity): at rest a drawn `frostedKnob` bead (no layers: a resting lens cost scroll frames); grabbed, a
+  `liquidLens(frost = { 1 - swell })` of the same rect grows and clears over it into a drop, frosting again on release.
+  Never a lens that pops in from nothing. Scrubbers hold the seek target until the PC's position agrees (browsers
+  report a stale/zero position after a seek). Also `draggable` relative drag, rubber-band ends, labels drawn twice and the second copy clipped
   to the liquid. `LiquidSlider` grows the same drop while held; pass `underlay` (the surface colour under it).
+- Header capsules and the touchpad button: `glassChrome(..., interactive = true)` flexes the glass itself on press
+  (grows past its bounds, zooms, brightens); glyphs inside use `LocalOnChrome` so `BounceIconButton` doesn't add a
+  second drop. Never scale a glyph inside a still ring.
 - Press glass: `pressable(glass = true)` / `pressScale(1f, glass = true)` turns capsules and circles into a clear
   drop while held. Put it BEFORE the background modifiers so the drop sees them.
 - `liquidLens` is a Modifier.Node that allocates its layers only on first visible frame: cheap on every control.
@@ -59,10 +67,9 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 ## Layout
 - Every top-level screen uses `CollapsingHeaderScaffold`: a tall hero title (~30% of screen height) that keeps content in
   thumb reach, collapsing into a compact bar. 16 dp side gutters, 12 dp between cards.
-- Long or unbounded groups (folder listings) are one lazy item per row: draw the card once behind them with
-  `listModifier = Modifier.glassListGroup(listState, contentType)` on `CollapsingHeaderScaffold` and cancel the list
-  gap between rows. Never give each row its own glass: every slice gets its own edge highlight. No per-row
-  `animateItem` there either; the card has to move as one.
+- Long or unbounded groups (folder listings) are one lazy item per row, each painting its slice with
+  `Modifier.cardSegment(first, last)` (flat cards have no rim, so slices join seamlessly) and cancelling the list gap.
+  Never draw one card behind the list from the list's own draw: the overscroll stretch moves the rows, not it.
 - Group related rows in `SectionCard` with `ListRow`s (`iconTint = SystemColor.X.color` → colored squircle `IconBadge`,
   dividers inset past the icon).
 - Section titles use `SectionLabel` (small, muted, drawn low so it belongs to the card below, not the gap above).

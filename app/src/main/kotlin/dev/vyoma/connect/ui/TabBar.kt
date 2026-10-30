@@ -54,6 +54,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import dev.vyoma.connect.designsystem.Backdrop
 import dev.vyoma.connect.designsystem.Glass
+import dev.vyoma.connect.designsystem.LensStyle
 import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.LocalBottomBarInset
 import dev.vyoma.connect.designsystem.VyomaMotion
@@ -141,7 +142,7 @@ fun TabsRoot(tab: Tab, onTab: (Tab) -> Unit, onTouchpad: () -> Unit, content: @C
         ) {
             TabBar(tab, onTab, backdrop)
             Box(
-                Modifier.size(BarHeight).pressable(pressedScale = 0.86f, onClick = onTouchpad).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp),
+                Modifier.size(BarHeight).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp, interactive = true).pressable(pressedScale = 0.82f, onClick = onTouchpad),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(Icons.Rounded.TouchApp, "Touchpad", tint = MaterialTheme.colorScheme.onBackground)
@@ -196,7 +197,7 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
 
     // The pill in bar coordinates: resting it sits inside the padding; lifted it outgrows the bar.
     val pad = with(density) { 4.dp.toPx() }
-    val overflow = with(density) { 7.dp.toPx() }
+    val overflow = with(density) { 12.dp.toPx() }
     fun DrawScope.pill(): Rect {
         val l = left.value
         val w = right.value - l
@@ -214,7 +215,7 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
     Box(
         Modifier
             .height(BarHeight)
-            .liquidLens(backdrop, strength = { lift.value }, zoom = { 1f + 0.12f * lift.value.coerceIn(0f, 1f) }, rect = { pill() })
+            .liquidLens(backdrop, strength = { lift.value }, zoom = { 1f + 0.1f * lift.value.coerceIn(0f, 1f) }, style = LensStyle.Lift, rect = { pill() })
             .glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp)
             .drawBehind {
                 // The resting pill fades as the clear drop takes its place (where drops can be drawn).
