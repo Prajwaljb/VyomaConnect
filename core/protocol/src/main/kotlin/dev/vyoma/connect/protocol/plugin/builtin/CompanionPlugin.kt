@@ -47,12 +47,12 @@ data class PcStats(
     val uptimeSeconds: Long?,
 )
 
-/** Where a screenshot request is. [Done.location] is something the UI can open. */
-sealed interface ScreenshotState {
-    data object Idle : ScreenshotState
-    data object Capturing : ScreenshotState
-    data class Done(val location: String, val mime: String, val at: Long) : ScreenshotState
-    data class Failed(val reason: String, val at: Long) : ScreenshotState
+/** Where a screenshot or camera photo request is. [Done.location] is something the UI can open. */
+sealed interface CaptureState {
+    data object Idle : CaptureState
+    data object Capturing : CaptureState
+    data class Done(val location: String, val mime: String, val at: Long) : CaptureState
+    data class Failed(val reason: String, val at: Long) : CaptureState
 }
 
 /** One entry of a PC folder. Sizes are 0 for folders; [modified] is epoch millis. */
@@ -83,9 +83,6 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     private val _stats = MutableStateFlow<PcStats?>(null)
     val stats: StateFlow<PcStats?> = _stats.asStateFlow()
 
-    private val _screenshot = MutableStateFlow<ScreenshotState>(ScreenshotState.Idle)
-    val screenshot: StateFlow<ScreenshotState> = _screenshot.asStateFlow()
-    private var watchdog: Job? = null
 
     private val _folder = MutableStateFlow<PcFolder?>(null)
     val folder: StateFlow<PcFolder?> = _folder.asStateFlow()
@@ -214,46 +211,64 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         }
     }
 
-    /** Asks the PC for a screenshot of its whole desktop; [screenshot] follows it to Done or Failed. */
-    suspend fun requestScreenshot() {
-        if (_screenshot.value == ScreenshotState.Capturing) return
-        _screenshot.value = ScreenshotState.Capturing
-        if (!ctx.send(packet(SCREENSHOT_REQUEST))) return fail("The PC isn't reachable")
-        watchdog?.cancel()
-        watchdog = ctx.scope.launch {
-            delay(SCREENSHOT_TIMEOUT_MS)
-            if (_screenshot.value == ScreenshotState.Capturing) fail("The PC didn't answer")
+    /**
+     * One kind of picture the PC takes on request (a screenshot, a camera photo): asks for it,
+     * saves the payload to Pictures, and follows it in [state] to Done or Failed, with a watchdog
+     * so the UI never waits on a spinner forever.
+     */
+    inner class Capture internal constructor(private val request: String, private val fileLabel: String) {
+        private val _state = MutableStateFlow<CaptureState>(CaptureState.Idle)
+        val state: StateFlow<CaptureState> = _state.asStateFlow()
+        private var watchdog: Job? = null
+
+        suspend fun request() {
+            if (_state.value == CaptureState.Capturing) return
+            _state.value = CaptureState.Capturing
+            if (!ctx.send(packet(request))) return fail("The PC isn't reachable")
+            watchdog?.cancel()
+            watchdog = ctx.scope.launch {
+                delay(CAPTURE_TIMEOUT_MS)
+                if (_state.value == CaptureState.Capturing) fail("The PC didn't answer")
+            }
         }
-    }
 
-    private fun fail(reason: String) {
-        _screenshot.value = ScreenshotState.Failed(reason, System.currentTimeMillis())
-    }
+        private fun fail(reason: String) {
+            watchdog?.cancel()
+            _state.value = CaptureState.Failed(reason, System.currentTimeMillis())
+        }
 
-    private fun receiveScreenshot(packet: NetworkPacket) {
-        packet.string("error")?.let { return fail(it) }
-        if (!packet.hasPayload) return fail("The PC sent no image")
-        ctx.scope.launch(Dispatchers.IO) {
-            val ext = packet.string("format")?.takeIf { it in IMAGE_FORMATS } ?: "png"
-            val name = "PC screenshot " + SimpleDateFormat("yyyy-MM-dd HH.mm.ss", Locale.US).format(Date()) + ".$ext"
-            val target = sink.createPicture(ctx.device, name, packet.payloadSize) ?: return@launch fail("Couldn't save the image")
-            try {
-                val input = ctx.device.openPayload(packet) ?: error("no payload")
-                input.use { it.copyTo(target.output, 256 * 1024) }
-                target.output.close()
-                val location = target.complete() ?: error("not saved")
-                watchdog?.cancel()
-                _screenshot.value = ScreenshotState.Done(location, if (ext == "jpg") "image/jpeg" else "image/$ext", System.currentTimeMillis())
-            } catch (e: Exception) {
-                VLog.w(TAG, "screenshot transfer failed: ${e.message}")
-                target.abort()
-                fail("The transfer was interrupted")
+        internal fun receive(packet: NetworkPacket) {
+            packet.string("error")?.let { return fail(it) }
+            if (!packet.hasPayload) return fail("The PC sent no image")
+            ctx.scope.launch(Dispatchers.IO) {
+                val ext = packet.string("format")?.takeIf { it in IMAGE_FORMATS } ?: "png"
+                val name = "$fileLabel " + SimpleDateFormat("yyyy-MM-dd HH.mm.ss", Locale.US).format(Date()) + ".$ext"
+                val target = sink.createPicture(ctx.device, name, packet.payloadSize) ?: return@launch fail("Couldn't save the image")
+                try {
+                    val input = ctx.device.openPayload(packet) ?: error("no payload")
+                    input.use { it.copyTo(target.output, 256 * 1024) }
+                    target.output.close()
+                    val location = target.complete() ?: error("not saved")
+                    watchdog?.cancel()
+                    _state.value = CaptureState.Done(location, if (ext == "jpg") "image/jpeg" else "image/$ext", System.currentTimeMillis())
+                } catch (e: Exception) {
+                    VLog.w(TAG, "$fileLabel transfer failed: ${e.message}")
+                    target.abort()
+                    fail("The transfer was interrupted")
+                }
             }
         }
     }
 
+    /** The PC's whole desktop. */
+    val screenshot = Capture(SCREENSHOT_REQUEST, "PC screenshot")
+
+    /** A photo from the PC's webcam (the PC shows a notification each time). */
+    val photo = Capture(CAMERA_REQUEST, "PC camera")
+
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
-        if (packet.type == SCREENSHOT) receiveScreenshot(packet)
+        if (packet.type == SCREENSHOT) screenshot.receive(packet)
+        if (packet.type == CAMERA) photo.receive(packet)
         if (packet.type == FILES_LISTING) receiveListing(packet)
         if (packet.type == FILES_FILE) receiveFile(packet)
         if (packet.type == FILES_SAVED) receiveSaved(packet)
@@ -276,19 +291,21 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val STATS_REQUEST = "vyoma.stats.request"
         const val SCREENSHOT = "vyoma.screenshot"
         const val SCREENSHOT_REQUEST = "vyoma.screenshot.request"
+        const val CAMERA = "vyoma.camera"
+        const val CAMERA_REQUEST = "vyoma.camera.request"
         const val FILES_LIST = "vyoma.files.list"
         const val FILES_LISTING = "vyoma.files.listing"
         const val FILES_GET = "vyoma.files.get"
         const val FILES_FILE = "vyoma.files.file"
         const val FILES_PUT = "vyoma.files.put"
         const val FILES_SAVED = "vyoma.files.saved"
-        private const val SCREENSHOT_TIMEOUT_MS = 30_000L
+        private const val CAPTURE_TIMEOUT_MS = 30_000L
         private const val TAG = "Companion"
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(STATS, SCREENSHOT, FILES_LISTING, FILES_FILE, FILES_SAVED),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, FILES_LIST, FILES_GET, FILES_PUT),
+            incoming = setOf(STATS, SCREENSHOT, CAMERA, FILES_LISTING, FILES_FILE, FILES_SAVED),
+            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, FILES_LIST, FILES_GET, FILES_PUT),
         ) { CompanionPlugin(it, sink) }
     }
 }

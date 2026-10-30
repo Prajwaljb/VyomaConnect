@@ -168,7 +168,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun fingerprint(id: String): String? = device(id)?.peerCertificate?.let(Certificates::sha256Fingerprint)
 
-    fun takeScreenshot(plugin: CompanionPlugin) = viewModelScope.launch { plugin.requestScreenshot() }
+    fun capture(capture: CompanionPlugin.Capture) = viewModelScope.launch { capture.request() }
     fun listPcFiles(plugin: CompanionPlugin, path: String) = viewModelScope.launch { plugin.listFiles(path) }
     fun downloadPcFile(plugin: CompanionPlugin, path: String) = viewModelScope.launch { plugin.download(path) }
     // App scope: an upload keeps going if you leave the browser.

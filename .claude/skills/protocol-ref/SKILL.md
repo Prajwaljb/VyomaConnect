@@ -56,6 +56,10 @@ body fields before implementing one.
 - `vyoma.screenshot.request` → `vyoma.screenshot {format:"webp"}` + payload (companion listens on 1739..1764, is the
   TLS server, and only serves the pinned phone cert), or `{error}` with no payload. Phone saves to Pictures/Vyoma.
   Any companion payload uses this same flow (`payload.rs`).
+- `vyoma.camera.request` → `vyoma.camera {format:"jpg"}` + payload, or `{error}`. ffmpeg grabs one frame from the
+  first V4L2 node offering MJPEG (skips IR cams), largest size, after 15 warm-up frames. The PC always shows a
+  notification ("<phone> took a photo with this PC's camera"). Phone: `CompanionPlugin.photo` (same `Capture` as
+  `screenshot`), saved to Pictures/Vyoma.
 - `vyoma.files.list {path}` → `vyoma.files.listing {path, entries:[{name, dir, size, modified(ms)}], truncated, error?}`.
   `path` is relative to the PC user's home (`""` = home); `..`/absolute components are refused and the canonical
   path (symlinks resolved) must stay inside home. Dotfiles hidden, folders first, max 5000 entries.
