@@ -168,6 +168,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun fingerprint(id: String): String? = device(id)?.peerCertificate?.let(Certificates::sha256Fingerprint)
 
     fun takeScreenshot(plugin: CompanionPlugin) = viewModelScope.launch { plugin.requestScreenshot() }
+    fun listPcFiles(plugin: CompanionPlugin, path: String) = viewModelScope.launch { plugin.listFiles(path) }
+    fun downloadPcFile(plugin: CompanionPlugin, path: String) = viewModelScope.launch { plugin.download(path) }
 
     fun setPalette(p: Palette) = viewModelScope.launch { settings.setPalette(p) }
     fun setDarkMode(m: DarkMode) = viewModelScope.launch { settings.setDarkMode(m) }

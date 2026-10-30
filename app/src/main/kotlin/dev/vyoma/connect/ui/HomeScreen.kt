@@ -74,6 +74,7 @@ fun HomeScreen(
     onOpenDevice: (String) -> Unit,
     onTouchpad: (String) -> Unit,
     onClipboard: () -> Unit,
+    onBrowseFiles: (String) -> Unit,
 ) {
     val allDevices by vm.devices.collectAsStateWithLifecycle()
     // Companions are part of their PC, never a separate computer.
@@ -157,7 +158,7 @@ fun HomeScreen(
             }
             item(key = "controls") {
                 Staggered(4, Modifier.animateItem()) {
-                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard)
+                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard, onBrowseFiles = { onBrowseFiles(id) })
                 }
             }
         }

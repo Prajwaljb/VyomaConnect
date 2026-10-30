@@ -49,6 +49,7 @@ fun DeviceScreen(
     onBack: () -> Unit,
     onTouchpad: (keyboard: Boolean) -> Unit,
     onClipboard: () -> Unit,
+    onBrowseFiles: () -> Unit,
 ) {
     val devices by vm.devices.collectAsStateWithLifecycle()
     val state = devices.firstOrNull { it.identity.deviceId == deviceId }
@@ -85,7 +86,7 @@ fun DeviceScreen(
                 Staggered(0, Modifier.animateItem()) {
                     PcDashboard(
                         vm, state, DashboardSection.CONTROLS,
-                        onOpenDevice = {}, onTouchpad = { onTouchpad(false) }, onClipboard = onClipboard, inDetails = true,
+                        onOpenDevice = {}, onTouchpad = { onTouchpad(false) }, onClipboard = onClipboard, inDetails = true, onBrowseFiles = onBrowseFiles,
                     )
                 }
             }

@@ -46,4 +46,10 @@ body fields before implementing one.
   `gpu` = amdgpu `gpu_busy_percent`, else Intel `1 − Δrc6_residency/Δt` (no root; never wake the NVIDIA dGPU).
 - `vyoma.screenshot.request` → `vyoma.screenshot {format:"webp"}` + payload (companion listens on 1739..1764, is the
   TLS server, and only serves the pinned phone cert), or `{error}` with no payload. Phone saves to Pictures/Vyoma.
+  Any companion payload uses this same flow (`payload.rs`).
+- `vyoma.files.list {path}` → `vyoma.files.listing {path, entries:[{name, dir, size, modified(ms)}], truncated, error?}`.
+  `path` is relative to the PC user's home (`""` = home); `..`/absolute components are refused and the canonical
+  path (symlinks resolved) must stay inside home. Dotfiles hidden, folders first, max 5000 entries.
+- `vyoma.files.get {path}` → `vyoma.files.file {path, name}` + payload, or `{path, error}`. Phone saves to
+  Downloads/Vyoma via `ShareSink.createFile`, tracks it in `Transfers`, and opens it.
 
