@@ -16,17 +16,22 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.Dp
@@ -104,6 +109,36 @@ fun Modifier.glassCard(shape: Shape, fill: Color? = null): Modifier = composed {
         .drawBehind { drawOutline(shape.createOutline(size, layoutDirection, this), color) }
         .border(0.75.dp, edge, shape)
         .clip(shape)
+}
+
+/**
+ * One row of a [glassCard] that a lazy list lays out row by row (a long folder listing): each
+ * row draws the whole card's rounded outline, stretched past its own edges where it has
+ * neighbours, and clipped to its own slice, so the rows join into one seamless card.
+ * [listSpacing] is the list's gap between items: rows above the last report that much less
+ * height, so the next row starts right below instead of after a gap.
+ */
+fun Modifier.glassCardSegment(first: Boolean, last: Boolean, radius: Dp = 26.dp, listSpacing: Dp = 12.dp): Modifier = composed {
+    val color = Glass.fill
+    val edge = Glass.edge
+    this.layout { measurable, constraints ->
+        val p = measurable.measure(constraints)
+        val gap = if (last) 0 else listSpacing.roundToPx()
+        layout(p.width, (p.height - gap).coerceAtLeast(0)) { p.place(0, 0) }
+    }.drawBehind {
+        val r = radius.toPx()
+        val top = if (first) 0f else -2 * r
+        val bottom = if (last) size.height else size.height + 2 * r
+        val stroke = 0.75.dp.toPx()
+        clipRect {
+            drawRoundRect(color, Offset(0f, top), Size(size.width, bottom - top), CornerRadius(r))
+            val inset = stroke / 2
+            drawRoundRect(
+                edge, Offset(inset, top + inset), Size(size.width - stroke, bottom - top - stroke), CornerRadius(r - inset),
+                style = Stroke(stroke),
+            )
+        }
+    }
 }
 
 /**

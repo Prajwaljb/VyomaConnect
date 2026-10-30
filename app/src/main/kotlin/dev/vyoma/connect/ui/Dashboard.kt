@@ -202,6 +202,7 @@ fun PcDashboard(
     onClipboard: () -> Unit,
     modifier: Modifier = Modifier,
     inDetails: Boolean = false,
+    onBrowseFiles: () -> Unit = {},
 ) {
     val id = state.identity.deviceId
     val pc = rememberPcState(vm, state)
@@ -261,7 +262,8 @@ fun PcDashboard(
           ScreenshotOutcome(shot)
           ControlGrid(
             listOf(
-                Control(Icons.Rounded.UploadFile, "Files", SystemColor.BLUE) { vm.pickFiles(context) },
+                // With the companion, Files browses the PC (sending is in there too); without it, it sends.
+                Control(Icons.Rounded.UploadFile, "Files", SystemColor.BLUE) { if (shots != null) onBrowseFiles() else vm.pickFiles(context) },
                 Control(Icons.Rounded.TouchApp, "Touchpad", SystemColor.TEAL, onClick = onTouchpad),
                 // With the companion, Screenshot takes this slot: Clipboard is already a tile and a tab.
                 if (shots != null) Control(

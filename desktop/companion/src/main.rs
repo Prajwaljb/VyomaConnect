@@ -1,13 +1,15 @@
 //! Vyoma companion: runs next to the stock KDE Connect daemon and gives Vyoma on the phone the
-//! extras kdeconnectd can't: PC stats, screenshots, and zero-setup USB (camera, screen view later).
+//! extras kdeconnectd can't: PC stats, screenshots, file browsing, and zero-setup USB (camera, screen view later).
 //!
 //! It never listens for strangers: it only dials phones that kdeconnectd already trusts, found
 //! via their mDNS announcements, and proves to them that it belongs to this PC by signing with
 //! kdeconnectd's key. So there's nothing to pair by hand and nothing new to trust.
 
+mod files;
 mod identity;
 mod kde;
 mod link;
+mod payload;
 mod screenshot;
 mod stats;
 mod usb;
@@ -110,8 +112,8 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request"],
-            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot"],
+            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.files.list", "vyoma.files.get"],
+            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.files.listing", "vyoma.files.file"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
         }),
@@ -133,8 +135,11 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
     let lease = Arc::new(Mutex::new(Instant::now()));
     let mut stats_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut shot_task: Option<tokio::task::JoinHandle<()>> = None;
+    // Listings and downloads; dropping the set when the link closes cancels whatever is left.
+    let mut file_tasks = tokio::task::JoinSet::new();
     let result = loop {
         let Some(p) = link.receiver.next().await? else { break Ok(()) };
+        while file_tasks.try_join_next().is_some() {}
         match p["type"].as_str().unwrap_or_default() {
             "kdeconnect.pair" => match p["body"]["pair"].as_bool() {
                 Some(true) => info!("{name}: paired"),
@@ -158,6 +163,22 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
                         }
                     }));
                 }
+            }
+            "vyoma.files.list" => {
+                let (sender, rel) = (link.sender.clone(), p["body"]["path"].as_str().unwrap_or_default().to_string());
+                file_tasks.spawn(async move {
+                    let _ = files::list(&sender, &rel).await;
+                });
+            }
+            "vyoma.files.get" => {
+                let (sender, shared, pinned, name) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone());
+                let rel = p["body"]["path"].as_str().unwrap_or_default().to_string();
+                file_tasks.spawn(async move {
+                    match files::send(&sender, &shared.me, &pinned, &rel).await {
+                        Ok(()) => info!("{name}: sent a file"),
+                        Err(e) => warn!("{name}: file transfer failed: {e:#}"),
+                    }
+                });
             }
             _ => {}
         }
