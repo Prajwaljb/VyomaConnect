@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import dev.vyoma.connect.designsystem.glassCard
 import dev.vyoma.connect.designsystem.aurora
 import dev.vyoma.connect.designsystem.Glass
@@ -7,7 +9,6 @@ import dev.vyoma.connect.designsystem.OrbState
 import dev.vyoma.connect.designsystem.ConnectionOrb
 import androidx.compose.material3.Surface
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -26,7 +27,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.ime
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -59,14 +62,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -76,9 +77,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -90,8 +89,15 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.pressable
+import dev.vyoma.connect.designsystem.pressScale
+import dev.vyoma.connect.designsystem.Haptic
+import dev.vyoma.connect.designsystem.perform
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalWindowInfo
+import kotlinx.coroutines.flow.first
 import dev.vyoma.connect.protocol.plugin.builtin.MousePadPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.SpecialKey
 import kotlin.math.abs
@@ -129,13 +135,42 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             if (sx != 0f || sy != 0f) p.scroll(sx, sy)
         }
     }
-    fun act(block: suspend MousePadPlugin.() -> Unit) { pad?.let { scope.launch { it.block() } } }
-
-    // The phone keyboard types on the PC. Each tap of the key re-opens it, since the system can
-    // hide it (back gesture) without telling us.
+    // The phone keyboard types on the PC through the typing bar.
     var keyboard by rememberSaveable { mutableStateOf(startWithKeyboard) }
     var keyboardSession by remember { mutableIntStateOf(0) }
-    val imeVisible = WindowInsets.isImeVisible
+    // From the inset itself: WindowInsets.isImeVisible stays false on One UI even with Gboard up,
+    // which left the key unable to close the keyboard. derivedStateOf: recompose on show/hide only.
+    val imeInsets = WindowInsets.ime
+    val density = LocalDensity.current
+    val imeVisible by remember(imeInsets, density) { derivedStateOf { imeInsets.getBottom(density) > 0 } }
+    val ime = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    // The system can hide the keyboard by itself (back gesture, the IME's own hide key). Close the
+    // bar with it, so the key's highlight always matches what's on screen.
+    var imeShown by remember { mutableStateOf(false) }
+    LaunchedEffect(keyboard, keyboardSession) { imeShown = false }
+    LaunchedEffect(imeVisible) {
+        if (imeVisible) imeShown = true
+        else if (keyboard && imeShown) keyboard = false
+    }
+    fun toggleKeyboard() {
+        if (keyboard && imeVisible) {
+            ime?.hide()
+            focusManager.clearFocus()
+            keyboard = false
+        } else {
+            keyboard = true
+            keyboardSession++
+        }
+    }
+    // Bumped when something other than the typing bar may move the PC's caret (a key, a click), so
+    // the bar starts afresh instead of replaying edits against a caret that's moved.
+    var caretMoved by remember { mutableIntStateOf(0) }
+    fun act(block: suspend MousePadPlugin.() -> Unit) {
+        if (keyboard) caretMoved++
+        pad?.let { scope.launch { it.block() } }
+    }
+    fun typing(block: suspend MousePadPlugin.() -> Unit) { pad?.let { scope.launch { it.block() } } }
 
     // Surface, not a bare background: it supplies onBackground as the content color for the bar.
     Surface(Modifier.fillMaxSize().aurora(), color = Color.Transparent, contentColor = MaterialTheme.colorScheme.onBackground) { Column(
@@ -175,7 +210,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                                 // Held still: grab for drag-and-drop.
                                 if (travelled < slop && maxPointers == 1) {
                                     dragging = true
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    haptics.perform(Haptic.Hold)
                                     act { press() }
                                 }
                                 continue
@@ -199,9 +234,12 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                             if (ended) {
                                 val duration = event.changes.first().uptimeMillis - start
                                 when {
-                                    dragging -> act { release() }
+                                    dragging -> {
+                                        haptics.perform(Haptic.Detent)
+                                        act { release() }
+                                    }
                                     travelled < slop && duration < 260 -> {
-                                        haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+                                        haptics.perform(Haptic.Tap)
                                         when (maxPointers) {
                                             1 -> act { click() }
                                             2 -> act { rightClick() }
@@ -273,9 +311,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             }
             Row(Modifier.fillMaxWidth().height(KEY_HEIGHT), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Key("Fn", selected = fn) { fn = !fn }
-                Key(icon = Icons.Rounded.Keyboard, desc = "Keyboard", selected = keyboard && imeVisible) {
-                    if (keyboard && imeVisible) keyboard = false else { keyboard = true; keyboardSession++ }
-                }
+                Key(icon = Icons.Rounded.Keyboard, desc = if (keyboard) "Hide keyboard" else "Type on PC", selected = keyboard, onClick = ::toggleKeyboard)
                 if (!fn) {
                     Key(icon = Icons.Rounded.SwapHoriz, desc = "Alt+Tab") { act { key(SpecialKey.TAB, alt = true) } }
                     Key(icon = Icons.AutoMirrored.Rounded.Undo, desc = "Undo") { act { chord("z", ctrl = true) } }
@@ -291,7 +327,9 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             }
         }
 
-        if (keyboard) key(keyboardSession) { TypingBar(onText = { t -> act { type(t) } }, onKey = { k -> act { key(k) } }) }
+        if (keyboard) key(keyboardSession) {
+            TypingBar(caretMoved, onText = { t -> typing { type(t) } }, onKey = { k -> typing { key(k) } })
+        }
         Spacer(Modifier.navigationBarsPadding())
     } }
 }
@@ -305,7 +343,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
  * backspace when the field looks empty. Send presses Enter and starts afresh.
  */
 @Composable
-private fun TypingBar(onText: (String) -> Unit, onKey: (SpecialKey) -> Unit) {
+private fun TypingBar(caretMoved: Int, onText: (String) -> Unit, onKey: (SpecialKey) -> Unit) {
     val sentinel = " "
     val fresh = TextFieldValue(sentinel, TextRange(sentinel.length))
     var value by remember { mutableStateOf(fresh) }
@@ -313,9 +351,19 @@ private fun TypingBar(onText: (String) -> Unit, onKey: (SpecialKey) -> Unit) {
     var pcCaret by remember { mutableIntStateOf(sentinel.length) }
     val focus = remember { FocusRequester() }
     val ime = LocalSoftwareKeyboardController.current
+    val window = LocalWindowInfo.current
     LaunchedEffect(Unit) {
+        // Android drops a show request made before the window has focus (e.g. opening straight
+        // into the keyboard from a tile), so wait for it.
+        snapshotFlow { window.isWindowFocused }.first { it }
         focus.requestFocus()
         ime?.show()
+    }
+    LaunchedEffect(caretMoved) {
+        if (caretMoved > 0) {
+            value = fresh
+            pcCaret = sentinel.length
+        }
     }
     fun moveTo(target: Int) {
         val delta = target - pcCaret
@@ -415,7 +463,6 @@ private fun RowScope.Key(
     onRepeat: ((Int) -> Unit)? = null,
     onClick: () -> Unit,
 ) {
-    val haptics = LocalHapticFeedback.current
     val bg by animateColorAsState(
         when {
             selected -> MaterialTheme.colorScheme.primary
@@ -436,17 +483,8 @@ private fun RowScope.Key(
             .clip(RoundedCornerShape(14.dp))
             .background(bg)
             .then(
-                if (onRepeat == null) {
-                    Modifier.pressable(pressedScale = 0.9f) {
-                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onClick()
-                    }
-                } else {
-                    Modifier.holdToRepeat(onRepeat) {
-                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onClick()
-                    }
-                },
+                if (onRepeat == null) Modifier.pressable(pressedScale = 0.88f, haptic = Haptic.Key, onClick = onClick)
+                else Modifier.holdToRepeat(onRepeat, onClick),
             ),
         contentAlignment = Alignment.Center,
     ) {
@@ -457,29 +495,31 @@ private fun RowScope.Key(
 
 /**
  * Fires [onClick] on touch, then, while held, [onRepeat] with a growing count: after 350 ms, at
- * an accelerating rate (75 ms down to 30 ms), like a hardware key's auto-repeat.
+ * an accelerating rate (75 ms down to 30 ms), like a hardware key's auto-repeat. A firmer tick
+ * marks the switch to whole words.
  */
 private fun Modifier.holdToRepeat(onRepeat: (Int) -> Unit, onClick: () -> Unit): Modifier = composed {
     val scope = rememberCoroutineScope()
-    var pressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (pressed) 0.9f else 1f, VyomaMotion.spatial(), label = "key")
+    val haptics = LocalHapticFeedback.current
+    val repeat by rememberUpdatedState(onRepeat)
+    val click by rememberUpdatedState(onClick)
     this
-        .graphicsLayer { scaleX = scale; scaleY = scale }
+        .pressScale(0.88f)
         .pointerInput(Unit) {
             detectTapGestures(onPress = {
-                pressed = true
-                onClick()
+                haptics.perform(Haptic.Key)
+                click()
                 val repeater = scope.launch {
                     delay(350)
                     var n = 0
                     while (isActive) {
-                        onRepeat(n++)
+                        if (n == WORD_AFTER) haptics.perform(Haptic.Edge)
+                        repeat(n++)
                         delay((75 - n * 3L).coerceAtLeast(30))
                     }
                 }
                 tryAwaitRelease()
                 repeater.cancel()
-                pressed = false
             })
         }
 }
@@ -497,22 +537,33 @@ private fun ScrollStrip(modifier: Modifier, onScroll: (Float) -> Unit, onClick: 
             .fillMaxSize()
             .clip(RoundedCornerShape(20.dp))
             .background(Glass.raised)
+            .pressScale(0.94f)
             .pointerInput(Unit) {
                 val slop = viewConfiguration.touchSlop
                 awaitEachGesture {
                     awaitFirstDown()
+                    val notch = 22.dp.toPx()
                     var travelled = 0f
+                    var wheel = 0f
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.first()
                         if (!change.pressed) break
                         val d = change.positionChange()
                         travelled += abs(d.y)
-                        if (travelled > slop) onScroll(d.y * 1.6f)
+                        if (travelled > slop) {
+                            onScroll(d.y * 1.6f)
+                            // A detent per notch, like a mouse wheel.
+                            wheel += d.y
+                            if (abs(wheel) >= notch) {
+                                wheel %= notch
+                                haptics.perform(Haptic.Detent)
+                            }
+                        }
                         change.consume()
                     }
                     if (travelled <= slop) {
-                        haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+                        haptics.perform(Haptic.Tap)
                         onClick()
                     }
                 }

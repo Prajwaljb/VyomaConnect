@@ -1,5 +1,9 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import dev.vyoma.connect.designsystem.PillButton
+import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.SystemColor
 import android.Manifest
 import android.content.Context
@@ -14,7 +18,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -24,20 +27,15 @@ import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material.icons.rounded.Wifi
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -89,7 +87,7 @@ fun OnboardingScreen(vm: AppViewModel, onDone: () -> Unit) {
     val askCore = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { tick++ }
     val askPhone = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         tick++
-        if (result.values.any { it }) LinkService.start(context, refresh = true)
+        if (result.values.any { it }) LinkService.start(context, refresh = true, visible = true)
         if (result.values.any { !it } && !PhonePermissions.allGranted(context)) {
             runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) }
         }
@@ -155,7 +153,7 @@ fun OnboardingScreen(vm: AppViewModel, onDone: () -> Unit) {
                             showDivider = i < rows.lastIndex,
                             trailing = {
                                 if (state.isPaired) Icon(Icons.Rounded.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
-                                else FilledTonalButton(onClick = { vm.requestPair(state.identity.deviceId) }) { Text("Pair") }
+                                else PillButton("Pair", onClick = { vm.requestPair(state.identity.deviceId) })
                             },
                         )
                     }
@@ -175,11 +173,9 @@ fun OnboardingScreen(vm: AppViewModel, onDone: () -> Unit) {
                 Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Button(onClick = onDone, Modifier.fillMaxWidth().height(52.dp), enabled = paired.isNotEmpty()) {
-                    Text("Start using Vyoma")
-                }
+                PillButton("Start using Vyoma", onClick = onDone, enabled = paired.isNotEmpty(), large = true, haptic = Haptic.Success)
                 if (paired.isEmpty()) {
-                    TextButton(onClick = onDone, Modifier.fillMaxWidth()) { Text("Skip for now") }
+                    PillButton("Skip for now", onClick = onDone, prominent = false, large = true)
                 }
             }
         }
@@ -208,7 +204,7 @@ private fun Step(
         showDivider = divider,
         trailing = {
             if (done) Icon(Icons.Rounded.CheckCircle, "Done", tint = MaterialTheme.colorScheme.primary)
-            else FilledTonalButton(onClick = onClick) { Text(action) }
+            else PillButton(action, onClick = onClick, prominent = false)
         },
     )
 }

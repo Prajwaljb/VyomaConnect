@@ -49,11 +49,15 @@ class LinkService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         Notifications.ensureChannels(this)
-        startForeground(
-            Notifications.SERVICE_ID,
-            Notifications.service(this, connected = emptyList()),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-        )
+        // Refused right after the user stops the app from One UI's Active apps panel. Started from the
+        // UI we still run (as a plain service while the app is open), so carry on rather than crash.
+        runCatching {
+            startForeground(
+                Notifications.SERVICE_ID,
+                Notifications.service(this, connected = emptyList()),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+            )
+        }.onFailure { VLog.w("LinkService", "not allowed in the foreground yet: ${it.message}") }
         lifecycleScope.launch { startHub() }
     }
 
@@ -226,9 +230,27 @@ class LinkService : LifecycleService() {
         const val ACTION_SEND = "dev.vyoma.connect.SEND"
         const val EXTRA_DEVICE = "device"
 
-        fun start(context: Context, refresh: Boolean = false) {
+        /**
+         * [visible] callers (an activity on screen) use a plain start: it's allowed while the app is in
+         * front and, unlike a foreground start, has no "call startForeground within 10 s" deadline
+         * that crashes the app when the system holds the service back (e.g. just after Stop in
+         * Active apps). Background callers must use a foreground start.
+         */
+        fun start(context: Context, refresh: Boolean = false, visible: Boolean = false) {
             val intent = Intent(context, LinkService::class.java)
             if (refresh) intent.action = ACTION_REFRESH
+            deliver(context, intent, visible)
+        }
+
+        fun deliver(context: Context, intent: Intent, visible: Boolean) {
+            if (visible) {
+                try {
+                    context.startService(intent)
+                    return
+                } catch (_: IllegalStateException) {
+                    // Already went to the background; fall through.
+                }
+            }
             ContextCompat.startForegroundService(context, intent)
         }
 

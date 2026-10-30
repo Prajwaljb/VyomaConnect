@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.runtime.getValue
 import android.app.Activity
 import android.app.PendingIntent
 import android.content.ClipData
@@ -37,7 +38,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -143,7 +143,7 @@ class ShareActivity : ComponentActivity() {
             service.clipData = clip
             service.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        startForegroundService(service)
+        LinkService.deliver(this, service, visible = true)
         val what = when {
             uris.size == 1 -> "file"
             uris.size > 1 -> "${uris.size} files"

@@ -1,5 +1,7 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.RectangleShape
@@ -32,6 +34,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -40,12 +43,27 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
+import kotlin.math.abs
+import androidx.compose.animation.core.Animatable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.mutableStateOf
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -179,13 +197,17 @@ fun SectionCard(
     Column(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(contentPadding), content = content)
 }
 
+/**
+ * Group heading above a [SectionCard]. Drawn a few dp low so it sits with the card it names
+ * rather than midway between groups, without changing the list's even spacing.
+ */
 @Composable
 fun SectionLabel(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.padding(start = 20.dp, top = 12.dp, bottom = 0.dp),
+        modifier = modifier.padding(start = 20.dp, top = 12.dp).offset(y = 5.dp),
     )
 }
 
@@ -263,19 +285,21 @@ fun ConnectionOrb(state: OrbState, modifier: Modifier = Modifier, size: Dp = 14.
         },
         label = "orb",
     )
-    val transition = rememberInfiniteTransition(label = "orb")
-    val period = if (state == OrbState.PENDING) 700 else 2200
-    val pulse by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(period, easing = LinearEasing), RepeatMode.Restart),
-        label = "pulse",
-    )
+    // Offline rests: no frame clock running for a gray dot.
+    val pulse: State<Float> = if (state == OrbState.OFFLINE) remember { mutableFloatStateOf(0f) } else {
+        rememberInfiniteTransition(label = "orb").animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(if (state == OrbState.PENDING) 700 else 2200, easing = LinearEasing), RepeatMode.Restart),
+            label = "pulse",
+        )
+    }
     Canvas(modifier.size(size * 2.4f)) {
         val r = size.toPx() / 2
         val c = Offset(this.size.width / 2, this.size.height / 2)
         if (state != OrbState.OFFLINE) {
-            drawCircle(color.copy(alpha = 0.35f * (1f - pulse)), radius = r * (1f + pulse * 1.4f), center = c)
+            val p = pulse.value
+            drawCircle(color.copy(alpha = 0.35f * (1f - p)), radius = r * (1f + p * 1.4f), center = c)
         }
         drawCircle(
             Brush.radialGradient(listOf(color.copy(alpha = 0.95f), color), center = c - Offset(r * 0.3f, r * 0.3f), radius = r * 1.4f),
@@ -299,5 +323,146 @@ fun Pill(text: String, modifier: Modifier = Modifier, icon: ImageVector? = null,
             Spacer(Modifier.width(5.dp))
         }
         Text(text, style = MaterialTheme.typography.labelMedium, color = tint)
+    }
+}
+
+/**
+ * iOS / One UI switch with a liquid thumb: it swells while your finger is on it, then slides
+ * across with a little bounce that squashes against the end. Toggling on and off feel different.
+ * Everything moves in the draw phase.
+ */
+@Composable
+fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+    val haptics = LocalHapticFeedback.current
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val position = animateFloatAsState(if (checked) 1f else 0f, VyomaMotion.release(), label = "thumb")
+    val swell = animateFloatAsState(if (pressed) 1f else 0f, VyomaMotion.spatial(), label = "swell")
+    val track by animateColorAsState(
+        if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f),
+        VyomaMotion.effects(), label = "track",
+    )
+    Canvas(
+        modifier
+            .size(52.dp, 32.dp)
+            .toggleable(checked, interaction, indication = null, role = Role.Switch) {
+                haptics.perform(if (it) Haptic.ToggleOn else Haptic.ToggleOff)
+                onCheckedChange(it)
+            },
+    ) {
+        drawRoundRect(track, cornerRadius = CornerRadius(size.height / 2))
+        val pad = 2.5.dp.toPx()
+        val d = size.height - 2 * pad
+        val raw = position.value
+        val p = raw.coerceIn(0f, 1f)
+        // Overshoot past either end squashes the thumb against the wall instead of leaving the track.
+        val squash = abs(raw - p) * d * 1.5f
+        val w = d + d * 0.3f * swell.value - squash
+        val x = pad + (size.width - 2 * pad - w) * p
+        val r = CornerRadius(d / 2)
+        drawRoundRect(Color.Black.copy(alpha = 0.12f), Offset(x, pad + 1.dp.toPx()), Size(w, d), r)
+        drawRoundRect(Color.White, Offset(x, pad), Size(w, d), r)
+    }
+}
+
+/**
+ * The one button shape: a pill that squishes and ticks. [prominent] fills it with the accent for
+ * the main action; otherwise it's tinted glass. [large] is the full-width onboarding size.
+ */
+@Composable
+fun PillButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    prominent: Boolean = true,
+    enabled: Boolean = true,
+    large: Boolean = false,
+    haptic: Haptic? = Haptic.Tap,
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    val bg by animateColorAsState(
+        when {
+            !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+            prominent -> accent
+            else -> accent.copy(alpha = 0.14f)
+        },
+        VyomaMotion.effects(), label = "pillBg",
+    )
+    val fg = when {
+        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+        prominent -> MaterialTheme.colorScheme.onPrimary
+        else -> accent
+    }
+    Box(
+        modifier
+            .then(if (large) Modifier.fillMaxWidth().height(54.dp) else Modifier.height(40.dp))
+            .pressable(enabled = enabled, pressedScale = if (large) 0.97f else 0.92f, haptic = haptic, onClick = onClick)
+            .clip(CircleShape)
+            .background(bg)
+            .padding(horizontal = 20.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, style = if (large) MaterialTheme.typography.titleSmall else MaterialTheme.typography.labelLarge, color = fg, maxLines = 1)
+    }
+}
+
+/**
+ * iOS-style segmented control: a glass track with a raised thumb that slides between options as a
+ * gel (leading edge first, trailing edge catching up). Drawn, not laid out, so the slide costs one
+ * draw per frame.
+ */
+@Composable
+fun SegmentedControl(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+    var width by remember { mutableStateOf(0) }
+    val seg = if (options.isEmpty()) 0f else width.toFloat() / options.size
+    val left = remember { Animatable(-1f) }
+    val right = remember { Animatable(-1f) }
+    LaunchedEffect(selected, seg) {
+        if (seg == 0f) return@LaunchedEffect
+        val l = selected * seg
+        if (left.value < 0f) {
+            left.snapTo(l); right.snapTo(l + seg)
+            return@LaunchedEffect
+        }
+        val forward = l > left.value
+        launch { left.animateTo(l, if (forward) VyomaMotion.trailing() else VyomaMotion.leading()) }
+        launch { right.animateTo(l + seg, if (forward) VyomaMotion.leading() else VyomaMotion.trailing()) }
+    }
+    val dark = isDarkUi
+    val thumb = if (dark) Color.White.copy(alpha = 0.2f) else Color.White
+    val shadow = Color.Black.copy(alpha = if (dark) 0f else 0.08f)
+    Row(
+        modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f))
+            .padding(3.dp)
+            .onSizeChanged { width = it.width }
+            .drawBehind {
+                if (left.value < 0f) return@drawBehind
+                val r = CornerRadius(size.height / 2)
+                val w = right.value - left.value
+                drawRoundRect(shadow, Offset(left.value, 1.dp.toPx()), Size(w, size.height), r)
+                drawRoundRect(thumb, Offset(left.value, 0f), Size(w, size.height), r)
+            },
+    ) {
+        options.forEachIndexed { i, label ->
+            val on = i == selected
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxSize()
+                    .pressable(pressedScale = 0.94f, role = Role.Tab, haptic = Haptic.Select) { if (!on) onSelect(i) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
     }
 }

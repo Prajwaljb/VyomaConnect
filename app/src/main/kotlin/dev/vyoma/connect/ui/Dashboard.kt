@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.Lifecycle
@@ -13,6 +15,11 @@ import dev.vyoma.connect.designsystem.glassCard
 import dev.vyoma.connect.designsystem.SystemColor
 import dev.vyoma.connect.designsystem.Glass
 import kotlin.math.roundToInt
+import kotlin.math.abs
+import kotlin.math.sign
+import androidx.compose.ui.graphics.TransformOrigin
+import dev.vyoma.connect.designsystem.Haptic
+import dev.vyoma.connect.designsystem.perform
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.foundation.gestures.horizontalDrag
@@ -61,17 +68,14 @@ import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,7 +86,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -188,6 +191,7 @@ fun PcDashboard(
     val id = state.identity.deviceId
     val pc = rememberPcState(vm, state)
     val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
     when (section) {
         DashboardSection.BENTO -> Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             val phone by vm.phoneBattery.collectAsStateWithLifecycle()
@@ -199,6 +203,7 @@ fun PcDashboard(
                 onOpen = onClipboard,
                 onSend = {
                     val to = vm.sendClipboard()
+                    haptics.perform(if (to != null) Haptic.Success else Haptic.Failure)
                     toast(context, if (to != null) "Clipboard sent to $to" else "Copy something first")
                 },
             )
@@ -241,12 +246,14 @@ fun PcDashboard(
                     if (pc.locked == true) "Locked" else "Lock",
                     SystemColor.BLUE,
                     active = pc.locked == true,
+                    toggle = true,
                 ) { vm.setPcLocked(id, pc.locked != true) },
                 Control(
                     if (pc.sink?.muted == true) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
                     if (pc.sink?.muted == true) "Muted" else "Mute",
                     SystemColor.RED,
                     active = pc.sink?.muted == true,
+                    toggle = pc.sink != null,
                 ) { pc.sink?.let { vm.setSinkMuted(id, it.name, !it.muted) } ?: toast(context, "Volume control isn't on for this PC") },
                 Control(Icons.Rounded.NotificationsActive, "Find PC", SystemColor.YELLOW) { vm.ringPc(id) },
                 Control(Icons.Rounded.Sensors, "Ping", SystemColor.GREEN) { vm.ping(id) },
@@ -346,7 +353,7 @@ private fun ClipboardTile(clip: ClipEntry?, modifier: Modifier, onOpen: () -> Un
                     modifier = Modifier.weight(1f),
                 )
                 Box(
-                    Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary).pressable(pressedScale = 0.88f, onClick = onSend),
+                    Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary).pressable(pressedScale = 0.84f, haptic = null, onClick = onSend),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(Icons.Rounded.Send, "Send to PC", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
@@ -357,8 +364,9 @@ private fun ClipboardTile(clip: ClipEntry?, modifier: Modifier, onOpen: () -> Un
 }
 
 /**
- * iOS-style chunky volume: drag or tap anywhere on the bar. Tracks the finger 1:1 while
- * dragging and springs to the PC's value otherwise. A tick at both ends.
+ * iOS-style chunky volume: drag anywhere on the bar. Tracks the finger 1:1 while dragging and
+ * springs to the PC's value otherwise. A detent every 10%, a firmer one at the ends, and past an
+ * end the bar itself stretches toward your finger like a gel and wobbles back when let go.
  */
 @Composable
 internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modifier = Modifier) {
@@ -366,6 +374,9 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
     var level by remember(sink.name) { mutableFloatStateOf(sink.volume / max) }
     var dragging by remember { mutableStateOf(false) }
     var lastTouch by remember { mutableLongStateOf(0L) }
+    // How far the finger has pulled past an end, as a fraction of the bar (signed: + is past max).
+    var excess by remember { mutableFloatStateOf(0f) }
+    val pull by animateFloatAsState(rubberBand(excess), if (dragging) snap() else VyomaMotion.release(), label = "volPull")
     // The PC echoes every value we send, late. Ignore echoes while the finger is down and shortly
     // after; once they stop, settle on whatever the PC really ended up at.
     LaunchedEffect(sink.volume, dragging) {
@@ -383,10 +394,20 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
 
     fun set(v: Float) {
         val n = v.coerceIn(0f, 1f)
-        if ((n == 0f || n == 1f) && n != level) haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
         if (n == level) return
+        when {
+            n == 0f || n == 1f -> haptics.perform(Haptic.Edge)
+            (n * 10).toInt() != (level * 10).toInt() -> haptics.perform(Haptic.Detent)
+        }
         level = n
         onVolume((n * max).roundToInt())
+    }
+    /** Moves by [delta]; whatever lands beyond 0 or 1 stretches the bar instead. */
+    fun drag(delta: Float) {
+        val total = level + excess + delta
+        val n = total.coerceIn(0f, 1f)
+        excess = total - n
+        set(n)
     }
 
     Row(modifier.fillMaxWidth().height(64.dp)) {
@@ -394,6 +415,13 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
             Modifier
                 .weight(1f)
                 .fillMaxHeight()
+                .graphicsLayer {
+                    if (pull != 0f) {
+                        transformOrigin = TransformOrigin(if (pull > 0f) 0f else 1f, 0.5f)
+                        scaleX = 1f + abs(pull)
+                        scaleY = 1f - abs(pull) * 0.5f
+                    }
+                }
                 .glassCard(MaterialTheme.shapes.large)
                 .pointerInput(sink.name) {
                     // Relative drag like iOS: the bar follows the finger's movement and never jumps
@@ -403,16 +431,17 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
                         val start = awaitHorizontalTouchSlopOrCancellation(down.id) { change, over ->
                             change.consume()
                             dragging = true
-                            set(level + over / size.width)
+                            drag(over / size.width)
                         } ?: return@awaitEachGesture
                         horizontalDrag(start.id) { change ->
                             // Read the movement before consuming: consumed changes report zero.
                             val dx = change.positionChange().x
                             change.consume()
                             lastTouch = System.currentTimeMillis()
-                            set(level + dx / size.width)
+                            drag(dx / size.width)
                         }
                         lastTouch = System.currentTimeMillis()
+                        excess = 0f
                         dragging = false
                     }
                 },
@@ -449,6 +478,9 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
 }
 
 private const val ECHO_QUIET_MS = 700L
+
+/** Diminishing stretch: the further you pull, the less it gives, topping out at 6%. */
+private fun rubberBand(excess: Float): Float = sign(excess) * 0.06f * (1f - 1f / (1f + abs(excess) * 4f))
 private const val STATS_RENEW_MS = 5_000L
 
 private class Control(
@@ -456,6 +488,8 @@ private class Control(
     val label: String,
     val color: SystemColor,
     val active: Boolean = false,
+    /** Flips [active]: ticks on/off instead of a plain tap. */
+    val toggle: Boolean = false,
     val onClick: () -> Unit,
 )
 
@@ -479,7 +513,12 @@ private fun ControlButton(c: Control, modifier: Modifier) {
     val tone = c.color.color
     val bg by animateColorAsState(if (c.active) tone else Glass.raised, VyomaMotion.effects(), label = "ctlBg")
     val fg by animateColorAsState(if (c.active) Color.White else tone, VyomaMotion.effects(), label = "ctlFg")
-    Column(modifier.pressable(pressedScale = 0.9f, onClick = c.onClick), horizontalAlignment = Alignment.CenterHorizontally) {
+    val haptic = when {
+        !c.toggle -> Haptic.Tap
+        c.active -> Haptic.ToggleOff
+        else -> Haptic.ToggleOn
+    }
+    Column(modifier.pressable(pressedScale = 0.88f, haptic = haptic, onClick = c.onClick), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(56.dp).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) {
             Icon(c.icon, null, tint = fg, modifier = Modifier.size(24.dp))
         }

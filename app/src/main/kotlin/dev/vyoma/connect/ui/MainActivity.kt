@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.MutableState
@@ -18,40 +19,48 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.SeekableTransitionState
+import androidx.compose.animation.core.rememberTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.VyomaTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
+private const val PAGE_SWIPE_MS = 420
+
 sealed interface Screen {
     /** The tabs (Home, Clipboard, Settings) under the floating bar. */
     data object Home : Screen
     data class DeviceDetail(val id: String) : Screen
     data class Touchpad(val deviceId: String?, val keyboard: Boolean) : Screen
+}
+
+/** How deep a screen sits; deeper means the transition is a push. */
+private val Screen.depth get() = when (this) {
+    Screen.Home -> 0
+    is Screen.DeviceDetail -> 1
+    is Screen.Touchpad -> 2
 }
 
 class MainActivity : ComponentActivity() {
@@ -99,6 +108,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Brings the link back if the system or the user stopped it while we were away. Idempotent.
+        if (vm.showOnboarding.value == false) vm.startService()
         vm.onForeground()
     }
 
@@ -144,64 +155,58 @@ private fun PermissionGate(onReady: () -> Unit) {
 }
 
 /**
- * Tiny back stack with One UI-style motion: pushes slide in from the side, and predictive
- * back shrinks and rounds the current page under your thumb before it leaves.
+ * Tiny back stack with iOS-style motion: pages push in from the right over a parallaxed,
+ * dimmed parent. The back gesture drags the page off under your thumb with the parent already
+ * visible beneath, then finishes (or snaps back) from wherever you let go.
  */
 @Composable
 private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState<Tab>, vm: AppViewModel) {
     val scope = rememberCoroutineScope()
-    val backProgress = remember { Animatable(0f) }
     var tab by tabState
     val toTab: (Tab) -> Unit = { t -> backStack.retainAll { it == Screen.Home }; tab = t }
 
     // At the root, back on another tab goes Home first, like One UI apps.
     BackHandler(enabled = backStack.size == 1 && tab != Tab.HOME) { tab = Tab.HOME }
 
-    if (backStack.size > 1) {
-        PredictiveBackHandler { events ->
-            try {
-                events.collect { e -> backProgress.snapTo(e.progress) }
-                backStack.removeAt(backStack.lastIndex)
-            } catch (e: CancellationException) {
-                scope.launch { backProgress.animateTo(0f, VyomaMotion.spatial()) }
-                throw e
+    val current = backStack.last()
+    val nav = remember { SeekableTransitionState<Screen>(current) }
+    // True while a back swipe drives the transition (and while its release animates).
+    var swiping by remember { mutableStateOf(false) }
+    LaunchedEffect(current) {
+        nav.animateTo(current, if (swiping) VyomaMotion.page() else null)
+        swiping = false
+    }
+    PredictiveBackHandler(enabled = backStack.size > 1) { events ->
+        val previous = backStack[backStack.lastIndex - 1]
+        try {
+            swiping = true
+            events.collect { e -> nav.seekTo(e.progress, previous) }
+            backStack.removeAt(backStack.lastIndex)
+        } catch (e: CancellationException) {
+            scope.launch {
+                nav.animateTo(nav.currentState, VyomaMotion.page())
+                swiping = false
             }
+            throw e
         }
     }
 
-    val current = backStack.last()
     val pop: () -> Unit = { if (backStack.size > 1) backStack.removeAt(backStack.lastIndex) }
-    AnimatedContent(
-        targetState = current,
+    rememberTransition(nav, label = "nav").AnimatedContent(
         transitionSpec = {
-            // Home is always the root, so anything else is a push.
-            if (targetState !is Screen.Home) {
-                (slideInHorizontally(VyomaMotion.spatial()) { it / 3 } + fadeIn(VyomaMotion.effects()))
-                    .togetherWith(scaleOut(VyomaMotion.effects(), targetScale = 0.94f) + fadeOut(VyomaMotion.effects()))
+            // A swipe seeks through the animation, so it needs a linear timeline; buttons get springs.
+            val slide: FiniteAnimationSpec<IntOffset> = if (swiping) tween(PAGE_SWIPE_MS, easing = LinearEasing) else VyomaMotion.page()
+            val fade: FiniteAnimationSpec<Float> = if (swiping) tween(PAGE_SWIPE_MS, easing = LinearEasing) else VyomaMotion.effects()
+            if (targetState.depth > initialState.depth) {
+                slideInHorizontally(slide) { it } togetherWith
+                    (slideOutHorizontally(slide) { -it / 4 } + fadeOut(fade, targetAlpha = 0.6f))
             } else {
-                (scaleIn(VyomaMotion.effects(), initialScale = 0.94f) + fadeIn(VyomaMotion.effects()))
-                    .togetherWith(slideOutHorizontally(VyomaMotion.spatial()) { it / 3 } + fadeOut(VyomaMotion.effects()))
+                ((slideInHorizontally(slide) { -it / 4 } + fadeIn(fade, initialAlpha = 0.6f)) togetherWith
+                    slideOutHorizontally(slide) { it }).apply { targetContentZIndex = -1f }
             }
         },
-        label = "nav",
     ) { screen ->
-        LaunchedEffect(screen) { backProgress.snapTo(0f) }
-        val isTop = screen == backStack.lastOrNull()
-        Box(
-            Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    if (isTop && backProgress.value > 0f) {
-                        val p = backProgress.value
-                        val s = 1f - 0.1f * p
-                        scaleX = s
-                        scaleY = s
-                        translationX = 24.dp.toPx() * p
-                        shape = RoundedCornerShape(32.dp * p)
-                        clip = true
-                    }
-                },
-        ) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             when (screen) {
                 Screen.Home -> TabsRoot(
                     tab = tab,
