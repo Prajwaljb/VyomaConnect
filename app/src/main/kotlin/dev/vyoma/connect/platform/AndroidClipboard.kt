@@ -102,8 +102,8 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
         _current.value = entry
         // The same text copied again moves to the top; whitespace differences (a trailing newline
         // from one app, not another) don't make it a second entry.
-        val key = entry.text.trim()
-        _history.update { old -> (listOf(entry) + old.filterNot { it.text.trim() == key }).take(HISTORY_SIZE) }
+        val key = sameText(entry.text)
+        _history.update { old -> (listOf(entry) + old.filterNot { sameText(it.text) == key }).take(HISTORY_SIZE) }
         persist()
     }
 
@@ -211,6 +211,11 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
             val o = el as? JsonObject ?: return@mapNotNull null
             val t = (o["text"] as? JsonPrimitive)?.content ?: return@mapNotNull null
             ClipEntry(t, o["timestamp"]?.jsonPrimitive?.long ?: 0, (o["origin"] as? JsonPrimitive)?.content)
-        }.distinctBy { it.text.trim() } // newest first, so the latest copy of a repeat wins
+        }.distinctBy { sameText(it.text) } // newest first, so the latest copy of a repeat wins
     }
 }
+
+/** Repeats differ only in whitespace when they've been through a terminal or the PC (wrapped lines, CRLF). */
+private fun sameText(text: String) = text.trim().replace(WHITESPACE, " ")
+
+private val WHITESPACE = Regex("""\s+""")

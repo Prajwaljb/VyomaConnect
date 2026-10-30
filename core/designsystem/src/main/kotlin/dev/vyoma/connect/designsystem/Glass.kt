@@ -55,6 +55,18 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.DrawModifierNode
+import androidx.compose.ui.node.GlobalPositionAwareModifierNode
+import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
+import androidx.compose.ui.node.currentValueOf
+import androidx.compose.ui.node.requireGraphicsContext
+import androidx.compose.ui.node.invalidateDraw
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.graphics.drawscope.ContentDrawScope
+import androidx.compose.ui.graphics.GraphicsContext
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.material3.LocalContentColor
 import kotlin.math.roundToInt
 
 /*
@@ -374,15 +386,15 @@ fun Modifier.glassChrome(
                 return@drawBehind
             }
             // The rim stays a fifth of the element at most, so small buttons are still mostly clear.
-            val rim = bevel.toPx().coerceAtMost(size.minDimension / 5)
-            // A slab six rims deep throws the edge's view across the element; the margin is what
-            // lies beyond its far side.
-            val depth = rim * 6f
+            val rim = bevel.toPx().coerceAtMost(size.minDimension * LensStyle.Chrome.rim)
+            // A deep slab throws the edge's view across the element; the margin is what lies
+            // beyond its far side.
+            val depth = rim * LensStyle.Chrome.depth
             val m = (rim * 2f).roundToInt() + 1
             blurred.renderEffect = lens.effect(
                 size, m.toFloat(), radius = size.minDimension / 2, bevel = rim, refract = depth, zoom = 1f,
                 // Clear in dark mode; light mode keeps more milk so dark labels stay legible over photos.
-                disperse = 0.15f, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.85f), spec = if (dark) 0.42f else 0.8f,
+                disperse = LensStyle.Chrome.disperse, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.85f), spec = if (dark) 0.42f else 0.8f,
                 shade = if (dark) 0f else 0.1f, blur = r,
             )
             blurred.record(IntSize(size.width.roundToInt() + 2 * m, size.height.roundToInt() + 2 * m)) {
@@ -393,52 +405,129 @@ fun Modifier.glassChrome(
         .then(if (edge && lens == null) Modifier.border(0.75.dp, edgeBrush, shape) else Modifier)
 }
 
+/** How a lens bends: the rim as a share of the lens's short side, and the slab's depth in rims. */
+@Immutable
+class LensStyle(val rim: Float, val depth: Float, val disperse: Float) {
+    companion object {
+        /** Bars, buttons and controls: water-like, the rim shows what's across the element. */
+        val Chrome = LensStyle(rim = 0.2f, depth = 6f, disperse = 0.04f)
+        /** A tube holding liquid (volume bar): a wide rim so the surface visibly climbs the walls. */
+        val Tube = LensStyle(rim = 0.3f, depth = 3f, disperse = 0f)
+        /** Drops that move or grow over content (tab lens, slider and press drops): a thinner,
+         *  calmer rim so what's under the middle stays readable. */
+        val Drop = LensStyle(rim = 0.18f, depth = 2.6f, disperse = 0.03f)
+    }
+}
+
 /**
- * A clear liquid droplet over this element: what's under [rect] (this element's own drawing and
- * the [backdrop] around it, so it can spill past the edges) magnified by [zoom], with a refracting
- * rim. Drawn while [strength] > 0, faded by it; costs nothing otherwise. Android 13+ only
- * ([liquidGlassSupported]); callers keep their plain look below that.
+ * A clear liquid drop over this element: what's under [rect] (this element's own drawing, over
+ * [underlay], plus the [backdrop] around it if given, so it can spill past the edges) magnified by
+ * [zoom], refracted by its rim. Drawn while [strength] > 0, faded by it. A modifier node that
+ * allocates nothing until the first frame it's visible and draws plain content otherwise, so it's
+ * fine on every control. Android 13+ only ([liquidGlassSupported]); a no-op below.
  */
-fun Modifier.liquidLens(backdrop: Backdrop?, strength: () -> Float, zoom: () -> Float, rect: DrawScope.() -> Rect): Modifier = composed {
-    if (!liquidGlassSupported) return@composed this
-    val self = rememberGraphicsLayer()
-    val drop = rememberGraphicsLayer()
-    val lens = remember { LiquidGlass() }
-    var position by remember { mutableStateOf(Offset.Zero) }
-    val dark = isDarkUi
-    this
-        .onGloballyPositioned { position = it.positionInRoot() }
-        .drawWithContent {
-            val a = strength().coerceIn(0f, 1f)
-            if (a < 0.01f) {
-                drawContent()
-                return@drawWithContent
-            }
-            self.record { this@drawWithContent.drawContent() }
-            drawLayer(self)
-            val r = rect()
-            if (r.width < 1f || r.height < 1f) return@drawWithContent
-            val radius = r.minDimension / 2
-            val rim = r.minDimension / 4
-            val m = (rim * 2f).roundToInt() + 1
-            drop.renderEffect = lens.effect(
-                r.size, m.toFloat(), radius, bevel = rim, refract = rim * 5f, zoom = zoom(), disperse = 0.12f,
-                tint = Color.White.copy(alpha = if (dark) 0.05f else 0.12f), spec = if (dark) 0.55f else 0.9f,
-                shade = if (dark) 0f else 0.12f, blur = 0f,
-            )
-            drop.alpha = a
-            // A margin around the drop, so its rim can bend in what's just outside it.
-            drop.record(IntSize(r.width.roundToInt() + 2 * m, r.height.roundToInt() + 2 * m)) {
-                translate(m - r.left, m - r.top) {
-                    if (backdrop != null) {
-                        val shift = backdrop.origin - position
-                        translate(shift.x, shift.y) { drawLayer(backdrop.layer) }
-                    }
-                    drawLayer(self)
-                }
-            }
-            translate(r.left - m, r.top - m) { drawLayer(drop) }
+fun Modifier.liquidLens(
+    backdrop: Backdrop?,
+    strength: () -> Float,
+    zoom: () -> Float = { 1f },
+    underlay: Color = Color.Transparent,
+    style: LensStyle = LensStyle.Drop,
+    rect: DrawScope.() -> Rect,
+): Modifier = if (!liquidGlassSupported) this else this then LiquidLensElement(backdrop, strength, zoom, underlay, style, rect)
+
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+private data class LiquidLensElement(
+    val backdrop: Backdrop?,
+    val strength: () -> Float,
+    val zoom: () -> Float,
+    val underlay: Color,
+    val style: LensStyle,
+    val rect: DrawScope.() -> Rect,
+) : ModifierNodeElement<LiquidLensNode>() {
+    override fun create() = LiquidLensNode(backdrop, strength, zoom, underlay, style, rect)
+    override fun update(node: LiquidLensNode) {
+        node.backdrop = backdrop
+        node.strength = strength
+        node.zoom = zoom
+        node.underlay = underlay
+        node.style = style
+        node.rect = rect
+        node.invalidateDraw()
+    }
+}
+
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+private class LiquidLensNode(
+    var backdrop: Backdrop?,
+    var strength: () -> Float,
+    var zoom: () -> Float,
+    var underlay: Color,
+    var style: LensStyle,
+    var rect: DrawScope.() -> Rect,
+) : Modifier.Node(), DrawModifierNode, GlobalPositionAwareModifierNode, CompositionLocalConsumerModifierNode {
+    private var position = Offset.Zero
+    private var painter: LensPainter? = null
+
+    override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
+        position = coordinates.positionInRoot()
+    }
+
+    override fun ContentDrawScope.draw() {
+        val a = strength().coerceIn(0f, 1f)
+        val r = if (a >= 0.01f) rect() else Rect.Zero
+        if (a < 0.01f || r.width < 1f || r.height < 1f) {
+            drawContent()
+            return
         }
+        // Light glyphs on it means a dark surface under it.
+        val dark = currentValueOf(LocalContentColor).luminance() > 0.5f
+        val p = painter ?: LensPainter(requireGraphicsContext()).also { painter = it }
+        val shift = backdrop?.let { it.origin - position }
+        with(p) { paint(a, r, zoom(), style, underlay, dark, backdrop, shift ?: Offset.Zero) }
+    }
+
+    override fun onDetach() {
+        painter?.release()
+        painter = null
+    }
+}
+
+/**
+ * Draws content plus a refracting drop over part of it. Owns two layers from the graphics context,
+ * released by [release]; one shader, rebuilt only when an input changes.
+ */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+internal class LensPainter(private val graphics: GraphicsContext) {
+    private val self = graphics.createGraphicsLayer()
+    private val drop = graphics.createGraphicsLayer()
+    private val glass = LiquidGlass()
+
+    fun ContentDrawScope.paint(a: Float, r: Rect, zoom: Float, style: LensStyle, underlay: Color, dark: Boolean, backdrop: Backdrop?, shift: Offset) {
+        self.record { this@paint.drawContent() }
+        drawLayer(self)
+        val rim = r.minDimension * style.rim
+        // Room for the rim to look past the far edge.
+        val m = (r.minDimension * style.rim * 2f).roundToInt() + 1
+        drop.renderEffect = glass.effect(
+            r.size, m.toFloat(), r.minDimension / 2, bevel = rim, refract = rim * style.depth, zoom = zoom, disperse = style.disperse,
+            tint = Color.White.copy(alpha = if (dark) 0.05f else 0.12f), spec = if (dark) 0.55f else 0.9f,
+            shade = if (dark) 0f else 0.12f, blur = 0f,
+        )
+        drop.alpha = a
+        drop.record(IntSize(r.width.roundToInt() + 2 * m, r.height.roundToInt() + 2 * m)) {
+            if (underlay.alpha > 0f) drawRect(underlay)
+            translate(m - r.left, m - r.top) {
+                if (backdrop != null) translate(shift.x, shift.y) { drawLayer(backdrop.layer) }
+                drawLayer(self)
+            }
+        }
+        translate(r.left - m, r.top - m) { drawLayer(drop) }
+    }
+
+    fun release() {
+        graphics.releaseGraphicsLayer(self)
+        graphics.releaseGraphicsLayer(drop)
+    }
 }
 
 /** Liquid glass needs AGSL (Android 13); below that chrome stays frosted and lenses aren't drawn. */
@@ -519,17 +608,26 @@ half4 main(float2 p) {
     // refracts through it (Snell, glass ≈ 1.5) and travels on through the slab's depth, so near the
     // edge it lands far inside: the rim shows what's across the element, bent round like water.
     float t = clamp(1.0 + d / bevel, 0.0, 1.0);
-    float3 normal = normalize(float3(n * t, sqrt(max(1.0 - t * t, 0.0))));
-    float3 ray = refract(float3(0.0, 0.0, -1.0), normal, 1.0 / 1.5);
-    float h = bevel * sqrt(max(1.0 - t * t, 0.0));
-    float2 shift = ray.xy * (h + bendBy) / -ray.z;
     float2 lo = float2(0.5);
     float2 hi = size + 2.0 * margin - 0.5;
-    float2 at = clamp(margin + c + rel / zoom + shift, lo, hi);
-    float2 k = shift * disperse * 0.3;
-    half4 col = content.eval(at);
-    col.r = content.eval(clamp(at + k, lo, hi)).r;
-    col.b = content.eval(clamp(at - k, lo, hi)).b;
+    float2 at = margin + c + rel / zoom;
+    half4 col;
+    if (t <= 0.0) {
+        // The flat middle (most pixels): straight through, one sample.
+        col = content.eval(at);
+    } else {
+        float3 normal = normalize(float3(n * t, sqrt(max(1.0 - t * t, 0.0))));
+        float3 ray = refract(float3(0.0, 0.0, -1.0), normal, 1.0 / 1.5);
+        float h = bevel * sqrt(max(1.0 - t * t, 0.0));
+        float2 shift = ray.xy * (h + bendBy) / -ray.z;
+        at = clamp(at + shift, lo, hi);
+        col = content.eval(at);
+        if (disperse > 0.0) {
+            float2 k = shift * disperse * 0.3;
+            col.r = content.eval(clamp(at + k, lo, hi)).r;
+            col.b = content.eval(clamp(at - k, lo, hi)).b;
+        }
+    }
     col.rgb = mix(col.rgb, half3(tint.rgb) * col.a, half(tint.a));
     // A thin specular rim, brightest where it faces the light (top left) and its opposite.
     float rim = 1.0 - smoothstep(0.0, 1.8, -d);

@@ -1,6 +1,7 @@
 package dev.vyoma.connect.ui
 
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.layout.onSizeChanged
@@ -9,6 +10,7 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -57,6 +59,8 @@ import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.snap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -123,6 +127,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.vyoma.connect.designsystem.ConnectionOrb
 import dev.vyoma.connect.designsystem.OrbState
 import dev.vyoma.connect.designsystem.VyomaMotion
+import dev.vyoma.connect.designsystem.pressScale
+import androidx.compose.ui.geometry.Rect
+import dev.vyoma.connect.designsystem.LensStyle
+import dev.vyoma.connect.designsystem.liquidLens
 import dev.vyoma.connect.designsystem.pressable
 import dev.vyoma.connect.protocol.device.DeviceState
 import dev.vyoma.connect.protocol.plugin.builtin.AudioSink
@@ -206,6 +214,7 @@ fun Staggered(index: Int, modifier: Modifier = Modifier, content: @Composable ()
         modifier.graphicsLayer {
             val p = e.rise.value
             alpha = p.coerceIn(0f, 1f)
+            compositingStrategy = CompositingStrategy.ModulateAlpha
             translationY = (1f - p) * 28.dp.toPx()
             scaleX = 0.96f + 0.04f * p
             scaleY = 0.93f + 0.07f * e.wobble.value
@@ -386,6 +395,7 @@ private fun CapturePreview(uri: Uri, mime: String, what: String, onDismiss: () -
                 .graphicsLayer {
                     val p = appear.value
                     alpha = p.coerceIn(0f, 1f)
+                    compositingStrategy = CompositingStrategy.ModulateAlpha
                     val sc = 0.86f + 0.14f * p
                     scaleX = sc; scaleY = sc
                     translationY = (1f - p) * 60.dp.toPx()
@@ -514,7 +524,7 @@ private fun ClipboardTile(clip: ClipEntry?, modifier: Modifier, onOpen: () -> Un
                     modifier = Modifier.weight(1f),
                 )
                 Box(
-                    Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary).pressable(pressedScale = 0.84f, haptic = null, onClick = onSend),
+                    Modifier.size(40.dp).pressable(pressedScale = 0.84f, haptic = null, glass = true, onClick = onSend).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(Icons.Rounded.Send, "Send to PC", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
@@ -555,6 +565,7 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
         VyomaMotion.effects(), label = "volLiquid",
     )
     val onLiquid = if (sink.muted) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onPrimary
+    val page = MaterialTheme.colorScheme.background
 
     fun set(v: Float) {
         val n = v.coerceIn(0f, 1f)
@@ -586,6 +597,19 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
                 scaleX = 1f + stretch + 0.015f * swell
                 scaleY = 1f - stretch * 0.5f + 0.06f * swell
             }
+            // While held, a clear drop rides the surface of the liquid and magnifies it.
+            .liquidLens(
+                null,
+                strength = { swell },
+                zoom = { 1f + 0.16f * swell.coerceIn(0f, 1f) },
+                underlay = page,
+                rect = {
+                    val h = size.height * (0.72f + 0.38f * swell.coerceAtLeast(0f))
+                    val w = h * 1.55f
+                    val x = (shown.coerceIn(0f, 1f) * size.width).coerceIn(w / 2, size.width - w / 2)
+                    Rect(x - w / 2, (size.height - h) / 2, x + w / 2, (size.height + h) / 2)
+                },
+            )
             .draggable(
                 drag, Orientation.Horizontal,
                 onDragStarted = { dragging = true },
@@ -597,27 +621,34 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
                 },
             )
             .glassCard(CircleShape)
-            .clip(CircleShape)
-            .drawBehind {
-                val w = shown.coerceIn(0f, 1f) * size.width
-                if (w < 0.5f) return@drawBehind
-                // Full height with a straight leading edge: the surface of the liquid.
-                drawRect(
-                    Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.2f).compositeOver(liquid), liquid)),
-                    size = Size(w, size.height),
-                )
-                drawRect(
-                    Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.22f), Color.Transparent), endY = size.height * 0.5f),
-                    size = Size(w, size.height * 0.5f),
-                )
-                // The meniscus: light gathers at the surface.
-                val band = 12.dp.toPx().coerceAtMost(w)
-                drawRect(
-                    Brush.horizontalGradient(listOf(Color.Transparent, Color.White.copy(alpha = 0.3f)), startX = w - band, endX = w),
-                    topLeft = Offset(w - band, 0f), size = Size(band, size.height),
-                )
-            },
+            .clip(CircleShape),
     ) {
+        // The liquid sits in a tube of glass: the rim bends its surface up the walls like water.
+        // Only the liquid goes through the lens; refracted text would read as a glitch.
+        Box(
+            Modifier
+                .matchParentSize()
+                .liquidLens(null, strength = { 1f }, style = LensStyle.Tube, rect = { Rect(Offset.Zero, size) })
+                .drawBehind {
+                    val w = shown.coerceIn(0f, 1f) * size.width
+                    if (w < 0.5f) return@drawBehind
+                    // Full height with a straight leading edge: the surface of the liquid.
+                    drawRect(
+                        Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.2f).compositeOver(liquid), liquid)),
+                        size = Size(w, size.height),
+                    )
+                    drawRect(
+                        Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.22f), Color.Transparent), endY = size.height * 0.5f),
+                        size = Size(w, size.height * 0.5f),
+                    )
+                    // The meniscus: light gathers at the surface.
+                    val band = 12.dp.toPx().coerceAtMost(w)
+                    drawRect(
+                        Brush.horizontalGradient(listOf(Color.Transparent, Color.White.copy(alpha = 0.3f)), startX = w - band, endX = w),
+                        topLeft = Offset(w - band, 0f), size = Size(band, size.height),
+                    )
+                },
+        )
         VolumeLabels(sink, level, MaterialTheme.colorScheme.onSurface, MaterialTheme.colorScheme.onSurfaceVariant, Modifier)
         VolumeLabels(
             sink, level, onLiquid, onLiquid.copy(alpha = 0.85f),
@@ -691,7 +722,8 @@ private fun ControlButton(c: Control, modifier: Modifier) {
         else -> Haptic.ToggleOn
     }
     Column(modifier.pressable(pressedScale = 0.88f, haptic = haptic, onClick = c.onClick), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.size(56.dp).glassRaised(CircleShape, bg.takeIf { c.active || it != Glass.raised }), contentAlignment = Alignment.Center) {
+        // The circle turns to clear glass under the finger (the whole tile squishes from the Column).
+        Box(Modifier.size(56.dp).pressScale(1f, glass = true).glassRaised(CircleShape, bg.takeIf { c.active || it != Glass.raised }), contentAlignment = Alignment.Center) {
             Icon(c.icon, null, tint = fg, modifier = Modifier.size(24.dp))
         }
         Spacer(Modifier.height(6.dp))
@@ -752,10 +784,32 @@ private fun PcVitals(stats: PcStats?, modifier: Modifier = Modifier) {
 private fun Gauge(label: String, value: String?, fraction: Float, color: SystemColor, modifier: Modifier) {
     val tone = color.color
     val track = Glass.raised
-    val sweep by animateFloatAsState(fraction.coerceIn(0f, 1f), VyomaMotion.spatialSlow(), label = "gauge")
+    // Readings arrive every 2 s and wobble by a point or two. Whole percent steps and a short glide
+    // keep the redraw (which every glass element over the page repeats) to a fraction of a second.
+    // Small moves (most updates) jump in one frame; only real changes glide.
+    val step = (fraction.coerceIn(0f, 1f) * 100).roundToInt() / 100f
+    val gauge = remember { mutableFloatStateOf(step) }
+    LaunchedEffect(step) {
+        val from = gauge.floatValue
+        if (abs(step - from) < 0.03f) {
+            gauge.floatValue = step
+            return@LaunchedEffect
+        }
+        // Paced at ~30 fps by hand: a dial needs no more, and at 120 Hz the glide (and every glass
+        // element over the page) redrew 4x as often for nothing.
+        val start = withFrameMillis { it }
+        while (true) {
+            val f = ((withFrameMillis { it } - start) / 380f).coerceAtMost(1f)
+            gauge.floatValue = from + (step - from) * FastOutSlowInEasing.transform(f)
+            if (f >= 1f) break
+            delay(33)
+        }
+    }
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(58.dp), contentAlignment = Alignment.Center) {
+            // Read while drawing: the glide never recomposes.
             Canvas(Modifier.fillMaxSize()) {
+                val sweep = gauge.floatValue
                 val w = 6.dp.toPx()
                 val inset = Offset(w / 2, w / 2)
                 val arc = Size(size.width - w, size.height - w)

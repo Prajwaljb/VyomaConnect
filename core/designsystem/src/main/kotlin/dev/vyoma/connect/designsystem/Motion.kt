@@ -24,6 +24,16 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.node.DrawModifierNode
+import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
+import androidx.compose.ui.node.currentValueOf
+import androidx.compose.ui.node.requireGraphicsContext
+import androidx.compose.ui.graphics.drawscope.ContentDrawScope
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.material3.LocalContentColor
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -80,11 +90,13 @@ fun Modifier.pressable(
     pressedScale: Float = 0.96f,
     role: Role? = Role.Button,
     haptic: Haptic? = Haptic.Tap,
+    /** Capsules and circles only: turns into a clear drop of liquid glass while held. */
+    glass: Boolean = false,
     onClick: () -> Unit,
 ): Modifier = composed {
     val haptics = LocalHapticFeedback.current
     this
-        .pressScale(pressedScale, enabled)
+        .pressScale(pressedScale, enabled, glass)
         .clickable(interactionSource = null, indication = null, enabled = enabled, role = role) {
             haptic?.let(haptics::perform)
             onClick()
@@ -99,25 +111,50 @@ fun Modifier.pressable(
  *
  * A modifier node that only touches its own graphics layer: presses never recompose or relayout.
  */
-fun Modifier.pressScale(pressedScale: Float = 0.96f, enabled: Boolean = true): Modifier =
-    this then PressScaleElement(pressedScale, enabled)
+fun Modifier.pressScale(pressedScale: Float = 0.96f, enabled: Boolean = true, glass: Boolean = false): Modifier =
+    this then PressScaleElement(pressedScale, enabled, glass && liquidGlassSupported)
 
-private class PressScaleElement(val pressedScale: Float, val enabled: Boolean) : ModifierNodeElement<PressScaleNode>() {
-    override fun create() = PressScaleNode(pressedScale, enabled)
+private data class PressScaleElement(val pressedScale: Float, val enabled: Boolean, val glass: Boolean) : ModifierNodeElement<PressScaleNode>() {
+    override fun create() = PressScaleNode(pressedScale, enabled, glass)
     override fun update(node: PressScaleNode) {
         node.pressedScale = pressedScale
         node.enabled = enabled
+        node.glass = glass
     }
-    override fun equals(other: Any?) = other is PressScaleElement && other.pressedScale == pressedScale && other.enabled == enabled
-    override fun hashCode() = pressedScale.hashCode() * 31 + enabled.hashCode()
 }
 
-private class PressScaleNode(var pressedScale: Float, var enabled: Boolean) :
-    Modifier.Node(), PointerInputModifierNode, LayoutModifierNode {
+private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var glass: Boolean) :
+    Modifier.Node(), PointerInputModifierNode, LayoutModifierNode, DrawModifierNode, CompositionLocalConsumerModifierNode {
     private val sx = Animatable(1f)
     private val sy = Animatable(1f)
+    /** How clear the press drop is: up while held, eases out after. Only animated with [glass]. */
+    private val clear = Animatable(0f)
+    private var painter: LensPainter? = null
     private var held = false
     private var job: Job? = null
+    private var glassJob: Job? = null
+
+    override fun ContentDrawScope.draw() {
+        val a = if (glass) clear.value else 0f
+        if (a < 0.01f || !liquidGlassSupported) {
+            drawContent()
+            return
+        }
+        val dark = currentValueOf(LocalContentColor).luminance() > 0.5f
+        val p = painter ?: LensPainter(requireGraphicsContext()).also { painter = it }
+        with(p) { paint(a, Rect(Offset.Zero, size), 1f + 0.06f * a, LensStyle.Drop, Color.Transparent, dark, null, Offset.Zero) }
+    }
+
+    override fun onDetach() {
+        painter?.release()
+        painter = null
+    }
+
+    private fun clearTo(target: Float) {
+        if (!glass) return
+        glassJob?.cancel()
+        glassJob = coroutineScope.launch { clear.animateTo(target, if (target > 0f) VyomaMotion.spatial() else VyomaMotion.effects()) }
+    }
 
     override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, bounds: IntSize) {
         if (!enabled) return
@@ -140,6 +177,7 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean) :
 
     private fun press() {
         held = true
+        clearTo(1f)
         job?.cancel()
         // Height gives a beat later than width: a squash, not a shrink.
         job = coroutineScope.launch {
@@ -150,6 +188,7 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean) :
 
     private fun release(bounce: Boolean) {
         held = false
+        clearTo(0f)
         job?.cancel()
         job = coroutineScope.launch {
             if (bounce) {

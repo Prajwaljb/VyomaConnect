@@ -14,6 +14,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.util.lerp
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.RectangleShape
@@ -152,6 +153,7 @@ fun CollapsingHeaderScaffold(
                         .graphicsLayer {
                             val c = (listState.firstVisibleItemScrollOffset / (headerPx * 0.6f)).coerceIn(0f, 1f)
                             alpha = 1f - c
+                            compositingStrategy = CompositingStrategy.ModulateAlpha
                             translationY = listState.firstVisibleItemScrollOffset * 0.35f
                         }
                         .padding(horizontal = 12.dp),
@@ -219,6 +221,7 @@ fun CollapsingHeaderScaffold(
                         .graphicsLayer {
                             val t = ((collapse - 0.6f) / 0.4f).coerceIn(0f, 1f)
                             alpha = t
+                            compositingStrategy = CompositingStrategy.ModulateAlpha
                             translationY = (1f - t) * 10.dp.toPx()
                             scaleX = 0.9f + 0.1f * t
                             scaleY = 0.9f + 0.1f * t
@@ -454,7 +457,7 @@ fun PillButton(
     Box(
         modifier
             .then(if (large) Modifier.fillMaxWidth().height(54.dp) else Modifier.height(40.dp))
-            .pressable(enabled = enabled, pressedScale = if (large) 0.97f else 0.92f, haptic = haptic, onClick = onClick)
+            .pressable(enabled = enabled, pressedScale = if (large) 0.97f else 0.92f, haptic = haptic, glass = true, onClick = onClick)
             // Prominent pills are lit accent glass; the rest are raised glass with an accent label.
             .glassRaised(CircleShape, bg.takeIf { prominent && enabled })
             .padding(horizontal = 20.dp),
@@ -541,6 +544,8 @@ fun LiquidSlider(
     track: Color = Color.White.copy(alpha = 0.22f),
     rest: Dp = 6.dp,
     swollen: Dp = 14.dp,
+    /** What the slider sits on, so its drop has something to refract around the track. */
+    underlay: Color = Color.Transparent,
 ) {
     val swell = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -583,7 +588,8 @@ fun LiquidSlider(
             .liquidLens(
                 null,
                 strength = { swell.value },
-                zoom = { 1f + 0.25f * swell.value.coerceIn(0f, 1f) },
+                zoom = { 1f + 0.18f * swell.value.coerceIn(0f, 1f) },
+                underlay = underlay,
                 rect = {
                     val k = swell.value.coerceAtLeast(0f)
                     val dh = lerp(swollen.toPx(), size.height * 1.1f, k)
@@ -664,7 +670,7 @@ fun BounceIconButton(
     content: @Composable () -> Unit,
 ) {
     Box(
-        modifier.size(size).pressable(enabled = enabled, pressedScale = 0.8f, onClick = onClick),
+        modifier.size(size).pressable(enabled = enabled, pressedScale = 0.8f, glass = true, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { content() }
 }
