@@ -99,7 +99,7 @@ object Glass {
     /** Tint laid over real backdrop blur. */
     val chrome: Color
         @Composable @ReadOnlyComposable
-        get() = if (isDarkUi) Color(0xFF1C1D21).copy(alpha = 0.66f) else Color.White.copy(alpha = 0.7f)
+        get() = if (isDarkUi) Color(0xFF1C1D21).copy(alpha = 0.56f) else Color.White.copy(alpha = 0.6f)
 
     val edge: Brush
         @Composable @ReadOnlyComposable
@@ -207,9 +207,10 @@ fun Modifier.backdropSource(backdrop: Backdrop): Modifier = this
  * Real glass: whatever of [backdrop] sits behind this element, blurred on the GPU, then [tint]
  * and the edge highlight. The element must not be inside the backdrop's source.
  *
- * With a [bevel] (pills and circles only) and Android 13+, it's liquid glass instead: the rim bends
- * the content toward the centre like the edge of a lens, splits colour a little, and catches light
- * from the top left. One AGSL pass on the already-blurred layer, rebuilt only when the size changes.
+ * With a [bevel] (pills and circles only) and Android 13+, it's liquid glass instead: clearer, and
+ * the rim bends in what lies just outside the element like the edge of a lens, splits colour a
+ * little, and catches light from the top left. One AGSL pass over a lightly blurred layer that
+ * covers a margin around the element, rebuilt only when the size changes.
  */
 fun Modifier.glassChrome(
     backdrop: Backdrop,
@@ -228,17 +229,30 @@ fun Modifier.glassChrome(
     val blurs = remember { BlurCache() }
     this
         .onGloballyPositioned { position = it.positionInRoot() }
-        .clip(shape)
+        // The shader clips to the shape itself, and its rim needs to reach past the edge.
+        .then(if (lens == null) Modifier.clip(shape) else Modifier)
         .drawBehind {
             val r = blur.toPx()
-            blurred.renderEffect = lens?.effect(
-                size, radius = size.minDimension / 2, bevel = bevel.toPx(), refract = bevel.toPx() * 0.55f, zoom = 1f,
-                disperse = 0.15f, tint = fill.copy(alpha = fill.alpha * 0.85f), spec = if (dark) 0.42f else 0.8f, blur = r,
-            ) ?: blurs[r]
             val shift = backdrop.origin - position
-            blurred.record { translate(shift.x, shift.y) { drawLayer(backdrop.layer) } }
-            drawLayer(blurred)
-            if (lens == null) drawRect(fill)
+            if (lens == null) {
+                blurred.renderEffect = blurs[r]
+                blurred.record { translate(shift.x, shift.y) { drawLayer(backdrop.layer) } }
+                drawLayer(blurred)
+                drawRect(fill)
+                return@drawBehind
+            }
+            val bend = bevel.toPx() * 0.55f
+            val m = bend.roundToInt() + 1
+            blurred.renderEffect = lens.effect(
+                size, m.toFloat(), radius = size.minDimension / 2, bevel = bevel.toPx(), refract = bend, zoom = 1f,
+                // Clear in dark mode; light mode keeps more milk so dark labels stay legible over photos.
+                disperse = 0.15f, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.85f), spec = if (dark) 0.42f else 0.8f,
+                shade = if (dark) 0f else 0.1f, blur = r,
+            )
+            blurred.record(IntSize(size.width.roundToInt() + 2 * m, size.height.roundToInt() + 2 * m)) {
+                translate(shift.x + m, shift.y + m) { drawLayer(backdrop.layer) }
+            }
+            translate(-m.toFloat(), -m.toFloat()) { drawLayer(blurred) }
         }
         .then(if (edge && lens == null) Modifier.border(0.75.dp, edgeBrush, shape) else Modifier)
 }
@@ -269,19 +283,23 @@ fun Modifier.liquidLens(backdrop: Backdrop, strength: () -> Float, zoom: () -> F
             val r = rect()
             if (r.width < 1f || r.height < 1f) return@drawWithContent
             val radius = r.minDimension / 2
+            val bend = radius * 0.35f
+            val m = bend.roundToInt() + 1
             drop.renderEffect = lens.effect(
-                r.size, radius, bevel = radius * 0.7f, refract = radius * 0.35f, zoom = zoom(), disperse = 0.12f,
-                tint = Color.White.copy(alpha = if (dark) 0.05f else 0.12f), spec = if (dark) 0.55f else 0.9f, blur = 0f,
+                r.size, m.toFloat(), radius, bevel = radius * 0.7f, refract = bend, zoom = zoom(), disperse = 0.12f,
+                tint = Color.White.copy(alpha = if (dark) 0.05f else 0.12f), spec = if (dark) 0.55f else 0.9f,
+                shade = if (dark) 0f else 0.12f, blur = 0f,
             )
             drop.alpha = a
             val shift = backdrop.origin - position
-            drop.record(IntSize(r.width.roundToInt(), r.height.roundToInt())) {
-                translate(-r.left, -r.top) {
+            // A margin around the drop, so its rim can bend in what's just outside it.
+            drop.record(IntSize(r.width.roundToInt() + 2 * m, r.height.roundToInt() + 2 * m)) {
+                translate(m - r.left, m - r.top) {
                     translate(shift.x, shift.y) { drawLayer(backdrop.layer) }
                     drawLayer(self)
                 }
             }
-            translate(r.left, r.top) { drawLayer(drop) }
+            translate(r.left - m, r.top - m) { drawLayer(drop) }
         }
 }
 
@@ -298,23 +316,25 @@ private class BlurCache {
 }
 
 /**
- * The liquid glass pass (AGSL). The shape is a rounded rect given by its size and corner radius;
- * outside it the result is transparent, so it also clips. A RenderEffect copies its shader's
+ * The liquid glass pass (AGSL). The shape is a rounded rect given by its size and corner radius,
+ * inset by `margin` in the layer it runs on; outside it the result is transparent, so it also clips.
+ * The rim samples outward into the margin: surroundings bend in at the edge, like a real lens. A RenderEffect copies its shader's
  * uniforms when built, so it's rebuilt only when an input actually changes.
  */
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal class LiquidGlass {
     private val shader = RuntimeShader(AGSL)
-    private var last = FloatArray(13) { Float.NaN }
+    private var last = FloatArray(15) { Float.NaN }
     private var effect: RenderEffect? = null
 
     internal fun effect(
-        size: Size, radius: Float, bevel: Float, refract: Float, zoom: Float, disperse: Float, tint: Color, spec: Float, blur: Float,
+        size: Size, margin: Float, radius: Float, bevel: Float, refract: Float, zoom: Float, disperse: Float, tint: Color, spec: Float, shade: Float, blur: Float,
     ): RenderEffect {
-        val args = floatArrayOf(size.width, size.height, radius, bevel, refract, zoom, disperse, tint.red, tint.green, tint.blue, tint.alpha, spec, blur)
+        val args = floatArrayOf(size.width, size.height, margin, radius, bevel, refract, zoom, disperse, tint.red, tint.green, tint.blue, tint.alpha, spec, shade, blur)
         effect?.let { if (args.contentEquals(last)) return it }
         last = args
         shader.setFloatUniform("size", size.width, size.height)
+        shader.setFloatUniform("margin", margin)
         shader.setFloatUniform("radius", radius)
         shader.setFloatUniform("bevel", bevel.coerceAtLeast(1f))
         shader.setFloatUniform("bendBy", refract)
@@ -322,6 +342,7 @@ internal class LiquidGlass {
         shader.setFloatUniform("disperse", disperse)
         shader.setFloatUniform("tint", tint.red, tint.green, tint.blue, tint.alpha)
         shader.setFloatUniform("spec", spec)
+        shader.setFloatUniform("shade", shade)
         val glass = android.graphics.RenderEffect.createRuntimeShaderEffect(shader, "content")
         val full = if (blur > 0f) {
             android.graphics.RenderEffect.createChainEffect(
@@ -335,6 +356,7 @@ internal class LiquidGlass {
         const val AGSL = """
 uniform shader content;
 uniform float2 size;
+uniform float margin;
 uniform float radius;
 uniform float bevel;
 uniform float bendBy;
@@ -342,10 +364,11 @@ uniform float zoom;
 uniform float disperse;
 uniform float4 tint;
 uniform float spec;
+uniform float shade;
 
 half4 main(float2 p) {
     float2 c = size * 0.5;
-    float2 rel = p - c;
+    float2 rel = p - margin - c;
     float2 q = abs(rel) - (c - radius);
     float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
     if (d > 1.0) return half4(0.0);
@@ -353,9 +376,10 @@ half4 main(float2 p) {
     float2 n = (q.x > 0.0 && q.y > 0.0) ? normalize(q) : (q.x > q.y ? float2(1.0, 0.0) : float2(0.0, 1.0));
     n *= sign(rel);
     // 1 at the rim, 0 past the bevel; squared so the bend gathers at the very edge like a meniscus.
+    // The rim looks outward: what lies just beyond the edge is pulled in and compressed.
     float t = clamp(1.0 + d / bevel, 0.0, 1.0);
     float bend = t * t * bendBy;
-    float2 at = c + rel / zoom - n * bend;
+    float2 at = margin + c + rel / zoom + n * bend;
     float2 k = n * bend * disperse * 0.3;
     half4 col = content.eval(at);
     col.r = content.eval(at + k).r;
@@ -366,6 +390,8 @@ half4 main(float2 p) {
     float facing = abs(dot(n, float2(-0.6, -0.8)));
     float light = rim * (0.25 + 0.75 * facing * facing) + t * t * t * 0.12;
     col.rgb += half3(light * spec) * col.a;
+    // On light backgrounds a highlight alone vanishes: a faint shaded underside gives the edge.
+    col.rgb -= half3(rim * shade * (0.4 + 0.6 * max(n.y, 0.0))) * col.a;
     return col * half(clamp(0.5 - d, 0.0, 1.0));
 }
 """

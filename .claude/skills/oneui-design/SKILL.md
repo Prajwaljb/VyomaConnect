@@ -18,8 +18,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   inside the source. Gate chrome that comes and goes in the draw phase (`drawWithContent { if (shown) drawContent() }`),
   not with `if` in composition: composing it on every threshold crossing costs a frame and a fresh layer.
 - Liquid glass (Android 13+, `liquidGlassSupported`): `glassChrome(..., bevel = 16.dp)` on pills/circles runs one AGSL
-  pass (`LiquidGlass`) over the blurred layer: rim refraction toward the centre, slight colour split, specular rim lit
-  from the top left, tint baked in (no border). `Modifier.liquidLens(backdrop, strength, zoom, rect)` draws a clear
+  pass (`LiquidGlass`) over a lightly blurred (8 dp) layer recorded with a margin around the shape: the rim samples
+  outward, so what's just outside bends in at the edge; slight colour split; specular rim lit from the top left; tint
+  baked in (no border). Dark mode is clear (half tint); light mode keeps more milk (0.85) for legibility over photos
+  and adds a faint shaded underside (`shade`), since a white highlight vanishes on white. `Modifier.liquidLens(backdrop, strength, zoom, rect)` draws a clear
   magnifying drop over an element's own drawing plus the backdrop around it, so it can spill past the edges; the tab
   bar's selection lifts into one while dragged and briefly on each switch. Keep dispersion subtle (≤ 0.15): more
   reads as a rainbow glitch. AGSL builtins (`refract`, `reflect`, …) can't be uniform names. Below 13: frosted fallback.

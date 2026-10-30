@@ -137,7 +137,7 @@ fun TabsRoot(tab: Tab, onTab: (Tab) -> Unit, onTouchpad: () -> Unit, content: @C
         ) {
             TabBar(tab, onTab, backdrop)
             Box(
-                Modifier.size(BarHeight).glassChrome(backdrop, CircleShape, blur = 14.dp, bevel = 16.dp).pressable(pressedScale = 0.88f, onClick = onTouchpad),
+                Modifier.size(BarHeight).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp).pressable(pressedScale = 0.88f, onClick = onTouchpad),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(Icons.Rounded.TouchApp, "Touchpad", tint = MaterialTheme.colorScheme.onBackground)
@@ -211,7 +211,7 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
         Modifier
             .height(BarHeight)
             .liquidLens(backdrop, strength = { lift.value }, zoom = { 1f + 0.22f * lift.value.coerceIn(0f, 1f) }, rect = { pill() })
-            .glassChrome(backdrop, CircleShape, blur = 14.dp, bevel = 16.dp)
+            .glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp)
             .drawBehind {
                 // The resting pill fades as the clear drop takes its place (where drops can be drawn).
                 val a = if (liquidGlassSupported) 1f - lift.value.coerceIn(0f, 1f) else 1f
