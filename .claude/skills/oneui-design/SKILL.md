@@ -15,7 +15,14 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   Buttons on glass use `Glass.raised`. `SectionCard` already does this. Don't use `surfaceContainerLowest` for cards.
 - Real blur only for chrome: record content with `backdropSource(backdrop)` (put it OUTSIDE `aurora()` in the
   modifier chain so the canvas is recorded too), then `glassChrome(backdrop, shape)` on the bar, which must not be
-  inside the source. Compose chrome only while visible (the collapsed header does this).
+  inside the source. Gate chrome that comes and goes in the draw phase (`drawWithContent { if (shown) drawContent() }`),
+  not with `if` in composition: composing it on every threshold crossing costs a frame and a fresh layer.
+- Liquid glass (Android 13+, `liquidGlassSupported`): `glassChrome(..., bevel = 16.dp)` on pills/circles runs one AGSL
+  pass (`LiquidGlass`) over the blurred layer: rim refraction toward the centre, slight colour split, specular rim lit
+  from the top left, tint baked in (no border). `Modifier.liquidLens(backdrop, strength, zoom, rect)` draws a clear
+  magnifying drop over an element's own drawing plus the backdrop around it, so it can spill past the edges; the tab
+  bar's selection lifts into one while dragged and briefly on each switch. Keep dispersion subtle (≤ 0.15): more
+  reads as a rainbow glitch. AGSL builtins (`refract`, `reflect`, …) can't be uniform names. Below 13: frosted fallback.
 - Feature colors: `SystemColor` (iOS system palette, light/dark tones, no indigo/purple). `IconBadge` is a filled
   squircle with a white glyph; give each feature a stable color (notifications RED, messages GREEN, clipboard ORANGE,
   files/connection BLUE, touchpad TEAL, find YELLOW, battery GREEN, destructive RED, info/neutral GRAY).
@@ -54,16 +61,21 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   `release()` anything let go of (iOS wobble), `page()` navigation (no overshoot), `leading()/trailing()` pairs for
   liquid shapes (lens, switch thumb): the edge moving toward the target leads, the other trails, so it stretches.
 - Respond on touch-down, not on tap-up: `pressable` / `pressScale` dip immediately (Modifier.Node, layer-only) and
-  bounce on release; if a scroll steals the gesture they ease back without the bounce.
+  bounce on release like water: width settles on `release()`, height on the softer `jelly()`, so it wobbles out of
+  step instead of just scaling. If a scroll steals the gesture they ease back without the bounce.
 - Things that hit a limit stretch (rubber band, diminishing) instead of stopping dead: see the volume bar.
 - Navigation: push slides the page in from the right over a parallaxed parent; back follows the thumb through
   `SeekableTransitionState` (linear timeline while seeking, spring on commit/cancel). Tabs drift 1/12 width in the
   direction travelled.
-- Entrances: `Staggered(index)` once per item, 40 ms apart, never replayed on scroll-back.
+- Entrances: `Staggered(index)` once per item, 40 ms apart, never replayed on scroll-back; height lands on `jelly()`.
+  Animated values are read only inside `graphicsLayer`, never returned to composition.
+- Tabs stay composed once visited (others warmed up 800 ms after start), measured but unplaced while hidden; a
+  switch is a layer-only drift + fade, so it never composes a screen in one frame.
 - List changes: `Modifier.animateItem()`; size changes: `animateContentSize()`.
 - Performance is a requirement: animate in draw/layer phases (`graphicsLayer {}`, `drawBehind {}`, `placeWithLayer`),
-  read animated values inside those lambdas, use `derivedStateOf` for thresholds, and stop infinite animations when
-  nothing is changing (offline orb). Check `dumpsys gfxinfo` after motion work (target < 1% janky at 120 Hz).
+  read animated values inside those lambdas, use `derivedStateOf` for thresholds, and never run endless animations
+  on a resting screen: anything under the glass chrome forces the blur to re-render every frame. The connection orb
+  breathes 3 times on connect, then rests. Idle check: `gfxinfo reset`, wait 3 s, expect ~0 frames. Check `dumpsys gfxinfo` after motion work (target < 1% janky at 120 Hz).
 
 ## Haptics (`Haptic` in Motion.kt; always through `HapticFeedback.perform`)
 Tap = buttons/cards · Key = keyboard-like keys · ToggleOn/ToggleOff = switches and toggle controls · Select = tabs,

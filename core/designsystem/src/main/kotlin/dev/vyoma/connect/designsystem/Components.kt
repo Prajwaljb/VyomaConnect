@@ -9,10 +9,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -48,8 +45,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.State
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -63,6 +58,7 @@ import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.animation.core.Animatable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.runtime.mutableStateOf
@@ -173,10 +169,15 @@ fun CollapsingHeaderScaffold(
 
         // Compact bar: always present for navigation/actions. Once the hero has scrolled away it
         // turns into frosted glass over the list, and its title fades in.
-        val frosted by remember { derivedStateOf { collapse > 0.98f } }
         Box(Modifier.fillMaxWidth()) {
-            // Only composed while collapsed, so the expanded page never pays for the blur.
-            if (frosted) Box(Modifier.matchParentSize().glassChrome(backdrop, RectangleShape, edge = false))
+            // Only drawn while collapsed, so the expanded page never pays for the blur. Gated in the
+            // draw phase: composing it on every crossing cost a frame and a fresh layer each time.
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .drawWithContent { if (collapse > 0.98f) drawContent() }
+                    .glassChrome(backdrop, RectangleShape, edge = false),
+            )
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -305,20 +306,26 @@ fun ConnectionOrb(state: OrbState, modifier: Modifier = Modifier, size: Dp = 14.
         },
         label = "orb",
     )
-    // Offline rests: no frame clock running for a gray dot.
-    val pulse: State<Float> = if (state == OrbState.OFFLINE) remember { mutableFloatStateOf(0f) } else {
-        rememberInfiniteTransition(label = "orb").animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(if (state == OrbState.PENDING) 700 else 2200, easing = LinearEasing), RepeatMode.Restart),
-            label = "pulse",
-        )
+    // Breathes a few times when it connects, then rests: an endless pulse kept the whole screen
+    // (glass blur included) redrawing at 120 Hz while idle. Pairing keeps pulsing; it's brief.
+    val pulse = remember { Animatable(0f) }
+    LaunchedEffect(state) {
+        val beats = when (state) {
+            OrbState.CONNECTED -> 3
+            OrbState.PENDING -> Int.MAX_VALUE
+            OrbState.OFFLINE -> 0
+        }
+        repeat(beats) {
+            pulse.snapTo(0f)
+            pulse.animateTo(1f, tween(if (state == OrbState.PENDING) 700 else 2200, easing = LinearEasing))
+        }
+        pulse.snapTo(1f)
     }
     Canvas(modifier.size(size * 2.4f)) {
         val r = size.toPx() / 2
         val c = Offset(this.size.width / 2, this.size.height / 2)
-        if (state != OrbState.OFFLINE) {
-            val p = pulse.value
+        val p = pulse.value
+        if (p < 1f) {
             drawCircle(color.copy(alpha = 0.35f * (1f - p)), radius = r * (1f + p * 1.4f), center = c)
         }
         drawCircle(

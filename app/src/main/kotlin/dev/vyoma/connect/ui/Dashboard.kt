@@ -122,6 +122,7 @@ import dev.vyoma.connect.protocol.plugin.builtin.ClipEntry
 import dev.vyoma.connect.protocol.plugin.builtin.LockPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.SystemVolumePlugin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /** Live plugin state for one PC; plugins come and go with the link, so this re-reads on every plugin change. */
@@ -162,33 +163,42 @@ fun DeviceGlyph(state: DeviceState, size: Dp = 76.dp) {
     }
 }
 
+/** Rise ([rise]) and the softer jelly of its height ([wobble]); read only in the draw phase. */
+private class Entrance(played: Boolean) {
+    val rise = Animatable(if (played) 1f else 0f)
+    val wobble = Animatable(if (played) 1f else 0f)
+}
+
 @Composable
-private fun rememberEntrance(index: Int): Float {
+private fun rememberEntrance(index: Int): Entrance {
     var played by rememberSaveable { mutableStateOf(false) }
-    val anim = remember { Animatable(if (played) 1f else 0f) }
+    val e = remember { Entrance(played) }
     LaunchedEffect(Unit) {
         if (!played) {
             delay(40L * index)
-            anim.animateTo(1f, VyomaMotion.spatialSlow())
+            launch { e.wobble.animateTo(1f, VyomaMotion.jelly()) }
+            e.rise.animateTo(1f, VyomaMotion.spatialSlow())
             played = true
         }
     }
-    return anim.value
+    return e
 }
 
 /**
- * Fades and rises in once, staggered by [index]. Saved with the lazy item, so cards scrolling
- * back into view don't replay it.
+ * Fades and rises in once, staggered by [index], landing like a drop: its height settles on a
+ * softer spring than its width, so it stretches a touch and wobbles into shape. Saved with the
+ * lazy item, so cards scrolling back into view don't replay it. Animates in the layer only.
  */
 @Composable
 fun Staggered(index: Int, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    val p = rememberEntrance(index)
+    val e = rememberEntrance(index)
     Box(
         modifier.graphicsLayer {
+            val p = e.rise.value
             alpha = p.coerceIn(0f, 1f)
             translationY = (1f - p) * 28.dp.toPx()
-            val s = 0.96f + 0.04f * p
-            scaleX = s; scaleY = s
+            scaleX = 0.96f + 0.04f * p
+            scaleY = 0.93f + 0.07f * e.wobble.value
         },
     ) { content() }
 }
