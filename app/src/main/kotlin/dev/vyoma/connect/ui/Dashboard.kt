@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.shape.RoundedCornerShape
 import dev.vyoma.connect.designsystem.specularEdge
+import dev.vyoma.connect.designsystem.toned
 import dev.vyoma.connect.designsystem.glassRaised
 import dev.vyoma.connect.designsystem.glassCard
 import dev.vyoma.connect.designsystem.LiquidSlider
@@ -164,7 +165,7 @@ private fun rememberPcState(vm: AppViewModel, state: DeviceState): PcState {
     return PcState(battery ?: cached, battery == null && cached != null, sinks.firstOrNull { it.isDefault } ?: sinks.firstOrNull(), locked)
 }
 
-/** Hero glyph: the PC in an accent squircle whose edge catches the light, with the live orb pinned to its corner. */
+/** Hero glyph: the PC in a deep accent squircle whose edge catches the light, with the live orb pinned to its corner. */
 @Composable
 fun DeviceGlyph(state: DeviceState, size: Dp = 76.dp) {
     Box(Modifier.size(size)) {
@@ -174,7 +175,9 @@ fun DeviceGlyph(state: DeviceState, size: Dp = 76.dp) {
                 .fillMaxSize()
                 .specularEdge(RoundedCornerShape(size * 0.3f), 1.2.dp)
                 .clip(RoundedCornerShape(size * 0.3f))
-                .background(Brush.linearGradient(listOf(accent.copy(alpha = 0.7f).compositeOver(Color.White), accent))),
+                // A deep shade of the accent, like an app icon: the white glyph stands out on it (a pastel
+                // accent left it washed out).
+                .background(Brush.linearGradient(listOf(accent.toned(1.2f, 0.64f), accent.toned(1.2f, 0.5f)))),
             contentAlignment = Alignment.Center,
         ) {
             Icon(state.identity.deviceType.icon(), null, tint = Color.White, modifier = Modifier.size(size * 0.5f))
