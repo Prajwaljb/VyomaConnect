@@ -43,7 +43,7 @@ object SpecularLight {
     internal fun publish(a: Float, d: Offset) {
         // Hand tremor is a degree or two: below that nothing is redrawn.
         if (abs(a - angle) >= 1.5f) angle = a
-        if ((d - drift).getDistance() >= 0.04f) drift = d
+        if ((d - drift).getDistance() >= 0.02f) drift = d
     }
 }
 
@@ -143,8 +143,8 @@ private class TiltListener(private val context: Context) : SensorEventListener {
         const val GAIN = 1.4f
         const val RANGE = 110f
         /** Tilt (degrees from the recent rest) that drifts the canvas all the way. */
-        const val DRIFT_DEG = 18f
-        /** Per 20 ms sample: back to rest with a time constant of about three seconds. */
-        const val RECENTER = 0.0067f
+        const val DRIFT_DEG = 12f
+        /** Per 20 ms sample: back to rest with a time constant of about six seconds. */
+        const val RECENTER = 0.0033f
     }
 }
