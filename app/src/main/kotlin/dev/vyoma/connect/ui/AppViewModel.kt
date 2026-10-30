@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import androidx.core.content.edit
 import android.app.Application
 import android.content.Context
@@ -165,6 +166,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun fingerprint(id: String): String? = device(id)?.peerCertificate?.let(Certificates::sha256Fingerprint)
+
+    fun takeScreenshot(plugin: CompanionPlugin) = viewModelScope.launch { plugin.requestScreenshot() }
 
     fun setPalette(p: Palette) = viewModelScope.launch { settings.setPalette(p) }
     fun setDarkMode(m: DarkMode) = viewModelScope.launch { settings.setDarkMode(m) }

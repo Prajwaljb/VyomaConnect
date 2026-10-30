@@ -131,7 +131,7 @@ class AppContainer(private val app: Application) {
         TelephonyPlugin.spec(calls),
         ContactsPlugin.spec(contacts),
         ConnectivityReportPlugin.spec(signal.states),
-        CompanionPlugin.spec,
+        CompanionPlugin.spec(shareSink),
     )
 
     fun defaultDeviceName(): String =

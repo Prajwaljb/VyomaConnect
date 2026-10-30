@@ -15,6 +15,21 @@ import dev.vyoma.connect.designsystem.glassCard
 import dev.vyoma.connect.designsystem.SystemColor
 import dev.vyoma.connect.designsystem.Glass
 import kotlin.math.roundToInt
+import android.graphics.ImageDecoder
+import androidx.compose.foundation.Image
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import dev.vyoma.connect.designsystem.PillButton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.material.icons.rounded.Screenshot
+import dev.vyoma.connect.protocol.plugin.builtin.ScreenshotState
 import kotlin.math.abs
 import kotlin.math.sign
 import androidx.compose.ui.graphics.TransformOrigin
@@ -236,11 +251,26 @@ fun PcDashboard(
                 modifier = modifier,
             )
         }
-        DashboardSection.CONTROLS -> ControlGrid(
+        DashboardSection.CONTROLS -> {
+          val devices by vm.devices.collectAsStateWithLifecycle()
+          val companion = devices.firstOrNull { it.identity.companionOf == id && it.isPaired && it.isReachable }
+          val shots = remember(companion?.identity?.deviceId, companion?.plugins) {
+              companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
+          }
+          val shot by (shots?.screenshot ?: remember { MutableStateFlow(ScreenshotState.Idle) }).collectAsStateWithLifecycle()
+          ScreenshotOutcome(shot)
+          ControlGrid(
             listOf(
                 Control(Icons.Rounded.UploadFile, "Files", SystemColor.BLUE) { vm.pickFiles(context) },
                 Control(Icons.Rounded.TouchApp, "Touchpad", SystemColor.TEAL, onClick = onTouchpad),
-                Control(Icons.Rounded.ContentPaste, "Clipboard", SystemColor.ORANGE, onClick = onClipboard),
+                // With the companion, Screenshot takes this slot: Clipboard is already a tile and a tab.
+                if (shots != null) Control(
+                    Icons.Rounded.Screenshot,
+                    if (shot == ScreenshotState.Capturing) "Capturing" else "Screenshot",
+                    SystemColor.PINK,
+                    active = shot == ScreenshotState.Capturing,
+                ) { vm.takeScreenshot(shots) }
+                else Control(Icons.Rounded.ContentPaste, "Clipboard", SystemColor.ORANGE, onClick = onClipboard),
                 Control(
                     if (pc.locked == true) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
                     if (pc.locked == true) "Locked" else "Lock",
@@ -261,7 +291,97 @@ fun PcDashboard(
                 else Control(Icons.Rounded.MoreHoriz, "More", SystemColor.GRAY, onClick = onOpenDevice),
             ),
             modifier,
-        )
+          )
+        }
+    }
+}
+
+/** Previews a fresh screenshot in place (it was asked for just now), or says why it failed. */
+@Composable
+private fun ScreenshotOutcome(state: ScreenshotState) {
+    val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
+    var preview by remember { mutableStateOf<ScreenshotState.Done?>(null) }
+    LaunchedEffect(state) {
+        // Only react to outcomes that just happened, not ones left over from before a recomposition.
+        when (state) {
+            is ScreenshotState.Done -> if (System.currentTimeMillis() - state.at < 5_000) {
+                haptics.perform(Haptic.Success)
+                preview = state
+            }
+            is ScreenshotState.Failed -> if (System.currentTimeMillis() - state.at < 5_000) {
+                haptics.perform(Haptic.Failure)
+                toast(context, "Screenshot failed: ${state.reason}")
+            }
+            else -> Unit
+        }
+    }
+    preview?.let { ScreenshotPreview(Uri.parse(it.location), it.mime, onDismiss = { preview = null }) }
+}
+
+/**
+ * The screenshot on a glass card that springs up from the controls, like iOS's screenshot
+ * thumbnail: share it, open it in the gallery, or just close it (it's already in Pictures/Vyoma).
+ */
+@Composable
+private fun ScreenshotPreview(uri: Uri, mime: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val image by produceState<ImageBitmap?>(null, uri) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, info, _ ->
+                    // Screen-sized is plenty for a preview; a 4K desktop would otherwise be ~33 MB.
+                    val scale = (info.size.width / 1440f).coerceAtLeast(1f)
+                    decoder.setTargetSize((info.size.width / scale).roundToInt(), (info.size.height / scale).roundToInt())
+                }.asImageBitmap()
+            }.getOrNull()
+        }
+    }
+    val appear = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { appear.animateTo(1f, VyomaMotion.release()) }
+    fun launch(intent: Intent) = runCatching { context.startActivity(intent) }
+
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .graphicsLayer {
+                    val p = appear.value
+                    alpha = p.coerceIn(0f, 1f)
+                    val sc = 0.86f + 0.14f * p
+                    scaleX = sc; scaleY = sc
+                    translationY = (1f - p) * 60.dp.toPx()
+                }
+                // Dialogs get no backdrop blur, so the glass is made solid over the app background.
+                .glassCard(MaterialTheme.shapes.extraLarge, fill = Glass.chrome.compositeOver(MaterialTheme.colorScheme.background))
+                .padding(14.dp),
+        ) {
+            Box(
+                Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(MaterialTheme.shapes.large).background(Glass.raised),
+                contentAlignment = Alignment.Center,
+            ) {
+                image?.let { Image(it, "PC screenshot", Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
+            }
+            Spacer(Modifier.height(12.dp))
+            Text("Saved to Pictures/Vyoma", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PillButton("Share", prominent = false, modifier = Modifier.weight(1f), onClick = {
+                    launch(
+                        Intent.createChooser(
+                            Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM, uri)
+                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                            null,
+                        ),
+                    )
+                })
+                PillButton("Open", prominent = false, modifier = Modifier.weight(1f), onClick = {
+                    launch(Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                })
+                PillButton("Done", modifier = Modifier.weight(1f), onClick = onDismiss)
+            }
+        }
     }
 }
 

@@ -8,6 +8,7 @@
 mod identity;
 mod kde;
 mod link;
+mod screenshot;
 mod stats;
 
 use std::collections::{HashMap, HashSet};
@@ -106,8 +107,8 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.stats.request"],
-            "outgoingCapabilities": ["vyoma.stats"],
+            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request"],
+            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
         }),
@@ -128,6 +129,7 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
 
     let lease = Arc::new(Mutex::new(Instant::now()));
     let mut stats_task: Option<tokio::task::JoinHandle<()>> = None;
+    let mut shot_task: Option<tokio::task::JoinHandle<()>> = None;
     let result = loop {
         let Some(p) = link.receiver.next().await? else { break Ok(()) };
         match p["type"].as_str().unwrap_or_default() {
@@ -142,9 +144,24 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
                     stats_task = Some(tokio::spawn(stream_stats(link.sender.clone(), lease.clone())));
                 }
             }
+            "vyoma.screenshot.request" => {
+                // One at a time; repeated taps while one is in flight are ignored.
+                if shot_task.as_ref().is_none_or(|t| t.is_finished()) {
+                    let (sender, shared, pinned, name) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone());
+                    shot_task = Some(tokio::spawn(async move {
+                        match screenshot::capture_and_send(&sender, &shared.me, &pinned).await {
+                            Ok(()) => info!("{name}: sent a screenshot"),
+                            Err(e) => warn!("{name}: screenshot failed: {e:#}"),
+                        }
+                    }));
+                }
+            }
             _ => {}
         }
     };
+    if let Some(t) = shot_task {
+        t.abort();
+    }
     if let Some(t) = stats_task {
         t.abort();
     }

@@ -2,18 +2,24 @@
 //! subscription every few seconds), so an idle companion does no polling at all.
 
 use serde_json::{Value, json};
+use std::path::PathBuf;
+use std::time::Instant;
+
 use sysinfo::{Components, System};
 
 pub struct Stats {
     sys: System,
     components: Components,
+    /// Intel iGPU idle-residency counter and when we last read it (see [Stats::intel_busy]).
+    rc6: Option<(PathBuf, Instant, u64)>,
 }
 
 impl Stats {
     pub fn new() -> anyhow::Result<Self> {
         let mut sys = System::new()?;
         sys.refresh_cpu_usage();
-        Ok(Self { sys, components: Components::new_with_refreshed_list()? })
+        let rc6 = intel_rc6_path().and_then(|p| Some((p.clone(), Instant::now(), read_u64(&p)?)));
+        Ok(Self { sys, components: Components::new_with_refreshed_list()?, rc6 })
     }
 
     /// One sample. CPU usage is measured since the previous call, so call it at a steady rate.
@@ -26,9 +32,20 @@ impl Stats {
             "memUsed": self.sys.used_memory(),
             "memTotal": self.sys.total_memory(),
             "cpuTemp": self.cpu_temp().map(round1),
-            "gpu": gpu_busy(),
+            "gpu": amd_busy().or_else(|| self.intel_busy()),
             "uptime": System::uptime().ok(),
         })
+    }
+
+    /// i915 counts how long the GPU sat power-gated idle (RC6). Busy is the rest of the interval:
+    /// a true utilization figure with no root and nothing to spawn (intel_gpu_top needs perf access).
+    fn intel_busy(&mut self) -> Option<u8> {
+        let (path, then, idle_then) = self.rc6.as_mut()?;
+        let (now, idle_now) = (Instant::now(), read_u64(path)?);
+        let wall = now.duration_since(*then).as_millis() as f64;
+        let idle = idle_now.saturating_sub(*idle_then) as f64;
+        (*then, *idle_then) = (now, idle_now);
+        (wall > 0.0).then(|| ((1.0 - idle / wall).clamp(0.0, 1.0) * 100.0).round() as u8)
     }
 
     /// The package sensor: k10temp's Tctl on AMD, coretemp's Package on Intel, else the hottest CPU one.
@@ -48,7 +65,7 @@ impl Stats {
 }
 
 /// amdgpu (and some others) expose a busy percentage in sysfs; nothing to spawn or link against.
-fn gpu_busy() -> Option<u8> {
+fn amd_busy() -> Option<u8> {
     let cards = std::fs::read_dir("/sys/class/drm").ok()?;
     cards
         .flatten()
@@ -60,4 +77,12 @@ fn gpu_busy() -> Option<u8> {
 
 fn round1(v: f32) -> f32 {
     (v * 10.0).round() / 10.0
+}
+
+fn intel_rc6_path() -> Option<PathBuf> {
+    std::fs::read_dir("/sys/class/drm").ok()?.flatten().map(|e| e.path().join("gt/gt0/rc6_residency_ms")).find(|p| p.exists())
+}
+
+fn read_u64(path: &PathBuf) -> Option<u64> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }

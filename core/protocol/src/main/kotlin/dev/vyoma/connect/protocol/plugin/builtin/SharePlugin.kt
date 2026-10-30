@@ -77,6 +77,9 @@ interface ShareSink {
 
     /** Create the destination for an incoming file; null refuses it. */
     fun createFile(from: Device, name: String, size: Long, lastModified: Long?): IncomingFile?
+
+    /** Like [createFile], for images that belong with the user's pictures (PC screenshots). */
+    fun createPicture(from: Device, name: String, size: Long): IncomingFile? = createFile(from, name, size, null)
 }
 
 interface IncomingFile {
