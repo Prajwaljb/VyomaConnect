@@ -1,6 +1,7 @@
 package dev.vyoma.connect.ui
 
 import androidx.compose.runtime.getValue
+import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.glassCard
 import androidx.compose.foundation.layout.Box
@@ -21,7 +22,6 @@ import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Laptop
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -49,8 +49,8 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
     CollapsingHeaderScaffold(
         title = "Clipboard",
         subtitle = if (background) "Syncing automatically" else "Syncs while Vyoma is open",
-        navigation = onBack?.let { back -> { IconButton(onClick = back) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } } },
-        actions = { if (history.isNotEmpty()) IconButton(onClick = vm::clearClipHistory) { Icon(Icons.Rounded.DeleteSweep, "Clear history") } },
+        navigation = onBack?.let { back -> { BounceIconButton(onClick = back) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } } },
+        actions = { if (history.isNotEmpty()) BounceIconButton(onClick = vm::clearClipHistory) { Icon(Icons.Rounded.DeleteSweep, "Clear history") } },
     ) {
         item(key = "send") {
             SectionCard(contentPadding = PaddingValues(16.dp)) {

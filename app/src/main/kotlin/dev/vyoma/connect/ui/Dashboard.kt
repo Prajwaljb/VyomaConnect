@@ -1,5 +1,8 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.util.lerp
+import androidx.compose.ui.geometry.Rect
+import dev.vyoma.connect.designsystem.liquidLens
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.runtime.getValue
@@ -527,6 +530,8 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
     val max = sink.maxVolume.coerceAtLeast(1).toFloat()
     var level by remember(sink.name) { mutableFloatStateOf(sink.volume / max) }
     var dragging by remember { mutableStateOf(false) }
+    var held by remember { mutableStateOf(false) }
+    val lens by animateFloatAsState(if (held) 1f else 0f, if (held) VyomaMotion.spatial() else VyomaMotion.release(), label = "volLens")
     var lastTouch by remember { mutableLongStateOf(0L) }
     // How far the finger has pulled past an end, as a fraction of the bar (signed: + is past max).
     var excess by remember { mutableFloatStateOf(0f) }
@@ -576,6 +581,19 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
                         scaleY = 1f - abs(pull) * 0.5f
                     }
                 }
+                // While held, a clear droplet sits on the end of the level and magnifies it.
+                .liquidLens(
+                    null,
+                    strength = { lens },
+                    zoom = { 1f + 0.2f * lens.coerceIn(0f, 1f) },
+                    rect = {
+                        val inset = 5.dp.toPx()
+                        val dh = size.height * lerp(0.8f, 1.2f, lens.coerceAtLeast(0f))
+                        val dw = dh * 1.4f
+                        val x = (inset + shown.coerceIn(0f, 1f) * (size.width - 2 * inset)).coerceIn(dw / 2, size.width - dw / 2)
+                        Rect(x - dw / 2, (size.height - dh) / 2, x + dw / 2, (size.height + dh) / 2)
+                    },
+                )
                 .glassCard(CircleShape)
                 // The level is a capsule of lit liquid inset in the glass, never narrower than round.
                 .drawBehind {
@@ -599,21 +617,27 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
                     // to where it landed, and a vertical swipe still scrolls the page.
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        val start = awaitHorizontalTouchSlopOrCancellation(down.id) { change, over ->
-                            change.consume()
-                            dragging = true
-                            drag(over / size.width)
-                        } ?: return@awaitEachGesture
-                        horizontalDrag(start.id) { change ->
-                            // Read the movement before consuming: consumed changes report zero.
-                            val dx = change.positionChange().x
-                            change.consume()
+                        held = true
+                        try {
+                            val start = awaitHorizontalTouchSlopOrCancellation(down.id) { change, over ->
+                                change.consume()
+                                dragging = true
+                                drag(over / size.width)
+                            } ?: return@awaitEachGesture
+                            horizontalDrag(start.id) { change ->
+                                // Read the movement before consuming: consumed changes report zero.
+                                val dx = change.positionChange().x
+                                change.consume()
+                                lastTouch = System.currentTimeMillis()
+                                drag(dx / size.width)
+                            }
+                        } finally {
+                            // Also when the gesture is cancelled mid-drag, so the bar never stays grabbed.
                             lastTouch = System.currentTimeMillis()
-                            drag(dx / size.width)
+                            excess = 0f
+                            dragging = false
+                            held = false
                         }
-                        lastTouch = System.currentTimeMillis()
-                        excess = 0f
-                        dragging = false
                     }
                 },
         ) {

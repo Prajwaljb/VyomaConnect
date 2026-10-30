@@ -137,7 +137,7 @@ fun TabsRoot(tab: Tab, onTab: (Tab) -> Unit, onTouchpad: () -> Unit, content: @C
         ) {
             TabBar(tab, onTab, backdrop)
             Box(
-                Modifier.size(BarHeight).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp).pressable(pressedScale = 0.88f, onClick = onTouchpad),
+                Modifier.size(BarHeight).pressable(pressedScale = 0.86f, onClick = onTouchpad).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(Icons.Rounded.TouchApp, "Touchpad", tint = MaterialTheme.colorScheme.onBackground)

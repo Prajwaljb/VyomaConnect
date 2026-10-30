@@ -2,6 +2,7 @@ package dev.vyoma.connect.ui
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.GlassDialog
 import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.SystemColor
@@ -21,7 +22,6 @@ import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -77,7 +77,7 @@ fun DeviceScreen(
     CollapsingHeaderScaffold(
         title = state?.identity?.deviceName ?: "Device",
         subtitle = subtitle,
-        navigation = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+        navigation = { BounceIconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
         hero = state?.let { { DeviceGlyph(it) } },
     ) {
         if (state == null) return@CollapsingHeaderScaffold

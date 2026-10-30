@@ -2,6 +2,7 @@ package dev.vyoma.connect.ui
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.GlassDialog
 import dev.vyoma.connect.designsystem.SegmentedControl
 import dev.vyoma.connect.designsystem.VyomaSwitch
@@ -56,7 +57,6 @@ import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -102,7 +102,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
 
     CollapsingHeaderScaffold(
         title = "Settings",
-        navigation = onBack?.let { back -> { IconButton(onClick = back) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } } },
+        navigation = onBack?.let { back -> { BounceIconButton(onClick = back) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } } },
     ) {
         item(key = "device") {
             SectionCard {
@@ -203,7 +203,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                         iconTint = SystemColor.TEAL.color,
                         showDivider = true,
                         trailing = {
-                            IconButton(onClick = { vm.removeManualHost(host) }) { Icon(Icons.Rounded.Close, "Remove $host") }
+                            BounceIconButton(onClick = { vm.removeManualHost(host) }) { Icon(Icons.Rounded.Close, "Remove $host") }
                         },
                     )
                 }

@@ -3,6 +3,7 @@ package dev.vyoma.connect.ui
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.glassRaised
 import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.SystemColor
@@ -45,7 +46,6 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Tablet
 import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -102,7 +102,7 @@ fun HomeScreen(
         },
         hero = primary?.let { { DeviceGlyph(it) } },
         actions = {
-            IconButton(onClick = vm::refresh) { Icon(Icons.Rounded.Refresh, "Refresh") }
+            BounceIconButton(onClick = vm::refresh) { Icon(Icons.Rounded.Refresh, "Refresh") }
         },
     ) {
         if (primary != null) {

@@ -2,6 +2,7 @@ package dev.vyoma.connect.ui
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.glassRaised
 import dev.vyoma.connect.designsystem.glassCard
 import dev.vyoma.connect.designsystem.aurora
@@ -59,7 +60,6 @@ import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.UnfoldMore
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -181,7 +181,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
         Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             // Same round glass back button as every other page.
             Box(Modifier.size(48.dp).glassRaised(CircleShape), contentAlignment = Alignment.Center) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") }
+                BounceIconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") }
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
