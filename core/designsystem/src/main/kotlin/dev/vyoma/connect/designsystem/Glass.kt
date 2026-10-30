@@ -373,10 +373,14 @@ fun Modifier.glassChrome(
                 drawRect(fill)
                 return@drawBehind
             }
-            val bend = bevel.toPx() * 0.55f
-            val m = bend.roundToInt() + 1
+            // The rim stays a fifth of the element at most, so small buttons are still mostly clear.
+            val rim = bevel.toPx().coerceAtMost(size.minDimension / 5)
+            // A slab six rims deep throws the edge's view across the element; the margin is what
+            // lies beyond its far side.
+            val depth = rim * 6f
+            val m = (rim * 2f).roundToInt() + 1
             blurred.renderEffect = lens.effect(
-                size, m.toFloat(), radius = size.minDimension / 2, bevel = bevel.toPx(), refract = bend, zoom = 1f,
+                size, m.toFloat(), radius = size.minDimension / 2, bevel = rim, refract = depth, zoom = 1f,
                 // Clear in dark mode; light mode keeps more milk so dark labels stay legible over photos.
                 disperse = 0.15f, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.85f), spec = if (dark) 0.42f else 0.8f,
                 shade = if (dark) 0f else 0.1f, blur = r,
@@ -415,10 +419,10 @@ fun Modifier.liquidLens(backdrop: Backdrop?, strength: () -> Float, zoom: () -> 
             val r = rect()
             if (r.width < 1f || r.height < 1f) return@drawWithContent
             val radius = r.minDimension / 2
-            val bend = radius * 0.35f
-            val m = bend.roundToInt() + 1
+            val rim = r.minDimension / 4
+            val m = (rim * 2f).roundToInt() + 1
             drop.renderEffect = lens.effect(
-                r.size, m.toFloat(), radius, bevel = radius * 0.7f, refract = bend, zoom = zoom(), disperse = 0.12f,
+                r.size, m.toFloat(), radius, bevel = rim, refract = rim * 5f, zoom = zoom(), disperse = 0.12f,
                 tint = Color.White.copy(alpha = if (dark) 0.05f else 0.12f), spec = if (dark) 0.55f else 0.9f,
                 shade = if (dark) 0f else 0.12f, blur = 0f,
             )
@@ -452,7 +456,8 @@ private class BlurCache {
 /**
  * The liquid glass pass (AGSL). The shape is a rounded rect given by its size and corner radius,
  * inset by `margin` in the layer it runs on; outside it the result is transparent, so it also clips.
- * The rim samples outward into the margin: surroundings bend in at the edge, like a real lens. A RenderEffect copies its shader's
+ * Physically based: Snell refraction through a rounded rim over a slab `bendBy` deep, so the rim shows what's
+ * across the element (and, past its far edge, the margin's surroundings). A RenderEffect copies its shader's
  * uniforms when built, so it's rebuilt only when an input actually changes.
  */
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -509,15 +514,22 @@ half4 main(float2 p) {
     // Outward normal of the rounded rect.
     float2 n = (q.x > 0.0 && q.y > 0.0) ? normalize(q) : (q.x > q.y ? float2(1.0, 0.0) : float2(0.0, 1.0));
     n *= sign(rel);
-    // 1 at the rim, 0 past the bevel; squared so the bend gathers at the very edge like a meniscus.
-    // The rim looks outward: what lies just beyond the edge is pulled in and compressed.
+    // The rim is a rounded slope (quarter circle, `bevel` wide) on a flat slab. Its surface normal
+    // tilts from straight up (t = 0) to sideways at the edge (t = 1); a ray looking straight down
+    // refracts through it (Snell, glass ≈ 1.5) and travels on through the slab's depth, so near the
+    // edge it lands far inside: the rim shows what's across the element, bent round like water.
     float t = clamp(1.0 + d / bevel, 0.0, 1.0);
-    float bend = t * t * bendBy;
-    float2 at = margin + c + rel / zoom + n * bend;
-    float2 k = n * bend * disperse * 0.3;
+    float3 normal = normalize(float3(n * t, sqrt(max(1.0 - t * t, 0.0))));
+    float3 ray = refract(float3(0.0, 0.0, -1.0), normal, 1.0 / 1.5);
+    float h = bevel * sqrt(max(1.0 - t * t, 0.0));
+    float2 shift = ray.xy * (h + bendBy) / -ray.z;
+    float2 lo = float2(0.5);
+    float2 hi = size + 2.0 * margin - 0.5;
+    float2 at = clamp(margin + c + rel / zoom + shift, lo, hi);
+    float2 k = shift * disperse * 0.3;
     half4 col = content.eval(at);
-    col.r = content.eval(at + k).r;
-    col.b = content.eval(at - k).b;
+    col.r = content.eval(clamp(at + k, lo, hi)).r;
+    col.b = content.eval(clamp(at - k, lo, hi)).b;
     col.rgb = mix(col.rgb, half3(tint.rgb) * col.a, half(tint.a));
     // A thin specular rim, brightest where it faces the light (top left) and its opposite.
     float rim = 1.0 - smoothstep(0.0, 1.8, -d);
