@@ -25,6 +25,8 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `desktop/companion`: Rust daemon beside stock kdeconnectd. Dials only phones kdeconnectd trusts (mDNS), pairs with
   no prompt via `CompanionProof` (signed with kdeconnectd's key; phone verifies against the pinned PC cert), speaks
   `vyoma.*` packets. Phone folds it into its PC (`DeviceIdentity.companionOf`, `DeviceState.isCompanion`).
+  Also watches sysfs for an adb USB interface and, for phones with Vyoma installed, runs `adb reverse tcp:1765 tcp:1716`
+  plus the READ_LOGS / SYSTEM_ALERT_WINDOW grants (src/usb.rs). Installed as a systemd user unit.
 
 ## Conventions
 - Protocol details and extension rules: the `protocol-ref` skill. Design rules: the `oneui-design` skill.
