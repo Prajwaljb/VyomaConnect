@@ -76,10 +76,13 @@ internal class LanPayloads(
     override suspend fun open(link: DeviceLink, packet: NetworkPacket): InputStream = withContext(Dispatchers.IO) {
         val port = (packet.payloadTransferInfo?.get("port") as? JsonPrimitive)?.let { it.intOrNull ?: it.content.toIntOrNull() }
             ?: throw ProtocolException("Payload without port")
+        // Over the adb tunnel the PC's payload port is reached through its mirror on this phone
+        // (the companion reverses each one, shifted clear of our own payload ports).
+        val target = if (link.remoteAddress.isLoopbackAddress) port + USB_PAYLOAD_SHIFT else port
         val plain = Socket()
         try {
             route(plain, link.remoteAddress)
-            plain.connect(InetSocketAddress(link.remoteAddress, port), CONNECT_TIMEOUT_MS)
+            plain.connect(InetSocketAddress(link.remoteAddress, target), CONNECT_TIMEOUT_MS)
             tuneSocket(plain)
             val ssl = tls.wrap(plain, asServer = false)
             ssl.soTimeout = IO_TIMEOUT_MS
@@ -116,6 +119,12 @@ internal class LanPayloads(
 
     private companion object {
         val PAYLOAD_PORTS = 1739..1764
+        /**
+         * The companion's `adb reverse tcp:(P + shift) tcp:P` for each payload port: the PC's
+         * payloads (album art, files) reach the phone over the cable without colliding with the
+         * phone's own [PAYLOAD_PORTS]. Must match PAYLOAD_SHIFT in desktop/companion/src/usb.rs.
+         */
+        const val USB_PAYLOAD_SHIFT = 100
         const val CONNECT_TIMEOUT_MS = 5_000
         const val IO_TIMEOUT_MS = 30_000
     }

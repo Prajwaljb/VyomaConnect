@@ -11,6 +11,11 @@ use tracing::{info, warn};
 const PACKAGES: [&str; 2] = ["dev.vyoma.connect", "dev.vyoma.connect.debug"];
 /// Must match LanBackend.USB_REVERSE_PORT on the phone; kdeconnectd listens on 1716.
 const REVERSE: [&str; 2] = ["tcp:1765", "tcp:1716"];
+/// kdeconnectd offers payloads (album art, files) on one of these ports. Each is mirrored on the
+/// phone at port + PAYLOAD_SHIFT, clear of the phone's own payload ports; must match
+/// LanPayloads.USB_PAYLOAD_SHIFT. Without them album art never arrived over the cable.
+const PAYLOAD_PORTS: std::ops::RangeInclusive<u16> = 1739..=1764;
+const PAYLOAD_SHIFT: u16 = 100;
 const POLL: Duration = Duration::from_secs(3);
 /// How long to keep retrying a phone that shows "unauthorized" (the RSA prompt is on its screen).
 const AUTH_WAIT: Duration = Duration::from_secs(90);
@@ -84,7 +89,8 @@ async fn recheck_tunnels(adb: &PathBuf) {
             continue;
         }
         let Some(list) = run(adb, &serial, &["reverse", "--list"]).await else { continue };
-        if !list.contains(REVERSE[0]) {
+        let mirror = format!("tcp:{}", PAYLOAD_PORTS.start() + PAYLOAD_SHIFT);
+        if !list.contains(REVERSE[0]) || !list.contains(&mirror) {
             info!("{serial}: USB tunnel was gone (adb server restarted?); setting it up again");
             setup(adb, &serial).await;
         }
@@ -113,6 +119,14 @@ async fn setup(adb: &PathBuf, serial: &str) {
         Some(_) => info!("{serial}: USB tunnel ready"),
         None => warn!("{serial}: couldn't set up the USB tunnel"),
     }
+    let mut mirrored = 0;
+    for port in PAYLOAD_PORTS {
+        let (phone, pc) = (format!("tcp:{}", port + PAYLOAD_SHIFT), format!("tcp:{port}"));
+        if run(adb, serial, &["reverse", &phone, &pc]).await.is_some() {
+            mirrored += 1;
+        }
+    }
+    info!("{serial}: {mirrored} payload ports mirrored over USB");
     for pkg in installed {
         // Both are idempotent; they only ever touch Vyoma's own permissions.
         let logs = run(adb, serial, &["shell", "pm", "grant", pkg, "android.permission.READ_LOGS"]).await;

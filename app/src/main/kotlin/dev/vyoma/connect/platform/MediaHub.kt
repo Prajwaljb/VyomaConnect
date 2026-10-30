@@ -96,12 +96,20 @@ class MediaHub(private val hub: StateFlow<DeviceHub?>, private val scope: Corout
                 return@transformLatest
             }
             val key = artKey(s.player)
+            val track = trackOf(s)
+            // Zen/Firefox rewrite their art file under a new name every few seconds (and delete the
+            // old one), so a new art URL within the same track usually means the same picture: keep
+            // what's on screen until a replacement actually loads, instead of blanking the card.
+            val held = lastArt.takeIf { track == lastTrack }
             val cached = key?.let(cache::get)
-            emit(NowPlaying(s.device.id, s.device.name, s.player, cached, s.players))
+            val art = cached ?: held
+            remember(track, art)
+            emit(NowPlaying(s.device.id, s.device.name, s.player, art, s.players))
             if (cached == null && key != null) {
                 val loaded = withContext(Dispatchers.IO) { loadArt(s) }
                 if (loaded != null) {
                     cache.put(key, loaded)
+                    remember(track, loaded)
                     emit(NowPlaying(s.device.id, s.device.name, s.player, loaded, s.players))
                 }
             }
@@ -119,6 +127,17 @@ class MediaHub(private val hub: StateFlow<DeviceHub?>, private val scope: Corout
     }
 
     // ---- artwork ------------------------------------------------------------------------------
+
+    /** The track last shown and its artwork, held across art-URL churn within that track. */
+    @Volatile private var lastTrack: String? = null
+    @Volatile private var lastArt: Bitmap? = null
+
+    private fun trackOf(s: Source) = with(s.player) { "${s.device.id}|$name|$title|$artist|$album" }
+
+    private fun remember(track: String, art: Bitmap?) {
+        lastTrack = track
+        lastArt = art
+    }
 
     private val cache = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount

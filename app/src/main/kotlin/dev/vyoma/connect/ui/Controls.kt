@@ -15,6 +15,13 @@ import dev.vyoma.connect.designsystem.glassChrome
 import dev.vyoma.connect.designsystem.pressScale
 import dev.vyoma.connect.designsystem.rememberBackdrop
 import dev.vyoma.connect.designsystem.SystemColor
+import dev.vyoma.connect.designsystem.specularEdge
+import dev.vyoma.connect.designsystem.toned
+import dev.vyoma.connect.protocol.plugin.builtin.RemotePlayer
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.rounded.Movie
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
@@ -118,7 +125,9 @@ fun ActionGrid(actions: List<Triple<ImageVector, String, () -> Unit>>, columns: 
 
 /**
  * Now-playing card: full-bleed artwork, a scrim tinted from the art itself, a live scrubber
- * and big controls. The artwork crossfades between tracks.
+ * and big controls. The artwork crossfades between tracks. Without artwork (mpv, local files, art
+ * that didn't load) it's a compact card instead, like Apple Music's: a deep accent tile with the
+ * player's glyph beside the title, on a deep shade of the accent, rather than a big empty frame.
  */
 @Composable
 fun MediaCard(
@@ -136,22 +145,20 @@ fun MediaCard(
 ) {
     val p = np.player
     val art = remember(np.art) { np.art?.let(::trimBars) }
-    val tint = remember(art) {
+    val accent = MaterialTheme.colorScheme.primary
+    val tint = remember(art, accent) {
         art?.let { bmp -> Palette.from(bmp).maximumColorCount(12).generate().let { it.getDarkMutedColor(it.getDominantColor(0xFF20242B.toInt())) } }
-            ?.let { Color(it) } ?: Color(0xFF20242B)
+            ?.let { Color(it) } ?: accent.toned(0.8f, 0.2f)
     }
-    Surface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.extraLarge, color = tint) {
-        Column {
-            val behind = rememberBackdrop()
-            Box(Modifier.fillMaxWidth().aspectRatio(16f / 10f)) {
+    val tintAnimated by animateColorAsState(tint, VyomaMotion.effects(), label = "tint")
+    Surface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.extraLarge, color = tintAnimated) {
+        Column(Modifier.animateContentSize(VyomaMotion.spatial())) {
+            if (art == null) {
+                PlainHeader(p, accent, onContinueHere)
+            } else Box(Modifier.fillMaxWidth().aspectRatio(16f / 10f)) {
+                val behind = rememberBackdrop()
                 Crossfade(art, Modifier.fillMaxSize().backdropSource(behind), label = "art") { art ->
-                    if (art != null) {
-                        Image(art.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                    } else {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Rounded.MusicNote, null, tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(64.dp))
-                        }
-                    }
+                    Image(art.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                 }
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to tint)))
                 if (onContinueHere != null) {
@@ -233,6 +240,52 @@ fun MediaCard(
         }
     }
 }
+
+/** The no-artwork top of [MediaCard]: glyph tile, title, artist, and which player it is. */
+@Composable
+private fun PlainHeader(p: RemotePlayer, accent: Color, onContinueHere: (() -> Unit)?) {
+    val video = VIDEO_PLAYERS.any { p.name.contains(it, ignoreCase = true) }
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val tile = RoundedCornerShape(18.dp)
+            Box(
+                Modifier
+                    .size(72.dp)
+                    .specularEdge(tile, 1.dp)
+                    .clip(tile)
+                    .background(Brush.linearGradient(listOf(accent.toned(1.2f, 0.62f), accent.toned(1.2f, 0.46f)))),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(if (video) Icons.Rounded.Movie else Icons.Rounded.MusicNote, null, tint = Color.White, modifier = Modifier.size(36.dp))
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(p.title.ifBlank { p.name }, style = MaterialTheme.typography.titleMedium, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                val sub = listOf(p.artist, p.album).filter { it.isNotBlank() }.joinToString(" · ")
+                if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.75f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (p.title.isNotBlank()) Text(p.name, style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.55f), maxLines = 1)
+            }
+        }
+        if (onContinueHere != null) {
+            Row(
+                Modifier
+                    .padding(top = 12.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.14f))
+                    .pressable(onClick = onContinueHere)
+                    .padding(start = 10.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Rounded.PhoneAndroid, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Continue on phone", style = MaterialTheme.typography.labelLarge, color = Color.White)
+            }
+        }
+    }
+}
+
+/** Players that are mostly for video, so their card shows a film glyph rather than a note. */
+private val VIDEO_PLAYERS = listOf("mpv", "vlc", "celluloid", "totem", "haruna", "smplayer", "mplayer", "kodi", "showtime", "dragon")
 
 @Composable
 private fun MediaButton(icon: ImageVector, label: String, enabled: Boolean, onClick: () -> Unit) {
