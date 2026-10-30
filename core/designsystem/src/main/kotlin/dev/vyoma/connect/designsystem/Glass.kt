@@ -47,6 +47,11 @@ import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.Canvas
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
@@ -286,9 +291,11 @@ fun Modifier.cardSegment(first: Boolean, last: Boolean, radius: Dp = 26.dp): Mod
 }
 
 /**
- * The app canvas: the theme background with two soft glows of the accent near the top. Cached per
- * size, so it costs one bitmap-free draw of a few shapes. Pure black keeps true black below the
- * fold; its glow is a little cooler and fades out sooner so the bottom stays ink.
+ * The app canvas: the theme background with two soft glows of the accent near the top. Pure black
+ * keeps true black below the fold; its glow is a little cooler and fades out sooner so the bottom
+ * stays ink. Painted once per size and colour into a quarter-resolution bitmap and drawn stretched:
+ * soft gradients survive the upscale untouched, and one textured quad is far cheaper for the GPU
+ * than three full-screen gradient fills every frame (again for every glass element replaying it).
  */
 fun Modifier.aurora(): Modifier = composed {
     val base = MaterialTheme.colorScheme.background
@@ -301,22 +308,30 @@ fun Modifier.aurora(): Modifier = composed {
         else -> 0.20f
     }
     drawWithCache {
-        val r = size.maxDimension * if (amoled) 0.6f else 0.75f
+        val w = (size.width / AURORA_SCALE).roundToInt().coerceAtLeast(1)
+        val h = (size.height / AURORA_SCALE).roundToInt().coerceAtLeast(1)
+        val small = Size(w.toFloat(), h.toFloat())
+        val r = small.maxDimension * if (amoled) 0.6f else 0.75f
         val left = Brush.radialGradient(
             listOf(accent.copy(alpha = strength), accent.copy(alpha = strength * 0.35f), Color.Transparent),
-            center = Offset(size.width * 0.05f, size.height * 0.02f), radius = r,
+            center = Offset(small.width * 0.05f, small.height * 0.02f), radius = r,
         )
         val right = Brush.radialGradient(
             listOf(accent.copy(alpha = strength * 0.6f), Color.Transparent),
-            center = Offset(size.width * 1.0f, size.height * 0.28f), radius = r * 0.8f,
+            center = Offset(small.width * 1.0f, small.height * 0.28f), radius = r * 0.8f,
         )
-        onDrawBehind {
+        val bitmap = ImageBitmap(w, h)
+        CanvasDrawScope().draw(this, layoutDirection, Canvas(bitmap), small) {
             drawRect(base)
             drawRect(left)
             drawRect(right)
         }
+        val dst = IntSize(size.width.roundToInt(), size.height.roundToInt())
+        onDrawBehind { drawImage(bitmap, dstSize = dst, filterQuality = FilterQuality.Low) }
     }
 }
+
+private const val AURORA_SCALE = 4f
 
 /** What chrome blurs: one recorded display list of the content underneath. */
 @Stable
@@ -409,21 +424,40 @@ fun Modifier.glassChrome(
             val grow = (size.minDimension * 0.08f * p).coerceAtLeast(0f)
             val g = Size(size.width + 2 * grow, size.height + 2 * grow)
             val m = (rim * 2f).roundToInt() + 1
+            // Rendered at quarter resolution and scaled up: under the blur the difference doesn't
+            // show, and the GPU blurs and refracts a sixteenth of the pixels (chrome was half the
+            // frame's GPU budget while scrolling at 120 Hz). The edge is what would show it, so the
+            // glass is clipped to the exact shape and its specular rim stroked at full resolution.
+            val q = CHROME_RES
             blurred.renderEffect = lens.effect(
-                g, m.toFloat(), radius = g.minDimension / 2, bevel = rim, refract = depth, zoom = 1f + 0.14f * p,
+                g * q, m * q, radius = g.minDimension / 2 * q, bevel = rim * q, refract = depth * q, zoom = 1f + 0.14f * p,
                 // Clear in dark mode; light mode keeps more milk so dark labels stay legible over photos.
                 disperse = LensStyle.Chrome.disperse, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.92f),
-                spec = (if (dark) 0.42f else 0.8f) + 0.35f * p.coerceIn(0f, 1f),
-                shade = if (dark) 0f else 0.1f, blur = r,
+                spec = 0.15f + 0.2f * p.coerceIn(0f, 1f),
+                shade = if (dark) 0f else 0.1f, blur = r * q,
             )
             val o = m + grow
-            blurred.record(IntSize((g.width + 2 * m).roundToInt(), (g.height + 2 * m).roundToInt())) {
-                translate(shift.x + o, shift.y + o) { drawLayer(backdrop.layer) }
+            blurred.record(IntSize(((g.width + 2 * m) * q).roundToInt(), ((g.height + 2 * m) * q).roundToInt())) {
+                scale(q, q, pivot = Offset.Zero) {
+                    translate(shift.x + o, shift.y + o) { drawLayer(backdrop.layer) }
+                }
             }
-            translate(-o, -o) { drawLayer(blurred) }
+            val edgePath = Path().apply { addRoundRect(RoundRect(-grow, -grow, size.width + grow, size.height + grow, CornerRadius(g.minDimension / 2))) }
+            clipPath(edgePath) {
+                translate(-o, -o) { scale(1f / q, 1f / q, pivot = Offset.Zero) { drawLayer(blurred) } }
+            }
+            val lit = if (dark) 0.5f else 0.95f
+            drawPath(
+                edgePath,
+                specularRim(Color.White.copy(alpha = lit + 0.3f * p.coerceIn(0f, 1f)), Color.White.copy(alpha = if (dark) 0.1f else 0.35f), center),
+                style = Stroke(1.dp.toPx()),
+            )
         }
         .then(if (edge && lens == null) Modifier.border(0.75.dp, edgeBrush, shape) else Modifier)
 }
+
+/** Chrome glass renders at this share of full resolution (see [glassChrome]). */
+private const val CHROME_RES = 0.25f
 
 /** How a lens bends: the rim as a share of the lens's short side, and the slab's depth in rims. */
 @Immutable
@@ -436,9 +470,10 @@ class LensStyle(val rim: Float, val depth: Float, val disperse: Float) {
         /** Drops that move or grow over content (tab lens, slider and press drops): a thinner,
          *  calmer rim so what's under the middle stays readable. */
         val Drop = LensStyle(rim = 0.18f, depth = 2.6f, disperse = 0.03f)
-        /** The tab bar's lifted drop. It outgrows the bar, and its rim looks outward (negative
-         *  depth): the edge gathers in the page around the bar, the way a drop of water on glass
-         *  rims itself with its surroundings. Looking inward, the rim only replayed the bar. */
+        /** Lifted drops that outgrow what they sit on (the tab bar's drop, slider, switch and
+         *  segmented knobs). The rim looks outward (negative depth): the edge gathers in what's
+         *  around, the way a drop of water on glass rims itself with its surroundings. Looking
+         *  inward, the rim replayed the track or bar as mirrored stripes. */
         val Lift = LensStyle(rim = 0.22f, depth = -1.1f, disperse = 0.03f)
     }
 }

@@ -454,7 +454,7 @@ private fun TypingBar(caretMoved: Int, onText: (String) -> Unit, onKey: (Special
 @Composable
 private fun MouseButton(label: String, modifier: Modifier, onClick: () -> Unit) {
     Box(
-        modifier.fillMaxSize().glassRaised(RoundedCornerShape(20.dp)).pressable(onClick = onClick),
+        modifier.fillMaxSize().pressable(glass = true, onClick = onClick).glassRaised(RoundedCornerShape(20.dp)),
         contentAlignment = Alignment.Center,
     ) { Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 }
@@ -487,11 +487,11 @@ private fun RowScope.Key(
         Modifier
             .weight(1f)
             .fillMaxHeight()
-            .glassRaised(RoundedCornerShape(14.dp), bg.takeIf { selected || accent })
             .then(
-                if (onRepeat == null) Modifier.pressable(pressedScale = 0.88f, haptic = Haptic.Key, onClick = onClick)
+                if (onRepeat == null) Modifier.pressable(haptic = Haptic.Key, glass = true, onClick = onClick)
                 else Modifier.holdToRepeat(onRepeat, onClick),
-            ),
+            )
+            .glassRaised(RoundedCornerShape(14.dp), bg.takeIf { selected || accent }),
         contentAlignment = Alignment.Center,
     ) {
         if (icon != null) Icon(icon, desc, Modifier.size(20.dp), tint = fg)
@@ -510,7 +510,7 @@ private fun Modifier.holdToRepeat(onRepeat: (Int) -> Unit, onClick: () -> Unit):
     val repeat by rememberUpdatedState(onRepeat)
     val click by rememberUpdatedState(onClick)
     this
-        .pressScale(0.88f)
+        .pressScale(1f, glass = true)
         .pointerInput(Unit) {
             detectTapGestures(onPress = {
                 haptics.perform(Haptic.Key)

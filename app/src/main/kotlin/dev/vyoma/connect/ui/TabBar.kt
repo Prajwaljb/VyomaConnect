@@ -1,5 +1,14 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.ui.graphics.Color
+import dev.vyoma.connect.designsystem.isDarkUi
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.animation.animateColorAsState
@@ -154,7 +163,7 @@ fun TabsRoot(tab: Tab, onTab: (Tab) -> Unit, onTouchpad: () -> Unit, content: @C
 /**
  * Glass pill with a liquid selection lens. The lens's leading edge leaves first and the trailing
  * edge catches up, so it stretches like a droplet in flight and thins as it does. Under a finger
- * (and briefly on every switch) it lifts into a clear drop of water a little bigger than the bar,
+ * it lifts into a clear drop of water a little bigger than the bar,
  * magnifying the tab under it. Drag along the bar to scrub between tabs (a tick per tab, like iOS);
  * letting go picks the one under your thumb. All of it runs in the draw phase.
  */
@@ -181,18 +190,9 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
         pulse?.cancel()
         pulse = scope.launch { lift.animateTo(if (up) 1f else 0f, if (up) VyomaMotion.spatial() else VyomaMotion.release()) }
     }
+    // The drop only lifts under a finger (as on iOS); a programmatic switch just glides.
     LaunchedEffect(tab) {
-        if (hover >= 0) return@LaunchedEffect
-        val far = abs(left.value - tab.ordinal * itemPx) > itemPx / 2
-        glide(tab.ordinal * itemPx)
-        // A tap lifts the drop for the trip and sets it down as it arrives.
-        if (far && liquidGlassSupported) {
-            pulse?.cancel()
-            pulse = scope.launch {
-                lift.animateTo(1f, VyomaMotion.leading())
-                lift.animateTo(0f, VyomaMotion.release())
-            }
-        }
+        if (hover < 0) glide(tab.ordinal * itemPx)
     }
 
     // The pill in bar coordinates: resting it sits inside the padding; lifted it outgrows the bar.
@@ -210,8 +210,8 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
         return Rect(Offset(cx - ww / 2, (size.height - h) / 2), Size(ww, h))
     }
 
-    val fill = Glass.raised
-    val edge = Glass.edge
+    // iOS 26: the selected tab sits on a plain neutral capsule; its colour is in the icon and label.
+    val fill = if (isDarkUi) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.07f)
     Box(
         Modifier
             .height(BarHeight)
@@ -224,40 +224,48 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
                 val r = pill()
                 val corner = CornerRadius(r.height / 2)
                 drawRoundRect(fill, r.topLeft, r.size, corner, alpha = a)
-                drawRoundRect(edge, r.topLeft, r.size, corner, alpha = a, style = Stroke(0.75.dp.toPx()))
             }
             .padding(4.dp)
             .pointerInput(itemPx) {
+                // iOS 26: the drop lifts the moment a finger lands, jumps to the tab under it, follows
+                // the finger along the bar (a tick per tab) and picks whatever it's over on release.
                 val last = Tab.entries.lastIndex
                 fun indexAt(x: Float) = (x / itemPx).toInt().coerceIn(0, last)
                 fun follow(x: Float) = glide((x - itemPx / 2).coerceIn(0f, last * itemPx))
-                detectHorizontalDragGestures(
-                    onDragStart = { o ->
-                        hover = indexAt(o.x)
-                        lifted(true)
-                        follow(o.x)
-                    },
-                    onHorizontalDrag = { change, _ ->
-                        change.consume()
-                        follow(change.position.x)
-                        val i = indexAt(change.position.x)
-                        if (i != hover) {
-                            hover = i
-                            haptics.perform(Haptic.Select)
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    hover = indexAt(down.position.x)
+                    lifted(true)
+                    glide(hover * itemPx)
+                    if (hover != currentTab.ordinal) haptics.perform(Haptic.Select)
+                    var dragged = false
+                    var cancelled = false
+                    while (true) {
+                        val e = awaitPointerEvent()
+                        val c = e.changes.firstOrNull { it.id == down.id }
+                        if (c == null) { cancelled = true; break }
+                        if (!c.pressed) break
+                        if (c.isConsumed) { cancelled = true; break }
+                        if (abs(c.position.x - down.position.x) > viewConfiguration.touchSlop) dragged = true
+                        if (dragged) {
+                            c.consume()
+                            follow(c.position.x)
+                            val i = indexAt(c.position.x)
+                            if (i != hover) {
+                                hover = i
+                                haptics.perform(Haptic.Select)
+                            }
                         }
-                    },
-                    onDragEnd = {
-                        val i = hover
-                        hover = -1
-                        lifted(false)
-                        if (i != currentTab.ordinal) select(Tab.entries[i]) else glide(i * itemPx)
-                    },
-                    onDragCancel = {
-                        hover = -1
-                        lifted(false)
-                        glide(currentTab.ordinal * itemPx)
-                    },
-                )
+                    }
+                    val i = hover
+                    hover = -1
+                    lifted(false)
+                    when {
+                        cancelled -> glide(currentTab.ordinal * itemPx)
+                        i != currentTab.ordinal -> select(Tab.entries[i])
+                        else -> glide(i * itemPx)
+                    }
+                }
             },
     ) {
         Row {
@@ -271,13 +279,17 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
 }
 
 @Composable
-private fun TabItem(tab: Tab, selected: Boolean, onClick: () -> Unit) {
+private fun TabItem(tab: Tab, selected: Boolean, onSelect: () -> Unit) {
     val color by animateColorAsState(
         if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
         VyomaMotion.effects(), label = "tabColor",
     )
     Column(
-        Modifier.width(ItemWidth).fillMaxHeight().pressable(pressedScale = 0.86f, haptic = Haptic.Select, onClick = onClick),
+        Modifier.width(ItemWidth).fillMaxHeight().semantics(mergeDescendants = true) {
+            role = Role.Tab
+            this.selected = selected
+            onClick { onSelect(); true }
+        },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {

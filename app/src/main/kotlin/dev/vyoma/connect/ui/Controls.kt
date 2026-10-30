@@ -1,5 +1,10 @@
 package dev.vyoma.connect.ui
 
+import kotlinx.coroutines.launch
+import androidx.compose.animation.core.Animatable
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -53,7 +58,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -238,15 +242,20 @@ private fun MediaButton(icon: ImageVector, label: String, enabled: Boolean, onCl
 }
 
 /**
- * Ticks locally between PC updates so the bar moves without network chatter, and only while the
- * app is on screen: it used to keep a 4 Hz timer running in the background for as long as the PC
- * played anything.
+ * Apple Music's scrubber: a bare track that thickens under the finger, no knob. One animated
+ * progress value drives it: it ticks locally between PC updates (on whole seconds of playback,
+ * only while the app is on screen), small drifts are absorbed in place and real jumps (a seek from
+ * the PC, a new position report) glide there instead of teleporting. After our own seek it holds
+ * the seek target until the PC's position agrees: browsers report a stale, often zero, position
+ * for a while after a seek, which used to fling the bar back to the start.
  */
 @Composable
 private fun Scrubber(np: NowPlaying, lengthMs: Long, underlay: Color, onSeek: (Long) -> Unit) {
-    val p = np.player
+    val player by rememberUpdatedState(np.player)
+    val length by rememberUpdatedState(lengthMs)
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val p = np.player
     LaunchedEffect(p.isPlaying, p.positionAt) {
         now = System.currentTimeMillis()
         if (!p.isPlaying) return@LaunchedEffect
@@ -255,48 +264,56 @@ private fun Scrubber(np: NowPlaying, lengthMs: Long, underlay: Color, onSeek: (L
                 now = System.currentTimeMillis()
                 // On the next whole second of playback: the labels change then, and the bar moves
                 // less than a pixel in between, so ticking faster only costs redraws.
-                val pos = p.currentPosition(now)
-                delay((1000 - pos % 1000).coerceAtLeast(16))
+                delay((1000 - p.currentPosition(now) % 1000).coerceAtLeast(16))
             }
         }
     }
+    val scope = rememberCoroutineScope()
     var dragValue by remember { mutableStateOf<Float?>(null) }
-    // Where we last seeked to, and when. Browsers report a stale (often zero) position for a while
-    // after a seek, which flung the knob back to the start while the video played on further. Until
-    // the reported position agrees with the seek (or a few seconds pass), show the seek target,
-    // moving on with playback.
+    // Our last seek: target and when.
     var seek by remember { mutableStateOf<Pair<Long, Long>?>(null) }
-    fun reported(at: Long) = p.currentPosition(at).coerceIn(0, lengthMs)
-    fun expected(at: Long): Long? = seek?.let { (target, t0) -> (target + if (p.isPlaying) at - t0 else 0).coerceIn(0, lengthMs) }
-    val settled = seek?.let { (_, t0) -> now - t0 > SEEK_SETTLE_MS || abs(reported(now) - expected(now)!!) < SEEK_AGREE_MS } == true
-    SideEffect { if (settled) seek = null }
-    fun shownAt(at: Long) = (if (settled) null else expected(at)) ?: reported(at)
-    val length = lengthMs.toFloat()
-    val position = dragValue?.let { it * length } ?: shownAt(now).toFloat()
+    fun positionAt(at: Long): Long {
+        val reported = player.currentPosition(at).coerceIn(0, length)
+        val (target, t0) = seek ?: return reported
+        val expected = (target + if (player.isPlaying) at - t0 else 0).coerceIn(0, length)
+        return if (at - t0 > SEEK_SETTLE_MS || abs(reported - expected) < SEEK_AGREE_MS) reported else expected
+    }
+    val progress = remember { Animatable((positionAt(now) / lengthMs.toFloat()).coerceIn(0f, 1f)) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { if (dragValue != null) null else positionAt(now) }.collect { ms ->
+            if (ms == null) return@collect
+            val t = (ms / length.toFloat()).coerceIn(0f, 1f)
+            if (abs(t - progress.value) * length > JUMP_MS) launch { progress.animateTo(t, VyomaMotion.page()) } else progress.snapTo(t)
+        }
+    }
+    val shownMs = dragValue?.let { (it * lengthMs).toLong() } ?: positionAt(now)
     Column {
         LiquidSlider(
-            value = { (dragValue ?: (shownAt(now) / length).coerceAtMost(1f)) },
+            value = { dragValue ?: progress.value },
             onChange = { dragValue = it },
             onDone = {
                 dragValue?.let {
-                    val target = (it * length).toLong()
+                    val target = (it * lengthMs).toLong()
                     seek = target to System.currentTimeMillis()
+                    scope.launch { progress.snapTo(it) }
                     onSeek(target)
                 }
                 dragValue = null
             },
             enabled = p.canSeek,
+            knob = null,
             fill = Color.White.copy(alpha = if (p.canSeek) 1f else 0.6f),
             underlay = underlay,
         )
         Row(Modifier.fillMaxWidth()) {
-            Text(formatTime(position.toLong()), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
+            Text(formatTime(shownMs), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
             Spacer(Modifier.weight(1f))
-            Text("-" + formatTime((lengthMs - position.toLong()).coerceAtLeast(0)), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
+            Text("-" + formatTime((lengthMs - shownMs).coerceAtLeast(0)), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
         }
     }
 }
 
+private const val JUMP_MS = 1_500L
 private const val SEEK_SETTLE_MS = 5_000L
 private const val SEEK_AGREE_MS = 2_500L
 

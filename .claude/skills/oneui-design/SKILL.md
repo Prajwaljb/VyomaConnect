@@ -31,19 +31,23 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   appears in a liquid capsule once collapsed (> 0.6); actions share one capsule. Same blur/bevel as the tab bar.
 - Dialogs: `GlassDialog` (same API as AlertDialog): opaque `surfaceContainerHigh` slab with the card rim. Never
   Material `AlertDialog`.
-- Value bars: `LiquidSlider` (capsule that swells under the finger, relative drag) for scrubbers and
-  in-card volume; the big volume control is `Dashboard.VolumeBar`: a glass tube (`LensStyle.Tube` lens over the liquid
-  only, never over text: refracted text reads as a glitch) with a rounded liquid end. Both have ONE knob throughout
-  (continuity): at rest a drawn `frostedKnob` bead (no layers: a resting lens cost scroll frames); grabbed, a
-  `liquidLens(frost = { 1 - swell })` of the same rect grows and clears over it into a drop, frosting again on release.
-  Never a lens that pops in from nothing. Scrubbers hold the seek target until the PC's position agrees (browsers
-  report a stale/zero position after a seek). Also `draggable` relative drag, rubber-band ends, labels drawn twice and the second copy clipped
-  to the liquid. `LiquidSlider` grows the same drop while held; pass `underlay` (the surface colour under it).
+- Value bars (Apple's, `LiquidSlider`): with `knob` (default 24 dp) the iOS 26 slider: slim track, wide white
+  capsule knob; `knob = null` is the Apple Music scrubber: bare track that thickens under the finger. Relative drag
+  after horizontal slop. ONE knob throughout (continuity): at rest a drawn `frostedKnob` (no layers: a resting lens
+  cost scroll frames); held, `liquidLens(style = LensStyle.Lift, frost = { 1 - swell })` of the same rect grows ~45%
+  and clears; an inward rim mirrored the track into stripes. Volume (`Dashboard.VolumeBar`) is an iOS card: name +
+  % over the knobbed slider between quiet/loud speakers. The media `Scrubber` drives one `Animatable` progress (small
+  drifts snap, jumps glide) and holds our seek target until MPRIS agrees (browsers report stale/zero after a seek).
+- Switches (`VyomaSwitch`, iOS 26): 62×28 track, green when on, wide white capsule thumb that lifts into a clear
+  `Lift` lens (bigger than the track) while touched. `SegmentedControl`: grey thumb that lifts into a lens on touch
+  and can be slid to another option; release picks. Same drawn-at-rest / lens-while-held rule.
 - Header capsules and the touchpad button: `glassChrome(..., interactive = true)` flexes the glass itself on press
   (grows past its bounds, zooms, brightens); glyphs inside use `LocalOnChrome` so `BounceIconButton` doesn't add a
   second drop. Never scale a glyph inside a still ring.
-- Press glass: `pressable(glass = true)` / `pressScale(1f, glass = true)` turns capsules and circles into a clear
-  drop while held. Put it BEFORE the background modifiers so the drop sees them.
+- Press glass = iOS 26 interactive glass: `pressable(glass = true)` / `pressScale(1f, glass = true)` SWELLS
+  (~7 dp past its edges, springy; `pressedScale` ignored), clears into a drop and lights up under the finger (a
+  radial glow that follows the touch). Use it on every glass button: quick actions, pills, touchpad buttons and keys.
+  Put it BEFORE the background modifiers so the drop sees them. Never a glyph scaling inside a still ring.
 - `liquidLens` is a Modifier.Node that allocates its layers only on first visible frame: cheap on every control.
 - Icon buttons: `BounceIconButton` (never Material `IconButton`); glass circles/capsules put `pressScale` BEFORE
   `glassChrome` so the glass itself squishes, not just the glyph.
@@ -51,8 +55,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   squircle with a white glyph; give each feature a stable color (notifications RED, messages GREEN, clipboard ORANGE,
   files/connection BLUE, touchpad TEAL, find YELLOW, battery GREEN, destructive RED, info/neutral GRAY).
 - Control Center tiles: colored glyph on `glassRaised`; toggles fill with their color (white glyph) while on.
-- Root navigation: `TabsRoot` (app/ui/TabBar.kt): Home / Clipboard / Settings in a glass pill with a sliding lens,
-  touchpad as a separate round glass button. Tabs stay composed (keep-alive) and are only placed when shown.
+- Root navigation: `TabsRoot` (app/ui/TabBar.kt), iOS 26 tab bar: Home / Clipboard / Settings in a glass pill, the
+  selected tab on a plain neutral capsule (colour only in icon + label). The drop lifts on touch-DOWN, jumps to the
+  touched tab, follows the finger (tick per tab), picks on release; it never lifts without a finger. Touchpad is a
+  separate round glass button. Tabs stay composed (keep-alive) and are only placed when shown.
   Lists get `LocalBottomBarInset` padding automatically via the scaffold.
 
 ## Theme (core/designsystem)
@@ -100,7 +106,11 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - List changes: `Modifier.animateItem()`; size changes: `animateContentSize()`.
 - Performance is a requirement: animate in draw/layer phases (`graphicsLayer {}`, `drawBehind {}`, `placeWithLayer`),
   read animated values inside those lambdas, use `derivedStateOf` for thresholds, and never run endless animations
-  on a resting screen: anything under the glass chrome forces the blur to re-render every frame. The connection orb
+  on a resting screen: anything under the glass chrome forces the blur to re-render every frame.
+  Scrolling is GPU-bound: measure per-frame GPU time with scratchpad-style framestats parsing (GpuCompleted -
+  IssueDrawCommandsStart), not just jank %, which swings 2x run to run. Budgets found: chrome glass renders at
+  quarter resolution (`CHROME_RES`) with the edge clipped and rimmed at full res (was ~4 ms of 8.5); the canvas is a
+  cached quarter-res bitmap (three full-screen gradients were ~1.3 ms). Settings scroll GPU ~4.8 ms/frame. The connection orb
   breathes 3 times on connect, then rests. Idle check: `gfxinfo reset`, wait 3 s, expect ~0 frames. Check `dumpsys gfxinfo` after motion work (target < 1% janky at 120 Hz).
 
 ## Haptics (`Haptic` in Motion.kt; always through `HapticFeedback.perform`)

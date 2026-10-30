@@ -24,6 +24,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.shape.RoundedCornerShape
 import dev.vyoma.connect.designsystem.glassRaised
 import dev.vyoma.connect.designsystem.glassCard
+import dev.vyoma.connect.designsystem.LiquidSlider
+import dev.vyoma.connect.designsystem.isDarkUi
+import androidx.compose.material.icons.automirrored.rounded.VolumeMute
 import dev.vyoma.connect.designsystem.SystemColor
 import dev.vyoma.connect.designsystem.Glass
 import kotlin.math.roundToInt
@@ -537,11 +540,10 @@ private fun ClipboardTile(clip: ClipEntry?, modifier: Modifier, onOpen: () -> Un
 }
 
 /**
- * Volume as a capsule of liquid. Drag anywhere on it, relative like iOS (a vertical swipe still
- * scrolls the page): it swells a little while held, tracks the finger 1:1, and springs to the PC's
- * value otherwise. A detent every 10%, a firmer one at the ends; past an end the bar stretches
- * toward the finger like a gel and wobbles back. The labels change colour exactly where the liquid
- * ends: the row is drawn twice, the second copy clipped to the liquid.
+ * The PC's volume, iOS style: the output's name and level over a slim slider with a liquid glass
+ * knob, between a quiet and a loud speaker. Drag relative like iOS (a vertical swipe still scrolls
+ * the page); it tracks the finger 1:1 and springs to the PC's value otherwise. A detent every 10%,
+ * a firmer one at the ends.
  */
 @Composable
 internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modifier = Modifier) {
@@ -549,8 +551,6 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
     var level by remember(sink.name) { mutableFloatStateOf(sink.volume / max) }
     var dragging by remember { mutableStateOf(false) }
     var lastTouch by remember { mutableLongStateOf(0L) }
-    // How far the finger has pulled past an end, as a fraction of the bar (signed: + is past max).
-    var excess by remember { mutableFloatStateOf(0f) }
     // The PC echoes every value we send, late. Ignore echoes while the finger is down and shortly
     // after; once they stop, settle on whatever the PC really ended up at.
     LaunchedEffect(sink.volume, dragging) {
@@ -559,15 +559,13 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
         level = sink.volume / max
     }
     val shown by animateFloatAsState(level, if (dragging) snap() else VyomaMotion.spatial(), label = "vol")
-    val pull by animateFloatAsState(rubberBand(excess), if (dragging) snap() else VyomaMotion.release(), label = "volPull")
-    val swell by animateFloatAsState(if (dragging) 1f else 0f, if (dragging) VyomaMotion.spatial() else VyomaMotion.release(), label = "volSwell")
     val haptics = LocalHapticFeedback.current
-    val liquid by animateColorAsState(
+    val fill by animateColorAsState(
         if (sink.muted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
-        VyomaMotion.effects(), label = "volLiquid",
+        VyomaMotion.effects(), label = "volFill",
     )
-    val onLiquid = if (sink.muted) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onPrimary
-    val page = MaterialTheme.colorScheme.background
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val card = MaterialTheme.colorScheme.surfaceContainerLow
 
     fun set(v: Float) {
         val n = v.coerceIn(0f, 1f)
@@ -579,120 +577,45 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
         level = n
         onVolume((n * max).roundToInt())
     }
-    var width by remember { mutableFloatStateOf(1f) }
-    val drag = rememberDraggableState { delta ->
-        // Whatever lands beyond 0 or 1 stretches the bar instead.
-        val total = level + excess + delta / width
-        val n = total.coerceIn(0f, 1f)
-        excess = total - n
-        set(n)
-    }
 
-    Box(
-        modifier
-            .fillMaxWidth()
-            .height(64.dp)
-            .onSizeChanged { width = it.width.toFloat().coerceAtLeast(1f) }
-            .graphicsLayer {
-                val stretch = abs(pull)
-                transformOrigin = TransformOrigin(if (pull >= 0f) 0f else 1f, 0.5f)
-                scaleX = 1f + stretch + 0.015f * swell
-                scaleY = 1f - stretch * 0.5f + 0.06f * swell
-            }
-            // The knob is always there, riding the surface of the liquid: a frosted bead at rest
-            // that, grabbed, swells and clears into a drop magnifying the liquid, then frosts over
-            // again when let go. One object throughout, never a lens popping in. At rest it's a
-            // plain drawn bead (a lens there cost scroll frames); the lens takes over as it grows.
-            .drawWithContent {
-                drawContent()
-                frostedKnob(volumeKnob(shown, swell), 1f - swell)
-            }
-            .liquidLens(
-                null,
-                strength = { swell },
-                zoom = { 1f + 0.16f * swell.coerceIn(0f, 1f) },
-                underlay = page,
-                frost = { 1f - swell },
-                rect = { volumeKnob(shown, swell) },
+    Column(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(start = 18.dp, end = 18.dp, top = 14.dp, bottom = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                prettySinkName(sink.description),
+                style = MaterialTheme.typography.labelLarge,
+                color = muted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
-            .draggable(
-                drag, Orientation.Horizontal,
-                onDragStarted = { dragging = true },
-                // Also called when the gesture is cancelled, so the bar never stays grabbed.
-                onDragStopped = {
+            Text(
+                if (sink.muted) "Muted" else "${(level * 100).roundToInt()}%",
+                style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.AutoMirrored.Rounded.VolumeMute, null, tint = muted, modifier = Modifier.size(20.dp))
+            LiquidSlider(
+                value = { if (dragging) level else shown },
+                onChange = { dragging = true; set(it) },
+                onDone = {
                     lastTouch = System.currentTimeMillis()
-                    excess = 0f
                     dragging = false
                 },
+                modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                fill = fill,
+                track = MaterialTheme.colorScheme.onSurface.copy(alpha = if (isDarkUi) 0.16f else 0.1f),
+                underlay = card,
+                edgeHaptics = false,
             )
-            .glassCard(CircleShape)
-            .clip(CircleShape),
-    ) {
-        // The liquid sits in a tube of glass: the rim bends its surface up the walls like water.
-        // Only the liquid goes through the lens; refracted text would read as a glitch.
-        Box(
-            Modifier
-                .matchParentSize()
-                .liquidLens(null, strength = { 1f }, style = LensStyle.Tube, rect = { Rect(Offset.Zero, size) })
-                .drawBehind {
-                    val w = shown.coerceIn(0f, 1f) * size.width
-                    if (w < 0.5f) return@drawBehind
-                    // Full height, its leading edge rounded like the knob riding it.
-                    val cap = CornerRadius(size.height / 2)
-                    drawRoundRect(
-                        Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.2f).compositeOver(liquid), liquid)),
-                        topLeft = Offset(-size.height, 0f), size = Size(w + size.height, size.height), cornerRadius = cap,
-                    )
-                    drawRoundRect(
-                        Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.22f), Color.Transparent), endY = size.height * 0.5f),
-                        topLeft = Offset(-size.height, 0f), size = Size(w + size.height, size.height), cornerRadius = cap,
-                    )
-                },
-        )
-        VolumeLabels(sink, level, MaterialTheme.colorScheme.onSurface, MaterialTheme.colorScheme.onSurfaceVariant, Modifier)
-        VolumeLabels(
-            sink, level, onLiquid, onLiquid.copy(alpha = 0.85f),
-            Modifier
-                .clearAndSetSemantics {}
-                .drawWithContent { clipRect(right = shown.coerceIn(0f, 1f) * size.width) { this@drawWithContent.drawContent() } },
-        )
-    }
-}
-
-@Composable
-private fun VolumeLabels(sink: AudioSink, level: Float, strong: Color, soft: Color, modifier: Modifier) {
-    Row(modifier.fillMaxSize().padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(if (sink.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null, tint = strong)
-        Spacer(Modifier.width(10.dp))
-        Text(
-            prettySinkName(sink.description),
-            style = MaterialTheme.typography.labelLarge,
-            color = soft,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            if (sink.muted) "Muted" else "${(level * 100).roundToInt()}%",
-            style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
-            color = strong,
-        )
+            Icon(if (sink.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null, tint = muted, modifier = Modifier.size(20.dp))
+        }
     }
 }
 
 private const val ECHO_QUIET_MS = 700L
 
-private fun DrawScope.volumeKnob(shown: Float, swell: Float): Rect {
-    val k = swell.coerceAtLeast(0f)
-    val h = size.height * (0.5f + 0.6f * k)
-    val w = h * (1.2f + 0.35f * k.coerceAtMost(1f))
-    val inset = (size.height - h) / 2
-    val x = (shown.coerceIn(0f, 1f) * size.width).coerceIn(w / 2 + inset, size.width - w / 2 - inset)
-    return Rect(x - w / 2, (size.height - h) / 2, x + w / 2, (size.height + h) / 2)
-}
 
-/** Diminishing stretch: the further you pull, the less it gives, topping out at 6%. */
-private fun rubberBand(excess: Float): Float = sign(excess) * 0.06f * (1f - 1f / (1f + abs(excess) * 4f))
 private const val STATS_RENEW_MS = 5_000L
 
 private class Control(
@@ -730,8 +653,8 @@ private fun ControlButton(c: Control, modifier: Modifier) {
         c.active -> Haptic.ToggleOff
         else -> Haptic.ToggleOn
     }
-    Column(modifier.pressable(pressedScale = 0.88f, haptic = haptic, onClick = c.onClick), horizontalAlignment = Alignment.CenterHorizontally) {
-        // The circle turns to clear glass under the finger (the whole tile squishes from the Column).
+    Column(modifier.pressable(pressedScale = 1f, haptic = haptic, onClick = c.onClick), horizontalAlignment = Alignment.CenterHorizontally) {
+        // iOS 26 interactive glass: the circle swells under the finger, clears and lights up where touched.
         Box(Modifier.size(56.dp).pressScale(1f, glass = true).glassRaised(CircleShape, bg.takeIf { c.active || it != Glass.raised }), contentAlignment = Alignment.Center) {
             Icon(c.icon, null, tint = fg, modifier = Modifier.size(24.dp))
         }

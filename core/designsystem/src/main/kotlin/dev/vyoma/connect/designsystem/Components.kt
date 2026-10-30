@@ -69,6 +69,10 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import kotlin.math.abs
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.runtime.snapshotFlow
@@ -390,9 +394,11 @@ fun Pill(text: String, modifier: Modifier = Modifier, icon: ImageVector? = null,
 }
 
 /**
- * iOS / One UI switch with a liquid thumb: it swells while your finger is on it, then slides
- * across with a little bounce that squashes against the end. Toggling on and off feel different.
- * Everything moves in the draw phase.
+ * iOS 26 switch: a wide white capsule thumb on a capsule track (green when on). Touched, the thumb
+ * lifts out of the track and turns into a clear drop of liquid glass, bigger than the track, that
+ * slides across and magnifies the track under it; let go, it frosts back into the white thumb.
+ * One object throughout (a drawn thumb at rest, the lens of the same rect while held), all in the
+ * draw phase.
  */
 @Composable
 fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
@@ -400,32 +406,39 @@ fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: 
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val position = animateFloatAsState(if (checked) 1f else 0f, VyomaMotion.release(), label = "thumb")
-    val swell = animateFloatAsState(if (pressed) 1f else 0f, VyomaMotion.spatial(), label = "swell")
+    val swell = animateFloatAsState(if (pressed) 1f else 0f, if (pressed) VyomaMotion.spatial() else VyomaMotion.release(), label = "swell")
     val track by animateColorAsState(
-        if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f),
+        if (checked) SystemColor.GREEN.color else MaterialTheme.colorScheme.onSurface.copy(alpha = if (isDarkUi) 0.2f else 0.12f),
         VyomaMotion.effects(), label = "track",
     )
-    Canvas(
-        modifier
-            .size(52.dp, 32.dp)
-            .toggleable(checked, interaction, indication = null, role = Role.Switch) {
-                haptics.perform(if (it) Haptic.ToggleOn else Haptic.ToggleOff)
-                onCheckedChange(it)
-            },
-    ) {
-        drawRoundRect(track, cornerRadius = CornerRadius(size.height / 2))
-        val pad = 2.5.dp.toPx()
-        val d = size.height - 2 * pad
+    val card = MaterialTheme.colorScheme.surfaceContainerLow
+    fun DrawScope.thumb(): Rect {
+        val pad = 2.dp.toPx()
+        val k = swell.value.coerceAtLeast(0f)
+        val h = (size.height - 2 * pad) * (1f + 0.45f * k)
         val raw = position.value
         val p = raw.coerceIn(0f, 1f)
         // Overshoot past either end squashes the thumb against the wall instead of leaving the track.
-        val squash = abs(raw - p) * d * 1.5f
-        val w = d + d * 0.3f * swell.value - squash
-        val x = pad + (size.width - 2 * pad - w) * p
-        val r = CornerRadius(d / 2)
-        drawRoundRect(Color.Black.copy(alpha = 0.12f), Offset(x, pad + 1.dp.toPx()), Size(w, d), r)
-        drawRoundRect(Color.White, Offset(x, pad), Size(w, d), r)
+        val squash = abs(raw - p) * h * 1.5f
+        val w = h * 1.55f - squash
+        val restW = (size.height - 2 * pad) * 1.55f
+        val cx = pad + restW / 2 + (size.width - 2 * pad - restW) * p
+        return Rect(cx - w / 2, size.height / 2 - h / 2, cx + w / 2, size.height / 2 + h / 2)
     }
+    Spacer(
+        modifier
+            .size(62.dp, 28.dp)
+            .toggleable(checked, interaction, indication = null, role = Role.Switch) {
+                haptics.perform(if (it) Haptic.ToggleOn else Haptic.ToggleOff)
+                onCheckedChange(it)
+            }
+            .drawWithContent {
+                drawContent()
+                frostedKnob(thumb(), 1f - swell.value)
+            }
+            .liquidLens(null, strength = { swell.value }, zoom = { 1f + 0.1f * swell.value.coerceIn(0f, 1f) }, underlay = card, style = LensStyle.Lift, frost = { 1f - swell.value }, rect = { thumb() })
+            .drawBehind { drawRoundRect(track, cornerRadius = CornerRadius(size.height / 2)) },
+    )
 }
 
 /**
@@ -470,9 +483,10 @@ fun PillButton(
 }
 
 /**
- * iOS-style segmented control: a glass track with a raised thumb that slides between options as a
- * gel (leading edge first, trailing edge catching up). Drawn, not laid out, so the slide costs one
- * draw per frame.
+ * iOS 26 segmented control: a capsule track with a raised thumb that slides between options as a
+ * gel (leading edge first, trailing edge catching up). Touched, the thumb lifts into a clear drop of
+ * liquid glass a little bigger than the track that magnifies the label under it, and you can slide
+ * it to another option; let go, it settles as the thumb again. Drawn, not laid out.
  */
 @Composable
 fun SegmentedControl(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
@@ -480,60 +494,102 @@ fun SegmentedControl(options: List<String>, selected: Int, onSelect: (Int) -> Un
     val seg = if (options.isEmpty()) 0f else width.toFloat() / options.size
     val left = remember { Animatable(-1f) }
     val right = remember { Animatable(-1f) }
-    LaunchedEffect(selected, seg) {
-        if (seg == 0f) return@LaunchedEffect
-        val l = selected * seg
+    val lift = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
+    val current by rememberUpdatedState(selected)
+    val pick by rememberUpdatedState(onSelect)
+    fun glide(i: Int) {
+        if (seg == 0f) return
+        val l = i * seg
         if (left.value < 0f) {
-            left.snapTo(l); right.snapTo(l + seg)
-            return@LaunchedEffect
+            scope.launch { left.snapTo(l); right.snapTo(l + seg) }
+            return
         }
-        val forward = l > left.value
-        launch { left.animateTo(l, if (forward) VyomaMotion.trailing() else VyomaMotion.leading()) }
-        launch { right.animateTo(l + seg, if (forward) VyomaMotion.leading() else VyomaMotion.trailing()) }
+        val forward = l > left.targetValue
+        scope.launch { left.animateTo(l, if (forward) VyomaMotion.trailing() else VyomaMotion.leading()) }
+        scope.launch { right.animateTo(l + seg, if (forward) VyomaMotion.leading() else VyomaMotion.trailing()) }
     }
+    LaunchedEffect(selected, seg) { glide(selected) }
     val dark = isDarkUi
-    val thumb = if (dark) Color.White.copy(alpha = 0.2f) else Color.White
-    val shadow = Color.Black.copy(alpha = if (dark) 0f else 0.08f)
-    Row(
+    val thumb = if (dark) Color(0xFF636366) else Color.White
+    val shadow = Color.Black.copy(alpha = if (dark) 0f else 0.1f)
+    val card = MaterialTheme.colorScheme.surfaceContainerLow
+    val pad = with(LocalDensity.current) { 3.dp.toPx() }
+    // The thumb in the control's coordinates, swelling past the track while lifted.
+    fun DrawScope.thumbRect(): Rect {
+        val k = lift.value.coerceAtLeast(0f)
+        val grow = 7.dp.toPx() * k
+        return Rect(pad + left.value - grow, pad - grow, pad + right.value + grow, size.height - pad + grow)
+    }
+    Box(
         modifier
             .fillMaxWidth()
             .height(40.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f))
-            .padding(3.dp)
-            .onSizeChanged { width = it.width }
+            .liquidLens(null, strength = { lift.value }, zoom = { 1f + 0.12f * lift.value.coerceIn(0f, 1f) }, underlay = card, style = LensStyle.Lift, rect = { thumbRect() })
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = if (dark) 0.12f else 0.07f), CircleShape)
             .drawBehind {
                 if (left.value < 0f) return@drawBehind
-                val r = CornerRadius(size.height / 2)
-                val w = right.value - left.value
-                drawRoundRect(shadow, Offset(left.value, 1.dp.toPx()), Size(w, size.height), r)
-                drawRoundRect(thumb, Offset(left.value, 0f), Size(w, size.height), r)
-            },
+                val a = 1f - lift.value.coerceIn(0f, 1f)
+                if (a < 0.01f) return@drawBehind
+                val r = thumbRect()
+                val corner = CornerRadius(r.height / 2)
+                drawRoundRect(shadow, r.topLeft + Offset(0f, 1.dp.toPx()), r.size, corner, alpha = a)
+                drawRoundRect(thumb, r.topLeft, r.size, corner, alpha = a)
+            }
+            .pointerInput(options.size) {
+                fun indexAt(x: Float) = ((x - pad) / (size.width - 2 * pad) * options.size).toInt().coerceIn(0, options.lastIndex)
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var hover = indexAt(down.position.x)
+                    scope.launch { lift.animateTo(1f, VyomaMotion.spatial()) }
+                    if (hover != current) { haptics.perform(Haptic.Select); glide(hover) }
+                    var cancelled = false
+                    while (true) {
+                        val e = awaitPointerEvent()
+                        val c = e.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!c.pressed) break
+                        val i = indexAt(c.position.x)
+                        if (i != hover) { hover = i; haptics.perform(Haptic.Select); glide(i) }
+                        // Pulled well away vertically: the page is scrolling, not this.
+                        if (c.isConsumed) { cancelled = true; break }
+                    }
+                    scope.launch { lift.animateTo(0f, VyomaMotion.release()) }
+                    if (cancelled) glide(current) else if (hover != current) pick(hover) else glide(current)
+                }
+            }
+            .padding(3.dp)
+            .onSizeChanged { width = it.width },
     ) {
-        options.forEachIndexed { i, label ->
-            val on = i == selected
-            Box(
-                Modifier
-                    .weight(1f)
-                    .fillMaxSize()
-                    .pressable(pressedScale = 0.94f, role = Role.Tab, haptic = Haptic.Select) { if (!on) onSelect(i) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    label,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
+        Row(Modifier.fillMaxSize()) {
+            options.forEachIndexed { i, label ->
+                val on = i == selected
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxSize()
+                        .semantics { role = Role.Tab; this.selected = on; onClick { if (!on) onSelect(i); true } },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
             }
         }
     }
 }
 
 /**
- * The liquid bar: a slim capsule with no thumb. Under a finger it swells (springy, like a drop
- * pressed flat) and follows the finger's movement relatively, iOS-style, so a touch never makes
- * it jump; a tap without a drag changes nothing. [value] is read in the draw phase only.
+ * Apple's two sliders in one. With a [knob] it's the iOS 26 slider: a slim track and a wide white
+ * capsule knob that, touched, lifts into a clear drop of liquid glass magnifying the track and
+ * frosts back when let go. Without one it's the Apple Music scrubber: a bare track that thickens
+ * under the finger. Either way it follows the finger's movement relatively once it moves
+ * sideways (a vertical swipe still scrolls the page; a touch never makes it jump; a tap changes
+ * nothing). [value] is read in the draw phase only.
  */
 @Composable
 fun LiquidSlider(
@@ -544,10 +600,12 @@ fun LiquidSlider(
     enabled: Boolean = true,
     fill: Color = Color.White,
     track: Color = Color.White.copy(alpha = 0.22f),
+    knob: Dp? = 24.dp,
     rest: Dp = 6.dp,
-    swollen: Dp = 14.dp,
-    /** What the slider sits on, so its drop has something to refract around the track. */
+    swollen: Dp = if (knob == null) 14.dp else 7.dp,
+    /** What the slider sits on, so the lifted knob has something to refract around the track. */
     underlay: Color = Color.Transparent,
+    edgeHaptics: Boolean = true,
 ) {
     val swell = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -557,7 +615,7 @@ fun LiquidSlider(
     Box(
         modifier
             .fillMaxWidth()
-            .height(32.dp)
+            .height(if (knob == null) 32.dp else maxOf(32.dp, knob + 8.dp))
             .then(
                 if (!enabled) Modifier else Modifier.pointerInput(Unit) {
                     awaitEachGesture {
@@ -576,7 +634,7 @@ fun LiquidSlider(
                                 val dx = c.positionChange().x
                                 c.consume()
                                 val n = (v + dx / size.width).coerceIn(0f, 1f)
-                                if ((n == 0f || n == 1f) && n != v) haptics.perform(Haptic.Edge)
+                                if (edgeHaptics && (n == 0f || n == 1f) && n != v) haptics.perform(Haptic.Edge)
                                 v = n
                                 change(v)
                             }
@@ -586,45 +644,44 @@ fun LiquidSlider(
                     }
                 },
             )
-            // The knob is always there: a frosted bead at the end of the fill that, grabbed, swells
-            // and clears into a drop of water magnifying the fill, and frosts over again when let go.
-            // At rest it's a plain drawn bead; the lens takes over as it grows.
-            .drawWithContent {
-                drawContent()
-                frostedKnob(sliderKnob(value(), swell.value, swollen), 1f - swell.value)
-            }
-            .liquidLens(
-                null,
-                strength = { swell.value },
-                zoom = { 1f + 0.18f * swell.value.coerceIn(0f, 1f) },
-                underlay = underlay,
-                frost = { 1f - swell.value },
-                rect = { sliderKnob(value(), swell.value, swollen) },
+            .then(
+                if (knob == null) Modifier else Modifier
+                    // At rest a drawn white knob (no layers); held, a lens of the same rect takes over.
+                    .drawWithContent {
+                        drawContent()
+                        frostedKnob(sliderKnob(value(), swell.value, knob), 1f - swell.value)
+                    }
+                    .liquidLens(
+                        null,
+                        strength = { swell.value },
+                        zoom = { 1f + 0.2f * swell.value.coerceIn(0f, 1f) },
+                        underlay = underlay,
+                        style = LensStyle.Lift,
+                        frost = { 1f - swell.value },
+                        rect = { sliderKnob(value(), swell.value, knob) },
+                    ),
             )
             .drawBehind {
-                val h = lerp(rest.toPx(), swollen.toPx(), swell.value.coerceAtLeast(0f))
+                val k = swell.value.coerceAtLeast(0f)
+                val h = lerp(rest.toPx(), swollen.toPx(), k)
                 val top = (size.height - h) / 2
                 val r = CornerRadius(h / 2)
                 drawRoundRect(track, Offset(0f, top), Size(size.width, h), r)
                 val w = (value().coerceIn(0f, 1f) * size.width)
                 if (w <= 0f) return@drawBehind
-                val fw = w.coerceAtLeast(h)
-                drawRoundRect(fill, Offset(0f, top), Size(fw, h), r)
-                // A gloss along the top of the fill: lit liquid rather than flat paint.
-                drawRoundRect(
-                    Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.35f), Color.Transparent), startY = top, endY = top + h * 0.6f),
-                    Offset(0f, top), Size(fw, h), r,
-                )
+                drawRoundRect(fill, Offset(0f, top), Size(w.coerceAtLeast(h), h), r)
             },
     )
 }
 
-private fun DrawScope.sliderKnob(value: Float, swell: Float, swollen: Dp): Rect {
+/** The knob: a wide capsule centred on the value, kept inside the track; lifted it grows ~45%. */
+private fun DrawScope.sliderKnob(value: Float, swell: Float, knob: Dp): Rect {
     val k = swell.coerceAtLeast(0f)
-    val dh = lerp(swollen.toPx() + 2.dp.toPx(), size.height * 1.1f, k)
-    val dw = dh * lerp(1.2f, 1.5f, k.coerceAtMost(1f))
-    val x = (value.coerceIn(0f, 1f) * size.width).coerceIn(dw / 2, size.width - dw / 2)
-    return Rect(x - dw / 2, (size.height - dh) / 2, x + dw / 2, (size.height + dh) / 2)
+    val h = knob.toPx() * (1f + 0.45f * k)
+    val w = h * 1.55f
+    val rest = knob.toPx() * 1.55f
+    val x = (value.coerceIn(0f, 1f) * size.width).coerceIn(rest / 2, size.width - rest / 2)
+    return Rect(x - w / 2, (size.height - h) / 2, x + w / 2, (size.height + h) / 2)
 }
 
 /**
