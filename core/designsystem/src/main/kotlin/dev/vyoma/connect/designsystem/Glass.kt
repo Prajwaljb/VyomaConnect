@@ -365,7 +365,7 @@ fun Modifier.aurora(): Modifier = composed {
 }
 
 private const val AURORA_SCALE = 4f
-private val AURORA_DRIFT = 12.dp
+private val AURORA_DRIFT = 36.dp
 
 /** What chrome blurs: one recorded display list of the content underneath. */
 @Stable
