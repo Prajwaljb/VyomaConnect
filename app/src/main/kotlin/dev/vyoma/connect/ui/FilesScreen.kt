@@ -6,6 +6,11 @@ import android.text.format.DateUtils
 import android.text.format.Formatter
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.layout.layout
+import dev.vyoma.connect.platform.outgoingFile
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,7 +33,6 @@ import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,7 +58,7 @@ import dev.vyoma.connect.designsystem.ListRow
 import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.SectionCard
 import dev.vyoma.connect.designsystem.SystemColor
-import dev.vyoma.connect.designsystem.glassCardSegment
+import dev.vyoma.connect.designsystem.glassListGroup
 import dev.vyoma.connect.designsystem.perform
 import dev.vyoma.connect.designsystem.pressable
 import dev.vyoma.connect.platform.AndroidShareSink
@@ -65,7 +69,8 @@ import dev.vyoma.connect.protocol.plugin.builtin.PcFileEvent
 /**
  * The PC's home folder, browsed from the phone through the companion. Folders open in place
  * (back goes up a level before leaving); tapping a file downloads it to Downloads/Vyoma, with the
- * usual transfer notification, and opens it when it lands.
+ * usual transfer notification, and opens it when it lands. "Upload here" puts phone files into
+ * the folder on screen.
  */
 @Composable
 fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
@@ -95,6 +100,10 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
                     runCatching { context.startActivity(open) }
                         .onFailure { toast(context, "${e.name} is in Downloads/Vyoma") }
                 }
+                is PcFileEvent.Uploaded -> {
+                    haptics.perform(Haptic.Success)
+                    toast(context, "Uploaded ${e.name}")
+                }
                 is PcFileEvent.Failed -> {
                     haptics.perform(Haptic.Failure)
                     toast(context, "Couldn't get ${e.name}: ${e.reason}")
@@ -103,8 +112,15 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
         }
     }
 
+    val upload = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (plugin != null && uris.isNotEmpty()) vm.uploadPcFiles(plugin, path, uris.map(context.contentResolver::outgoingFile))
+    }
+
     val shown = folder?.takeIf { it.path == path }
+    val listState = rememberLazyListState()
     CollapsingHeaderScaffold(
+        listState = listState,
+        listModifier = Modifier.glassListGroup(listState, ENTRY),
         title = if (path.isEmpty()) "Home" else path.substringAfterLast('/'),
         subtitle = when {
             plugin == null -> pcName
@@ -114,8 +130,6 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
         },
         navigation = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
         actions = {
-            // Sending goes through KDE Connect's share, so it lands in the PC's Downloads.
-            IconButton(onClick = { vm.pickFiles(context) }) { Icon(Icons.Rounded.UploadFile, "Send files to the PC") }
             if (plugin != null) IconButton(onClick = { vm.listPcFiles(plugin, path) }) { Icon(Icons.Rounded.Refresh, "Refresh") }
         },
     ) {
@@ -133,7 +147,13 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
             return@CollapsingHeaderScaffold
         }
 
-        item(key = "crumbs") { Breadcrumbs(path, onPick = { path = it }) }
+        item(key = "crumbs") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Breadcrumbs(path, onPick = { path = it }, modifier = Modifier.weight(1f))
+                // Into the folder on screen; the dashboard's Send drops files in the PC's Downloads instead.
+                PillButton("Upload here", prominent = false, onClick = { upload.launch(arrayOf("*/*")) })
+            }
+        }
 
         when {
             shown == null || (shown.loading && shown.entries.isEmpty()) -> item(key = "loading") {
@@ -165,12 +185,12 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
                 val last = shown.entries.lastIndex
                 shown.entries.forEachIndexed { i, f ->
                     val child = if (path.isEmpty()) f.name else "$path/${f.name}"
-                    item(key = child, contentType = "entry") {
+                    item(key = child, contentType = ENTRY) {
                         FileRow(
                             f,
                             busy = child in fetching,
                             showDivider = i != last,
-                            modifier = Modifier.animateItem().glassCardSegment(first = i == 0, last = i == last),
+                            modifier = if (i != last) Modifier.joinNext() else Modifier,
                             onClick = { if (f.isDir) path = child else vm.downloadPcFile(plugin, child) },
                         )
                     }
@@ -190,10 +210,13 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
 
 /** Home › Documents › Work: every level is a chip you can jump back to. */
 @Composable
-private fun Breadcrumbs(path: String, onPick: (String) -> Unit) {
+private fun Breadcrumbs(path: String, onPick: (String) -> Unit, modifier: Modifier) {
     val parts = if (path.isEmpty()) emptyList() else path.split('/')
+    val scroll = rememberScrollState()
+    // Deep paths keep the folder you're in visible.
+    LaunchedEffect(path) { scroll.animateScrollTo(scroll.maxValue) }
     Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 2.dp),
+        modifier.horizontalScroll(scroll).padding(bottom = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -255,6 +278,14 @@ private fun kindOf(name: String): Pair<ImageVector, SystemColor> = when (name.su
     "kt", "rs", "py", "js", "ts", "c", "h", "cpp", "java", "sh", "json", "toml", "yaml", "yml", "html", "css" ->
         Icons.Rounded.Code to SystemColor.TEAL
     else -> Icons.AutoMirrored.Rounded.InsertDriveFile to SystemColor.GRAY
+}
+
+private const val ENTRY = "entry"
+
+/** File rows are list items of their own; this cancels the list's gap so they sit edge to edge on one card. */
+private fun Modifier.joinNext() = layout { measurable, constraints ->
+    val p = measurable.measure(constraints)
+    layout(p.width, p.height - 12.dp.roundToPx()) { p.place(0, 0) }
 }
 
 private fun itemCount(n: Int) = if (n == 1) "1 item" else "$n items"

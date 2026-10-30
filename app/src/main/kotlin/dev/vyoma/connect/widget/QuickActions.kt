@@ -12,7 +12,7 @@ import dev.vyoma.connect.ui.MainActivity
  */
 enum class QuickAction(val icon: Int, val label: String, val description: String) {
     CLIPBOARD(R.drawable.ic_w_clipboard, "Clipboard", "Send what you copied to the PC"),
-    FILES(R.drawable.ic_w_upload, "Files", "Pick files to send"),
+    FILES(R.drawable.ic_w_upload, "Send", "Pick files to send to the PC"),
     TOUCHPAD(R.drawable.ic_w_mouse, "Touchpad", "Mouse and keyboard"),
     PLAY_PAUSE(R.drawable.ic_play, "Play", "Play or pause PC media"),
     PREVIOUS(R.drawable.ic_skip_previous, "Previous", "Previous track"),

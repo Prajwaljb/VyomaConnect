@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
@@ -93,9 +94,11 @@ fun CollapsingHeaderScaffold(
     navigation: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
     hero: (@Composable () -> Unit)? = null,
+    listState: LazyListState = rememberLazyListState(),
+    /** Applied to the list itself, e.g. [glassListGroup] to draw behind its items. */
+    listModifier: Modifier = Modifier,
     content: LazyListScope.() -> Unit,
 ) {
-    val listState = rememberLazyListState()
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     val headerHeight = (screenHeight * 0.30f).coerceIn(180.dp, 300.dp)
     val headerPx = with(LocalDensity.current) { headerHeight.toPx() }
@@ -131,7 +134,7 @@ fun CollapsingHeaderScaffold(
                 bottom = 24.dp + bottomInset + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().then(listModifier),
         ) {
             item(key = "header", contentType = "header") {
                 Column(

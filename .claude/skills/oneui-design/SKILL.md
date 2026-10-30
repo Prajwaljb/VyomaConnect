@@ -33,10 +33,17 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 ## Layout
 - Every top-level screen uses `CollapsingHeaderScaffold`: a tall hero title (~30% of screen height) that keeps content in
   thumb reach, collapsing into a compact bar. 16 dp side gutters, 12 dp between cards.
+- Long or unbounded groups (folder listings) are one lazy item per row: draw the card once behind them with
+  `listModifier = Modifier.glassListGroup(listState, contentType)` on `CollapsingHeaderScaffold` and cancel the list
+  gap between rows. Never give each row its own glass: every slice gets its own edge highlight. No per-row
+  `animateItem` there either; the card has to move as one.
 - Group related rows in `SectionCard` with `ListRow`s (`iconTint = SystemColor.X.color` → colored squircle `IconBadge`,
   dividers inset past the icon).
 - Section titles use `SectionLabel` (small, muted, drawn low so it belongs to the card below, not the gap above).
 - Order by frequency: glanceable state first, then what you adjust (media, volume), then one-shot actions.
+- One job per button, named for what it does ("Send", "PC files", "Upload here"), never one button whose meaning
+  changes with state. No two buttons on the same screen open the same thing. When a feature appears only
+  sometimes (companion online), swap it into a fixed slot so the other buttons never move.
 - One clear primary action per card. Touch targets ≥ 48 dp; keep the bottom 70 px clear of the floating tab bar
   (`LocalBottomBarInset`).
 - Controls: `PillButton` (prominent = accent fill, else tinted), `SegmentedControl` for 2–4 exclusive choices,

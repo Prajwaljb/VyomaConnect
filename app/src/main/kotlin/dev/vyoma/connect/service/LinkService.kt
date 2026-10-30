@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.Uri
-import android.provider.OpenableColumns
+import dev.vyoma.connect.platform.outgoingFile
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
@@ -15,7 +15,6 @@ import dev.vyoma.connect.protocol.device.DeviceState
 import dev.vyoma.connect.protocol.plugin.builtin.BatteryPlugin
 import dev.vyoma.connect.protocol.device.HubEvent
 import dev.vyoma.connect.protocol.link.TransportKind
-import dev.vyoma.connect.protocol.plugin.builtin.OutgoingFile
 import dev.vyoma.connect.protocol.plugin.builtin.PingPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.SharePlugin
 import dev.vyoma.connect.protocol.plugin.builtin.Transfer
@@ -187,27 +186,10 @@ class LinkService : LifecycleService() {
             val device = container.obtainHub().device(deviceId) ?: return@launch
             val share = device.plugin<SharePlugin>(SharePlugin.ID) ?: return@launch
             if (uris.isNotEmpty()) {
-                share.sendFiles(uris.mapNotNull(::describe))
+                share.sendFiles(uris.map(contentResolver::outgoingFile))
             } else if (text != null) {
                 if (looksLikeUrl(text)) share.sendUrl(text.trim()) else share.sendText(text)
             }
-        }
-    }
-
-    private fun describe(uri: Uri): OutgoingFile? {
-        var name: String? = null
-        var size = -1L
-        runCatching {
-            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
-                if (c.moveToFirst()) {
-                    name = c.getString(0)
-                    if (!c.isNull(1)) size = c.getLong(1)
-                }
-            }
-        }.onFailure { VLog.w("Share", "can't read $uri: ${it.message}") }
-        if (size < 0) size = runCatching { contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } }.getOrNull() ?: -1
-        return OutgoingFile(name ?: uri.lastPathSegment ?: "file", size, null) {
-            contentResolver.openInputStream(uri) ?: error("can't open $uri")
         }
     }
 
