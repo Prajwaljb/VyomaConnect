@@ -346,7 +346,7 @@ internal fun ClipboardAdbDialog(onDismiss: () -> Unit) {
         title = { Text("Automatic clipboard sync") },
         text = {
             Column {
-                Text("Android only lets the app in front read the clipboard. Run this once from a computer with USB debugging on, then reopen Vyoma and tap Allow when Android asks about log access:")
+                Text("Android only lets the app in front read the clipboard. With the Vyoma companion on your PC, just plug in with USB debugging on and it's allowed for you. Otherwise run this once from a computer, then reopen Vyoma and tap Allow when Android asks about log access:")
                 Spacer(Modifier.height(12.dp))
                 Text(cmd, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
             }
@@ -380,7 +380,7 @@ private fun UsbHelpDialog(onDismiss: () -> Unit) {
                 )
                 Spacer(Modifier.height(12.dp))
                 Text("USB debugging", style = MaterialTheme.typography.titleSmall)
-                Text("If your PC already has adb, run this on the PC once per plug-in:", style = MaterialTheme.typography.bodyMedium)
+                Text("With the Vyoma companion on your PC, that's all: it sets up the link when you plug in. Without it, run this on the PC once per plug-in:", style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(6.dp))
                 Text(cmd, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
                 Spacer(Modifier.height(12.dp))

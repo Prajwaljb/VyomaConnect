@@ -1,5 +1,5 @@
 //! Vyoma companion: runs next to the stock KDE Connect daemon and gives Vyoma on the phone the
-//! extras kdeconnectd can't (PC stats now; screenshots, camera, screen view later).
+//! extras kdeconnectd can't: PC stats, screenshots, and zero-setup USB (camera, screen view later).
 //!
 //! It never listens for strangers: it only dials phones that kdeconnectd already trusts, found
 //! via their mDNS announcements, and proves to them that it belongs to this PC by signing with
@@ -10,6 +10,7 @@ mod kde;
 mod link;
 mod screenshot;
 mod stats;
+mod usb;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
@@ -47,6 +48,8 @@ async fn main() -> Result<()> {
     let me = Identity::load_or_create()?;
     info!("companion {} for KDE Connect device {} ({})", me.device_id, host.device_id, host.name);
     let shared = Arc::new(Shared { host, me, connected: Mutex::default(), seen: Mutex::default() });
+
+    tokio::spawn(usb::watch());
 
     let mdns = mdns_sd::ServiceDaemon::new()?;
     let events = mdns.browse(SERVICE)?;
