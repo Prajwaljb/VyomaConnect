@@ -15,6 +15,7 @@ import dev.vyoma.connect.protocol.plugin.builtin.MprisPlugin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlin.math.abs
 import kotlinx.coroutines.launch
 
 /**
@@ -36,6 +37,10 @@ class PcMediaSession(private val context: Context, private val media: MediaHub) 
     private var job: Job? = null
     private var lastArt: Any? = null
     private var volume: PcVolume? = null
+    /** What the posted notification shows; reposting (art bitmap and all, across to the system) only when it changes. */
+    private var shownKey: List<Any?>? = null
+    /** The playback state last handed to the session, to skip updates the framework already extrapolates. */
+    private var lastState: PlaybackState? = null
 
     fun start(scope: CoroutineScope) {
         job = scope.launch {
@@ -55,6 +60,8 @@ class PcMediaSession(private val context: Context, private val media: MediaHub) 
     private fun render(np: NowPlaying?) {
         if (np == null || !np.player.hasMedia) {
             session.isActive = false
+            shownKey = null
+            lastState = null
             cancel()
             return
         }
@@ -75,18 +82,34 @@ class PcMediaSession(private val context: Context, private val media: MediaHub) 
         if (p.canNext) actions = actions or PlaybackState.ACTION_SKIP_TO_NEXT
         if (p.canPrevious) actions = actions or PlaybackState.ACTION_SKIP_TO_PREVIOUS
         if (p.canSeek && p.lengthMs > 0) actions = actions or PlaybackState.ACTION_SEEK_TO
-        session.setPlaybackState(
-            PlaybackState.Builder()
+        // Every packet from the PC restamps the position; the framework extrapolates a playing
+        // position itself, so only real changes (play/pause, actions, a jump) go to the session.
+        val state = if (p.isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
+        val last = lastState
+        val drift = last?.let { abs(extrapolated(it) - p.currentPosition()) } ?: Long.MAX_VALUE
+        if (last == null || last.state != state || last.actions != actions || drift > POSITION_SLACK_MS) {
+            lastState = PlaybackState.Builder()
                 .setActions(actions)
-                .setState(if (p.isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED, p.positionMs, if (p.isPlaying) 1f else 0f, p.positionAt.toElapsed())
-                .build(),
-        )
+                .setState(state, p.positionMs, if (p.isPlaying) 1f else 0f, p.positionAt.toElapsed())
+                .build()
+                .also(session::setPlaybackState)
+        }
         if (p.volume >= 0) {
             val v = volume ?: PcVolume().also { volume = it; session.setPlaybackToRemote(it) }
             v.currentVolume = p.volume
         }
         session.isActive = true
-        notify(np)
+        val key = listOf(p.title, p.artist, p.name, np.deviceName, np.deviceId, p.isPlaying, System.identityHashCode(np.art))
+        if (key != shownKey) {
+            shownKey = key
+            notify(np)
+        }
+    }
+
+    /** Where [state] says playback is now, in ms (as the framework's seek bar computes it). */
+    private fun extrapolated(state: PlaybackState): Long {
+        if (state.state != PlaybackState.STATE_PLAYING) return state.position
+        return state.position + (android.os.SystemClock.elapsedRealtime() - state.lastPositionUpdateTime)
     }
 
     /** SystemClock-based timestamp the framework uses to extrapolate the seek bar. */
@@ -129,4 +152,8 @@ class PcMediaSession(private val context: Context, private val media: MediaHub) 
     }
 
     private fun cancel() = context.getSystemService(NotificationManager::class.java).cancel(Notifications.MEDIA_ID)
+
+    private companion object {
+        const val POSITION_SLACK_MS = 1_500L
+    }
 }

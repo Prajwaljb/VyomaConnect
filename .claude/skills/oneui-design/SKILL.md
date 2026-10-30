@@ -18,8 +18,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   linear-gradient rim misaligned) plus, in the dark, a soft glow on the lit side baked INTO the fill as one radial
   gradient (a separate glow pass over the card cost 0.4 ms GPU/frame; in-fill is ~free). Measured ≈ +0.1–0.2 ms.
   Card slices (`cardSegment`) pass `lit = false`. Refraction belongs only to things that float.
-- Media card without artwork (mpv, failed art): compact Apple Music-style header (72 dp deep-accent tile with a note
-  or film glyph, title/artist/player) on `accent.toned(0.8f, 0.2f)`, never a big empty art frame.
+- Media card without artwork (mpv, failed art) or with a thumbnail < 400 px (YouTube Music's mini player gives 60 px):
+  compact Apple Music-style header (72 dp tile with the thumbnail or a note/film glyph, title/artist/player, and
+  Continue on phone as a 44 dp round button at the row's end, not a chip under the title) on `accent.toned(0.8f, 0.2f)`
+  or the art's palette; never a big empty or blurry frame. Art trimming/palette run off the main thread.
 - Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a plain
   even fill plus a 0.9 dp specular hairline that follows the phone's tilt (a FIXED painted rim read as fake; the user
   asked for it back once it moved like iOS 26); pass `color` for accent/tinted or for chips over artwork (dark translucent).
@@ -119,6 +121,13 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   (`LocalBottomBarInset`).
 - Controls: `PillButton` (prominent = accent fill, else tinted), `SegmentedControl` for 2–4 exclusive choices,
   `VyomaSwitch` for on/off. No Material `Button`/`FilledTonalButton`/`Switch`/`SegmentedButton` outside dialogs.
+
+## Efficiency
+- Measure CPU with the app COMPILED: `adb shell cmd package compile -m speed-profile -f dev.vyoma.connect` after a
+  launch (sideloads sit at `status=verify`, i.e. interpreted, ~2x the CPU). `app/src/main/baseline-prof.txt` compiles
+  all of Vyoma's code at install. Scratchpad `cpu.sh N` = per-thread ticks over N s; simpleperf works (`--app`).
+- Never repost a notification or session state per packet: PC packets restamp `positionAt` on every update, so key
+  on what's shown (PcMediaSession) and identity-reuse unchanged bitmaps (MediaHub `sameAs`).
 
 ## Motion
 - Springs only (`VyomaMotion`): `spatial()` movement (slight overshoot), `effects()` alpha/color (never bounces),

@@ -1,6 +1,12 @@
 package dev.vyoma.connect.ui
 
 import kotlinx.coroutines.launch
+import androidx.compose.material.icons.automirrored.rounded.SendToMobile
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.produceState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
@@ -144,17 +150,26 @@ fun MediaCard(
     onContinueHere: (() -> Unit)? = null,
 ) {
     val p = np.player
-    val art = remember(np.art) { np.art?.let(::trimBars) }
     val accent = MaterialTheme.colorScheme.primary
-    val tint = remember(art, accent) {
-        art?.let { bmp -> Palette.from(bmp).maximumColorCount(12).generate().let { it.getDarkMutedColor(it.getDominantColor(0xFF20242B.toInt())) } }
-            ?.let { Color(it) } ?: accent.toned(0.8f, 0.2f)
+    // Trimming the bars and sampling the palette scan the whole bitmap: off the main thread, once
+    // per picture. Until it's ready the previous picture stays.
+    val prepared by produceState<Pair<Bitmap, Color>?>(null, np.art) {
+        val source = np.art
+        value = if (source == null) null else withContext(Dispatchers.Default) {
+            val trimmed = trimBars(source)
+            val swatch = Palette.from(trimmed).maximumColorCount(12).generate().let { it.getDarkMutedColor(it.getDominantColor(0xFF20242B.toInt())) }
+            trimmed to Color(swatch)
+        }
     }
+    val art = prepared?.first
+    val tint = prepared?.second ?: accent.toned(0.8f, 0.2f)
     val tintAnimated by animateColorAsState(tint, VyomaMotion.effects(), label = "tint")
     Surface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.extraLarge, color = tintAnimated) {
         Column(Modifier.animateContentSize(VyomaMotion.spatial())) {
-            if (art == null) {
-                PlainHeader(p, accent, onContinueHere)
+            // A thumbnail too small to fill the card (YouTube Music's mini player hands over ~120 px
+            // art) sits in the tile instead of being stretched into a blur.
+            if (art == null || art.width < FULL_BLEED_MIN_PX) {
+                PlainHeader(p, accent, art, onContinueHere)
             } else Box(Modifier.fillMaxWidth().aspectRatio(16f / 10f)) {
                 val behind = rememberBackdrop()
                 Crossfade(art, Modifier.fillMaxSize().backdropSource(behind), label = "art") { art ->
@@ -241,11 +256,15 @@ fun MediaCard(
     }
 }
 
-/** The no-artwork top of [MediaCard]: glyph tile, title, artist, and which player it is. */
+/**
+ * The compact top of [MediaCard], for no artwork or a small thumbnail: the art (or a glyph) in a
+ * tile, title, artist and which player it is, and Continue on phone as a round button at the end
+ * of the row (where Apple Music keeps AirPlay).
+ */
 @Composable
-private fun PlainHeader(p: RemotePlayer, accent: Color, onContinueHere: (() -> Unit)?) {
+private fun PlainHeader(p: RemotePlayer, accent: Color, art: Bitmap?, onContinueHere: (() -> Unit)?) {
     val video = VIDEO_PLAYERS.any { p.name.contains(it, ignoreCase = true) }
-    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 6.dp)) {
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 16.dp, bottom = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             val tile = RoundedCornerShape(18.dp)
             Box(
@@ -256,7 +275,11 @@ private fun PlainHeader(p: RemotePlayer, accent: Color, onContinueHere: (() -> U
                     .background(Brush.linearGradient(listOf(accent.toned(1.2f, 0.62f), accent.toned(1.2f, 0.46f)))),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(if (video) Icons.Rounded.Movie else Icons.Rounded.MusicNote, null, tint = Color.White, modifier = Modifier.size(36.dp))
+                if (art != null) {
+                    Image(art.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                } else {
+                    Icon(if (video) Icons.Rounded.Movie else Icons.Rounded.MusicNote, null, tint = Color.White, modifier = Modifier.size(36.dp))
+                }
             }
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
@@ -265,24 +288,26 @@ private fun PlainHeader(p: RemotePlayer, accent: Color, onContinueHere: (() -> U
                 if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.75f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (p.title.isNotBlank()) Text(p.name, style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.55f), maxLines = 1)
             }
-        }
-        if (onContinueHere != null) {
-            Row(
-                Modifier
-                    .padding(top = 12.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.14f))
-                    .pressable(onClick = onContinueHere)
-                    .padding(start = 10.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Rounded.PhoneAndroid, null, tint = Color.White, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Continue on phone", style = MaterialTheme.typography.labelLarge, color = Color.White)
+            if (onContinueHere != null) {
+                Spacer(Modifier.width(8.dp))
+                Box(
+                    Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.14f))
+                        .pressable(onClick = onContinueHere)
+                        .semantics { contentDescription = "Continue on phone" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.AutoMirrored.Rounded.SendToMobile, null, tint = Color.White, modifier = Modifier.size(22.dp))
+                }
             }
         }
     }
 }
+
+/** Narrower artwork than this is a thumbnail: shown in the compact card's tile, not full-bleed. */
+private const val FULL_BLEED_MIN_PX = 400
 
 /** Players that are mostly for video, so their card shows a film glyph rather than a note. */
 private val VIDEO_PLAYERS = listOf("mpv", "vlc", "celluloid", "totem", "haruna", "smplayer", "mplayer", "kodi", "showtime", "dragon")
@@ -405,23 +430,31 @@ fun CommandsCard(commands: List<RemoteCommand>, onRun: (RemoteCommand) -> Unit) 
 }
 
 /**
- * Video thumbnails often come letter- or pillarboxed. Crops near-black bars off the edges so the
- * art can fill the card; leaves genuinely dark artwork alone by sampling across each line.
+ * Video thumbnails often come letter- or pillarboxed (black bars, or a solid colour beside square
+ * album art). Crops flat bars off the edges so the art can fill the card; leaves genuinely flat
+ * artwork alone by sampling across each line.
  */
 private fun trimBars(bmp: Bitmap): Bitmap {
     val w = bmp.width
     val h = bmp.height
     if (w < 32 || h < 32) return bmp
-    // Bars are rarely pure black after compression; anything this dark and flat counts.
-    fun dark(c: Int) = (c shr 16 and 0xFF) + (c shr 8 and 0xFF) + (c and 0xFF) < 96
-    fun darkColumn(x: Int) = (0 until 16).all { dark(bmp.getPixel(x, h * (2 * it + 1) / 32)) }
-    fun darkRow(y: Int) = (0 until 16).all { dark(bmp.getPixel(w * (2 * it + 1) / 32, y)) }
-    var l = 0; while (l < w / 3 && darkColumn(l)) l++
-    var r = w - 1; while (r > w * 2 / 3 && darkColumn(r)) r--
-    var t = 0; while (t < h / 3 && darkRow(t)) t++
-    var b = h - 1; while (b > h * 2 / 3 && darkRow(b)) b--
+    // A bar is flat: every sample across the line matches the colour at that edge (black for
+    // letterboxing, or the solid colour YouTube puts beside square album art). Compression noise
+    // allowed.
+    fun near(a: Int, b: Int) =
+        abs((a shr 16 and 0xFF) - (b shr 16 and 0xFF)) + abs((a shr 8 and 0xFF) - (b shr 8 and 0xFF)) + abs((a and 0xFF) - (b and 0xFF)) < 36
+    fun flatColumn(x: Int, edge: Int) = (0 until 16).all { near(bmp.getPixel(x, h * (2 * it + 1) / 32), edge) }
+    fun flatRow(y: Int, edge: Int) = (0 until 16).all { near(bmp.getPixel(w * (2 * it + 1) / 32, y), edge) }
+    val left = bmp.getPixel(0, h / 2)
+    val right = bmp.getPixel(w - 1, h / 2)
+    val top = bmp.getPixel(w / 2, 0)
+    val bottom = bmp.getPixel(w / 2, h - 1)
+    var l = 0; while (l < w / 3 && flatColumn(l, left)) l++
+    var r = w - 1; while (r > w * 2 / 3 && flatColumn(r, right)) r--
+    var t = 0; while (t < h / 3 && flatRow(t, top)) t++
+    var b = h - 1; while (b > h * 2 / 3 && flatRow(b, bottom)) b--
     if (l == 0 && t == 0 && r == w - 1 && b == h - 1) return bmp
-    // A whole dark third means a dark image, not bars.
+    // A whole flat third means a flat image (a dark scene, a plain cover), not bars.
     if (l >= w / 3 || t >= h / 3) return bmp
     return Bitmap.createBitmap(bmp, l, t, r - l + 1, b - t + 1)
 }
