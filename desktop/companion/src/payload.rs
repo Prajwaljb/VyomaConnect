@@ -1,15 +1,17 @@
-//! KDE Connect payloads from our side: announce a packet with `payloadSize` and a port, wait for
-//! the phone to connect back, prove it's the paired phone (pinned certificate), then stream.
-//! As on the link, the side that accepts is the TLS server.
+//! KDE Connect payloads. Sending: announce a packet with `payloadSize` and a port, wait for the
+//! phone to connect back, prove it's the paired phone (pinned certificate), then stream.
+//! Receiving: connect to the port the phone announced. As on the link, the side that accepts is
+//! the TLS server.
 
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
-use tokio::io::{AsyncRead, AsyncWriteExt};
-use tokio::net::TcpListener;
-use tokio_rustls::TlsAcceptor;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 use crate::identity::Identity;
 use crate::link::Sender;
@@ -33,6 +35,22 @@ pub async fn offer(sender: &Sender, me: &Identity, pinned: &[u8], mut packet: Va
     tokio::io::copy(&mut source, &mut tls).await?;
     tls.shutdown().await?;
     Ok(())
+}
+
+/// Opens the payload the phone announced in `packet`; reads end after `payloadSize` bytes.
+pub async fn fetch(me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value) -> Result<impl AsyncRead + Unpin + use<>> {
+    let port = packet["payloadTransferInfo"]["port"].as_u64().context("payload without a port")? as u16;
+    let size = packet["payloadSize"].as_u64().context("payload without a size")?;
+    let tcp = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect((phone, port))).await.context("couldn't reach the phone")??;
+    tcp.set_nodelay(true)?;
+    let connector = TlsConnector::from(Arc::new(crate::link::client_config(me)?));
+    let name = rustls_pki_types::ServerName::IpAddress(phone.into());
+    let tls = tokio::time::timeout(Duration::from_secs(10), connector.connect(name, tcp)).await.context("payload TLS timed out")??;
+    let peer = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).context("phone sent no certificate")?;
+    if peer.as_ref() != pinned {
+        bail!("payload peer isn't the paired phone");
+    }
+    Ok(tls.take(size))
 }
 
 async fn bind() -> Result<TcpListener> {

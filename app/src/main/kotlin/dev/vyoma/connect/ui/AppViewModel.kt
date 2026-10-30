@@ -1,6 +1,7 @@
 package dev.vyoma.connect.ui
 
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.OutgoingFile
 import androidx.core.content.edit
 import android.app.Application
 import android.content.Context
@@ -170,6 +171,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun takeScreenshot(plugin: CompanionPlugin) = viewModelScope.launch { plugin.requestScreenshot() }
     fun listPcFiles(plugin: CompanionPlugin, path: String) = viewModelScope.launch { plugin.listFiles(path) }
     fun downloadPcFile(plugin: CompanionPlugin, path: String) = viewModelScope.launch { plugin.download(path) }
+    // App scope: an upload keeps going if you leave the browser.
+    fun uploadPcFiles(plugin: CompanionPlugin, folder: String, files: List<OutgoingFile>) =
+        container.appScope.launch { plugin.upload(folder, files) }
 
     fun setPalette(p: Palette) = viewModelScope.launch { settings.setPalette(p) }
     fun setDarkMode(m: DarkMode) = viewModelScope.launch { settings.setDarkMode(m) }

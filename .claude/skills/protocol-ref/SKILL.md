@@ -52,4 +52,7 @@ body fields before implementing one.
   path (symlinks resolved) must stay inside home. Dotfiles hidden, folders first, max 5000 entries.
 - `vyoma.files.get {path}` → `vyoma.files.file {path, name}` + payload, or `{path, error}`. Phone saves to
   Downloads/Vyoma via `ShareSink.createFile`, tracks it in `Transfers`, and opens it.
+- `vyoma.files.put {path(folder), name}` + payload (phone serves it; the companion connects as TLS client with its
+  cert and pins the phone's) → `vyoma.files.saved {path, name, error?}`. Written as `.name.vyoma-part`, renamed when
+  complete, never overwrites (`name (2).ext`). A refusal before connecting makes the phone stop waiting.
 

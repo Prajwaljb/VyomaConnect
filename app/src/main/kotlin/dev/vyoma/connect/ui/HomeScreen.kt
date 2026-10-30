@@ -72,7 +72,7 @@ import dev.vyoma.connect.protocol.link.TransportKind
 fun HomeScreen(
     vm: AppViewModel,
     onOpenDevice: (String) -> Unit,
-    onTouchpad: (String) -> Unit,
+    onKeyboard: (String) -> Unit,
     onClipboard: () -> Unit,
     onBrowseFiles: (String) -> Unit,
 ) {
@@ -124,13 +124,13 @@ fun HomeScreen(
             }
             item(key = "bento") {
                 Staggered(0, Modifier.animateItem()) {
-                    PcDashboard(vm, primary, DashboardSection.BENTO, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard)
+                    PcDashboard(vm, primary, DashboardSection.BENTO, { onOpenDevice(id) }, { onKeyboard(id) }, onClipboard)
                 }
             }
             if (companionOnline) {
                 item(key = "vitals") {
                     Staggered(1, Modifier.animateItem()) {
-                        PcDashboard(vm, primary, DashboardSection.VITALS, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard)
+                        PcDashboard(vm, primary, DashboardSection.VITALS, { onOpenDevice(id) }, { onKeyboard(id) }, onClipboard)
                     }
                 }
             }
@@ -153,12 +153,12 @@ fun HomeScreen(
             }
             item(key = "volume") {
                 Staggered(3, Modifier.animateItem()) {
-                    PcDashboard(vm, primary, DashboardSection.VOLUME, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard)
+                    PcDashboard(vm, primary, DashboardSection.VOLUME, { onOpenDevice(id) }, { onKeyboard(id) }, onClipboard)
                 }
             }
             item(key = "controls") {
                 Staggered(4, Modifier.animateItem()) {
-                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard, onBrowseFiles = { onBrowseFiles(id) })
+                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onOpenDevice(id) }, { onKeyboard(id) }, onClipboard, onBrowseFiles = { onBrowseFiles(id) })
                 }
             }
         }

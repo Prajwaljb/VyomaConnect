@@ -219,7 +219,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                         Tab.HOME -> HomeScreen(
                             vm = vm,
                             onOpenDevice = { backStack.add(Screen.DeviceDetail(it)) },
-                            onTouchpad = { id -> backStack.add(Screen.Touchpad(id, keyboard = false)) },
+                            onKeyboard = { id -> backStack.add(Screen.Touchpad(id, keyboard = true)) },
                             onClipboard = { toTab(Tab.CLIPBOARD) },
                             onBrowseFiles = { id -> backStack.add(Screen.Files(id)) },
                         )

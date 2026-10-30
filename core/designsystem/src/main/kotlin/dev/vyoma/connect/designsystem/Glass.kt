@@ -1,6 +1,7 @@
 package dev.vyoma.connect.designsystem
 
 import androidx.compose.foundation.border
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
@@ -26,12 +27,10 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.Dp
@@ -112,31 +111,32 @@ fun Modifier.glassCard(shape: Shape, fill: Color? = null): Modifier = composed {
 }
 
 /**
- * One row of a [glassCard] that a lazy list lays out row by row (a long folder listing): each
- * row draws the whole card's rounded outline, stretched past its own edges where it has
- * neighbours, and clipped to its own slice, so the rows join into one seamless card.
- * [listSpacing] is the list's gap between items: rows above the last report that much less
- * height, so the next row starts right below instead of after a gap.
+ * A [glassCard] behind every visible item of [contentType] in a lazy list, for groups too long to
+ * live in one item (a folder listing). Drawn by the list itself in the draw phase, so it's one
+ * card with one highlight however many rows it holds, and it follows scrolling for free. Where
+ * the group runs past the viewport its rounded end is pushed off-screen.
  */
-fun Modifier.glassCardSegment(first: Boolean, last: Boolean, radius: Dp = 26.dp, listSpacing: Dp = 12.dp): Modifier = composed {
+fun Modifier.glassListGroup(state: LazyListState, contentType: Any, gutter: Dp = 16.dp, radius: Dp = 26.dp): Modifier = composed {
     val color = Glass.fill
     val edge = Glass.edge
-    this.layout { measurable, constraints ->
-        val p = measurable.measure(constraints)
-        val gap = if (last) 0 else listSpacing.roundToPx()
-        layout(p.width, (p.height - gap).coerceAtLeast(0)) { p.place(0, 0) }
-    }.drawBehind {
+    drawBehind {
+        val visible = state.layoutInfo.visibleItemsInfo
+        val first = visible.firstOrNull { it.contentType == contentType } ?: return@drawBehind
+        val last = visible.last { it.contentType == contentType }
         val r = radius.toPx()
-        val top = if (first) 0f else -2 * r
-        val bottom = if (last) size.height else size.height + 2 * r
+        // A neighbour of another type on screen means the group ends there; otherwise it continues off-screen.
+        val endsAbove = visible.any { it.index == first.index - 1 }
+        val endsBelow = visible.any { it.index == last.index + 1 } || last.index == state.layoutInfo.totalItemsCount - 1
+        val top = if (endsAbove) first.offset.toFloat() else minOf(first.offset.toFloat(), -2 * r)
+        val bottom = if (endsBelow) (last.offset + last.size).toFloat() else maxOf((last.offset + last.size).toFloat(), size.height + 2 * r)
+        val x = gutter.toPx()
+        val w = size.width - 2 * x
         val stroke = 0.75.dp.toPx()
-        clipRect {
-            drawRoundRect(color, Offset(0f, top), Size(size.width, bottom - top), CornerRadius(r))
-            val inset = stroke / 2
-            drawRoundRect(
-                edge, Offset(inset, top + inset), Size(size.width - stroke, bottom - top - stroke), CornerRadius(r - inset),
-                style = Stroke(stroke),
-            )
+        // Brushes are laid out from the origin, so draw at the card's top for the highlight to start there.
+        translate(left = x, top = top) {
+            val h = bottom - top
+            drawRoundRect(color, Offset.Zero, Size(w, h), CornerRadius(r))
+            drawRoundRect(edge, Offset(stroke / 2, stroke / 2), Size(w - stroke, h - stroke), CornerRadius(r - stroke / 2), style = Stroke(stroke))
         }
     }
 }

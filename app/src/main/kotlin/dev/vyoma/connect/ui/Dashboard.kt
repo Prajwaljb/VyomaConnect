@@ -79,7 +79,8 @@ import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.Terminal
-import androidx.compose.material.icons.rounded.TouchApp
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -262,21 +263,26 @@ fun PcDashboard(
           ScreenshotOutcome(shot)
           ControlGrid(
             listOf(
-                // With the companion, Files browses the PC (sending is in there too); without it, it sends.
-                Control(Icons.Rounded.UploadFile, "Files", SystemColor.BLUE) { if (shots != null) onBrowseFiles() else vm.pickFiles(context) },
-                Control(Icons.Rounded.TouchApp, "Touchpad", SystemColor.TEAL, onClick = onTouchpad),
-                // With the companion, Screenshot takes this slot: Clipboard is already a tile and a tab.
+                // One job per button. Send drops phone files in the PC's Downloads (works with plain KDE
+                // Connect); PC files browses and uploads into a chosen folder, which needs the companion.
+                // Slots never move: the companion swaps Clipboard (also a tile and a tab) for PC files,
+                // and Ping (also in the PC's details) for Screenshot.
+                Control(Icons.Rounded.UploadFile, "Send", SystemColor.CYAN) { vm.pickFiles(context) },
+                if (shots != null) Control(Icons.Rounded.Folder, "PC files", SystemColor.BLUE, onClick = onBrowseFiles)
+                else Control(Icons.Rounded.ContentPaste, "Clipboard", SystemColor.ORANGE, onClick = onClipboard),
+                // The touchpad has its own round button by the tab bar; this opens the same screen ready to type.
+                Control(Icons.Rounded.Keyboard, "Keyboard", SystemColor.TEAL, onClick = onTouchpad),
                 if (shots != null) Control(
                     Icons.Rounded.Screenshot,
                     if (shot == ScreenshotState.Capturing) "Capturing" else "Screenshot",
                     SystemColor.PINK,
                     active = shot == ScreenshotState.Capturing,
                 ) { vm.takeScreenshot(shots) }
-                else Control(Icons.Rounded.ContentPaste, "Clipboard", SystemColor.ORANGE, onClick = onClipboard),
+                else Control(Icons.Rounded.Sensors, "Ping", SystemColor.GREEN) { vm.ping(id) },
                 Control(
                     if (pc.locked == true) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
                     if (pc.locked == true) "Locked" else "Lock",
-                    SystemColor.BLUE,
+                    SystemColor.MINT,
                     active = pc.locked == true,
                     toggle = true,
                 ) { vm.setPcLocked(id, pc.locked != true) },
@@ -288,7 +294,6 @@ fun PcDashboard(
                     toggle = pc.sink != null,
                 ) { pc.sink?.let { vm.setSinkMuted(id, it.name, !it.muted) } ?: toast(context, "Volume control isn't on for this PC") },
                 Control(Icons.Rounded.NotificationsActive, "Find PC", SystemColor.YELLOW) { vm.ringPc(id) },
-                Control(Icons.Rounded.Sensors, "Ping", SystemColor.GREEN) { vm.ping(id) },
                 if (inDetails) Control(Icons.Rounded.Terminal, "Commands", SystemColor.GRAY) { vm.openCommandSetup(id) }
                 else Control(Icons.Rounded.MoreHoriz, "More", SystemColor.GRAY, onClick = onOpenDevice),
             ),

@@ -6,7 +6,15 @@ import dev.vyoma.connect.protocol.plugin.Plugin
 import dev.vyoma.connect.protocol.plugin.PluginContext
 import dev.vyoma.connect.protocol.plugin.PluginSpec
 import dev.vyoma.connect.protocol.VLog
+import dev.vyoma.connect.protocol.link.PayloadSource
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -62,6 +70,8 @@ data class PcFolder(
 sealed interface PcFileEvent {
     data class Saved(val name: String, val location: String) : PcFileEvent
     data class Failed(val name: String, val reason: String) : PcFileEvent
+    /** Uploaded into [folder]; [name] is what the PC saved it as (it never overwrites). */
+    data class Uploaded(val name: String, val folder: String) : PcFileEvent
 }
 
 /**
@@ -106,6 +116,52 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
             _fetching.update { it - path }
             _fileEvents.tryEmit(PcFileEvent.Failed(path.substringAfterLast('/'), "The PC isn't reachable"))
         }
+    }
+
+    /** The companion's answer to the upload in flight: null error means saved. */
+    private class Pending(val folder: String, val name: String, val reply: CompletableDeferred<Pair<String, String?>>)
+    @Volatile private var pending: Pending? = null
+    private val uploadLock = Mutex()
+
+    /** Uploads into a home-relative PC folder, one file at a time, with the usual transfer progress. */
+    suspend fun upload(folder: String, files: List<OutgoingFile>) = withContext(Dispatchers.IO) {
+        uploadLock.withLock {
+            for (file in files) {
+                val id = Transfers.start(ctx.device, file.name, incoming = false, total = file.size)
+                val reply = CompletableDeferred<Pair<String, String?>>()
+                pending = Pending(folder, file.name, reply)
+                val answer = coroutineScope {
+                    val send = async {
+                        runCatching {
+                            ctx.device.sendWithPayload(
+                                packet(FILES_PUT) { put("path", folder); put("name", file.name) },
+                                PayloadSource(file.size, file.open), timeoutMs = 60_000,
+                            ) { done -> Transfers.progress(id, done) }
+                        }.onFailure { VLog.w(TAG, "upload failed: ${it.message}") }.getOrDefault(false)
+                    }
+                    // If the PC refuses up front (bad folder, odd name) it never connects; stop waiting.
+                    val refused = launch { if (reply.await().second != null) send.cancel() }
+                    val sent = runCatching { send.await() }.getOrDefault(false)
+                    val answer = if (sent || reply.isCompleted) withTimeoutOrNull(15_000) { reply.await() } else null
+                    refused.cancel()
+                    answer
+                }
+                pending = null
+                val error = when {
+                    answer == null -> "The transfer was interrupted"
+                    else -> answer.second
+                }
+                Transfers.finish(id, ok = error == null)
+                _fileEvents.tryEmit(if (error == null) PcFileEvent.Uploaded(answer!!.first, folder) else PcFileEvent.Failed(file.name, error))
+            }
+            if (_folder.value?.path == folder) listFiles(folder)
+        }
+    }
+
+    private fun receiveSaved(packet: NetworkPacket) {
+        val p = pending ?: return
+        if (packet.string("path") != p.folder) return
+        p.reply.complete((packet.string("name") ?: p.name) to packet.string("error"))
     }
 
     private fun receiveListing(packet: NetworkPacket) {
@@ -200,6 +256,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         if (packet.type == SCREENSHOT) receiveScreenshot(packet)
         if (packet.type == FILES_LISTING) receiveListing(packet)
         if (packet.type == FILES_FILE) receiveFile(packet)
+        if (packet.type == FILES_SAVED) receiveSaved(packet)
         if (packet.type == STATS) {
             _stats.value = PcStats(
                 cpu = packet.double("cpu")?.toFloat() ?: 0f,
@@ -223,13 +280,15 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val FILES_LISTING = "vyoma.files.listing"
         const val FILES_GET = "vyoma.files.get"
         const val FILES_FILE = "vyoma.files.file"
+        const val FILES_PUT = "vyoma.files.put"
+        const val FILES_SAVED = "vyoma.files.saved"
         private const val SCREENSHOT_TIMEOUT_MS = 30_000L
         private const val TAG = "Companion"
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(STATS, SCREENSHOT, FILES_LISTING, FILES_FILE),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, FILES_LIST, FILES_GET),
+            incoming = setOf(STATS, SCREENSHOT, FILES_LISTING, FILES_FILE, FILES_SAVED),
+            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, FILES_LIST, FILES_GET, FILES_PUT),
         ) { CompanionPlugin(it, sink) }
     }
 }

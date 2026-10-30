@@ -112,8 +112,8 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.files.list", "vyoma.files.get"],
-            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.files.listing", "vyoma.files.file"],
+            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put"],
+            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
         }),
@@ -177,6 +177,15 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
                     match files::send(&sender, &shared.me, &pinned, &rel).await {
                         Ok(()) => info!("{name}: sent a file"),
                         Err(e) => warn!("{name}: file transfer failed: {e:#}"),
+                    }
+                });
+            }
+            "vyoma.files.put" => {
+                let (sender, shared, pinned, name, phone) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone(), addr.ip());
+                file_tasks.spawn(async move {
+                    match files::receive(&sender, &shared.me, &pinned, phone, &p).await {
+                        Ok(()) => info!("{name}: received a file"),
+                        Err(e) => warn!("{name}: upload failed: {e:#}"),
                     }
                 });
             }

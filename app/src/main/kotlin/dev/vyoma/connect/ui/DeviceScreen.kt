@@ -86,7 +86,7 @@ fun DeviceScreen(
                 Staggered(0, Modifier.animateItem()) {
                     PcDashboard(
                         vm, state, DashboardSection.CONTROLS,
-                        onOpenDevice = {}, onTouchpad = { onTouchpad(false) }, onClipboard = onClipboard, inDetails = true, onBrowseFiles = onBrowseFiles,
+                        onOpenDevice = {}, onTouchpad = { onTouchpad(true) }, onClipboard = onClipboard, inDetails = true, onBrowseFiles = onBrowseFiles,
                     )
                 }
             }
@@ -162,6 +162,8 @@ fun DeviceScreen(
                     icon = if (TransportKind.USB in state.transports) Icons.Rounded.Usb else Icons.Rounded.Wifi,
                     iconTint = if (state.isReachable) SystemColor.BLUE.color else SystemColor.GRAY.color,
                     showDivider = battery != null,
+                    // Checks the link end to end: the PC shows a "Ping!" notification.
+                    trailing = if (live) { { PillButton("Ping", prominent = false, onClick = { vm.ping(deviceId) }) } } else null,
                 )
                 battery?.let { b ->
                     ListRow(
