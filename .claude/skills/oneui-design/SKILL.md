@@ -13,8 +13,9 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Canvas: `Modifier.aurora()` (theme background + two cached accent glows; in pure black a tighter glow that
   leaves the bottom true black). No decorative textures (stars were tried and rejected: too specific).
 - Depth tokens: `glassDepth` (`GlassDepth` Dark / Amoled / Light) drive every surface so the themes stay consistent.
-- Cards: `Modifier.glassCard(shape, fill?)` = a depth slab: soft shadow outside only, top-lit gradient fill, sheen,
-  lit→shaded rim. No blur, cheap (all `drawWithCache`). `SectionCard`/`glassListGroup` use it. Never flat fills.
+- Cards: `Modifier.glassCard(shape, fill?)` = an even-toned pane (no visible top-to-bottom gradient: the user called
+  it cheap) with a specular hairline rim (`specularRim`: bright at the top-left, a softer catch bottom-right) and a
+  soft shadow only where the canvas is light enough to show one. `SectionCard`/`glassListGroup` use it.
 - Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a
   smaller lit bead; pass `color` for accent/tinted or for chips over artwork (dark translucent).
 - Real blur only for chrome: record content with `backdropSource(backdrop)` (put it OUTSIDE `aurora()` in the

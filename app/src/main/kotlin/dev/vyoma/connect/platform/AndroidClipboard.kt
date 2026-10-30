@@ -99,6 +99,8 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
     }
 
     private fun record(entry: ClipEntry) {
+        // The PC sends an empty clip when it copies something that isn't text (an image, files).
+        if (entry.text.isBlank()) return
         _current.value = entry
         // The same text copied again moves to the top; whitespace differences (a trailing newline
         // from one app, not another) don't make it a second entry.
@@ -209,7 +211,7 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
 
         fun decode(text: String): List<ClipEntry> = Json.parseToJsonElement(text).jsonArray.mapNotNull { el ->
             val o = el as? JsonObject ?: return@mapNotNull null
-            val t = (o["text"] as? JsonPrimitive)?.content ?: return@mapNotNull null
+            val t = (o["text"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
             ClipEntry(t, o["timestamp"]?.jsonPrimitive?.long ?: 0, (o["origin"] as? JsonPrimitive)?.content)
         }.distinctBy { sameText(it.text) } // newest first, so the latest copy of a repeat wins
     }

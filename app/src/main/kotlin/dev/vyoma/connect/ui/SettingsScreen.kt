@@ -66,6 +66,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -137,9 +138,12 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     modifier = Modifier.padding(horizontal = 20.dp),
                 )
                 Spacer(Modifier.height(8.dp))
+                // Only means something in dark mode: shown quieter while the app is forced light.
+                val forcedLight = theme.darkMode == DarkMode.LIGHT
                 ListRow(
+                    modifier = Modifier.alpha(if (forcedLight) 0.45f else 1f),
                     title = "Pure black",
-                    subtitle = "True black backgrounds in dark mode, easy on AMOLED",
+                    subtitle = if (forcedLight) "Applies in dark mode" else "True black backgrounds in dark mode, easy on AMOLED",
                     icon = Icons.Rounded.DarkMode,
                     iconTint = SystemColor.GRAY.color,
                     trailing = { VyomaSwitch(checked = theme.amoled, onCheckedChange = { vm.setAmoled(it) }) },
