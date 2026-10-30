@@ -317,12 +317,13 @@ fun ListRow(
     }
 }
 
-/** iOS / One UI settings icon: a white glyph on a filled, softly rounded square of [tint]. */
+/** iOS / One UI settings icon: a white glyph on a filled, softly rounded square of [tint], its edge catching the light. */
 @Composable
 fun IconBadge(icon: ImageVector, tint: Color, size: Dp = 34.dp) {
     Box(
         Modifier
             .size(size)
+            .specularEdge(RoundedCornerShape(size * 0.28f), 0.8.dp)
             .clip(RoundedCornerShape(size * 0.28f))
             .background(Brush.verticalGradient(listOf(tint.copy(alpha = 0.88f).compositeOver(Color.White), tint))),
         contentAlignment = Alignment.Center,

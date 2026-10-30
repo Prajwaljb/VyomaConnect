@@ -23,6 +23,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   gravity sensor only while the UI is started (`TrackSpecularLight` in `VyomaTheme`), smoothed, 1.5° dead band. Every
   specular edge uses it: `specularRim(...)` (chrome stroke, raised controls) and the AGSL `light` uniform (lens rims).
   Read it only in draw lambdas, never in composition. A still phone renders ~0 frames; measured no jank cost.
+  Coloured solid objects (IconBadge, DeviceGlyph) take `Modifier.specularEdge(shape, width)` like iOS 26 icon edges.
+  `SpecularLight.drift` (recent tilt, recentres in ~3 s) moves ONLY the aurora canvas (12 dp, wallpaper parallax);
+  never move cards, text or controls with tilt (iOS doesn't inside apps). The first samples after start set the rest
+  pose (else the recentring redrew for ~20 s after every launch).
 - Real blur only for chrome: record content with `backdropSource(backdrop)` (put it OUTSIDE `aurora()` in the
   modifier chain so the canvas is recorded too), then `glassChrome(backdrop, shape)` (AGSL liquid lens on 33+:
   `LiquidGlass`/`liquidLens`: physically based, like Telegram's/Apple's: Snell refraction (n≈1.5) through a
