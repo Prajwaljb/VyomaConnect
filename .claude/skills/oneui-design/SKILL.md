@@ -29,10 +29,13 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Dialogs: `GlassDialog` (same API as AlertDialog): opaque `surfaceContainerHigh` slab with the card rim. Never
   Material `AlertDialog`.
 - Value bars: `LiquidSlider` (thumbless capsule that swells under the finger, relative drag) for scrubbers and
-  in-card volume; the big volume control is `Dashboard.VolumeBar`: a glass capsule filled with liquid (straight surface
-  with a lit meniscus), `draggable` relative drag, swells while held, rubber-band ends, labels drawn twice and the
-  second copy clipped to the liquid so colour flips exactly at the surface. No droplet on it (looked bugged over
-  text). `LiquidSlider` grows a clear `liquidLens(null, …)` droplet while held.
+  in-card volume; the big volume control is `Dashboard.VolumeBar`: a glass tube (`LensStyle.Tube` lens over the liquid
+  only, never over text: refracted text reads as a glitch) with a lit meniscus, a `LensStyle.Drop` drop riding the
+  surface while held, `draggable` relative drag, rubber-band ends, labels drawn twice and the second copy clipped
+  to the liquid. `LiquidSlider` grows the same drop while held; pass `underlay` (the surface colour under it).
+- Press glass: `pressable(glass = true)` / `pressScale(1f, glass = true)` turns capsules and circles into a clear
+  drop while held. Put it BEFORE the background modifiers so the drop sees them.
+- `liquidLens` is a Modifier.Node that allocates its layers only on first visible frame: cheap on every control.
 - Icon buttons: `BounceIconButton` (never Material `IconButton`); glass circles/capsules put `pressScale` BEFORE
   `glassChrome` so the glass itself squishes, not just the glyph.
 - Feature colors: `SystemColor` (iOS system palette, light/dark tones, no indigo/purple). `IconBadge` is a filled
@@ -111,3 +114,11 @@ Short, friendly, specific ("Connected via Wi-Fi", "Make sure this code matches o
 - Wi-Fi multicast lock only while `AppContainer.uiVisible`; otherwise rely on the PC's broadcasts and keep-alive.
 - Widgets: skip identical snapshots, re-encode art only when it changes (WebP). Never poll when a flow can say it.
 - Check: `/proc/<pid>/stat` ticks over 60 s in background (target ≲ 20 ticks), `dumpsys wifi` for locks.
+
+## Rendering cost (glass makes every redraw expensive)
+- Every chrome element replays the page behind it, so a page-level offscreen buffer is multiplied by the number of
+  glass elements. Never fade pages/large content with a default layer alpha: use
+  `compositingStrategy = CompositingStrategy.ModulateAlpha`, or draw a shade (push/pop dims the page below this way).
+- Idle must be idle: periodic data (stats every 2 s) snaps small changes and glides big ones at ~30 fps by hand
+  (`withFrameMillis` + `delay(33)`; `preferredFrameRate` is not honoured here); clocks tick on the second.
+  Measure: `dumpsys gfxinfo` frames over 6 s at rest, and `framestats` (ui vs issue vs gpu) for transitions.
