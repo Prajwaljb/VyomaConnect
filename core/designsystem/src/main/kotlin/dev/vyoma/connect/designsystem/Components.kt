@@ -76,6 +76,16 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import kotlin.math.abs
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntSize
+import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.animation.core.Animatable
@@ -119,31 +129,66 @@ fun CollapsingHeaderScaffold(
 ) {
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     val headerHeight = (screenHeight * 0.30f).coerceIn(180.dp, 300.dp)
-    val headerPx = with(LocalDensity.current) { headerHeight.toPx() }
+    val density = LocalDensity.current
+    val headerPx = with(density) { headerHeight.toPx() }
+    val distance = headerPx * 0.6f
     val collapse by remember {
         derivedStateOf {
             if (listState.firstVisibleItemIndex > 0) 1f
-            else (listState.firstVisibleItemScrollOffset / (headerPx * 0.6f)).coerceIn(0f, 1f)
+            else (listState.firstVisibleItemScrollOffset / distance).coerceIn(0f, 1f)
         }
     }
     // One UI never rests half-collapsed: when a scroll ends inside the header, settle open or
-    // closed, whichever is nearer. A page that only overflows by a sliver therefore springs back
-    // instead of sitting a few pixels down.
+    // closed, whichever is nearer.
     LaunchedEffect(listState, headerPx) {
-        val distance = (headerPx * 0.6f).toInt()
+        val d = distance.toInt()
         snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
             if (scrolling || listState.firstVisibleItemIndex != 0) return@collect
             val offset = listState.firstVisibleItemScrollOffset
-            if (offset in 1 until distance) {
-                listState.animateScrollBy((if (offset < distance / 2) -offset else distance - offset).toFloat(), VyomaMotion.page())
+            if (offset in 1 until d) {
+                listState.animateScrollBy((if (offset < d / 2) -offset else d - offset).toFloat(), VyomaMotion.page())
             }
+        }
+    }
+    // A page that overflows by less than the collapse would stop with the title half faded (and
+    // the snap above couldn't close it): room at the end lets any page that scrolls at all close
+    // fully. Measured from the real items only, so the room never feeds back into itself.
+    var room by remember { mutableIntStateOf(0) }
+    LaunchedEffect(listState, distance) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull { it.key != ROOM_KEY } ?: return@snapshotFlow null
+            if (listState.firstVisibleItemIndex != 0 || last.index != info.totalItemsCount - 2) return@snapshotFlow null
+            val end = last.offset + last.size + listState.firstVisibleItemScrollOffset + info.afterContentPadding
+            val overflow = end - info.viewportEndOffset
+            if (overflow <= 0) 0 else (distance.roundToInt() - overflow).coerceAtLeast(0)
+        }.collect { if (it != null) room = it }
+    }
+
+    // The title is one piece of text that travels: it rests in the hero, and as the page scrolls it
+    // rises and shrinks into the bar, where a bubble of glass forms around it like water.
+    val heroStyle = if (hero != null) MaterialTheme.typography.headlineLarge else MaterialTheme.typography.displayMedium
+    val shrink = MaterialTheme.typography.titleMedium.fontSize.value / heroStyle.fontSize.value
+    val statusTop = WindowInsets.statusBars.getTop(density)
+    val anchor = remember { CoordinatesHolder() }
+    // The hero title's centre at rest, in the scaffold's coordinates (NaN until placed).
+    var restY by remember { mutableFloatStateOf(Float.NaN) }
+    var titleSize by remember { mutableStateOf(IntSize.Zero) }
+    val bubbleW = remember { Animatable(0f) }
+    val bubbleH = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { collapse > 0.72f }.collect { on ->
+            // Forming, the drop swells to full height first and then spreads sideways with a wobble;
+            // leaving, it just shrinks away.
+            launch { bubbleH.animateTo(if (on) 1f else 0f, if (on) VyomaMotion.leading() else VyomaMotion.effects()) }
+            launch { bubbleW.animateTo(if (on) 1f else 0f, if (on) VyomaMotion.jelly() else VyomaMotion.effects()) }
         }
     }
 
     val backdrop = rememberBackdrop()
     val bottomInset = LocalBottomBarInset.current
     // Content color for everything on the canvas, so bar icons and titles are legible.
-    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) { Box(modifier.fillMaxSize()) {
+    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) { Box(modifier.fillMaxSize().onPlaced { anchor.coordinates = it }) {
         // The backdrop records the canvas too: blurring only the cards would let sharp text show through.
         Box(Modifier.fillMaxSize().backdropSource(backdrop).aurora()) { LazyColumn(
             state = listState,
@@ -160,10 +205,10 @@ fun CollapsingHeaderScaffold(
                         .fillMaxWidth()
                         .height(headerHeight)
                         .graphicsLayer {
-                            val c = (listState.firstVisibleItemScrollOffset / (headerPx * 0.6f)).coerceIn(0f, 1f)
+                            // Gone by three quarters, before the subtitle can pass under the title's bubble.
+                            val c = (listState.firstVisibleItemScrollOffset / (distance * 0.75f)).coerceIn(0f, 1f)
                             alpha = 1f - c
                             compositingStrategy = CompositingStrategy.ModulateAlpha
-                            translationY = listState.firstVisibleItemScrollOffset * 0.35f
                         }
                         .padding(horizontal = 12.dp),
                     verticalArrangement = Arrangement.Center,
@@ -174,12 +219,22 @@ fun CollapsingHeaderScaffold(
                         hero()
                         Spacer(Modifier.height(14.dp))
                     }
+                    // Holds the title's place; the travelling copy above the list is what shows.
                     Text(
                         title,
-                        style = if (hero != null) MaterialTheme.typography.headlineLarge else MaterialTheme.typography.displayMedium,
-                        color = MaterialTheme.colorScheme.onBackground,
+                        style = heroStyle,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .graphicsLayer { alpha = 0f }
+                            .onGloballyPositioned { c ->
+                                val root = anchor.coordinates ?: return@onGloballyPositioned
+                                if (listState.firstVisibleItemIndex != 0 || !root.isAttached) return@onGloballyPositioned
+                                // Back to where it sits unscrolled.
+                                val y = root.localPositionOf(c, Offset.Zero).y + c.size.height / 2f +
+                                    listState.firstVisibleItemScrollOffset
+                                if (restY.isNaN() || abs(y - restY) > 0.5f) restY = y
+                            },
                     )
                     if (subtitle != null) {
                         Spacer(Modifier.height(6.dp))
@@ -188,12 +243,14 @@ fun CollapsingHeaderScaffold(
                 }
             }
             content()
+            item(key = ROOM_KEY, contentType = ROOM_KEY) {
+                Spacer(Modifier.height(with(density) { room.toDp() }))
+            }
         } }
 
         // The compact bar floats over the list in the same material as the tab bar: back and
-        // actions are liquid-glass buttons, and once the hero has scrolled away the title rises in
-        // a glass capsule of its own. Instead of a hard frosted strip, the status bar area fades
-        // softly to the canvas so content slips under it.
+        // actions are liquid-glass buttons, and the title's bubble forms in the middle. Instead of a
+        // hard frosted strip, the status bar area fades softly to the canvas so content slips under it.
         val edgeColor = MaterialTheme.colorScheme.background
         Box(Modifier.fillMaxWidth()) {
             Box(
@@ -213,7 +270,7 @@ fun CollapsingHeaderScaffold(
                 Modifier
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.statusBars)
-                    .height(64.dp)
+                    .height(BAR_HEIGHT)
                     .padding(horizontal = 12.dp),
             ) {
                 if (navigation != null) {
@@ -222,32 +279,66 @@ fun CollapsingHeaderScaffold(
                         contentAlignment = Alignment.Center,
                     ) { CompositionLocalProvider(LocalOnChrome provides true) { navigation() } }
                 }
+                // The title's bubble: sized here (layout only, while it forms), empty; the title
+                // itself is drawn over it.
                 Box(
                     Modifier
                         .align(Alignment.Center)
-                        .padding(horizontal = 60.dp)
-                        // Only once the big title is mostly gone, so a small scroll never shows two titles.
-                        .graphicsLayer {
-                            val t = ((collapse - 0.6f) / 0.4f).coerceIn(0f, 1f)
-                            alpha = t
-                            compositingStrategy = CompositingStrategy.ModulateAlpha
-                            translationY = (1f - t) * 10.dp.toPx()
-                            scaleX = 0.9f + 0.1f * t
-                            scaleY = 0.9f + 0.1f * t
+                        .layout { m, c ->
+                            val full = (titleSize.width * shrink + 36.dp.toPx()).coerceAtMost(c.maxWidth - 120.dp.toPx())
+                            val h = (44.dp.toPx() * bubbleH.value).coerceAtLeast(0f)
+                            val w = maxOf(h, full * bubbleW.value).coerceAtLeast(0f)
+                            val p = m.measure(Constraints.fixed(w.roundToInt(), h.roundToInt()))
+                            layout(p.width, p.height) { p.place(0, 0) }
                         }
-                        .drawWithContent { if (collapse > 0.6f) drawContent() }
-                        .glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp)
-                        .padding(horizontal = 18.dp, vertical = 10.dp),
-                ) {
-                    Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
+                        .glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp),
+                )
                 Row(
                     Modifier.align(Alignment.CenterEnd).height(48.dp).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp, interactive = true),
                     verticalAlignment = Alignment.CenterVertically,
                 ) { CompositionLocalProvider(LocalOnChrome provides true) { actions() } }
             }
         }
+
+        // The travelling title: centred like both its homes, so only height and size change.
+        Text(
+            title,
+            style = heroStyle,
+            color = MaterialTheme.colorScheme.onBackground,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(horizontal = 24.dp)
+                .onSizeChanged { titleSize = it }
+                .clearAndSetSemantics {}
+                .graphicsLayer {
+                    val rest = restY
+                    if (rest.isNaN()) {
+                        alpha = 0f
+                        return@graphicsLayer
+                    }
+                    // It rides with the page until it reaches the bar (by 90% of the collapse at
+                    // the latest), then stays there; it shrinks over the same trip.
+                    val inBar = statusTop + BAR_HEIGHT.toPx() / 2f
+                    val trip = (rest - inBar).coerceAtLeast(1f)
+                    val travelled = (collapse * maxOf(distance, trip / 0.9f)).coerceAtMost(trip)
+                    translationY = rest - travelled - size.height / 2f
+                    val q = travelled / trip
+                    val k = lerp(1f, shrink, q * q * (3f - 2f * q))
+                    scaleX = k
+                    scaleY = k
+                },
+        )
     } }
+}
+
+private const val ROOM_KEY = "collapse-room"
+private val BAR_HEIGHT = 64.dp
+
+/** Plain holder: layout coordinates read in callbacks, never state. */
+private class CoordinatesHolder {
+    var coordinates: LayoutCoordinates? = null
 }
 
 /** Grouped rounded card: the basic One UI container. */
