@@ -60,7 +60,6 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.node.ModifierNodeElement
@@ -350,8 +349,6 @@ fun Modifier.cardSegment(first: Boolean, last: Boolean, radius: Dp = 26.dp): Mod
  * stays ink. Painted once per size and colour into a quarter-resolution bitmap and drawn stretched:
  * soft gradients survive the upscale untouched, and one textured quad is far cheaper for the GPU
  * than three full-screen gradient fills every frame (again for every glass element replaying it).
- * It sits a little deeper than the page: tilting drifts it up to [AURORA_DRIFT] against the cards
- * (iOS's wallpaper parallax), drawn that much oversized so its edges never show.
  */
 fun Modifier.aurora(): Modifier = composed {
     val base = MaterialTheme.colorScheme.background
@@ -382,19 +379,12 @@ fun Modifier.aurora(): Modifier = composed {
             drawRect(left)
             drawRect(right)
         }
-        val m = AURORA_DRIFT.toPx()
-        val dst = IntSize((size.width + 2 * m).roundToInt(), (size.height + 2 * m).roundToInt())
-        onDrawBehind {
-            // Deeper things move the other way to the tilt.
-            val d = SpecularLight.drift
-            val at = IntOffset((-m - d.x * m).roundToInt(), (-m - d.y * m).roundToInt())
-            drawImage(bitmap, dstOffset = at, dstSize = dst, filterQuality = FilterQuality.Low)
-        }
+        val dst = IntSize(size.width.roundToInt(), size.height.roundToInt())
+        onDrawBehind { drawImage(bitmap, dstSize = dst, filterQuality = FilterQuality.Low) }
     }
 }
 
 private const val AURORA_SCALE = 4f
-private val AURORA_DRIFT = 36.dp
 
 /** What chrome blurs: one recorded display list of the content underneath. */
 @Stable

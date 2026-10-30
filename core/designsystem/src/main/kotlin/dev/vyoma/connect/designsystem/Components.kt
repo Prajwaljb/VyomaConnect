@@ -146,7 +146,9 @@ fun CollapsingHeaderScaffold(
             if (scrolling || listState.firstVisibleItemIndex != 0) return@collect
             val offset = listState.firstVisibleItemScrollOffset
             if (offset in 1 until d) {
-                listState.animateScrollBy((if (offset < d / 2) -offset else d - offset).toFloat(), VyomaMotion.page())
+                // Its own job: a finger landing mid-snap cancels just the snap. Run inline, that
+                // cancellation ended this whole watcher and nothing snapped again.
+                launch { listState.animateScrollBy((if (offset < d / 2) -offset else d - offset).toFloat(), VyomaMotion.page()) }
             }
         }
     }
