@@ -36,6 +36,8 @@ class DeviceLink internal constructor(
     private val closed = AtomicBoolean(false)
 
     val remoteAddress: InetAddress get() = socket.inetAddress
+    /** When the link came up (monotonic ms). */
+    val since: Long = System.nanoTime() / 1_000_000
     val isClosed: Boolean get() = closed.get()
 
     suspend fun send(packet: NetworkPacket): Boolean = withContext(Dispatchers.IO) {
