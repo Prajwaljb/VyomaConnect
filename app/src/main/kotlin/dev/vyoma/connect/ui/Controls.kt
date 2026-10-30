@@ -176,12 +176,12 @@ fun MediaCard(
                 // Browsers blank the length for a moment now and then (ads, hover previews): keep the track's last one.
                 val length = remember(p.name, p.title) { mutableLongStateOf(0L) }
                 if (p.lengthMs > 0 && length.longValue != p.lengthMs) length.longValue = p.lengthMs
-                if (length.longValue > 0) Scrubber(np, length.longValue, onSeek)
+                if (length.longValue > 0) Scrubber(np, length.longValue, tint, onSeek)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                     MediaButton(Icons.Rounded.SkipPrevious, "Previous", enabled = p.canPrevious, onClick = onPrevious)
                     val scale by animateFloatAsState(if (p.isPlaying) 1f else 1.06f, VyomaMotion.spatial(), label = "pp")
                     Box(
-                        Modifier.size(68.dp).clip(CircleShape).background(Color.White).pressable(pressedScale = 0.9f, onClick = onPlayPause),
+                        Modifier.size(68.dp).pressable(pressedScale = 0.9f, glass = true, onClick = onPlayPause).clip(CircleShape).background(Color.White),
                         contentAlignment = Alignment.Center,
                     ) {
                         AnimatedContent(p.isPlaying, transitionSpec = { (scaleIn() + fadeIn()).togetherWith(scaleOut() + fadeOut()) }, label = "ppicon") { playing ->
@@ -201,6 +201,7 @@ fun MediaCard(
                             onChange = { dragging = true; vol = it * 100f; onVolume(vol.toInt()) },
                             onDone = { dragging = false },
                             modifier = Modifier.padding(start = 10.dp).weight(1f),
+                            underlay = tint,
                         )
                     }
                 }
@@ -240,7 +241,7 @@ private fun MediaButton(icon: ImageVector, label: String, enabled: Boolean, onCl
  * played anything.
  */
 @Composable
-private fun Scrubber(np: NowPlaying, lengthMs: Long, onSeek: (Long) -> Unit) {
+private fun Scrubber(np: NowPlaying, lengthMs: Long, underlay: Color, onSeek: (Long) -> Unit) {
     val p = np.player
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -250,7 +251,10 @@ private fun Scrubber(np: NowPlaying, lengthMs: Long, onSeek: (Long) -> Unit) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
                 now = System.currentTimeMillis()
-                delay(500)
+                // On the next whole second of playback: the labels change then, and the bar moves
+                // less than a pixel in between, so ticking faster only costs redraws.
+                val pos = p.currentPosition(now)
+                delay((1000 - pos % 1000).coerceAtLeast(16))
             }
         }
     }
@@ -264,6 +268,7 @@ private fun Scrubber(np: NowPlaying, lengthMs: Long, onSeek: (Long) -> Unit) {
             onDone = { dragValue?.let { onSeek((it * length).toLong()) }; dragValue = null },
             enabled = p.canSeek,
             fill = Color.White.copy(alpha = if (p.canSeek) 1f else 0.6f),
+            underlay = underlay,
         )
         Row(Modifier.fillMaxWidth()) {
             Text(formatTime(position.toLong()), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))

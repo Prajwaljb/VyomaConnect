@@ -44,6 +44,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -120,6 +121,9 @@ fun TabsRoot(tab: Tab, onTab: (Tab) -> Unit, onTouchpad: () -> Unit, content: @C
                                     page.placeWithLayer(0, 0) {
                                         val p = shown.value
                                         alpha = p.coerceIn(0f, 1f)
+                                        // Fade each draw instead of the whole page through an offscreen buffer:
+                                        // every glass element replays this page, so a buffer would cost one per element.
+                                        compositingStrategy = CompositingStrategy.ModulateAlpha
                                         translationX = (1f - p) * size.width / 12 * (if (active) travel.dir else -travel.dir)
                                     }
                                 }
@@ -210,7 +214,7 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
     Box(
         Modifier
             .height(BarHeight)
-            .liquidLens(backdrop, strength = { lift.value }, zoom = { 1f + 0.22f * lift.value.coerceIn(0f, 1f) }, rect = { pill() })
+            .liquidLens(backdrop, strength = { lift.value }, zoom = { 1f + 0.12f * lift.value.coerceIn(0f, 1f) }, rect = { pill() })
             .glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp)
             .drawBehind {
                 // The resting pill fades as the clear drop takes its place (where drops can be drawn).

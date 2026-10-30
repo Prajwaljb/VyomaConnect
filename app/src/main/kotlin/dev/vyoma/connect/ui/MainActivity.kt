@@ -1,5 +1,9 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.EnterExitState
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -26,8 +30,6 @@ import androidx.compose.animation.core.SeekableTransitionState
 import androidx.compose.animation.core.rememberTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -200,21 +202,35 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
     val pop: () -> Unit = {
         if (backStack.size > 1) saved.removeState(backStack.removeAt(backStack.lastIndex).toString())
     }
-    rememberTransition(nav, label = "nav").AnimatedContent(
+    val navTransition = rememberTransition(nav, label = "nav")
+    navTransition.AnimatedContent(
         transitionSpec = {
             // A swipe seeks through the animation, so it needs a linear timeline; buttons get springs.
             val slide: FiniteAnimationSpec<IntOffset> = if (swiping) tween(PAGE_SWIPE_MS, easing = LinearEasing) else VyomaMotion.page()
-            val fade: FiniteAnimationSpec<Float> = if (swiping) tween(PAGE_SWIPE_MS, easing = LinearEasing) else VyomaMotion.effects()
             if (targetState.depth > initialState.depth) {
-                slideInHorizontally(slide) { it } togetherWith
-                    (slideOutHorizontally(slide) { -it / 4 } + fadeOut(fade, targetAlpha = 0.6f))
+                slideInHorizontally(slide) { it } togetherWith slideOutHorizontally(slide) { -it / 4 }
             } else {
-                ((slideInHorizontally(slide) { -it / 4 } + fadeIn(fade, initialAlpha = 0.6f)) togetherWith
-                    slideOutHorizontally(slide) { it }).apply { targetContentZIndex = -1f }
+                (slideInHorizontally(slide) { -it / 4 } togetherWith slideOutHorizontally(slide) { it }).apply { targetContentZIndex = -1f }
             }
         },
     ) { screen ->
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) { saved.SaveableStateProvider(screen.toString()) {
+        // The page underneath dims while another slides over it. A drawn shade, not a layer fade:
+        // fading would push the whole page (and every glass element replaying it) through an
+        // offscreen buffer each frame.
+        val below = screen.depth < maxOf(navTransition.currentState.depth, navTransition.targetState.depth)
+        val dim by transition.animateFloat(
+            transitionSpec = { if (swiping) tween(PAGE_SWIPE_MS, easing = LinearEasing) else VyomaMotion.effects() },
+            label = "dim",
+        ) { if (it == EnterExitState.Visible) 0f else 0.4f }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .drawWithContent {
+                    drawContent()
+                    if (below && dim > 0.005f) drawRect(Color.Black, alpha = dim)
+                },
+        ) { saved.SaveableStateProvider(screen.toString()) {
             when (screen) {
                 Screen.Home -> TabsRoot(
                     tab = tab,
