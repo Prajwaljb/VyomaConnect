@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.asAndroidPath
@@ -354,6 +355,13 @@ fun Modifier.backdropSource(backdrop: Backdrop): Modifier = this
     }
 
 /**
+ * Chrome's blur and refraction run at this share of full resolution (see [glassChrome]). Tried and
+ * measured: one shared full-page blur was slower (it replays the whole page; each element's own
+ * copy only replays what's behind it), and full resolution cost ~3 ms of GPU per frame scrolling.
+ */
+private const val CHROME_RES = 0.25f
+
+/**
  * Real glass: whatever of [backdrop] sits behind this element, blurred on the GPU, then [tint]
  * and the edge highlight. The element must not be inside the backdrop's source.
  *
@@ -423,18 +431,22 @@ fun Modifier.glassChrome(
             // Pressed, the glass grows past its bounds (drawn bigger, sampled bigger: nothing slides).
             val grow = (size.minDimension * 0.08f * p).coerceAtLeast(0f)
             val g = Size(size.width + 2 * grow, size.height + 2 * grow)
-            val m = (rim * 2f).roundToInt() + 1
-            // Rendered at quarter resolution and scaled up: under the blur the difference doesn't
-            // show, and the GPU blurs and refracts a sixteenth of the pixels (chrome was half the
-            // frame's GPU budget while scrolling at 120 Hz). The edge is what would show it, so the
-            // glass is clipped to the exact shape and its specular rim stroked at full resolution.
+            // Just enough room for the rim to see past the edge (it samples up to rim * wrap out):
+            // every extra pixel of margin is offscreen fill on every frame.
+            val m = (rim * LensStyle.Chrome.wrap).roundToInt() + 12
+            // Blurred and refracted in one pass at quarter resolution: inside, it only bends blurred
+            // content, which looks the same at that size, for a sixteenth of the GPU fill. What
+            // would show the lower resolution is the outline and the highlight, so the shader's
+            // shape is inflated a little past the real one and the visible edge comes from an
+            // anti-aliased full-resolution clip, with the specular rim stroked at full resolution.
             val q = CHROME_RES
+            val inflate = 2f / q
+            val gs = Size(g.width + 2 * inflate, g.height + 2 * inflate)
             blurred.renderEffect = lens.effect(
-                g * q, m * q, radius = g.minDimension / 2 * q, bevel = rim * q, refract = depth * q, zoom = 1f + 0.14f * p,
+                gs * q, (m - inflate) * q, radius = gs.minDimension / 2 * q, bevel = rim * q, refract = depth * q, zoom = 1f + 0.14f * p,
                 // Clear in dark mode; light mode keeps more milk so dark labels stay legible over photos.
                 disperse = LensStyle.Chrome.disperse, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.92f),
-                spec = 0.15f + 0.2f * p.coerceIn(0f, 1f),
-                shade = if (dark) 0f else 0.1f, blur = r * q,
+                spec = 0f, shade = if (dark) 0f else 0.1f, blur = r * q, wrap = LensStyle.Chrome.wrap,
             )
             val o = m + grow
             blurred.record(IntSize(((g.width + 2 * m) * q).roundToInt(), ((g.height + 2 * m) * q).roundToInt())) {
@@ -446,35 +458,36 @@ fun Modifier.glassChrome(
             clipPath(edgePath) {
                 translate(-o, -o) { scale(1f / q, 1f / q, pivot = Offset.Zero) { drawLayer(blurred) } }
             }
-            val lit = if (dark) 0.5f else 0.95f
+            // The highlight: brightest where it faces the light (top left) and its opposite.
+            val pr = p.coerceIn(0f, 1f)
             drawPath(
                 edgePath,
-                specularRim(Color.White.copy(alpha = lit + 0.3f * p.coerceIn(0f, 1f)), Color.White.copy(alpha = if (dark) 0.1f else 0.35f), center),
+                // On a light page a white highlight alone vanishes: the rest of the edge is a soft dark hairline.
+                specularRim(
+                    Color.White.copy(alpha = (if (dark) 0.55f else 1f) * (0.75f + 0.25f * pr) + 0.25f * pr),
+                    if (dark) Color.White.copy(alpha = 0.08f) else Color(0xFF1A2B4C).copy(alpha = 0.12f),
+                    center,
+                ),
                 style = Stroke(1.dp.toPx()),
             )
         }
         .then(if (edge && lens == null) Modifier.border(0.75.dp, edgeBrush, shape) else Modifier)
 }
 
-/** Chrome glass renders at this share of full resolution (see [glassChrome]). */
-private const val CHROME_RES = 0.25f
-
 /** How a lens bends: the rim as a share of the lens's short side, and the slab's depth in rims. */
 @Immutable
-class LensStyle(val rim: Float, val depth: Float, val disperse: Float) {
+class LensStyle(val rim: Float, val depth: Float, val disperse: Float, val wrap: Float = 0f) {
     companion object {
-        /** Bars, buttons and controls: water-like, the rim shows what's across the element. */
-        val Chrome = LensStyle(rim = 0.2f, depth = 6f, disperse = 0.04f)
-        /** A tube holding liquid (volume bar): a wide rim so the surface visibly climbs the walls. */
+        /** Bars and buttons (chrome): an iOS-style edge that gathers in what's around it. */
+        val Chrome = LensStyle(rim = 0.22f, depth = 0f, disperse = 0.05f, wrap = 1f)
+        /** A tube holding liquid: Snell refraction through a wide rim, so the surface climbs the walls. */
         val Tube = LensStyle(rim = 0.3f, depth = 3f, disperse = 0f)
-        /** Drops that move or grow over content (tab lens, slider and press drops): a thinner,
-         *  calmer rim so what's under the middle stays readable. */
-        val Drop = LensStyle(rim = 0.18f, depth = 2.6f, disperse = 0.03f)
-        /** Lifted drops that outgrow what they sit on (the tab bar's drop, slider, switch and
-         *  segmented knobs). The rim looks outward (negative depth): the edge gathers in what's
-         *  around, the way a drop of water on glass rims itself with its surroundings. Looking
-         *  inward, the rim replayed the track or bar as mirrored stripes. */
-        val Lift = LensStyle(rim = 0.22f, depth = -1.1f, disperse = 0.03f)
+        /** Press drops over buttons with labels: a calm edge and no colour split, so the label
+         *  under it stays one clean copy. */
+        val Drop = LensStyle(rim = 0.2f, depth = 0f, disperse = 0f, wrap = 0.8f)
+        /** Lifted drops that outgrow what they sit on (the tab bar's drop, slider and switch knobs,
+         *  segmented thumbs): a wider rim that gathers in what's around. */
+        val Lift = LensStyle(rim = 0.24f, depth = 0f, disperse = 0.1f, wrap = 1.15f)
     }
 }
 
@@ -568,16 +581,26 @@ internal class LensPainter(private val graphics: GraphicsContext) {
 
     fun ContentDrawScope.paint(a: Float, r: Rect, zoom: Float, style: LensStyle, underlay: Color, dark: Boolean, backdrop: Backdrop?, shift: Offset, frost: Float = 0f) {
         self.record { this@paint.drawContent() }
-        drawLayer(self)
+        // Under the drop only the drop shows: drawing the original there too doubled anything
+        // seen through a translucent surface (a pill's label showed twice, magnified and not).
+        // While the drop forms or fades, the original crossfades with it under there (a small
+        // offscreen for those few frames only), so it never punches a hole or flashes.
+        val hole = Path().apply { addRoundRect(RoundRect(r.deflate(0.5f), CornerRadius(r.minDimension / 2))) }
+        clipPath(hole, ClipOp.Difference) { drawLayer(self) }
+        if (a < 0.99f) clipPath(hole) {
+            drawContext.canvas.saveLayer(r, Paint().apply { alpha = 1f - a })
+            drawLayer(self)
+            drawContext.canvas.restore()
+        }
         val rim = r.minDimension * style.rim
         // Room for the rim to look past the far edge.
-        val m = (r.minDimension * style.rim * (2f + abs(style.depth).coerceAtMost(4f) * 0.5f).coerceAtLeast(2f)).roundToInt() + 1
+        val m = (r.minDimension * style.rim * if (style.wrap > 0f) style.wrap else 2f).roundToInt() + 3
         drop.renderEffect = glass.effect(
             r.size, m.toFloat(), r.minDimension / 2, bevel = rim, refract = rim * style.depth, zoom = zoom, disperse = style.disperse,
             // Quantized so a frost animation rebuilds the shader a few dozen times, not every frame.
             tint = Color.White.copy(alpha = androidx.compose.ui.util.lerp(if (dark) 0.05f else 0.12f, 0.97f, (frost * 32).roundToInt() / 32f)),
             spec = if (dark) 0.55f else 0.9f,
-            shade = if (dark) 0f else 0.12f, blur = 0f,
+            shade = if (dark) 0f else 0.12f, blur = 0f, wrap = style.wrap,
         )
         drop.alpha = a
         drop.record(IntSize(r.width.roundToInt() + 2 * m, r.height.roundToInt() + 2 * m)) {
@@ -618,13 +641,14 @@ private class BlurCache {
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal class LiquidGlass {
     private val shader = RuntimeShader(AGSL)
-    private var last = FloatArray(15) { Float.NaN }
+    private var last = FloatArray(16) { Float.NaN }
     private var effect: RenderEffect? = null
 
     internal fun effect(
         size: Size, margin: Float, radius: Float, bevel: Float, refract: Float, zoom: Float, disperse: Float, tint: Color, spec: Float, shade: Float, blur: Float,
+        wrap: Float = 0f,
     ): RenderEffect {
-        val args = floatArrayOf(size.width, size.height, margin, radius, bevel, refract, zoom, disperse, tint.red, tint.green, tint.blue, tint.alpha, spec, shade, blur)
+        val args = floatArrayOf(size.width, size.height, margin, radius, bevel, refract, zoom, disperse, tint.red, tint.green, tint.blue, tint.alpha, spec, shade, blur, wrap)
         effect?.let { if (args.contentEquals(last)) return it }
         last = args
         shader.setFloatUniform("size", size.width, size.height)
@@ -637,6 +661,7 @@ internal class LiquidGlass {
         shader.setFloatUniform("tint", tint.red, tint.green, tint.blue, tint.alpha)
         shader.setFloatUniform("spec", spec)
         shader.setFloatUniform("shade", shade)
+        shader.setFloatUniform("wrap", wrap)
         val glass = android.graphics.RenderEffect.createRuntimeShaderEffect(shader, "content")
         val full = if (blur > 0f) {
             android.graphics.RenderEffect.createChainEffect(
@@ -659,6 +684,7 @@ uniform float disperse;
 uniform float4 tint;
 uniform float spec;
 uniform float shade;
+uniform float wrap;
 
 half4 main(float2 p) {
     float2 c = size * 0.5;
@@ -681,6 +707,18 @@ half4 main(float2 p) {
     if (t <= 0.0) {
         // The flat middle (most pixels): straight through, one sample.
         col = content.eval(at);
+    } else if (wrap > 0.0) {
+        // iOS-style edge: the rim gathers in what lies just past the edge, squeezed tighter the
+        // closer to the edge (a rim pixel t of the way out samples bevel*(t + wrap*t^3) from the
+        // rim's inner side). Monotonic, so nothing is mirrored, and seamless with the middle.
+        float2 shift = n * (bevel * wrap * t * t * t);
+        at = clamp(at + shift, lo, hi);
+        col = content.eval(at);
+        if (disperse > 0.0) {
+            float2 k = shift * disperse;
+            col.r = content.eval(clamp(at + k, lo, hi)).r;
+            col.b = content.eval(clamp(at - k, lo, hi)).b;
+        }
     } else {
         float3 normal = normalize(float3(n * t, sqrt(max(1.0 - t * t, 0.0))));
         float3 ray = refract(float3(0.0, 0.0, -1.0), normal, 1.0 / 1.5);

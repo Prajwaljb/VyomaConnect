@@ -454,7 +454,7 @@ private fun TypingBar(caretMoved: Int, onText: (String) -> Unit, onKey: (Special
 @Composable
 private fun MouseButton(label: String, modifier: Modifier, onClick: () -> Unit) {
     Box(
-        modifier.fillMaxSize().pressable(glass = true, onClick = onClick).glassRaised(RoundedCornerShape(20.dp)),
+        modifier.fillMaxSize().pressable(glass = true, onClick = onClick).glassRaised(CircleShape),
         contentAlignment = Alignment.Center,
     ) { Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 }
@@ -491,7 +491,7 @@ private fun RowScope.Key(
                 if (onRepeat == null) Modifier.pressable(haptic = Haptic.Key, glass = true, onClick = onClick)
                 else Modifier.holdToRepeat(onRepeat, onClick),
             )
-            .glassRaised(RoundedCornerShape(14.dp), bg.takeIf { selected || accent }),
+            .glassRaised(CircleShape, bg.takeIf { selected || accent }),
         contentAlignment = Alignment.Center,
     ) {
         if (icon != null) Icon(icon, desc, Modifier.size(20.dp), tint = fg)
@@ -541,8 +541,8 @@ private fun ScrollStrip(modifier: Modifier, onScroll: (Float) -> Unit, onClick: 
     Box(
         modifier
             .fillMaxSize()
-            .glassRaised(RoundedCornerShape(20.dp))
-            .pressScale(0.94f)
+            .pressScale(1f, glass = true)
+            .glassRaised(CircleShape)
             .pointerInput(Unit) {
                 val slop = viewConfiguration.touchSlop
                 awaitEachGesture {

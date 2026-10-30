@@ -69,6 +69,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.role
@@ -394,11 +395,10 @@ fun Pill(text: String, modifier: Modifier = Modifier, icon: ImageVector? = null,
 }
 
 /**
- * iOS 26 switch: a wide white capsule thumb on a capsule track (green when on). Touched, the thumb
- * lifts out of the track and turns into a clear drop of liquid glass, bigger than the track, that
- * slides across and magnifies the track under it; let go, it frosts back into the white thumb.
- * One object throughout (a drawn thumb at rest, the lens of the same rect while held), all in the
- * draw phase.
+ * Switch: an accent track with a round white thumb that slides across with a little bounce and
+ * squashes against the end. Touched, the thumb lifts into a clear drop of liquid glass, bigger
+ * than the track, that magnifies the track under it, and frosts back into the white thumb when
+ * let go (the same knob as the sliders). Everything moves in the draw phase.
  */
 @Composable
 fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
@@ -408,26 +408,26 @@ fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: 
     val position = animateFloatAsState(if (checked) 1f else 0f, VyomaMotion.release(), label = "thumb")
     val swell = animateFloatAsState(if (pressed) 1f else 0f, if (pressed) VyomaMotion.spatial() else VyomaMotion.release(), label = "swell")
     val track by animateColorAsState(
-        if (checked) SystemColor.GREEN.color else MaterialTheme.colorScheme.onSurface.copy(alpha = if (isDarkUi) 0.2f else 0.12f),
+        if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f),
         VyomaMotion.effects(), label = "track",
     )
     val card = MaterialTheme.colorScheme.surfaceContainerLow
     fun DrawScope.thumb(): Rect {
-        val pad = 2.dp.toPx()
+        val pad = 2.5.dp.toPx()
+        val d = size.height - 2 * pad
         val k = swell.value.coerceAtLeast(0f)
-        val h = (size.height - 2 * pad) * (1f + 0.45f * k)
         val raw = position.value
         val p = raw.coerceIn(0f, 1f)
         // Overshoot past either end squashes the thumb against the wall instead of leaving the track.
-        val squash = abs(raw - p) * h * 1.5f
-        val w = h * 1.55f - squash
-        val restW = (size.height - 2 * pad) * 1.55f
-        val cx = pad + restW / 2 + (size.width - 2 * pad - restW) * p
+        val squash = abs(raw - p) * d * 1.5f
+        val h = d * (1f + 0.4f * k)
+        val w = d * (1f + 0.75f * k) - squash
+        val cx = pad + d / 2 + (size.width - 2 * pad - d) * p
         return Rect(cx - w / 2, size.height / 2 - h / 2, cx + w / 2, size.height / 2 + h / 2)
     }
     Spacer(
         modifier
-            .size(62.dp, 28.dp)
+            .size(52.dp, 32.dp)
             .toggleable(checked, interaction, indication = null, role = Role.Switch) {
                 haptics.perform(if (it) Haptic.ToggleOn else Haptic.ToggleOff)
                 onCheckedChange(it)
@@ -546,13 +546,16 @@ fun SegmentedControl(options: List<String>, selected: Int, onSelect: (Int) -> Un
                     if (hover != current) { haptics.perform(Haptic.Select); glide(hover) }
                     var cancelled = false
                     while (true) {
-                        val e = awaitPointerEvent()
-                        val c = e.changes.firstOrNull { it.id == down.id } ?: break
+                        // The Final pass: by then a scrolling parent has had its say (it consumes the
+                        // move in its own Main pass, after ours), so a vertical swipe that starts
+                        // here scrolls the page instead of picking whatever segment it started on.
+                        val e = awaitPointerEvent(PointerEventPass.Final)
+                        val c = e.changes.firstOrNull { it.id == down.id } ?: run { cancelled = true; null } ?: break
                         if (!c.pressed) break
+                        val d = c.position - down.position
+                        if (c.isConsumed || (abs(d.y) > viewConfiguration.touchSlop && abs(d.y) > abs(d.x))) { cancelled = true; break }
                         val i = indexAt(c.position.x)
                         if (i != hover) { hover = i; haptics.perform(Haptic.Select); glide(i) }
-                        // Pulled well away vertically: the page is scrolling, not this.
-                        if (c.isConsumed) { cancelled = true; break }
                     }
                     scope.launch { lift.animateTo(0f, VyomaMotion.release()) }
                     if (cancelled) glide(current) else if (hover != current) pick(hover) else glide(current)
@@ -693,7 +696,7 @@ fun DrawScope.frostedKnob(r: Rect, alpha: Float) {
     if (a < 0.01f || r.width < 1f) return
     val corner = CornerRadius(r.height / 2)
     drawRoundRect(Color.Black.copy(alpha = 0.14f * a), r.topLeft + Offset(0f, 1.dp.toPx()), r.size, corner)
-    drawRoundRect(Color(0xFFF7F7F9), r.topLeft, r.size, corner, alpha = a)
+    drawRoundRect(Color.White, r.topLeft, r.size, corner, alpha = a)
     drawRoundRect(
         Brush.verticalGradient(listOf(Color.White, Color.Black.copy(alpha = 0.06f)), startY = r.top, endY = r.bottom),
         r.topLeft, r.size, corner, alpha = a, style = Stroke(1.dp.toPx()),

@@ -23,8 +23,15 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   `LiquidGlass`/`liquidLens`: physically based, like Telegram's/Apple's: Snell refraction (n≈1.5) through a
   quarter-circle rim (≤ 1/5 of the element) over a slab 6 rims deep, so the rim shows what's ACROSS the element and
   beyond it (the recorded margin), bent like water. Rejected: plain outward bend, weak inward/convex bend).
-  Exception: the tab bar's lifted drop (`LensStyle.Lift`, negative depth) overflows the bar 12 dp and its rim looks
-  OUTWARD, so the page around the bar bends into it; an inward rim there only replayed the bar and mirrored labels. Every
+  Current (my reading of "like iOS", pending the user's verdict): every `LensStyle` except `Tube` uses `wrap` instead of Snell: the rim
+  samples bevel*(t + wrap*t^3) along the normal, i.e. it gathers in what lies just OUTSIDE the edge, squeezed toward
+  the edge, monotonic (never mirrored). Inward Snell mirrored labels into rims and doubled text. Press drops
+  (`Drop`) have no colour split. Under a drop only the drop shows (`LensPainter` cuts the original out and
+  crossfades it while the drop forms); drawing both doubled labels on translucent pills.
+  Chrome rendering: one chained blur+refraction pass per element at quarter resolution (`CHROME_RES`), the
+  shader's shape inflated 2 low-res px so the visible outline is a full-res anti-aliased clip, plus a full-res
+  `specularRim` stroke (light mode: dark hairline base). Measured alternatives: full res +3 ms GPU; one shared
+  full-page blur was slower (replays the whole page). Every
   chrome element uses the tab bar's values: `blur = 8.dp, bevel = 16.dp`. The bar must not be inside
   the source. Compose/draw chrome only while visible.
 - Header (`CollapsingHeaderScaffold`): no slab. A soft status-bar fade; back in a 48 dp liquid circle; the title
@@ -38,9 +45,11 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   and clears; an inward rim mirrored the track into stripes. Volume (`Dashboard.VolumeBar`) is an iOS card: name +
   % over the knobbed slider between quiet/loud speakers. The media `Scrubber` drives one `Animatable` progress (small
   drifts snap, jumps glide) and holds our seek target until MPRIS agrees (browsers report stale/zero after a seek).
-- Switches (`VyomaSwitch`, iOS 26): 62×28 track, green when on, wide white capsule thumb that lifts into a clear
-  `Lift` lens (bigger than the track) while touched. `SegmentedControl`: grey thumb that lifts into a lens on touch
-  and can be slid to another option; release picks. Same drawn-at-rest / lens-while-held rule.
+- Switches (`VyomaSwitch`): accent track (NOT iOS green: the user disliked it on pure black), round white thumb with a
+  squash at the ends; touched, it lifts into the same clear `Lift` lens as the slider knobs. `SegmentedControl`: grey thumb that lifts into a lens on touch
+  and can be slid to another option; release picks. Same drawn-at-rest / lens-while-held rule. Custom gestures inside
+  scrolling pages read moves in `PointerEventPass.Final` (the scroll consumes after a child's Main pass) and cancel on
+  vertical slop: a swipe starting on the segmented control once switched the app to Light.
 - Header capsules and the touchpad button: `glassChrome(..., interactive = true)` flexes the glass itself on press
   (grows past its bounds, zooms, brightens); glyphs inside use `LocalOnChrome` so `BounceIconButton` doesn't add a
   second drop. Never scale a glyph inside a still ring.
@@ -57,7 +66,8 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Control Center tiles: colored glyph on `glassRaised`; toggles fill with their color (white glyph) while on.
 - Root navigation: `TabsRoot` (app/ui/TabBar.kt), iOS 26 tab bar: Home / Clipboard / Settings in a glass pill, the
   selected tab on a plain neutral capsule (colour only in icon + label). The drop lifts on touch-DOWN, jumps to the
-  touched tab, follows the finger (tick per tab), picks on release; it never lifts without a finger. Touchpad is a
+  touched tab, follows the finger (tick per tab), picks on release; it never lifts without a finger. `glide` ignores
+  a repeat of the current target: re-gliding mid-flight swapped the leading/trailing springs and overshot one way only. Touchpad is a
   separate round glass button. Tabs stay composed (keep-alive) and are only placed when shown.
   Lists get `LocalBottomBarInset` padding automatically via the scaffold.
 
