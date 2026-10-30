@@ -1,0 +1,5 @@
+# Compile all of Vyoma's own code ahead of time at install. The app is small and every screen sits
+# on the hot path (glass drawing, packet handling), so a broad rule is right; R8 rewrites it to the
+# minified names. Libraries (Compose, coroutines) ship their own profiles, merged in by AGP.
+HSPLdev/vyoma/connect/**->**(**)**
+Ldev/vyoma/connect/**;

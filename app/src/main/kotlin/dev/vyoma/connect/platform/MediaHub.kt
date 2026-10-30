@@ -106,11 +106,15 @@ class MediaHub(private val hub: StateFlow<DeviceHub?>, private val scope: Corout
             remember(track, art)
             emit(NowPlaying(s.device.id, s.device.name, s.player, art, s.players))
             if (cached == null && key != null) {
-                val loaded = withContext(Dispatchers.IO) { loadArt(s) }
+                val loaded = withContext(Dispatchers.IO) {
+                    // The churned file is usually the same picture: keep the bitmap already shown,
+                    // so the card, media session and widgets don't redo their work for nothing.
+                    loadArt(s)?.let { fresh -> art?.takeIf { it.sameAs(fresh) } ?: fresh }
+                }
                 if (loaded != null) {
                     cache.put(key, loaded)
                     remember(track, loaded)
-                    emit(NowPlaying(s.device.id, s.device.name, s.player, loaded, s.players))
+                    if (loaded !== art) emit(NowPlaying(s.device.id, s.device.name, s.player, loaded, s.players))
                 }
             }
         }
