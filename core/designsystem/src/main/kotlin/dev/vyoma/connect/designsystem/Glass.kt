@@ -73,6 +73,7 @@ import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.GraphicsContext
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.animation.core.Animatable
 import androidx.compose.runtime.rememberCoroutineScope
@@ -81,6 +82,8 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.roundToInt
 
 /*
@@ -192,22 +195,20 @@ val glassDepth: GlassDepth
     }
 
 /**
- * The specular edge: a sweep around the shape's centre, brightest at the top-left (where the
- * light is), a softer catch at the bottom-right, the base tone between. Angles run clockwise from
- * 3 o'clock.
+ * The specular edge: a sweep around the shape's centre, brightest facing the light (top left at
+ * rest, following [SpecularLight] as the phone tilts), a softer catch opposite, the base tone
+ * between. Angles run clockwise from 3 o'clock.
  */
-internal fun specularRim(lit: Color, base: Color, center: Offset): Brush {
-    val back = lerp(base, lit, 0.45f)
-    return Brush.sweepGradient(
-        0f to base,
-        0.125f to back, // bottom-right
-        0.3f to base,
-        0.5f to base,
-        0.625f to lit, // top-left
-        0.8f to base,
-        1f to base,
-        center = center,
+internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float = SpecularLight.angle): Brush {
+    val b = base.toArgb()
+    val shader = android.graphics.SweepGradient(
+        center.x, center.y,
+        intArrayOf(b, lerp(base, lit, 0.45f).toArgb(), b, b, lit.toArgb(), b, b),
+        // Laid out for the resting light (top left = 0.625), then turned to where it is now.
+        floatArrayOf(0f, 0.125f, 0.3f, 0.5f, 0.625f, 0.8f, 1f),
     )
+    shader.setLocalMatrix(android.graphics.Matrix().apply { setRotate(light - SpecularLight.REST, center.x, center.y) })
+    return ShaderBrush(shader)
 }
 
 /**
@@ -249,18 +250,31 @@ fun Modifier.glassCard(shape: Shape, fill: Color? = null): Modifier = composed {
 }
 
 /**
- * Raised controls sitting on a card (round buttons, chips, keys): a plain, even fill one step up
- * from the card, no drawn rim (a painted highlight edge read as fake refraction). With [color]
- * it's filled with that color instead (an active toggle, an accent pill).
+ * Raised controls sitting on a card (round buttons, chips, keys): an even fill one step up from
+ * the card and a hairline specular edge that follows the phone's tilt ([SpecularLight]), so it reads
+ * as lit glass rather than a painted ring. With [color] it's filled with that color instead (an
+ * active toggle, an accent pill).
  */
 fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = composed {
     val dark = isDarkUi
     val base = color
     this
         .drawWithCache {
-            val outline = shape.createOutline(size, layoutDirection, this)
+            val path = Path().apply { addOutline(shape.createOutline(size, layoutDirection, this@drawWithCache)) }
             val fill = base ?: if (dark) Color.White.copy(alpha = 0.12f) else Color(0xFF1A2B4C).copy(alpha = 0.06f)
-            onDrawBehind { drawOutline(outline, fill) }
+            val lit = Color.White.copy(alpha = if (base != null) 0.5f else if (dark) 0.4f else 0.95f)
+            val rimBase = when {
+                base != null -> Color.White.copy(alpha = 0.1f)
+                dark -> Color.White.copy(alpha = 0.05f)
+                else -> Color(0xFF1A2B4C).copy(alpha = 0.06f)
+            }
+            val stroke = Stroke(0.9.dp.toPx())
+            val center = Offset(size.width / 2, size.height / 2)
+            onDrawBehind {
+                drawPath(path, fill)
+                // The light's angle is read here only, so tilting redraws the edge and nothing else.
+                drawPath(path, specularRim(lit, rimBase, center), style = stroke)
+            }
         }
         .clip(shape)
 }
@@ -445,7 +459,7 @@ fun Modifier.glassChrome(
             clipPath(edgePath) {
                 translate(-o, -o) { scale(1f / q, 1f / q, pivot = Offset.Zero) { drawLayer(blurred) } }
             }
-            // The highlight: brightest where it faces the light (top left) and its opposite.
+            // The highlight: brightest where it faces the light and its opposite; it follows the tilt.
             val pr = p.coerceIn(0f, 1f)
             drawPath(
                 edgePath,
@@ -630,13 +644,17 @@ private class BlurCache {
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal class LiquidGlass {
     private val shader = RuntimeShader(AGSL)
-    private var last = FloatArray(15) { Float.NaN }
+    private var last = FloatArray(17) { Float.NaN }
     private var effect: RenderEffect? = null
 
     internal fun effect(
         size: Size, margin: Float, radius: Float, bevel: Float, refract: Float, zoom: Float, disperse: Float, tint: Color, spec: Float, shade: Float, blur: Float,
     ): RenderEffect {
-        val args = floatArrayOf(size.width, size.height, margin, radius, bevel, refract, zoom, disperse, tint.red, tint.green, tint.blue, tint.alpha, spec, shade, blur)
+        // Where the light is (see SpecularLight), as a unit vector in screen axes.
+        val a = Math.toRadians(SpecularLight.angle.toDouble())
+        val lx = cos(a).toFloat()
+        val ly = sin(a).toFloat()
+        val args = floatArrayOf(size.width, size.height, margin, radius, bevel, refract, zoom, disperse, tint.red, tint.green, tint.blue, tint.alpha, spec, shade, blur, lx, ly)
         effect?.let { if (args.contentEquals(last)) return it }
         last = args
         shader.setFloatUniform("size", size.width, size.height)
@@ -649,6 +667,7 @@ internal class LiquidGlass {
         shader.setFloatUniform("tint", tint.red, tint.green, tint.blue, tint.alpha)
         shader.setFloatUniform("spec", spec)
         shader.setFloatUniform("shade", shade)
+        shader.setFloatUniform("light", lx, ly)
         val glass = android.graphics.RenderEffect.createRuntimeShaderEffect(shader, "content")
         val full = if (blur > 0f) {
             android.graphics.RenderEffect.createChainEffect(
@@ -671,6 +690,7 @@ uniform float disperse;
 uniform float4 tint;
 uniform float spec;
 uniform float shade;
+uniform float2 light;
 
 half4 main(float2 p) {
     float2 c = size * 0.5;
@@ -707,9 +727,9 @@ half4 main(float2 p) {
         }
     }
     col.rgb = mix(col.rgb, half3(tint.rgb) * col.a, half(tint.a));
-    // A thin specular rim, brightest where it faces the light (top left) and its opposite.
+    // A thin specular rim, brightest where it faces the light and its opposite.
     float rim = 1.0 - smoothstep(0.0, 1.8, -d);
-    float facing = abs(dot(n, float2(-0.6, -0.8)));
+    float facing = abs(dot(n, light));
     float light = rim * (0.25 + 0.75 * facing * facing) + t * t * t * 0.12;
     col.rgb += half3(light * spec) * col.a;
     // On light backgrounds a highlight alone vanishes: a faint shaded underside gives the edge.

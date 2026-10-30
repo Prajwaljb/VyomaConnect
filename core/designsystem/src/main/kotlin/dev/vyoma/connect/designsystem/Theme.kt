@@ -61,6 +61,7 @@ fun VyomaTheme(settings: ThemeSettings = ThemeSettings(), content: @Composable (
         }
         buildScheme(settings, dark, accentSource)
     }
+    TrackSpecularLight()
     MaterialTheme(
         colorScheme = target.animated(),
         typography = VyomaTypography,
