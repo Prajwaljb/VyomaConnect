@@ -182,6 +182,9 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
     var pulse by remember { mutableStateOf<Job?>(null) }
 
     fun glide(toLeft: Float) {
+        // Already headed there: restarting would swap which edge leads (and its spring) mid-flight,
+        // which made a tap to the right overshoot while one to the left didn't.
+        if (toLeft == left.targetValue && toLeft + itemPx == right.targetValue) return
         val forward = toLeft > left.targetValue
         scope.launch { left.animateTo(toLeft, if (forward) VyomaMotion.trailing() else VyomaMotion.leading()) }
         scope.launch { right.animateTo(toLeft + itemPx, if (forward) VyomaMotion.leading() else VyomaMotion.trailing()) }
