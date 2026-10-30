@@ -1,6 +1,10 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.SystemColor
+import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.Glass
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -16,10 +20,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,12 +42,10 @@ import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Tablet
 import androidx.compose.material.icons.rounded.Tv
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -133,20 +133,10 @@ fun HomeScreen(
                     }
                 }
             }
-            item(key = "volume") {
-                Staggered(1, Modifier.animateItem()) {
-                    PcDashboard(vm, primary, DashboardSection.VOLUME, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard)
-                }
-            }
-            item(key = "controls") {
-                Staggered(2, Modifier.animateItem()) {
-                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard)
-                }
-            }
             val np = nowPlaying?.takeIf { it.deviceId == id && it.player.hasMedia }
             if (np != null) {
                 item(key = "media") {
-                    Staggered(3, Modifier.animateItem()) {
+                    Staggered(2, Modifier.animateItem()) {
                         MediaCard(
                             np = np,
                             onPlayPause = vm::playPause,
@@ -158,6 +148,16 @@ fun HomeScreen(
                             showVolume = false,
                         )
                     }
+                }
+            }
+            item(key = "volume") {
+                Staggered(3, Modifier.animateItem()) {
+                    PcDashboard(vm, primary, DashboardSection.VOLUME, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard)
+                }
+            }
+            item(key = "controls") {
+                Staggered(4, Modifier.animateItem()) {
+                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onOpenDevice(id) }, { onTouchpad(id) }, onClipboard)
                 }
             }
         }
@@ -186,7 +186,7 @@ fun HomeScreen(
                             iconTint = SystemColor.BLUE.color,
                             showDivider = i < available.lastIndex,
                             trailing = {
-                                FilledTonalButton(onClick = { vm.requestPair(state.identity.deviceId) }) { Text("Pair") }
+                                PillButton("Pair", onClick = { vm.requestPair(state.identity.deviceId) })
                             },
                         )
                     }
@@ -244,9 +244,9 @@ internal fun PairingCard(state: DeviceState, onAccept: () -> Unit, onReject: () 
         )
         AnimatedVisibility(incoming, enter = fadeIn(), exit = fadeOut()) {
             Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = onReject) { Text("Decline") }
+                PillButton("Decline", onClick = onReject, prominent = false, haptic = Haptic.Failure)
                 Spacer(Modifier.width(8.dp))
-                FilledTonalButton(onClick = onAccept) { Text("Pair") }
+                PillButton("Pair", onClick = onAccept, haptic = Haptic.Success)
             }
         }
     }

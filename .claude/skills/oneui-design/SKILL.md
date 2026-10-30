@@ -35,15 +35,34 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   thumb reach, collapsing into a compact bar. 16 dp side gutters, 12 dp between cards.
 - Group related rows in `SectionCard` with `ListRow`s (`iconTint = SystemColor.X.color` → colored squircle `IconBadge`,
   dividers inset past the icon).
-- Section titles use `SectionLabel` (small, muted, above the card).
+- Section titles use `SectionLabel` (small, muted, drawn low so it belongs to the card below, not the gap above).
+- Order by frequency: glanceable state first, then what you adjust (media, volume), then one-shot actions.
+- One clear primary action per card. Touch targets ≥ 48 dp; keep the bottom 70 px clear of the floating tab bar
+  (`LocalBottomBarInset`).
+- Controls: `PillButton` (prominent = accent fill, else tinted), `SegmentedControl` for 2–4 exclusive choices,
+  `VyomaSwitch` for on/off. No Material `Button`/`FilledTonalButton`/`Switch`/`SegmentedButton` outside dialogs.
 
 ## Motion
-- Use `VyomaMotion.spatial()` for movement/scale (slight overshoot) and `effects()` for alpha/color (no bounce).
-- Everything tappable uses `Modifier.pressable` (scale squish plus haptic tick). Don't use the ripple-only `clickable`.
-- Navigation: push = slide-in third + fade; back = predictive-back shrink + rounded corners (MainActivity).
+- Springs only (`VyomaMotion`): `spatial()` movement (slight overshoot), `effects()` alpha/color (never bounces),
+  `release()` anything let go of (iOS wobble), `page()` navigation (no overshoot), `leading()/trailing()` pairs for
+  liquid shapes (lens, switch thumb): the edge moving toward the target leads, the other trails, so it stretches.
+- Respond on touch-down, not on tap-up: `pressable` / `pressScale` dip immediately (Modifier.Node, layer-only) and
+  bounce on release; if a scroll steals the gesture they ease back without the bounce.
+- Things that hit a limit stretch (rubber band, diminishing) instead of stopping dead: see the volume bar.
+- Navigation: push slides the page in from the right over a parallaxed parent; back follows the thumb through
+  `SeekableTransitionState` (linear timeline while seeking, spring on commit/cancel). Tabs drift 1/12 width in the
+  direction travelled.
+- Entrances: `Staggered(index)` once per item, 40 ms apart, never replayed on scroll-back.
 - List changes: `Modifier.animateItem()`; size changes: `animateContentSize()`.
-- Drive scroll-linked effects from `graphicsLayer {}` lambdas reading state, never via recomposition.
-- Live status = `ConnectionOrb` (breathes when connected, fast pulse while pairing).
+- Performance is a requirement: animate in draw/layer phases (`graphicsLayer {}`, `drawBehind {}`, `placeWithLayer`),
+  read animated values inside those lambdas, use `derivedStateOf` for thresholds, and stop infinite animations when
+  nothing is changing (offline orb). Check `dumpsys gfxinfo` after motion work (target < 1% janky at 120 Hz).
+
+## Haptics (`Haptic` in Motion.kt; always through `HapticFeedback.perform`)
+Tap = buttons/cards · Key = keyboard-like keys · ToggleOn/ToggleOff = switches and toggle controls · Select = tabs,
+segments · Detent = steps while dragging a value (every 10% volume, scroll-wheel notches) · Edge = end stops and
+mode thresholds · Hold = long-press grab · Success/Failure = outcomes (sent, paired, declined). One haptic per action;
+never haptics on passive updates.
 
 ## Widgets (Glance, Phase 1)
 Same palette tokens; system widget corner radius; never show a spinner forever. Render cached state and an

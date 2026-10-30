@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.runtime.getValue
+import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.glassCard
 import androidx.compose.foundation.layout.Box
 import dev.vyoma.connect.designsystem.SystemColor
@@ -18,14 +20,11 @@ import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Laptop
 import androidx.compose.material.icons.rounded.PhoneAndroid
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -60,10 +59,7 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                         Text("Send what's copied", style = MaterialTheme.typography.titleMedium)
                         Text("Pushes this phone's clipboard to your PC", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    FilledTonalButton(onClick = { context.startActivity(ClipboardActivity.intent(context)) }) {
-                        Icon(Icons.AutoMirrored.Rounded.Send, null, Modifier.padding(end = 6.dp))
-                        Text("Send")
-                    }
+                    PillButton("Send", onClick = { context.startActivity(ClipboardActivity.intent(context)) })
                 }
             }
         }

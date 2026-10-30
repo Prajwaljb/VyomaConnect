@@ -1,5 +1,9 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import dev.vyoma.connect.designsystem.SegmentedControl
+import dev.vyoma.connect.designsystem.VyomaSwitch
 import dev.vyoma.connect.designsystem.SystemColor
 import android.annotation.SuppressLint
 import android.content.ClipData
@@ -37,7 +41,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -56,17 +59,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -133,23 +130,19 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     }
                 }
                 Spacer(Modifier.height(20.dp))
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-                    DarkMode.entries.forEachIndexed { i, mode ->
-                        SegmentedButton(
-                            selected = theme.darkMode == mode,
-                            onClick = { vm.setDarkMode(mode) },
-                            shape = SegmentedButtonDefaults.itemShape(i, DarkMode.entries.size),
-                        ) { Text(mode.name.lowercase().replaceFirstChar(Char::uppercase)) }
-                    }
-                }
+                SegmentedControl(
+                    options = DarkMode.entries.map { it.name.lowercase().replaceFirstChar(Char::uppercase) },
+                    selected = theme.darkMode.ordinal,
+                    onSelect = { vm.setDarkMode(DarkMode.entries[it]) },
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                )
                 Spacer(Modifier.height(8.dp))
                 ListRow(
                     title = "Pure black",
                     subtitle = "True black backgrounds in dark mode, easy on AMOLED",
                     icon = Icons.Rounded.DarkMode,
                     iconTint = SystemColor.GRAY.color,
-                    trailing = { Switch(checked = theme.amoled, onCheckedChange = vm::setAmoled) },
-                    onClick = { vm.setAmoled(!theme.amoled) },
+                    trailing = { VyomaSwitch(checked = theme.amoled, onCheckedChange = { vm.setAmoled(it) }) },
                 )
             }
         }
@@ -162,7 +155,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
             val phoneOn = remember(resumeTick, phoneTick) { PhonePermissions.allGranted(context) }
             val askPhone = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
                 phoneTick++
-                if (result.values.any { it }) LinkService.start(context, refresh = true)
+                if (result.values.any { it }) LinkService.start(context, refresh = true, visible = true)
                 // Denied twice: Android stops asking, so send them to the app's permission page.
                 if (result.values.any { !it } && !PhonePermissions.allGranted(context)) {
                     runCatching {

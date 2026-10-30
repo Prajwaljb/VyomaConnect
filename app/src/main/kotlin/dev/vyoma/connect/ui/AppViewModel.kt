@@ -97,9 +97,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun finishOnboarding() = viewModelScope.launch { settings.setOnboarded() }
 
-    fun startService() = LinkService.start(getApplication())
+    fun startService() = LinkService.start(getApplication(), visible = true)
 
-    fun refresh() = LinkService.start(getApplication(), refresh = true)
+    fun refresh() = LinkService.start(getApplication(), refresh = true, visible = true)
 
     fun device(id: String): Device? = container.hub.value?.device(id)
     fun deviceName(id: String): String = device(id)?.name ?: "PC"
