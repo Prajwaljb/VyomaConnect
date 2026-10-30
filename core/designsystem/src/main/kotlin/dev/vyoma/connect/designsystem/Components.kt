@@ -58,6 +58,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import kotlin.math.abs
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.animation.core.Animatable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.draw.drawBehind
@@ -101,6 +103,19 @@ fun CollapsingHeaderScaffold(
         derivedStateOf {
             if (listState.firstVisibleItemIndex > 0) 1f
             else (listState.firstVisibleItemScrollOffset / (headerPx * 0.6f)).coerceIn(0f, 1f)
+        }
+    }
+    // One UI never rests half-collapsed: when a scroll ends inside the header, settle open or
+    // closed, whichever is nearer. A page that only overflows by a sliver therefore springs back
+    // instead of sitting a few pixels down.
+    LaunchedEffect(listState, headerPx) {
+        val distance = (headerPx * 0.6f).toInt()
+        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (scrolling || listState.firstVisibleItemIndex != 0) return@collect
+            val offset = listState.firstVisibleItemScrollOffset
+            if (offset in 1 until distance) {
+                listState.animateScrollBy((if (offset < distance / 2) -offset else distance - offset).toFloat(), VyomaMotion.page())
+            }
         }
     }
 
@@ -177,8 +192,10 @@ fun CollapsingHeaderScaffold(
                         .weight(1f)
                         .padding(horizontal = 8.dp)
                         .graphicsLayer {
-                            alpha = collapse
-                            translationY = (1f - collapse) * 12.dp.toPx()
+                            // Only once the big title is mostly gone, so a small scroll never shows two titles.
+                            val t = ((collapse - 0.6f) / 0.4f).coerceIn(0f, 1f)
+                            alpha = t
+                            translationY = (1f - t) * 12.dp.toPx()
                         },
                 )
                 actions()
