@@ -17,6 +17,7 @@ import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.BatteryStd
 import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.LinkOff
+import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -55,6 +56,7 @@ fun DeviceScreen(
     val state = devices.firstOrNull { it.identity.deviceId == deviceId }
     val context = LocalContext.current
     var confirmUnpair by rememberSaveable { mutableStateOf(false) }
+    val companionOnline = devices.any { it.identity.companionOf == deviceId && it.isPaired && it.isReachable }
     val fingerprint = remember(state?.isReachable, state?.isPaired) { vm.fingerprint(deviceId) }
 
     // Plugin instances change when the link reconnects; key on the loaded set.
@@ -161,10 +163,21 @@ fun DeviceScreen(
                     subtitle = if (state.isReachable) "${state.plugins.size} features active" else "Open KDE Connect on it, or join the same network",
                     icon = if (TransportKind.USB in state.transports) Icons.Rounded.Usb else Icons.Rounded.Wifi,
                     iconTint = if (state.isReachable) SystemColor.BLUE.color else SystemColor.GRAY.color,
-                    showDivider = battery != null,
+                    showDivider = battery != null || companionOnline,
                     // Checks the link end to end: the PC shows a "Ping!" notification.
                     trailing = if (live) { { PillButton("Ping", prominent = false, onClick = { vm.ping(deviceId) }) } } else null,
                 )
+                // With the companion, the camera has Find PC's slot in the controls.
+                if (companionOnline) {
+                    ListRow(
+                        title = "Find this PC",
+                        subtitle = "Rings it so you can find it",
+                        icon = Icons.Rounded.NotificationsActive,
+                        iconTint = SystemColor.YELLOW.color,
+                        showDivider = battery != null,
+                        trailing = { PillButton("Ring", prominent = false, onClick = { vm.ringPc(deviceId) }) },
+                    )
+                }
                 battery?.let { b ->
                     ListRow(
                         title = "Battery ${b.charge}%",

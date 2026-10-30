@@ -29,7 +29,7 @@ import kotlinx.coroutines.withContext
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.material.icons.rounded.Screenshot
-import dev.vyoma.connect.protocol.plugin.builtin.ScreenshotState
+import dev.vyoma.connect.protocol.plugin.builtin.CaptureState
 import kotlin.math.abs
 import kotlin.math.sign
 import androidx.compose.ui.graphics.TransformOrigin
@@ -80,6 +80,7 @@ import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material3.Icon
@@ -259,14 +260,16 @@ fun PcDashboard(
           val shots = remember(companion?.identity?.deviceId, companion?.plugins) {
               companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
           }
-          val shot by (shots?.screenshot ?: remember { MutableStateFlow(ScreenshotState.Idle) }).collectAsStateWithLifecycle()
-          ScreenshotOutcome(shot)
+          val shot by (shots?.screenshot?.state ?: remember { MutableStateFlow(CaptureState.Idle) }).collectAsStateWithLifecycle()
+          val photo by (shots?.photo?.state ?: remember { MutableStateFlow(CaptureState.Idle) }).collectAsStateWithLifecycle()
+          CaptureOutcome(shot, "Screenshot")
+          CaptureOutcome(photo, "Photo")
           ControlGrid(
             listOf(
                 // One job per button. Send drops phone files in the PC's Downloads (works with plain KDE
                 // Connect); PC files browses and uploads into a chosen folder, which needs the companion.
                 // Slots never move: the companion swaps Clipboard (also a tile and a tab) for PC files,
-                // and Ping (also in the PC's details) for Screenshot.
+                // Ping for Screenshot and Find PC for Camera (both stay in the PC's details).
                 Control(Icons.Rounded.UploadFile, "Send", SystemColor.CYAN) { vm.pickFiles(context) },
                 if (shots != null) Control(Icons.Rounded.Folder, "PC files", SystemColor.BLUE, onClick = onBrowseFiles)
                 else Control(Icons.Rounded.ContentPaste, "Clipboard", SystemColor.ORANGE, onClick = onClipboard),
@@ -274,10 +277,10 @@ fun PcDashboard(
                 Control(Icons.Rounded.Keyboard, "Keyboard", SystemColor.TEAL, onClick = onTouchpad),
                 if (shots != null) Control(
                     Icons.Rounded.Screenshot,
-                    if (shot == ScreenshotState.Capturing) "Capturing" else "Screenshot",
+                    if (shot == CaptureState.Capturing) "Capturing" else "Screenshot",
                     SystemColor.PINK,
-                    active = shot == ScreenshotState.Capturing,
-                ) { vm.takeScreenshot(shots) }
+                    active = shot == CaptureState.Capturing,
+                ) { vm.capture(shots.screenshot) }
                 else Control(Icons.Rounded.Sensors, "Ping", SystemColor.GREEN) { vm.ping(id) },
                 Control(
                     if (pc.locked == true) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
@@ -293,7 +296,14 @@ fun PcDashboard(
                     active = pc.sink?.muted == true,
                     toggle = pc.sink != null,
                 ) { pc.sink?.let { vm.setSinkMuted(id, it.name, !it.muted) } ?: toast(context, "Volume control isn't on for this PC") },
-                Control(Icons.Rounded.NotificationsActive, "Find PC", SystemColor.YELLOW) { vm.ringPc(id) },
+                // The companion's camera takes Find PC's slot; Find PC is then in the PC's details.
+                if (shots != null) Control(
+                    Icons.Rounded.PhotoCamera,
+                    if (photo == CaptureState.Capturing) "Taking" else "Camera",
+                    SystemColor.YELLOW,
+                    active = photo == CaptureState.Capturing,
+                ) { vm.capture(shots.photo) }
+                else Control(Icons.Rounded.NotificationsActive, "Find PC", SystemColor.YELLOW) { vm.ringPc(id) },
                 if (inDetails) Control(Icons.Rounded.Terminal, "Commands", SystemColor.GRAY) { vm.openCommandSetup(id) }
                 else Control(Icons.Rounded.MoreHoriz, "More", SystemColor.GRAY, onClick = onOpenDevice),
             ),
@@ -303,35 +313,35 @@ fun PcDashboard(
     }
 }
 
-/** Previews a fresh screenshot in place (it was asked for just now), or says why it failed. */
+/** Previews a fresh capture in place (it was asked for just now), or says why it failed. */
 @Composable
-private fun ScreenshotOutcome(state: ScreenshotState) {
+private fun CaptureOutcome(state: CaptureState, what: String) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
-    var preview by remember { mutableStateOf<ScreenshotState.Done?>(null) }
+    var preview by remember { mutableStateOf<CaptureState.Done?>(null) }
     LaunchedEffect(state) {
         // Only react to outcomes that just happened, not ones left over from before a recomposition.
         when (state) {
-            is ScreenshotState.Done -> if (System.currentTimeMillis() - state.at < 5_000) {
+            is CaptureState.Done -> if (System.currentTimeMillis() - state.at < 5_000) {
                 haptics.perform(Haptic.Success)
                 preview = state
             }
-            is ScreenshotState.Failed -> if (System.currentTimeMillis() - state.at < 5_000) {
+            is CaptureState.Failed -> if (System.currentTimeMillis() - state.at < 5_000) {
                 haptics.perform(Haptic.Failure)
-                toast(context, "Screenshot failed: ${state.reason}")
+                toast(context, "$what failed: ${state.reason}")
             }
             else -> Unit
         }
     }
-    preview?.let { ScreenshotPreview(Uri.parse(it.location), it.mime, onDismiss = { preview = null }) }
+    preview?.let { CapturePreview(Uri.parse(it.location), it.mime, what, onDismiss = { preview = null }) }
 }
 
 /**
- * The screenshot on a glass card that springs up from the controls, like iOS's screenshot
+ * The picture on a glass card that springs up from the controls, like iOS's screenshot
  * thumbnail: share it, open it in the gallery, or just close it (it's already in Pictures/Vyoma).
  */
 @Composable
-private fun ScreenshotPreview(uri: Uri, mime: String, onDismiss: () -> Unit) {
+private fun CapturePreview(uri: Uri, mime: String, what: String, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val image by produceState<ImageBitmap?>(null, uri) {
         value = withContext(Dispatchers.IO) {
@@ -365,10 +375,10 @@ private fun ScreenshotPreview(uri: Uri, mime: String, onDismiss: () -> Unit) {
                 .padding(14.dp),
         ) {
             Box(
-                Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(MaterialTheme.shapes.large).background(Glass.raised),
+                Modifier.fillMaxWidth().aspectRatio(image?.let { it.width.toFloat() / it.height } ?: (16f / 9f)).clip(MaterialTheme.shapes.large).background(Glass.raised),
                 contentAlignment = Alignment.Center,
             ) {
-                image?.let { Image(it, "PC screenshot", Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
+                image?.let { Image(it, what, Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
             }
             Spacer(Modifier.height(12.dp))
             Text("Saved to Pictures/Vyoma", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
