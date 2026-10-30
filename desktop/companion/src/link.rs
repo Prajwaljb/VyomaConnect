@@ -98,7 +98,7 @@ pub async fn connect(addr: SocketAddr, me: &Identity, identity: &Value, phone_id
     Ok(Link { sender, receiver, phone_identity })
 }
 
-fn server_config(me: &Identity) -> Result<rustls::ServerConfig> {
+pub fn server_config(me: &Identity) -> Result<rustls::ServerConfig> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     Ok(rustls::ServerConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()?

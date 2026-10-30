@@ -40,3 +40,10 @@ body fields before implementing one.
   peers ignore unknown fields (they do).
 - Real-time streams (gamepad, video) don't go through the JSON link: negotiate over a vyoma packet, then use a
   dedicated socket (UDP with AEAD for input, TLS/TCP for video).
+
+### Companion packets (desktop/companion ⇄ CompanionPlugin)
+- `vyoma.stats.request` → 12 s lease of `vyoma.stats` every 2 s: `cpu, memUsed, memTotal, cpuTemp?, gpu?, uptime?`.
+  `gpu` = amdgpu `gpu_busy_percent`, else Intel `1 − Δrc6_residency/Δt` (no root; never wake the NVIDIA dGPU).
+- `vyoma.screenshot.request` → `vyoma.screenshot {format:"webp"}` + payload (companion listens on 1739..1764, is the
+  TLS server, and only serves the pinned phone cert), or `{error}` with no payload. Phone saves to Pictures/Vyoma.
+

@@ -39,6 +39,23 @@ class AndroidShareSink(private val context: Context, private val clipboard: Andr
         return MediaStoreFile(uri, out.buffered(256 * 1024))
     }
 
+    /** Screenshots go with the user's pictures, so Gallery shows them in a "Vyoma" album. */
+    override fun createPicture(from: Device, name: String, size: Long): IncomingFile? {
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, name)
+            put(MediaStore.Images.Media.MIME_TYPE, mimeOf(name))
+            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Vyoma")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
+        val out = resolver.openOutputStream(uri) ?: run {
+            resolver.delete(uri, null, null)
+            return null
+        }
+        return MediaStoreFile(uri, out.buffered(256 * 1024))
+    }
+
     private inner class MediaStoreFile(private val uri: Uri, override val output: OutputStream) : IncomingFile {
         override fun complete(): String {
             context.contentResolver.update(uri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
