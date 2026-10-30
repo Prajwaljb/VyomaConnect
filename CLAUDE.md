@@ -12,6 +12,8 @@ source scripts/env.sh            # user-local JDK 21 + Android SDK; required bef
 VYOMA_INTEROP=1 ./gradlew :core:protocol:test --rerun   # live test vs this PC's kdeconnectd
 scripts/deploy.sh debug          # install + launch on phone
 cargo build --release --manifest-path desktop/companion/Cargo.toml   # Linux companion (Rust)
+install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ && systemctl --user restart vyoma-companion
+                                 # the installed systemd user unit runs ~/.local/bin/vyoma-companion; logs: journalctl --user -u vyoma-companion
 ```
 
 ## Modules
