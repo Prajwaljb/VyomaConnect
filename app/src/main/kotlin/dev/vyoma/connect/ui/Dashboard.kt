@@ -1,8 +1,12 @@
 package dev.vyoma.connect.ui
 
-import androidx.compose.ui.util.lerp
-import androidx.compose.ui.geometry.Rect
-import dev.vyoma.connect.designsystem.liquidLens
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.runtime.getValue
@@ -521,21 +525,20 @@ private fun ClipboardTile(clip: ClipEntry?, modifier: Modifier, onOpen: () -> Un
 }
 
 /**
- * iOS-style chunky volume: drag anywhere on the bar. Tracks the finger 1:1 while dragging and
- * springs to the PC's value otherwise. A detent every 10%, a firmer one at the ends, and past an
- * end the bar itself stretches toward your finger like a gel and wobbles back when let go.
+ * Volume as a capsule of liquid. Drag anywhere on it, relative like iOS (a vertical swipe still
+ * scrolls the page): it swells a little while held, tracks the finger 1:1, and springs to the PC's
+ * value otherwise. A detent every 10%, a firmer one at the ends; past an end the bar stretches
+ * toward the finger like a gel and wobbles back. The labels change colour exactly where the liquid
+ * ends: the row is drawn twice, the second copy clipped to the liquid.
  */
 @Composable
 internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modifier = Modifier) {
     val max = sink.maxVolume.coerceAtLeast(1).toFloat()
     var level by remember(sink.name) { mutableFloatStateOf(sink.volume / max) }
     var dragging by remember { mutableStateOf(false) }
-    var held by remember { mutableStateOf(false) }
-    val lens by animateFloatAsState(if (held) 1f else 0f, if (held) VyomaMotion.spatial() else VyomaMotion.release(), label = "volLens")
     var lastTouch by remember { mutableLongStateOf(0L) }
     // How far the finger has pulled past an end, as a fraction of the bar (signed: + is past max).
     var excess by remember { mutableFloatStateOf(0f) }
-    val pull by animateFloatAsState(rubberBand(excess), if (dragging) snap() else VyomaMotion.release(), label = "volPull")
     // The PC echoes every value we send, late. Ignore echoes while the finger is down and shortly
     // after; once they stop, settle on whatever the PC really ended up at.
     LaunchedEffect(sink.volume, dragging) {
@@ -544,12 +547,14 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
         level = sink.volume / max
     }
     val shown by animateFloatAsState(level, if (dragging) snap() else VyomaMotion.spatial(), label = "vol")
+    val pull by animateFloatAsState(rubberBand(excess), if (dragging) snap() else VyomaMotion.release(), label = "volPull")
+    val swell by animateFloatAsState(if (dragging) 1f else 0f, if (dragging) VyomaMotion.spatial() else VyomaMotion.release(), label = "volSwell")
     val haptics = LocalHapticFeedback.current
-    val fill by animateColorAsState(
+    val liquid by animateColorAsState(
         if (sink.muted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
-        VyomaMotion.effects(), label = "volFill",
+        VyomaMotion.effects(), label = "volLiquid",
     )
-    val onFill = if (sink.muted) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onPrimary
+    val onLiquid = if (sink.muted) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onPrimary
 
     fun set(v: Float) {
         val n = v.coerceIn(0f, 1f)
@@ -561,113 +566,86 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
         level = n
         onVolume((n * max).roundToInt())
     }
-    /** Moves by [delta]; whatever lands beyond 0 or 1 stretches the bar instead. */
-    fun drag(delta: Float) {
-        val total = level + excess + delta
+    var width by remember { mutableFloatStateOf(1f) }
+    val drag = rememberDraggableState { delta ->
+        // Whatever lands beyond 0 or 1 stretches the bar instead.
+        val total = level + excess + delta / width
         val n = total.coerceIn(0f, 1f)
         excess = total - n
         set(n)
     }
 
-    Row(modifier.fillMaxWidth().height(60.dp)) {
-        BoxWithConstraints(
-            Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .graphicsLayer {
-                    if (pull != 0f) {
-                        transformOrigin = TransformOrigin(if (pull > 0f) 0f else 1f, 0.5f)
-                        scaleX = 1f + abs(pull)
-                        scaleY = 1f - abs(pull) * 0.5f
-                    }
-                }
-                // While held, a clear droplet sits on the end of the level and magnifies it.
-                .liquidLens(
-                    null,
-                    strength = { lens },
-                    zoom = { 1f + 0.2f * lens.coerceIn(0f, 1f) },
-                    rect = {
-                        val inset = 5.dp.toPx()
-                        val dh = size.height * lerp(0.8f, 1.2f, lens.coerceAtLeast(0f))
-                        val dw = dh * 1.4f
-                        val x = (inset + shown.coerceIn(0f, 1f) * (size.width - 2 * inset)).coerceIn(dw / 2, size.width - dw / 2)
-                        Rect(x - dw / 2, (size.height - dh) / 2, x + dw / 2, (size.height + dh) / 2)
-                    },
-                )
-                .glassCard(CircleShape)
-                // The level is a capsule of lit liquid inset in the glass, never narrower than round.
-                .drawBehind {
-                    val inset = 5.dp.toPx()
-                    val h = size.height - 2 * inset
-                    val w = shown.coerceIn(0f, 1f) * (size.width - 2 * inset)
-                    if (w <= 0.5f) return@drawBehind
-                    val fw = w.coerceAtLeast(h)
-                    val r = CornerRadius(h / 2)
-                    drawRoundRect(
-                        Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.18f).compositeOver(fill), fill), startY = inset, endY = inset + h),
-                        Offset(inset, inset), Size(fw, h), r,
-                    )
-                    drawRoundRect(
-                        Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.35f), Color.Transparent), startY = inset, endY = inset + h * 0.5f),
-                        Offset(inset, inset), Size(fw, h), r, style = Stroke(1.dp.toPx()),
-                    )
-                }
-                .pointerInput(sink.name) {
-                    // Relative drag like iOS: the bar follows the finger's movement and never jumps
-                    // to where it landed, and a vertical swipe still scrolls the page.
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        held = true
-                        try {
-                            val start = awaitHorizontalTouchSlopOrCancellation(down.id) { change, over ->
-                                change.consume()
-                                dragging = true
-                                drag(over / size.width)
-                            } ?: return@awaitEachGesture
-                            horizontalDrag(start.id) { change ->
-                                // Read the movement before consuming: consumed changes report zero.
-                                val dx = change.positionChange().x
-                                change.consume()
-                                lastTouch = System.currentTimeMillis()
-                                drag(dx / size.width)
-                            }
-                        } finally {
-                            // Also when the gesture is cancelled mid-drag, so the bar never stays grabbed.
-                            lastTouch = System.currentTimeMillis()
-                            excess = 0f
-                            dragging = false
-                            held = false
-                        }
-                    }
-                },
-        ) {
-            val barWidth = maxWidth.value
-            Row(
-                Modifier.fillMaxSize().padding(horizontal = 22.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // The icon sits on the fill once there's enough of it, so it flips color with it.
-                val onBar = shown * barWidth > 52f
-                Icon(
-                    if (sink.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null,
-                    tint = if (onBar) onFill else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    prettySinkName(sink.description),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (shown * barWidth > 160f) onFill else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    if (sink.muted) "Muted" else "${(level * 100).roundToInt()}%",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = if (shown > 0.92f) onFill else MaterialTheme.colorScheme.onSurface,
-                )
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .onSizeChanged { width = it.width.toFloat().coerceAtLeast(1f) }
+            .graphicsLayer {
+                val stretch = abs(pull)
+                transformOrigin = TransformOrigin(if (pull >= 0f) 0f else 1f, 0.5f)
+                scaleX = 1f + stretch + 0.015f * swell
+                scaleY = 1f - stretch * 0.5f + 0.06f * swell
             }
-        }
+            .draggable(
+                drag, Orientation.Horizontal,
+                onDragStarted = { dragging = true },
+                // Also called when the gesture is cancelled, so the bar never stays grabbed.
+                onDragStopped = {
+                    lastTouch = System.currentTimeMillis()
+                    excess = 0f
+                    dragging = false
+                },
+            )
+            .glassCard(CircleShape)
+            .clip(CircleShape)
+            .drawBehind {
+                val w = shown.coerceIn(0f, 1f) * size.width
+                if (w < 0.5f) return@drawBehind
+                // Full height with a straight leading edge: the surface of the liquid.
+                drawRect(
+                    Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.2f).compositeOver(liquid), liquid)),
+                    size = Size(w, size.height),
+                )
+                drawRect(
+                    Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.22f), Color.Transparent), endY = size.height * 0.5f),
+                    size = Size(w, size.height * 0.5f),
+                )
+                // The meniscus: light gathers at the surface.
+                val band = 12.dp.toPx().coerceAtMost(w)
+                drawRect(
+                    Brush.horizontalGradient(listOf(Color.Transparent, Color.White.copy(alpha = 0.3f)), startX = w - band, endX = w),
+                    topLeft = Offset(w - band, 0f), size = Size(band, size.height),
+                )
+            },
+    ) {
+        VolumeLabels(sink, level, MaterialTheme.colorScheme.onSurface, MaterialTheme.colorScheme.onSurfaceVariant, Modifier)
+        VolumeLabels(
+            sink, level, onLiquid, onLiquid.copy(alpha = 0.85f),
+            Modifier
+                .clearAndSetSemantics {}
+                .drawWithContent { clipRect(right = shown.coerceIn(0f, 1f) * size.width) { this@drawWithContent.drawContent() } },
+        )
+    }
+}
+
+@Composable
+private fun VolumeLabels(sink: AudioSink, level: Float, strong: Color, soft: Color, modifier: Modifier) {
+    Row(modifier.fillMaxSize().padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(if (sink.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null, tint = strong)
+        Spacer(Modifier.width(10.dp))
+        Text(
+            prettySinkName(sink.description),
+            style = MaterialTheme.typography.labelLarge,
+            color = soft,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            if (sink.muted) "Muted" else "${(level * 100).roundToInt()}%",
+            style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
+            color = strong,
+        )
     }
 }
 

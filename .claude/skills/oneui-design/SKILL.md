@@ -19,16 +19,20 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   smaller lit bead; pass `color` for accent/tinted or for chips over artwork (dark translucent).
 - Real blur only for chrome: record content with `backdropSource(backdrop)` (put it OUTSIDE `aurora()` in the
   modifier chain so the canvas is recorded too), then `glassChrome(backdrop, shape)` (AGSL liquid lens on 33+:
-  `LiquidGlass`/`liquidLens`: the rim samples outward into a recorded margin, so it bends in its surroundings;
-  the user rejected an inward/convex variant). Every chrome element uses the tab bar's values: `blur = 8.dp, bevel = 16.dp`. The bar must not be inside
+  `LiquidGlass`/`liquidLens`: physically based, like Telegram's/Apple's: Snell refraction (n≈1.5) through a
+  quarter-circle rim (≤ 1/5 of the element) over a slab 6 rims deep, so the rim shows what's ACROSS the element and
+  beyond it (the recorded margin), bent like water. Rejected: plain outward bend, weak inward/convex bend). Every
+  chrome element uses the tab bar's values: `blur = 8.dp, bevel = 16.dp`. The bar must not be inside
   the source. Compose/draw chrome only while visible.
 - Header (`CollapsingHeaderScaffold`): no slab. A soft status-bar fade; back in a 48 dp liquid circle; the title
   appears in a liquid capsule once collapsed (> 0.6); actions share one capsule. Same blur/bevel as the tab bar.
 - Dialogs: `GlassDialog` (same API as AlertDialog): opaque `surfaceContainerHigh` slab with the card rim. Never
   Material `AlertDialog`.
 - Value bars: `LiquidSlider` (thumbless capsule that swells under the finger, relative drag) for scrubbers and
-  in-card volume; the big volume control is the inset liquid-fill capsule in `Dashboard.VolumeBar`. Both grow a
-  clear `liquidLens(null, …)` droplet on the end of the fill while held.
+  in-card volume; the big volume control is `Dashboard.VolumeBar`: a glass capsule filled with liquid (straight surface
+  with a lit meniscus), `draggable` relative drag, swells while held, rubber-band ends, labels drawn twice and the
+  second copy clipped to the liquid so colour flips exactly at the surface. No droplet on it (looked bugged over
+  text). `LiquidSlider` grows a clear `liquidLens(null, …)` droplet while held.
 - Icon buttons: `BounceIconButton` (never Material `IconButton`); glass circles/capsules put `pressScale` BEFORE
   `glassChrome` so the glass itself squishes, not just the glyph.
 - Feature colors: `SystemColor` (iOS system palette, light/dark tones, no indigo/purple). `IconBadge` is a filled
