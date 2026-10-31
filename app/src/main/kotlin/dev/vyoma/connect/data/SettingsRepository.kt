@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -24,6 +25,8 @@ class SettingsRepository(private val context: Context) {
         val liteGlass = booleanPreferencesKey("lite_glass")
         /** Set once FrameBudget finds this phone can't keep up with the full glass. */
         val liteGlassAuto = booleanPreferencesKey("lite_glass_auto")
+        /** Launches FrameBudget found too slow so far; two turn lighter glass on. */
+        val slowLaunches = intPreferencesKey("slow_launches")
         val deviceName = stringPreferencesKey("device_name")
         val onboarded = booleanPreferencesKey("onboarded")
         val manualHosts = stringSetPreferencesKey("manual_hosts")
@@ -49,7 +52,12 @@ class SettingsRepository(private val context: Context) {
         LiteGlass(on = p[Keys.liteGlass] ?: p[Keys.liteGlassAuto] ?: false, chosen = p[Keys.liteGlass] != null, detected = p[Keys.liteGlassAuto] ?: false)
     }.distinctUntilChanged()
     suspend fun setLiteGlass(enabled: Boolean) = context.dataStore.edit { it[Keys.liteGlass] = enabled }
-    suspend fun setLiteGlassDetected() = context.dataStore.edit { it[Keys.liteGlassAuto] = true }
+    /** One more launch found too slow; the second turns lighter glass on (one could be a fluke). */
+    suspend fun recordSlowLaunch() = context.dataStore.edit {
+        val n = (it[Keys.slowLaunches] ?: 0) + 1
+        it[Keys.slowLaunches] = n
+        if (n >= 2) it[Keys.liteGlassAuto] = true
+    }
     suspend fun setDeviceName(name: String) = context.dataStore.edit { it[Keys.deviceName] = name }
     /** PCs added by address (Tailscale IP, MagicDNS name, another subnet). */
     val manualHosts: Flow<Set<String>> = prefs.map { it[Keys.manualHosts].orEmpty() }.distinctUntilChanged()
