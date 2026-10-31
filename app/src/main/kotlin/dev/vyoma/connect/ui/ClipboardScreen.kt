@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.LocalStatus
+
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.rounded.ContentCopy
 import dev.vyoma.connect.designsystem.DialogButton
@@ -57,6 +59,7 @@ import androidx.compose.material.icons.rounded.Sync
 fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
     val history by vm.clipHistory.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val status = LocalStatus.current
     val background = vm.backgroundClipboardSync()
     var setup by rememberSaveable { mutableStateOf(false) }
     var clearing by rememberSaveable { mutableStateOf(false) }
@@ -91,7 +94,7 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     .cardSegment(first = i == 0, last = i == last)
                     .pressable {
                         vm.copyClip(clip.text)
-                        Toast.makeText(context, "Copied, and sent to your PC", Toast.LENGTH_SHORT).show()
+                        status.show("Copied, and sent to your PC")
                     },
             ) {
                 Row(Modifier.padding(horizontal = 20.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) {

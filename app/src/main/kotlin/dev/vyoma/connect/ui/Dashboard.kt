@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.LocalStatus
+
 import androidx.compose.foundation.layout.widthIn
 import dev.vyoma.connect.designsystem.DialogButton
 import androidx.compose.ui.text.TextStyle
@@ -72,6 +74,18 @@ import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.perform
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.foundation.gestures.awaitVerticalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.verticalDrag
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.material.icons.rounded.Speaker
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -267,6 +281,7 @@ fun PcDashboard(
     var showCommands by rememberSaveable { mutableStateOf(false) }
     if (showCommands) CommandsSheet(vm, id) { showCommands = false }
     val context = LocalContext.current
+    val status = LocalStatus.current
     val haptics = LocalHapticFeedback.current
     when (section) {
         // One card for the PC's state: its battery, and with the companion its load and heat, as
@@ -295,7 +310,7 @@ fun PcDashboard(
         }
         // Everything about sound in one place: the level, and where it plays when there's a choice.
         DashboardSection.VOLUME -> pc.sink?.let { sink ->
-            VolumeBar(
+            VolumeCapsule(
                 sink, onVolume = { vm.setSinkVolume(id, sink.name, it) }, modifier,
                 outputs = pc.sinks.takeIf { it.size > 1 }, onOutput = { vm.makeSinkDefault(id, it.name) },
             )
@@ -341,7 +356,7 @@ fun PcDashboard(
                     SystemColor.RED,
                     active = pc.sink?.muted == true,
                     toggle = pc.sink != null,
-                ) { pc.sink?.let { vm.setSinkMuted(id, it.name, !it.muted) } ?: toast(context, "Volume control isn't on for this PC") },
+                ) { pc.sink?.let { vm.setSinkMuted(id, it.name, !it.muted) } ?: status.show("Volume control isn't on for this PC", failure = true) },
                 // The companion's camera takes Find PC's slot; Find PC is then in the PC's details.
                 if (shots != null) Control(
                     Icons.Rounded.PhotoCamera,
@@ -354,6 +369,8 @@ fun PcDashboard(
                 Control(Icons.Rounded.Terminal, "Commands", SystemColor.GRAY) { showCommands = true },
             ),
             modifier,
+            // Away, the tiles keep their places but rest, quiet and untappable.
+            enabled = state.isReachable,
           )
         }
     }
@@ -362,7 +379,7 @@ fun PcDashboard(
 /** Previews a fresh capture in place (it was asked for just now), or says why it failed. */
 @Composable
 private fun CaptureOutcome(state: CaptureState, what: String) {
-    val context = LocalContext.current
+    val status = LocalStatus.current
     val haptics = LocalHapticFeedback.current
     var preview by remember { mutableStateOf<CaptureState.Done?>(null) }
     LaunchedEffect(state) {
@@ -374,7 +391,7 @@ private fun CaptureOutcome(state: CaptureState, what: String) {
             }
             is CaptureState.Failed -> if (System.currentTimeMillis() - state.at < 5_000) {
                 haptics.perform(Haptic.Failure)
-                toast(context, "$what failed: ${state.reason}")
+                status.show("$what failed: ${state.reason}", failure = true, haptic = false)
             }
             else -> Unit
         }
@@ -455,17 +472,16 @@ private fun toast(context: Context, text: String) =
     Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
 
 /**
- * The PC's volume, iOS style: the output's name and level over a slim slider with a liquid glass
- * knob, between a quiet and a loud speaker. Drag relative like iOS (a vertical swipe still scrolls
- * the page); it tracks the finger 1:1 and springs to the PC's value otherwise. A detent every 10%,
- * a firmer one at the ends.
+ * The PC's volume as iOS Control Center has it: a tall glass capsule beside the media card that
+ * fills from the bottom. Drag anywhere on it, relative like iOS (a touch never jumps the level; it
+ * swells a little while held); a detent every 10%, a firmer one at the ends. With a choice of
+ * outputs, a tap lists them (chips under a wide slider were cut off by the card's edge).
  */
 @Composable
-internal fun VolumeBar(
+internal fun VolumeCapsule(
     sink: AudioSink,
     onVolume: (Int) -> Unit,
     modifier: Modifier = Modifier,
-    /** With a choice of outputs, they sit under the slider and name it; the title is then just "Volume". */
     outputs: List<AudioSink>? = null,
     onOutput: (AudioSink) -> Unit = {},
 ) {
@@ -473,6 +489,7 @@ internal fun VolumeBar(
     var level by remember(sink.name) { mutableFloatStateOf(sink.volume / max) }
     var dragging by remember { mutableStateOf(false) }
     var lastTouch by remember { mutableLongStateOf(0L) }
+    var picking by rememberSaveable { mutableStateOf(false) }
     // The PC echoes every value we send, late. Ignore echoes while the finger is down and shortly
     // after; once they stop, settle on whatever the PC really ended up at.
     LaunchedEffect(sink.volume, dragging) {
@@ -480,14 +497,13 @@ internal fun VolumeBar(
         delay((ECHO_QUIET_MS - (System.currentTimeMillis() - lastTouch)).coerceAtLeast(0))
         level = sink.volume / max
     }
-    val shown by animateFloatAsState(level, if (dragging) snap() else VyomaMotion.spatial(), label = "vol")
+    val shown = animateFloatAsState(level, if (dragging) snap() else VyomaMotion.spatial(), label = "vol")
+    val swell by animateFloatAsState(if (dragging) 1.04f else 1f, VyomaMotion.release(), label = "volSwell")
     val haptics = LocalHapticFeedback.current
     val fill by animateColorAsState(
         if (sink.muted) MaterialTheme.colorScheme.onSurfaceVariant else Glass.accent,
         VyomaMotion.effects(), label = "volFill",
     )
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val card = MaterialTheme.colorScheme.surfaceContainerLow
 
     fun set(v: Float) {
         val n = v.coerceIn(0f, 1f)
@@ -499,42 +515,92 @@ internal fun VolumeBar(
         level = n
         onVolume((n * max).roundToInt())
     }
-
-    Column(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = if (outputs != null) 14.dp else 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                if (outputs != null) "Volume" else prettySinkName(sink.description),
-                style = MaterialTheme.typography.labelLarge,
-                color = muted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                if (sink.muted) "Muted" else "${(level * 100).roundToInt()}%",
-                style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
-            )
+    val pick by rememberUpdatedState(outputs?.let { { haptics.perform(Haptic.Tap); picking = true } })
+    val percent = "${(level * 100).roundToInt()}%"
+    Box(
+        modifier
+            .fillMaxHeight()
+            .heightIn(min = DeckMinHeight)
+            .graphicsLayer { scaleX = swell; scaleY = swell }
+            .semantics(mergeDescendants = true) {
+                contentDescription = "PC volume"
+                stateDescription = if (sink.muted) "Muted" else percent
+                progressBarRangeInfo = ProgressBarRangeInfo(level, 0f..1f)
+                setProgress { set(it); true }
+                pick?.let { onClick("Choose output") { it(); true } }
+            }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    val start = awaitVerticalTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
+                    if (start != null) {
+                        dragging = true
+                        verticalDrag(start.id) { c ->
+                            set(level - c.positionChange().y / size.height)
+                            c.consume()
+                        }
+                        lastTouch = System.currentTimeMillis()
+                        dragging = false
+                    } else {
+                        // A tap only if the finger lifted here, not if a scroll took it.
+                        val up = currentEvent.changes.firstOrNull { it.id == down.id }
+                        if (up != null && !up.pressed && !up.isConsumed) pick?.invoke()
+                    }
+                }
+            }
+            .glassCard(MaterialTheme.shapes.large),
+    ) {
+        // Read while drawing: a glide or a drag never recomposes the card.
+        Canvas(Modifier.matchParentSize()) {
+            val h = size.height * shown.value
+            if (h > 0f) drawRect(fill, topLeft = Offset(0f, size.height - h), size = Size(size.width, h))
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.AutoMirrored.Rounded.VolumeMute, null, tint = muted, modifier = Modifier.size(20.dp))
-            LiquidSlider(
-                value = { if (dragging) level else shown },
-                onChange = { dragging = true; set(it) },
-                onDone = {
-                    lastTouch = System.currentTimeMillis()
-                    dragging = false
-                },
-                modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
-                fill = fill,
-                track = MaterialTheme.colorScheme.onSurface.copy(alpha = if (isDarkUi) 0.16f else 0.1f),
-                underlay = card,
-                edgeHaptics = false,
-            )
-            Icon(if (sink.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null, tint = muted, modifier = Modifier.size(20.dp))
-        }
-        if (outputs != null) OutputPicker(outputs, onOutput, Modifier.padding(top = 4.dp), bleed = 20.dp)
+        val high = shown.value > 0.86f
+        val low = shown.value > 0.14f
+        Text(
+            if (sink.muted) "Off" else percent,
+            style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
+            color = if (high) Color.White else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 14.dp),
+        )
+        Icon(
+            if (sink.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null,
+            tint = if (low) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp).size(24.dp),
+        )
     }
+    if (picking && outputs != null) OutputDialog(outputs, onDismiss = { picking = false }) { onOutput(it); picking = false }
 }
+
+/** Where the PC's sound plays, the current output ticked. */
+@Composable
+private fun OutputDialog(sinks: List<AudioSink>, onDismiss: () -> Unit, onPick: (AudioSink) -> Unit) {
+    GlassDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Play PC sound on") },
+        text = {
+            Column(Modifier.heightIn(max = 360.dp).fadingVerticalScroll(rememberScrollState())) {
+                sinks.forEachIndexed { i, sink ->
+                    ListRow(
+                        title = prettySinkName(sink.description),
+                        icon = Icons.Rounded.Speaker,
+                        iconTint = SystemColor.BLUE.color,
+                        showDivider = i < sinks.lastIndex,
+                        horizontalPadding = 0.dp,
+                        trailing = if (sink.isDefault) { { Icon(Icons.Rounded.Check, "Playing here", tint = MaterialTheme.colorScheme.primary) } } else null,
+                        haptic = Haptic.Select,
+                        onClick = { onPick(sink) },
+                    )
+                }
+            }
+        },
+        confirmButton = { DialogButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+/** The media card and the volume capsule share a row at least this tall. */
+internal val DeckMinHeight = 148.dp
+internal val DeckVolumeWidth = 80.dp
 
 private const val ECHO_QUIET_MS = 700L
 
@@ -559,14 +625,14 @@ private class Control(
  * buttons (plastic balls), wide tiles two across (a stack of pills), app icons with labels under.
  */
 @Composable
-private fun ControlGrid(controls: List<Control>, modifier: Modifier = Modifier) {
+private fun ControlGrid(controls: List<Control>, modifier: Modifier = Modifier, enabled: Boolean = true) {
     Column(
         modifier.fillMaxWidth().glassCard(RoundedCornerShape(TileRadius + TilePad)).padding(TilePad),
         verticalArrangement = Arrangement.spacedBy(TileGap),
     ) {
         controls.chunked(4).forEach { row ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(TileGap)) {
-                row.forEach { c -> ControlTile(c, Modifier.weight(1f)) }
+                row.forEach { c -> ControlTile(c, Modifier.weight(1f), enabled) }
                 repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
@@ -574,7 +640,7 @@ private fun ControlGrid(controls: List<Control>, modifier: Modifier = Modifier) 
 }
 
 @Composable
-private fun ControlTile(c: Control, modifier: Modifier) {
+private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true) {
     val tone = c.color.color
     val on by animateFloatAsState(if (!c.toggle || c.active) 1f else 0f, VyomaMotion.effects(), label = "ctlOn")
     val haptic = when {
@@ -597,7 +663,8 @@ private fun ControlTile(c: Control, modifier: Modifier) {
     Column(
         modifier
             .aspectRatio(1f)
-            .pressable(haptic = haptic, onClick = c.onClick)
+            .graphicsLayer { if (!enabled) { alpha = 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha } }
+            .pressable(enabled = enabled, haptic = haptic, onClick = c.onClick)
             .glassRaised(shape, fill.copy(alpha = offPane + (0.92f - offPane) * on))
             .padding(start = 10.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
@@ -623,33 +690,6 @@ internal fun ago(time: Long): CharSequence {
     val now = System.currentTimeMillis()
     return if (now - time < DateUtils.MINUTE_IN_MILLIS) "Just now"
     else DateUtils.getRelativeTimeSpanString(time, now, DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE)
-}
-
-/** Where the PC's sound goes: one chip per output, the default one filled. */
-@Composable
-internal fun OutputPicker(sinks: List<AudioSink>, onDefault: (AudioSink) -> Unit, modifier: Modifier = Modifier, bleed: Dp = 16.dp) {
-    val chip: @Composable (AudioSink, Modifier) -> Unit = { sink, m ->
-        val bg by animateColorAsState(
-            if (sink.isDefault) Glass.accent else Glass.raised,
-            VyomaMotion.effects(), label = "outBg",
-        )
-        Text(
-            prettySinkName(sink.description),
-            style = MaterialTheme.typography.labelLarge,
-            color = if (sink.isDefault) Color.White else MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = m.pressable(haptic = Haptic.Select, glass = true) { onDefault(sink) }
-                .glassRaised(CircleShape, bg.takeIf { sink.isDefault })
-                .padding(horizontal = 14.dp, vertical = 9.dp),
-        )
-    }
-    val sorted = sinks.sortedByDescending { it.isDefault }
-    // Full names, scrolling out to the card's edge and fading there (sharing the row truncated three
-    // outputs to "Laptop …", worse than scrolling).
-    Row(modifier.fadingHorizontalScroll(rememberScrollState(), bleed = bleed).padding(horizontal = bleed), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        sorted.forEach { chip(it, Modifier) }
-    }
 }
 
 /**
@@ -687,7 +727,7 @@ private fun Reading(value: String?, unit: String, style: TextStyle) {
 @Composable
 private fun PcStatus(battery: BatteryState?, stale: Boolean, stats: PcStats?, showLoad: Boolean, modifier: Modifier = Modifier) {
     Row(
-        modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(horizontal = 20.dp, vertical = 16.dp),
+        modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(horizontal = 20.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (battery != null) {
@@ -696,7 +736,7 @@ private fun PcStatus(battery: BatteryState?, stale: Boolean, stats: PcStats?, sh
             Box(Modifier.graphicsLayer { alpha = if (stale) 0.5f else 1f }) {
                 Gauge(
                     if (battery.charging) "Charging" else "Battery", "${battery.charge}", "%",
-                    battery.charge / 100f, color, Modifier, size = 96.dp, stroke = 8.dp,
+                    battery.charge / 100f, color, Modifier, size = 80.dp, stroke = 7.dp,
                     valueStyle = MaterialTheme.typography.headlineSmall,
                 )
             }
@@ -819,8 +859,8 @@ private fun Meter(label: String, value: String?, unit: String, fraction: Float, 
 
 /** The PC's commands, run from where you are; set up (or edited) on the PC itself. */
 @Composable
-private fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) {
-    val context = LocalContext.current
+internal fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) {
+    val status = LocalStatus.current
     val device = remember(id) { vm.device(id) }
     val commands by (device?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands ?: remember { MutableStateFlow(emptyList()) }).collectAsState()
     GlassDialog(
@@ -841,7 +881,7 @@ private fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) {
                             horizontalPadding = 0.dp,
                             onClick = {
                                 vm.runCommand(id, cmd.key)
-                                toast(context, "Running ${cmd.name}")
+                                status.show("Running ${cmd.name}", icon = Icons.Rounded.Terminal)
                                 onDismiss()
                             },
                         )

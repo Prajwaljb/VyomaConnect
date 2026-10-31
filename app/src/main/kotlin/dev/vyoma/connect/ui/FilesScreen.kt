@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.LocalStatus
+
 import androidx.compose.ui.text.font.FontWeight
 import dev.vyoma.connect.designsystem.fadingHorizontalScroll
 import android.content.Intent
@@ -79,6 +81,7 @@ import dev.vyoma.connect.protocol.plugin.builtin.PcFileEvent
 fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
+    val status = LocalStatus.current
     val devices by vm.devices.collectAsStateWithLifecycle()
     val pcName = devices.firstOrNull { it.identity.deviceId == pcId }?.identity?.deviceName ?: "PC"
     val companion = devices.firstOrNull { it.identity.companionOf == pcId && it.isPaired && it.isReachable }
@@ -101,15 +104,15 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
                         .setDataAndType(Uri.parse(e.location), AndroidShareSink.mimeOf(e.name))
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     runCatching { context.startActivity(open) }
-                        .onFailure { toast(context, "${e.name} is in Downloads/Vyoma") }
+                        .onFailure { status.show("${e.name} is in Downloads/Vyoma", haptic = false) }
                 }
                 is PcFileEvent.Uploaded -> {
                     haptics.perform(Haptic.Success)
-                    toast(context, "Uploaded ${e.name}")
+                    status.show("Uploaded ${e.name}", haptic = false)
                 }
                 is PcFileEvent.Failed -> {
                     haptics.perform(Haptic.Failure)
-                    toast(context, "Couldn't get ${e.name}: ${e.reason}")
+                    status.show("Couldn't get ${e.name}: ${e.reason}", failure = true, haptic = false)
                 }
             }
         }
@@ -278,7 +281,7 @@ private fun FileRow(f: PcFile, busy: Boolean, showDivider: Boolean, modifier: Mo
 }
 
 /** A glyph and a stable color per kind of file, so a folder reads at a glance. */
-private fun kindOf(name: String): Pair<ImageVector, SystemColor> = when (name.substringAfterLast('.', "").lowercase()) {
+internal fun kindOf(name: String): Pair<ImageVector, SystemColor> = when (name.substringAfterLast('.', "").lowercase()) {
     "png", "jpg", "jpeg", "webp", "gif", "heic", "avif", "svg", "bmp" -> Icons.Rounded.Image to SystemColor.PINK
     "mp4", "mkv", "webm", "mov", "avi" -> Icons.Rounded.Movie to SystemColor.RED
     "mp3", "flac", "ogg", "opus", "wav", "m4a" -> Icons.Rounded.Audiotrack to SystemColor.ORANGE

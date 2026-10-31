@@ -1,5 +1,8 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.LocalStatus
+import dev.vyoma.connect.designsystem.RowChevron
+
 import dev.vyoma.connect.designsystem.DialogButton
 import dev.vyoma.connect.designsystem.VyomaMotion
 import androidx.compose.animation.animateContentSize
@@ -55,6 +58,8 @@ fun DeviceScreen(
     val state = devices.firstOrNull { it.identity.deviceId == deviceId }
     val context = LocalContext.current
     var confirmUnpair by rememberSaveable { mutableStateOf(false) }
+    var showCommands by rememberSaveable { mutableStateOf(false) }
+    val status = LocalStatus.current
     val companionOnline = devices.any { it.identity.companionOf == deviceId && it.isPaired && it.isReachable }
     val fingerprint = remember(state?.isReachable, state?.isPaired) { vm.fingerprint(deviceId) }
 
@@ -74,26 +79,6 @@ fun DeviceScreen(
     ) {
         if (state == null) return@CollapsingHeaderScaffold
         val live = state.isPaired && state.isReachable
-
-        // Home has the controls, the player and the sound: details are what it doesn't.
-        if (live) {
-            item(key = "commands-label") { SectionLabel("Commands", Modifier.animateItem()) }
-            item(key = "commands") {
-                if (commands.isNotEmpty()) {
-                    CommandsCard(commands, onEdit = { vm.openCommandSetup(deviceId) }) { vm.runCommand(deviceId, it.key); toast(context, "Running ${it.name}") }
-                } else {
-                    SectionCard(Modifier.animateItem()) {
-                        ListRow(
-                            title = "Add PC commands",
-                            subtitle = "Shutdown, sleep, scripts… set them up on the PC and run them from here",
-                            icon = Icons.Rounded.Terminal,
-                            iconTint = SystemColor.GRAY.color,
-                            onClick = { vm.openCommandSetup(deviceId) },
-                        )
-                    }
-                }
-            }
-        }
 
         if (!state.isPaired && state.isReachable) {
             item(key = "pair") {
@@ -119,7 +104,7 @@ fun DeviceScreen(
                     iconTint = if (state.isReachable) SystemColor.BLUE.color else SystemColor.GRAY.color,
                     showDivider = battery != null || companionOnline,
                     // Checks the link end to end: the PC shows a "Ping!" notification.
-                    trailing = if (live) { { PillButton("Ping", prominent = false, onClick = { vm.ping(deviceId) }) } } else null,
+                    trailing = if (live) { { PillButton("Ping", prominent = false, onClick = { vm.ping(deviceId); status.show("Pinged: look for it on the PC") }) } } else null,
                 )
                 // With the companion, the camera has Find PC's slot in the controls.
                 if (companionOnline) {
@@ -129,7 +114,7 @@ fun DeviceScreen(
                         icon = Icons.Rounded.NotificationsActive,
                         iconTint = SystemColor.YELLOW.color,
                         showDivider = battery != null,
-                        trailing = { PillButton("Ring", prominent = false, onClick = { vm.ringPc(deviceId) }) },
+                        trailing = { PillButton("Ring", prominent = false, onClick = { vm.ringPc(deviceId); status.show("Ringing the PC", icon = Icons.Rounded.NotificationsActive) }) },
                     )
                 }
                 battery?.let { b ->
@@ -138,6 +123,23 @@ fun DeviceScreen(
                         subtitle = if (b.charging) "Charging" else if (b.low) "Low" else "On battery",
                         icon = if (b.charging) Icons.Rounded.BatteryChargingFull else Icons.Rounded.BatteryStd,
                         iconTint = if (b.low) SystemColor.RED.color else SystemColor.GREEN.color,
+                    )
+                }
+            }
+        }
+
+        // Commands are run from Home; here they're one row (a wall of shell lines led the page before).
+        if (live) {
+            item(key = "commands") {
+                SectionCard(Modifier.animateItem()) {
+                    ListRow(
+                        title = "Commands",
+                        subtitle = if (commands.isEmpty()) "Shutdown, sleep, scripts: set up on the PC" else "Run or edit what the PC offers",
+                        subtitleMaxLines = 1,
+                        icon = Icons.Rounded.Terminal,
+                        iconTint = SystemColor.GRAY.color,
+                        trailing = { RowChevron(commands.size.takeIf { it > 0 }?.toString()) },
+                        onClick = { if (commands.isEmpty()) vm.openCommandSetup(deviceId) else showCommands = true },
                     )
                 }
             }
@@ -176,6 +178,7 @@ fun DeviceScreen(
         }
     }
 
+    if (showCommands) CommandsSheet(vm, deviceId) { showCommands = false }
     if (confirmUnpair) {
         GlassDialog(
             onDismissRequest = { confirmUnpair = false },
@@ -192,5 +195,3 @@ fun DeviceScreen(
         )
     }
 }
-
-private fun toast(context: android.content.Context, text: String) = Toast.makeText(context, text, Toast.LENGTH_SHORT).show()

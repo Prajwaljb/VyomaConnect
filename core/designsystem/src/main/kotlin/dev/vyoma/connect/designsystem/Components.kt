@@ -470,13 +470,16 @@ fun ListRow(
     subtitleStyle: TextStyle? = null,
     /** The row's one haptic: a plain tap, or e.g. Select when it picks one of several. */
     haptic: Haptic? = Haptic.Tap,
+    /** False: shown quiet (40%) and untappable, e.g. an action that needs the PC while it's away. */
+    enabled: Boolean = true,
     onClick: (() -> Unit)? = null,
 ) {
     Column(modifier) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .then(if (onClick != null) Modifier.pressable(haptic = haptic, onClick = onClick) else Modifier)
+                .then(if (!enabled) Modifier.graphicsLayer { alpha = 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha } else Modifier)
+                .then(if (onClick != null && enabled) Modifier.pressable(haptic = haptic, onClick = onClick) else Modifier)
                 .padding(horizontal = horizontalPadding, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

@@ -30,7 +30,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ContentPaste
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.TouchApp
@@ -84,7 +84,7 @@ import kotlinx.coroutines.launch
 
 enum class Tab(val label: String, val icon: ImageVector) {
     HOME("Home", Icons.Rounded.Home),
-    CLIPBOARD("Clipboard", Icons.Rounded.ContentPaste),
+    FILES("Files", Icons.Rounded.Folder),
     SETTINGS("Settings", Icons.Rounded.Settings),
 }
 

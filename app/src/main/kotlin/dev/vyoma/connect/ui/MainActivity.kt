@@ -37,6 +37,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
+import dev.vyoma.connect.designsystem.StatusHost
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import dev.vyoma.connect.BuildConfig
@@ -55,8 +56,9 @@ import kotlinx.coroutines.launch
 private const val PAGE_SWIPE_MS = 420
 
 sealed interface Screen {
-    /** The tabs (Home, Clipboard, Settings) under the floating bar. */
+    /** The tabs (Home, Files, Settings) under the floating bar. */
     data object Home : Screen
+    data object Clipboard : Screen
     data class DeviceDetail(val id: String) : Screen
     data class Touchpad(val deviceId: String?, val keyboard: Boolean) : Screen
     data class Files(val pcId: String) : Screen
@@ -68,6 +70,7 @@ private val Screen.depth get() = when (this) {
     is Screen.DeviceDetail -> 1
     is Screen.Touchpad -> 2
     is Screen.Files -> 2
+    Screen.Clipboard -> 1
 }
 
 class MainActivity : ComponentActivity() {
@@ -93,7 +96,7 @@ class MainActivity : ComponentActivity() {
                     enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
                 }
                 val onboarding by vm.showOnboarding.collectAsStateWithLifecycle()
-                Crossfade(onboarding, animationSpec = VyomaMotion.effects(), label = "onboarding") { show ->
+                StatusHost { Crossfade(onboarding, animationSpec = VyomaMotion.effects(), label = "onboarding") { show ->
                     when (show) {
                         true -> OnboardingScreen(vm, onDone = { vm.finishOnboarding() })
                         false -> {
@@ -103,7 +106,7 @@ class MainActivity : ComponentActivity() {
                         // Still reading settings: just the themed background, no flash of Home.
                         null -> Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
                     }
-                }
+                } }
             }
         }
     }
@@ -130,7 +133,8 @@ class MainActivity : ComponentActivity() {
         intent ?: return
         if (intent.getStringExtra(EXTRA_SCREEN) == SCREEN_CLIPBOARD) {
             backStack.retainAll { it == Screen.Home }
-            tab.value = Tab.CLIPBOARD
+            tab.value = Tab.FILES
+            backStack.add(Screen.Clipboard)
             return
         }
         val target = when (intent.getStringExtra(EXTRA_SCREEN)) {
@@ -181,7 +185,8 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
             Screen.Home -> tab.name.lowercase().replaceFirstChar(Char::uppercase)
             is Screen.DeviceDetail -> "Device"
             is Screen.Touchpad -> if (current.keyboard) "Keyboard" else "Touchpad"
-            is Screen.Files -> "Files"
+            is Screen.Files -> "PC files"
+            Screen.Clipboard -> "Clipboard"
         }
     }
     val nav = remember { SeekableTransitionState<Screen>(current) }
@@ -252,16 +257,22 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                             vm = vm,
                             onOpenDevice = { backStack.add(Screen.DeviceDetail(it)) },
                             onKeyboard = { id -> backStack.add(Screen.Touchpad(id, keyboard = true)) },
-                            onClipboard = { toTab(Tab.CLIPBOARD) },
+                            onClipboard = { backStack.add(Screen.Clipboard) },
                             onBrowseFiles = { id -> backStack.add(Screen.Files(id)) },
+                            onFiles = { toTab(Tab.FILES) },
                         )
-                        Tab.CLIPBOARD -> ClipboardScreen(vm)
+                        Tab.FILES -> FilesHubScreen(
+                            vm = vm,
+                            onBrowse = { id -> backStack.add(Screen.Files(id)) },
+                            onClipboard = { backStack.add(Screen.Clipboard) },
+                        )
                         Tab.SETTINGS -> SettingsScreen(vm)
                     }
                 }
                 is Screen.DeviceDetail -> DeviceScreen(vm, screen.id, onBack = pop)
                 is Screen.Touchpad -> RemoteInputScreen(vm, screen.deviceId, screen.keyboard, onBack = pop)
                 is Screen.Files -> FilesScreen(vm, screen.pcId, onBack = pop)
+                Screen.Clipboard -> ClipboardScreen(vm, onBack = pop)
             }
         } }
     }
