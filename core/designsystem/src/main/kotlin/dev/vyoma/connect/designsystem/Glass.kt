@@ -268,7 +268,7 @@ half4 main(float2 xy) {
     // Which way this bit of edge faces, as on a squircle: lit facing the light, and the far side.
     float2 n = normalize(p / max(c, float2(1.0)) + 1e-4);
     float f = dot(n, light);
-    float k = max(f, 0.0) + opposite * max(-f, 0.0);
+    float k = pow(max(f, 0.0), 1.3) + opposite * pow(max(-f, 0.0), 1.3);
     float a = float(color.a) * band * k;
     return half4(color.rgb * half(a), half(a));
 }
@@ -287,10 +287,10 @@ internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float =
         center.x, center.y,
         // Like Apple's glass: a broad, soft highlight facing the light and a nearly as bright one
         // opposite (the light passing through and catching the far edge), each fading over about
-        // a quarter of the way round, dark between.
-        intArrayOf(at(0.4f * o), at(o), at(0.4f * o), b, at(0.4f), lit.toArgb(), at(0.4f), b, at(0.4f * o)),
+        // a little under a quarter of the way round, dark between.
+        intArrayOf(at(0.4f * o), at(o), at(0.4f * o), b, b, at(0.4f), lit.toArgb(), at(0.4f), b, b, at(0.4f * o)),
         // Laid out with the light at 0.625 of the sweep (225°), then turned to where it is now.
-        floatArrayOf(0f, 0.125f, 0.25f, 0.375f, 0.5f, 0.625f, 0.75f, 0.875f, 1f),
+        floatArrayOf(0f, 0.125f, 0.236f, 0.347f, 0.403f, 0.514f, 0.625f, 0.736f, 0.847f, 0.903f, 1f),
     )
     shader.setLocalMatrix(android.graphics.Matrix().apply { setRotate(light - RIM_LAYOUT_DEG, center.x, center.y) })
     return ShaderBrush(shader)
@@ -325,7 +325,7 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
             val a = Math.toRadians(light.toDouble())
             val at = Offset(width / 2 + cos(a).toFloat() * width / 2, height / 2 + sin(a).toFloat() * height / 2)
             // Spread wide, so it washes softly into the card rather than sitting as a spot.
-            drawOutline(outline, Brush.radialGradient(listOf(d.glow.compositeOver(fill), fill), at, minOf(width, height) * 1.6f))
+            drawOutline(outline, Brush.radialGradient(listOf(d.glow.compositeOver(fill), fill), at, minOf(width, height) * 1.4f))
         } else {
             drawOutline(outline, fill)
         }
@@ -900,7 +900,7 @@ half4 main(float2 p) {
     float rim = 1.0 - smoothstep(0.0, 1.8, -d);
     float facing = abs(dot(n, light));
     // Linear in how squarely the edge faces it: a broad highlight, not a glint.
-    float light = rim * (0.25 + 0.75 * facing) + t * t * t * 0.12;
+    float light = rim * (0.25 + 0.75 * pow(facing, 1.3)) + t * t * t * 0.12;
     col.rgb += half3(light * spec) * col.a;
     // On light backgrounds a highlight alone vanishes: a faint shaded underside gives the edge.
     col.rgb -= half3(rim * shade * (0.4 + 0.6 * max(n.y, 0.0))) * col.a;
