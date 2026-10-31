@@ -184,7 +184,7 @@ private val DarkDepth = GlassDepth(
     rimLit = Color.White.copy(alpha = 0.42f), rimBase = Color.White.copy(alpha = 0.06f),
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
     glow = Color.White.copy(alpha = 0.05f),
-    band = Color.White.copy(alpha = 0.32f),
+    band = Color.White.copy(alpha = 0.42f),
 )
 private val LightDepth = GlassDepth(
     fill = Color.White.copy(alpha = 0.72f),
@@ -263,13 +263,13 @@ half4 main(float2 xy) {
     float2 q = abs(p) - c + radius;
     float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
     float t = clamp(1.0 + d / width, 0.0, 1.0);
-    // Eases in from nothing, so the band has no inner edge to see, and climbs slowly towards the edge.
-    float band = pow(t, 2.2);
+    // Eases in from nothing, so the band has no inner edge to see.
+    float band = t * t * t;
     // Which way this bit of edge faces, as on a squircle: lit facing the light, and the far side.
     float2 n = normalize(p / max(c, float2(1.0)) + 1e-4);
     float f = dot(n, light);
-    // Broad, unlike the rim line: Apple's inner light spreads well along the edge.
-    float k = max(f, 0.0) + opposite * max(-f, 0.0);
+    // Spreads along the edge but gathers towards where it faces the light, so the lit corners stand out.
+    float k = pow(max(f, 0.0), 1.6) + opposite * pow(max(-f, 0.0), 1.6);
     float a = float(color.a) * band * k;
     return half4(color.rgb * half(a), half(a));
 }
@@ -304,7 +304,7 @@ internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float =
 private class GlassPainter(private val d: GlassDepth, private val flat: Color?, private val lit: Boolean, density: Float) {
     private val drop = d.shadowDrop * density
     private val stroke = 1f * density
-    private val band = 11f * density
+    private val band = 8f * density
     private val glow = InnerGlow()
     private val shadowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         color = d.shadow.toArgb()
@@ -380,8 +380,8 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
             val stroke = Stroke(0.9.dp.toPx())
             val center = Offset(size.width / 2, size.height / 2)
             val glow = InnerGlow()
-            val band = Color.White.copy(alpha = if (base != null) 0.34f else if (dark) 0.26f else 0.6f)
-            val bandWidth = (size.minDimension * 0.16f).coerceAtMost(6.dp.toPx())
+            val band = Color.White.copy(alpha = if (base != null) 0.42f else if (dark) 0.34f else 0.6f)
+            val bandWidth = (size.minDimension * 0.12f).coerceAtMost(4.dp.toPx())
             onDrawBehind {
                 drawOutline(outline, fill)
                 // The light's angle is read here only, so tilting redraws the edge and nothing else.
@@ -522,7 +522,7 @@ fun Modifier.glassChrome(
     val liteFill = fill.copy(alpha = maxOf(fill.alpha, if (tint == null) 0.92f else 0.6f))
     // The rim's inner band of light (see InnerGlow).
     val glow = remember { InnerGlow() }
-    val band = Color.White.copy(alpha = if (isDarkUi) 0.42f else 0.6f)
+    val band = Color.White.copy(alpha = if (isDarkUi) 0.52f else 0.6f)
     val edgeBrush = Glass.edge
     val dark = isDarkUi
     val lens = remember(bevel) { if (bevel > 0.dp && liquidGlassSupported) LiquidGlass() else null }
@@ -548,7 +548,7 @@ fun Modifier.glassChrome(
             // An empty slot (an actions row with nothing in it) draws nothing.
             if (size.width < 1f || size.height < 1f) return@drawBehind
             // Read while drawing, so switching it redraws every element in place.
-            val bandWidth = (size.minDimension * 0.14f).coerceAtMost(6.dp.toPx())
+            val bandWidth = (size.minDimension * 0.1f).coerceAtMost(4.dp.toPx())
             if (GlassQuality.lite) {
                 val outline = shape.createOutline(size, layoutDirection, this)
                 drawOutline(outline, liteFill)
