@@ -112,6 +112,7 @@ fun HomeScreen(
     onClipboard: () -> Unit,
     onBrowseFiles: (String) -> Unit,
     onFiles: () -> Unit = {},
+    onCaptures: () -> Unit = {},
 ) {
     val allDevices by vm.devices.collectAsStateWithLifecycle()
     // Companions are part of their PC, never a separate computer.
@@ -136,6 +137,7 @@ fun HomeScreen(
     val companionPlugin = remember(companionOnline, primary?.identity?.deviceId, allDevices) { primary?.let { vm.companionOf(it.identity.deviceId) } }
     val shot by (companionPlugin?.screenshot?.state ?: remember { MutableStateFlow(CaptureState.Idle) }).collectAsStateWithLifecycle()
     val photo by (companionPlugin?.photo?.state ?: remember { MutableStateFlow(CaptureState.Idle) }).collectAsStateWithLifecycle()
+    RefreshCaptures((shot as? CaptureState.Done)?.at to (photo as? CaptureState.Done)?.at)
     val seen = remember(primary?.identity?.deviceId, live) { primary?.takeIf { !live }?.let { LastSeen.of(context, it.identity.deviceId) } }
 
     CollapsingHeaderScaffold(
@@ -227,8 +229,8 @@ fun HomeScreen(
                 item(key = "captures-label") { SectionLabel("Captures", Modifier.animateItem()) }
                 item(key = "captures") {
                     CapturesStrip(
-                        refresh = (shot as? CaptureState.Done)?.at to (photo as? CaptureState.Done)?.at,
                         onTake = companionPlugin?.let { c -> { vm.capture(c.screenshot) } },
+                        onSeeAll = onCaptures,
                         modifier = Modifier.animateItem(),
                     )
                 }

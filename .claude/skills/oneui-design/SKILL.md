@@ -25,7 +25,9 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   shape"). Menus: Send files (files / photos / clipboard), Screen (watch / screenshot), Send clip (send / history),
   Commands (the commands themselves).
 - Pages earn their scroll with real content, never empty space (user: "make that content, make it impressive").
-  Home after the tiles: "Run on PC" command capsules and "Captures" (Pictures/Vyoma thumbnails, `CapturesStrip`).
+  Home after the tiles: "Run on PC" command capsules and "Captures" (newest 5 Pictures/Vyoma thumbnails + "See all"
+  to the Captures page; `CaptureStore` loads them when Home opens, and the strip holds its height while loading: loaded
+  lazily, the list ended short and then jumped).
   Files: Send (three big tiles: Files / Photos / Clipboard), On the PC (Desktop, Documents, Downloads, Pictures, Music,
   Videos tiles + Browse everything), Captures, Transfers, Clipboard.
 - (Old) Dashboard actions: Apple Shortcuts-widget tiles, 4 across in one card, concentric corners (18 dp tile + 10 dp pad), white
