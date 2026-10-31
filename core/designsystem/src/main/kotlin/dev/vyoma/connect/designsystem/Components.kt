@@ -338,12 +338,11 @@ fun CollapsingHeaderScaffold(
         // Under the status bar, content blurs and fades away (iOS 26's soft edge) so the clock never
         // sits on raw cards; it reaches through the bar row and fades out below it (the user asked
         // for it longer and stronger than the first 12 dp).
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(with(density) { statusTop.toDp() } + 40.dp)
-                .scrollEdge(backdrop) { !listState.atTop() },
-        )
+        // Progressive: a light blur reaches 48 dp below the status bar, a heavy one thickens it under
+        // the icons themselves (the user asked for it stronger again).
+        val statusDp = with(density) { statusTop.toDp() }
+        Box(Modifier.fillMaxWidth().height(statusDp + 48.dp).scrollEdge(backdrop, blur = 14.dp, tint = 0.4f) { !listState.atTop() })
+        Box(Modifier.fillMaxWidth().height(statusDp + 18.dp).scrollEdge(backdrop, blur = 32.dp, tint = 0.35f) { !listState.atTop() })
         Box(Modifier.fillMaxWidth()) {
             // No shade behind the bar: the user wants the glass bubbles to show what passes under them
             // (a dark scroll-edge fade hid the refraction; removed 2026-10-31).

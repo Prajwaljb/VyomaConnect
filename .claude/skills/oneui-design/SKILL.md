@@ -33,7 +33,11 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   Files: Send (three big tiles: Files / Photos / Clipboard), On the PC (Desktop, Documents, Downloads, Pictures, Music,
   Videos: clear 16 dp glass tiles with a BARE coloured glyph, no badge inside, + Browse everything), Captures, Transfers, Clipboard.
 - (Old) Dashboard actions: Apple Shortcuts-widget tiles, 4 across in one card, concentric corners (18 dp tile + 10 dp pad), white
-  ink (dark on yellow-bright tones; tones of luminance 0.2–0.5 darkened 22% for 4.5:1). Now: 16 dp tiles + 12 dp pad, labels 11 sp SemiBold (as the other small labels), 9 dp even
+  ink (dark on yellow-bright tones; tones of luminance 0.2–0.5 darkened 22% for 4.5:1). Now (2026-11-01, user chose it over "card with more air"): tiles FLOAT on the canvas like Control Center, no
+  enclosing card, 16 dp gaps (a card with 8 dp gaps stacked nine lit outlines: "congested"); toggles off get their own
+  body (white 0.14 dark / 0.55 light). Home groups by spacing only, no labels: +8 dp above the volume card and above
+  the tiles; Captures on Home is one compact row (newest thumb, count, chevron; Files keeps the strip). 16 dp radius
+  tiles, labels 11 sp SemiBold (as the other small labels), 9 dp even
   side padding so "Commands" fits at full size (measure label heights: auto-shrink read as uneven). Corner capsules
   (volume output picker) sit an even 10 dp from top and side. Toggle tiles keep
   fill AND name when on ("Locked", "Muted"): the user wants the state in words (a judge suggested constant labels; rejected).
@@ -119,7 +123,8 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   POPS (swells 18%, 140 ms). A fixed 220 ms fade at a collapse threshold lagged fast flings (empty bubble behind the
   text). Forming and bursting each play `Haptic.Bubble`; a list flung into either end ticks (`Detent`). The hero fades by 75%.
   Under the status bar: `scrollEdge(backdrop)` (iOS 26 soft edge), only while scrolled: blurs what passes under
-  (16 dp) with a thin canvas tint (0.55, lite 0.9), masked to fade out 40 dp below the icons (the user loved it and
+  (progressive: a 14 dp blur / 0.4 tint reaching 48 dp below the bar plus a 32 dp blur / 0.35 tint over the top 18 dp;
+  lite 0.9 tint), masked to fade out (the user loved it and
   asked for it longer and stronger than the first 10 dp blur / 12 dp reach). The user found raw
   cards under the clock "not nice"; a dark shade stays rejected.
   The hero title's centre sits at a fixed 63% of the hero (56% put the PC glyph up against the status bar) on every page (custom Layout, displayMedium everywhere):
@@ -259,7 +264,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   height first (critically damped 340) and width after (220), no bounce; the glass is fully transparent by 35%
   drained and the menu ends there (draining all the way, it sat over the button as an opaque blurred blob and then
   vanished: the user called it glitchy). Touches pass through the moment it starts closing. The pressed element
-  stays undimmed (scrim has a hole). Pickers (PC output on the volume card, media player) use the same menu
+  stays undimmed (scrim has a hole). Tiles MORPH instead (`MenuMorph(owner, color, face)`): the tile hides
+  (`covers(owner)`), the drop starts as an exact copy (its colour + `TileFace`, held in place) whose colour clears
+  into glass over the first half of forming, corners 16 -> 24 dp; closing drains fully back, refills the colour,
+  then hands over. The user asked for "the tile's glass itself expanding into the menu". Pickers (PC output on the volume card, media player) use the same menu
   poured from their capsule/button, current item checked; never a dialog. Tiles with a hold menu show a quiet
   "•••" (MoreHoriz, 60% ink) in the chevron's corner; one mark per tile.
 - Things that hit a limit stretch (rubber band, diminishing) instead of stopping dead: see the volume bar.

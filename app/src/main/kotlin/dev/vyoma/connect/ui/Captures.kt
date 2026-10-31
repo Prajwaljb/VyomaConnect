@@ -45,6 +45,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -53,6 +54,7 @@ import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.CollapsingHeaderScaffold
 import dev.vyoma.connect.designsystem.LocalStatus
 import dev.vyoma.connect.designsystem.PillButton
+import dev.vyoma.connect.designsystem.RowChevron
 import dev.vyoma.connect.designsystem.StatusController
 import dev.vyoma.connect.designsystem.fadingHorizontalScroll
 import dev.vyoma.connect.designsystem.glassCard
@@ -179,6 +181,55 @@ fun CapturesStrip(onTake: (() -> Unit)?, onSeeAll: () -> Unit, modifier: Modifie
                     Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                 }
             }
+        }
+    }
+}
+
+/**
+ * Home's compact entry to the captures: the newest thumbnail, a count and a chevron in one row
+ * (the strip of five on Home added to its congestion; Files keeps the strip). Empty, it says what
+ * lands here and offers [onTake].
+ */
+@Composable
+fun CapturesRow(onTake: (() -> Unit)?, onOpen: () -> Unit, modifier: Modifier = Modifier) {
+    val recent by CaptureStore.recent.collectAsStateWithLifecycle()
+    val r = recent
+    val any = r != null && r.total > 0
+    Row(
+        modifier
+            .fillMaxWidth()
+            .then(if (any) Modifier.pressable(onClick = onOpen) else Modifier)
+            .glassCard(MaterialTheme.shapes.large)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val thumb = r?.items?.firstOrNull()?.thumb
+        Box(
+            Modifier.size(56.dp, 40.dp).clip(RoundedCornerShape(10.dp)).glassRaised(RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (thumb != null) Image(thumb, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            else Icon(Icons.Rounded.Screenshot, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Captures", style = MaterialTheme.typography.titleSmall)
+            Text(
+                when {
+                    r == null -> " "
+                    r.total == 0 -> "None from the PC yet"
+                    r.total == 1 -> "1 from your PC"
+                    else -> "${r.total} from your PC"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        when {
+            any -> RowChevron()
+            onTake != null && r != null -> PillButton("Take one", prominent = false, onClick = onTake)
         }
     }
 }

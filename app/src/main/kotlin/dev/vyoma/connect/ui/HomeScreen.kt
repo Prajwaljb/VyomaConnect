@@ -209,13 +209,15 @@ fun HomeScreen(
                     )
                 }
             }
+            // Spacing groups Home (no labels): what the PC is doing, then what you control.
             if (live) item(key = "volume") {
-                Staggered(2, Modifier.animateItem()) {
+                Staggered(2, Modifier.animateItem().padding(top = 8.dp)) {
                     PcDashboard(vm, primary, DashboardSection.VOLUME, { onKeyboard(id) }, onClipboard)
                 }
             }
             item(key = "controls") {
-                Staggered(2, Modifier.animateItem()) {
+                // Free-floating tiles need air from the card above them.
+                Staggered(2, Modifier.animateItem().padding(top = 8.dp)) {
                     PcDashboard(vm, primary, DashboardSection.CONTROLS, { onKeyboard(id) }, onClipboard, onBrowseFiles = { onBrowseFiles(id) }, onFiles = onFiles)
                 }
             }
@@ -225,13 +227,12 @@ fun HomeScreen(
                     item(key = "run-label") { SectionLabel("Run on PC", Modifier.animateItem()) }
                     item(key = "run") { CommandChips(commands, Modifier.animateItem()) { cmd -> vm.runCommand(id, cmd.key); status.show("Running ${cmd.name}", icon = Icons.Rounded.Terminal) } }
                 }
-                // What the PC's screen and camera sent, newest first.
-                item(key = "captures-label") { SectionLabel("Captures", Modifier.animateItem()) }
+                // What the PC's screen and camera sent: one compact row (the full strip is in Files).
                 item(key = "captures") {
-                    CapturesStrip(
+                    CapturesRow(
                         onTake = companionPlugin?.let { c -> { vm.capture(c.screenshot) } },
-                        onSeeAll = onCaptures,
-                        modifier = Modifier.animateItem(),
+                        onOpen = onCaptures,
+                        modifier = Modifier.animateItem().padding(top = 8.dp),
                     )
                 }
             }
