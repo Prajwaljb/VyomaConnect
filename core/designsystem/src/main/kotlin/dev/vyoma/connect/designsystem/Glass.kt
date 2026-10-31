@@ -183,7 +183,7 @@ private val DarkDepth = GlassDepth(
     // Bright, like Apple's: on true black the lit edge is what makes it glass.
     rimLit = Color.White.copy(alpha = 0.42f), rimBase = Color.White.copy(alpha = 0.06f),
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
-    glow = Color.White.copy(alpha = 0.05f),
+    glow = Color.White.copy(alpha = 0.085f),
     band = Color.White.copy(alpha = 0.2f),
 )
 private val LightDepth = GlassDepth(
