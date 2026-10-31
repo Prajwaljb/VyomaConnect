@@ -45,8 +45,10 @@
         tools:targetApi="37">
         <profileable android:shell="true" tools:targetApi="29" />
 
+        <!-- Portrait only: a phone remote has no use for landscape; the PC screen viewer is the exception. -->
         <activity
             android:name=".ui.MainActivity"
+            android:screenOrientation="portrait"
             android:exported="true"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
@@ -92,6 +94,7 @@
 
         <activity
             android:name=".ui.FindMyPhoneActivity"
+            android:screenOrientation="portrait"
             android:exported="false"
             android:excludeFromRecents="true"
             android:launchMode="singleInstance"
@@ -145,6 +148,7 @@
         </receiver>
         <activity
             android:name=".ui.QuickActionsSettingsActivity"
+            android:screenOrientation="portrait"
             android:exported="true"
             android:excludeFromRecents="true"
             android:taskAffinity=""

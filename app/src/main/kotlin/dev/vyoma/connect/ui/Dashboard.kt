@@ -723,8 +723,9 @@ private fun PcStatus(battery: BatteryState?, stale: Boolean, stats: PcStats?, sh
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Meter("CPU", stats?.let { "${it.cpu.roundToInt()}" }, "%", cpu, loadColor(cpu), Modifier.weight(1f))
+                // "RAM", short enough beside a wide reading like 14.6G ("Memory" wrapped there).
                 Meter(
-                    "Memory", stats?.takeIf { it.memTotal > 0 }?.let { "%.1f".format(it.memUsed / 1e9) }, "G",
+                    "RAM", stats?.takeIf { it.memTotal > 0 }?.let { "%.1f".format(it.memUsed / 1e9) }, "G",
                     memFraction, loadColor(memFraction), Modifier.weight(1f),
                 )
             }
@@ -800,7 +801,7 @@ private fun Meter(label: String, value: String?, unit: String, fraction: Float, 
     val level = rememberGlide(fraction)
     Column(modifier) {
         Row(verticalAlignment = Alignment.Bottom) {
-            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             Reading(value, unit, MaterialTheme.typography.titleSmall)
         }
         Spacer(Modifier.height(6.dp))
