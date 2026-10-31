@@ -268,7 +268,8 @@ half4 main(float2 xy) {
     // Which way this bit of edge faces, as on a squircle: lit facing the light, and the far side.
     float2 n = normalize(p / max(c, float2(1.0)) + 1e-4);
     float f = dot(n, light);
-    float k = pow(max(f, 0.0), 1.3) + opposite * pow(max(-f, 0.0), 1.3);
+    // Broad, unlike the rim line: Apple's inner light spreads well along the edge.
+    float k = max(f, 0.0) + opposite * max(-f, 0.0);
     float a = float(color.a) * band * k;
     return half4(color.rgb * half(a), half(a));
 }
@@ -325,7 +326,7 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
             val a = Math.toRadians(light.toDouble())
             val at = Offset(width / 2 + cos(a).toFloat() * width / 2, height / 2 + sin(a).toFloat() * height / 2)
             // Spread wide, so it washes softly into the card rather than sitting as a spot.
-            drawOutline(outline, Brush.radialGradient(listOf(d.glow.compositeOver(fill), fill), at, minOf(width, height) * 1.4f))
+            drawOutline(outline, Brush.radialGradient(listOf(d.glow.compositeOver(fill), fill), at, minOf(width, height) * 1.6f))
         } else {
             drawOutline(outline, fill)
         }
