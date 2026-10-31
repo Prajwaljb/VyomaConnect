@@ -37,6 +37,12 @@ import dev.vyoma.connect.designsystem.SectionCard
 import dev.vyoma.connect.designsystem.SectionLabel
 import dev.vyoma.connect.designsystem.pressable
 import android.widget.Toast
+import dev.vyoma.connect.designsystem.GlassDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.material.icons.rounded.Sync
 
 /** Shared clipboard: what's on it now, recent history from both sides, and how sync is running. */
@@ -45,12 +51,15 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
     val history by vm.clipHistory.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val background = vm.backgroundClipboardSync()
+    var setup by rememberSaveable { mutableStateOf(false) }
+    var clearing by rememberSaveable { mutableStateOf(false) }
 
     CollapsingHeaderScaffold(
         title = "Clipboard",
         subtitle = if (background) "Syncing automatically" else "Syncs while Vyoma is open",
         navigation = onBack?.let { back -> { BounceIconButton(onClick = back) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } } },
-        actions = { if (history.isNotEmpty()) BounceIconButton(onClick = vm::clearClipHistory) { Icon(Icons.Rounded.DeleteSweep, "Clear history") } },
+        // Clearing can't be undone, so it asks first.
+        actions = { if (history.isNotEmpty()) BounceIconButton(onClick = { clearing = true }) { Icon(Icons.Rounded.DeleteSweep, "Clear history") } },
     ) {
         item(key = "send") {
             SectionCard(contentPadding = PaddingValues(16.dp)) {
@@ -66,16 +75,28 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
         if (!background) {
             item(key = "bg") {
                 SectionCard {
+                    // Opens the setup right here (it used to point at a Settings section by a wrong name).
                     ListRow(
-                        title = "Turn on automatic sync",
-                        subtitle = "Android blocks background clipboard reading. A one-time ADB grant lifts that, no root needed. See Settings → Clipboard.",
+                        title = "Sync when closed",
+                        subtitle = "Android only lets the open app read the clipboard. A one-time grant from your PC lifts that, no root.",
                         icon = Icons.Rounded.Sync,
                         iconTint = SystemColor.ORANGE.color,
+                        trailing = { PillButton("Set up", onClick = { setup = true }, prominent = false) },
+                        onClick = { setup = true },
                     )
                 }
             }
         }
         if (history.isNotEmpty()) item(key = "label") { SectionLabel("Recent") }
+        else item(key = "empty") {
+            Text(
+                "Nothing yet. What you copy on this phone or your PC shows up here; tap one to copy it again.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 32.dp),
+            )
+        }
         items(history, key = { it.timestamp.toString() + it.text.hashCode() }) { clip ->
             Box(
                 Modifier.fillMaxWidth().animateItem().pressable(pressedScale = 0.98f) {
@@ -101,5 +122,15 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                 }
             }
         }
+    }
+    if (setup) ClipboardAdbDialog { setup = false }
+    if (clearing) {
+        GlassDialog(
+            onDismissRequest = { clearing = false },
+            title = { Text("Clear clipboard history?") },
+            text = { Text("Removes the list on this phone. What's copied right now stays.") },
+            confirmButton = { TextButton(onClick = { vm.clearClipHistory(); clearing = false }) { Text("Clear") } },
+            dismissButton = { TextButton(onClick = { clearing = false }) { Text("Cancel") } },
+        )
     }
 }

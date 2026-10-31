@@ -223,7 +223,7 @@ fun HomeScreen(
         }
 
         if (connected.isEmpty() && pairing.isEmpty() && available.isEmpty()) {
-            item(key = "searching") { SearchingCard(Modifier.animateItem()) }
+            item(key = "searching") { SearchingCard(vm, Modifier.animateItem()) }
         }
     }
 }
@@ -261,9 +261,14 @@ internal fun PairingCard(state: DeviceState, onAccept: () -> Unit, onReject: () 
     }
 }
 
-/** Radar sweep while nothing is around, with the two tips that solve 90% of "not found". */
+/**
+ * Radar sweep while nothing is around, with the two tips that solve 90% of "not found", and the
+ * two ways round discovery right there (an address, the cable) instead of a dead end.
+ */
 @Composable
-internal fun SearchingCard(modifier: Modifier = Modifier) {
+internal fun SearchingCard(vm: AppViewModel, modifier: Modifier = Modifier) {
+    var adding by rememberSaveable { mutableStateOf(false) }
+    var usb by rememberSaveable { mutableStateOf(false) }
     val color = MaterialTheme.colorScheme.primary
     val t = rememberInfiniteTransition(label = "radar")
     val wave by t.animateFloat(0f, 1f, infiniteRepeatable(tween(2400, easing = LinearEasing), RepeatMode.Restart), label = "wave")
@@ -286,7 +291,14 @@ internal fun SearchingCard(modifier: Modifier = Modifier) {
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
+        Spacer(Modifier.height(16.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
+            PillButton("Enter address", onClick = { adding = true }, prominent = false)
+            PillButton("Use USB", onClick = { usb = true }, prominent = false)
+        }
     }
+    if (adding) AddHostDialog(vm) { adding = false }
+    if (usb) UsbHelpDialog { usb = false }
 }
 
 fun DeviceType.icon(): ImageVector = when (this) {
