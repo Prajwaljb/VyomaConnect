@@ -154,7 +154,7 @@ desktop/companion/     Rust daemon (Phase 2)
 - ColorOS / iOS-style polish: frosted surfaces (RenderEffect blur on Android 12+),
   fluid springs, morphing shapes, a live "connection orb" on the device card.
 - Themes: **wallpaper dynamic color** (default) or curated fixed palettes
-  (Graphite, Ocean, Ember, Mint, Sand) plus **AMOLED black**. No purple default.
+  (Graphite, Ocean, Ember, Mint, Sand) ; dark mode is **AMOLED true black**. No purple default.
 - Haptics are tied to motion (`performHapticFeedback` + Vibrator primitives).
 
 ## 7. Security

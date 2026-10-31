@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.shape.RoundedCornerShape
+import dev.vyoma.connect.designsystem.GlassQuality
 import dev.vyoma.connect.designsystem.specularEdge
 import dev.vyoma.connect.designsystem.toned
 import dev.vyoma.connect.designsystem.glassRaised
@@ -724,7 +725,8 @@ private fun Gauge(label: String, value: String?, fraction: Float, color: SystemC
     val gauge = remember { mutableFloatStateOf(step) }
     LaunchedEffect(step) {
         val from = gauge.floatValue
-        if (abs(step - from) < 0.03f) {
+        // Lighter glass: every frame of a glide costs too much on this phone, so it jumps too.
+        if (abs(step - from) < 0.03f || GlassQuality.lite) {
             gauge.floatValue = step
             return@LaunchedEffect
         }

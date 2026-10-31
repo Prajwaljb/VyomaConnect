@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.data.LiteGlass
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.OutgoingFile
 import androidx.core.content.edit
@@ -49,6 +50,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     val theme: StateFlow<ThemeSettings> = settings.theme
         .stateIn(viewModelScope, SharingStarted.Eagerly, ThemeSettings())
+    val liteGlass: StateFlow<LiteGlass> = settings.liteGlass
+        .stateIn(viewModelScope, SharingStarted.Eagerly, LiteGlass(on = false, chosen = false, detected = false))
 
     /** Every known device, ordered: connected, pairing, available, offline. */
     val devices: StateFlow<List<DeviceState>> = container.hub.filterNotNull()
@@ -199,7 +202,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setPalette(p: Palette) = viewModelScope.launch { settings.setPalette(p) }
     fun setDarkMode(m: DarkMode) = viewModelScope.launch { settings.setDarkMode(m) }
-    fun setAmoled(enabled: Boolean) = viewModelScope.launch { settings.setAmoled(enabled) }
+    fun setLiteGlass(enabled: Boolean) = viewModelScope.launch { settings.setLiteGlass(enabled) }
 
     fun setDeviceName(name: String) = viewModelScope.launch {
         settings.setDeviceName(name)

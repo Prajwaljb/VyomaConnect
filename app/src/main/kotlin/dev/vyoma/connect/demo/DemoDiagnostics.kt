@@ -169,7 +169,9 @@ object DemoDiagnostics {
         line("Animation scale", Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f).toString())
         line("System dark mode", ((res.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES).toString())
         val theme = container.settings.theme.first()
-        line("App theme", "${theme.darkMode}, palette ${theme.palette}, pure black ${theme.amoled}")
+        line("App theme", "${theme.darkMode}, palette ${theme.palette}")
+        val glass = container.settings.liteGlass.first()
+        line("Glass", if (!glass.on) "full" else "lighter (" + (if (glass.chosen) "chosen" else "auto: frames too slow") + ")")
 
         section("Power")
         line("Battery saver", power.isPowerSaveMode.toString())

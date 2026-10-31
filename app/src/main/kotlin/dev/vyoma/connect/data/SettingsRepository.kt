@@ -20,7 +20,10 @@ class SettingsRepository(private val context: Context) {
     private object Keys {
         val palette = stringPreferencesKey("palette")
         val darkMode = stringPreferencesKey("dark_mode")
-        val amoled = booleanPreferencesKey("amoled")
+        /** The user's own choice of lighter glass; absent means automatic. */
+        val liteGlass = booleanPreferencesKey("lite_glass")
+        /** Set once FrameBudget finds this phone can't keep up with the full glass. */
+        val liteGlassAuto = booleanPreferencesKey("lite_glass_auto")
         val deviceName = stringPreferencesKey("device_name")
         val onboarded = booleanPreferencesKey("onboarded")
         val manualHosts = stringSetPreferencesKey("manual_hosts")
@@ -32,7 +35,6 @@ class SettingsRepository(private val context: Context) {
         ThemeSettings(
             palette = p[Keys.palette]?.let { runCatching { Palette.valueOf(it) }.getOrNull() } ?: Palette.DYNAMIC,
             darkMode = p[Keys.darkMode]?.let { runCatching { DarkMode.valueOf(it) }.getOrNull() } ?: DarkMode.SYSTEM,
-            amoled = p[Keys.amoled] ?: false,
         )
     }.distinctUntilChanged()
 
@@ -41,7 +43,13 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setPalette(palette: Palette) = context.dataStore.edit { it[Keys.palette] = palette.name }
     suspend fun setDarkMode(mode: DarkMode) = context.dataStore.edit { it[Keys.darkMode] = mode.name }
-    suspend fun setAmoled(enabled: Boolean) = context.dataStore.edit { it[Keys.amoled] = enabled }
+
+    /** Lighter glass: the user's choice if they made one, else what FrameBudget found. */
+    val liteGlass: Flow<LiteGlass> = prefs.map { p ->
+        LiteGlass(on = p[Keys.liteGlass] ?: p[Keys.liteGlassAuto] ?: false, chosen = p[Keys.liteGlass] != null, detected = p[Keys.liteGlassAuto] ?: false)
+    }.distinctUntilChanged()
+    suspend fun setLiteGlass(enabled: Boolean) = context.dataStore.edit { it[Keys.liteGlass] = enabled }
+    suspend fun setLiteGlassDetected() = context.dataStore.edit { it[Keys.liteGlassAuto] = true }
     suspend fun setDeviceName(name: String) = context.dataStore.edit { it[Keys.deviceName] = name }
     /** PCs added by address (Tailscale IP, MagicDNS name, another subnet). */
     val manualHosts: Flow<Set<String>> = prefs.map { it[Keys.manualHosts].orEmpty() }.distinctUntilChanged()
@@ -50,3 +58,6 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setOnboarded() = context.dataStore.edit { it[Keys.onboarded] = true }
 }
+
+/** [chosen]: the user set it themselves; [detected]: this phone was found too slow for full glass. */
+data class LiteGlass(val on: Boolean, val chosen: Boolean, val detected: Boolean)

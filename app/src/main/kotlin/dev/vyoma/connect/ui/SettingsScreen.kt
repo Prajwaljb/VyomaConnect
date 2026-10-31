@@ -60,7 +60,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material3.Icon
@@ -73,7 +73,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -145,15 +144,16 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     modifier = Modifier.padding(horizontal = 20.dp),
                 )
                 Spacer(Modifier.height(8.dp))
-                // Only means something in dark mode: shown quieter while the app is forced light.
-                val forcedLight = theme.darkMode == DarkMode.LIGHT
+                val glass by vm.liteGlass.collectAsStateWithLifecycle()
                 ListRow(
-                    modifier = Modifier.alpha(if (forcedLight) 0.45f else 1f),
-                    title = "Pure black",
-                    subtitle = if (forcedLight) "Applies in dark mode" else "True black backgrounds in dark mode, easy on AMOLED",
-                    icon = Icons.Rounded.DarkMode,
+                    title = "Lighter glass",
+                    subtitle = when {
+                        glass.detected && !glass.chosen -> "On by itself: this phone couldn't redraw the full glass in time"
+                        else -> "Frosted bars instead of live blur, for smoother scrolling on slower phones"
+                    },
+                    icon = Icons.Rounded.Speed,
                     iconTint = SystemColor.GRAY.color,
-                    trailing = { VyomaSwitch(checked = theme.amoled, onCheckedChange = { vm.setAmoled(it) }) },
+                    trailing = { VyomaSwitch(checked = glass.on, onCheckedChange = { vm.setLiteGlass(it) }) },
                 )
             }
         }

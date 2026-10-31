@@ -4,6 +4,7 @@ import android.graphics.RuntimeShader
 import android.os.Build
 import androidx.annotation.ChecksSdkIntAtLeast
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.MaterialTheme
@@ -151,11 +152,6 @@ object Glass {
         }
 }
 
-/** Pure-black (AMOLED) mode: the canvas is true black, so glass glows instead of casting shadows. */
-val isAmoledUi: Boolean
-    @Composable @ReadOnlyComposable
-    get() = MaterialTheme.colorScheme.background == Color.Black
-
 /**
  * How a card sits on the canvas, per theme: a sheet of glass, translucent so the page's accent glow
  * shows through (an opaque grey slab read as dull), even in tone, no gradient. Its edge is a faint specular
@@ -178,13 +174,8 @@ class GlassDepth internal constructor(
     val glow: Color = Color.Transparent,
 )
 
+// Dark is true black (AMOLED): glass glows instead of casting shadows.
 private val DarkDepth = GlassDepth(
-    fill = Color.White.copy(alpha = 0.085f),
-    rimLit = Color.White.copy(alpha = 0.2f), rimBase = Color.White.copy(alpha = 0.035f),
-    shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
-    glow = Color.White.copy(alpha = 0.045f),
-)
-private val AmoledDepth = GlassDepth(
     fill = Color.White.copy(alpha = 0.095f),
     rimLit = Color.White.copy(alpha = 0.26f), rimBase = Color.White.copy(alpha = 0.05f),
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
@@ -201,7 +192,6 @@ private val LightDepth = GlassDepth(
 val glassDepth: GlassDepth
     @Composable @ReadOnlyComposable
     get() = when {
-        isAmoledUi -> AmoledDepth
         isDarkUi -> DarkDepth
         else -> LightDepth
     }
@@ -344,27 +334,21 @@ fun Modifier.cardSegment(first: Boolean, last: Boolean, radius: Dp = 26.dp): Mod
 }
 
 /**
- * The app canvas: the theme background with two soft glows of the accent near the top. Pure black
- * keeps true black below the fold; its glow is a little cooler and fades out sooner so the bottom
- * stays ink. Painted once per size and colour into a quarter-resolution bitmap and drawn stretched:
+ * The app canvas: the theme background with, in light mode, two soft glows of the accent near the
+ * top. Dark mode is true black throughout, glow and all, for AMOLED screens. Painted once per size and colour into a quarter-resolution bitmap and drawn stretched:
  * soft gradients survive the upscale untouched, and one textured quad is far cheaper for the GPU
  * than three full-screen gradient fills every frame (again for every glass element replaying it).
  */
 fun Modifier.aurora(): Modifier = composed {
     val base = MaterialTheme.colorScheme.background
     val accent = MaterialTheme.colorScheme.primary
-    val dark = isDarkUi
-    val amoled = base == Color.Black
-    val strength = when {
-        amoled -> 0.16f
-        dark -> 0.24f
-        else -> 0.20f
-    }
+    if (isDarkUi) return@composed background(base)
+    val strength = 0.20f
     drawWithCache {
         val w = (size.width / AURORA_SCALE).roundToInt().coerceAtLeast(1)
         val h = (size.height / AURORA_SCALE).roundToInt().coerceAtLeast(1)
         val small = Size(w.toFloat(), h.toFloat())
-        val r = small.maxDimension * if (amoled) 0.6f else 0.75f
+        val r = small.maxDimension * 0.75f
         val left = Brush.radialGradient(
             listOf(accent.copy(alpha = strength), accent.copy(alpha = strength * 0.35f), Color.Transparent),
             center = Offset(small.width * 0.05f, small.height * 0.02f), radius = r,
@@ -441,6 +425,8 @@ fun Modifier.glassChrome(
     val scope = rememberCoroutineScope()
     var position by remember { mutableStateOf(Offset.Zero) }
     val fill = tint ?: Glass.chrome
+    // Lighter glass: opaque enough that the missing blur isn't missed (content passing under stays a shadow).
+    val liteFill = fill.copy(alpha = maxOf(fill.alpha, if (tint == null) 0.92f else 0.6f))
     val edgeBrush = Glass.edge
     val dark = isDarkUi
     val lens = remember(bevel) { if (bevel > 0.dp && liquidGlassSupported) LiquidGlass() else null }
@@ -465,6 +451,14 @@ fun Modifier.glassChrome(
         .drawBehind {
             // An empty slot (an actions row with nothing in it) draws nothing.
             if (size.width < 1f || size.height < 1f) return@drawBehind
+            // Read while drawing, so switching it redraws every element in place.
+            if (GlassQuality.lite) {
+                val outline = shape.createOutline(size, layoutDirection, this)
+                drawOutline(outline, liteFill)
+                // Without the lens the border modifier below draws the edge already.
+                if (edge && lens != null) drawOutline(outline, edgeBrush, style = Stroke(0.75.dp.toPx()))
+                return@drawBehind
+            }
             val r = blur.toPx()
             val shift = backdrop.origin - position
             if (lens == null) {
@@ -686,6 +680,16 @@ internal class LensPainter(private val graphics: GraphicsContext) {
         graphics.releaseGraphicsLayer(self)
         graphics.releaseGraphicsLayer(drop)
     }
+}
+
+/**
+ * Lighter glass for phones that can't redraw the full kind in time (the app turns it on when frames
+ * keep missing their deadline, see FrameBudget). Every live glass element is its own offscreen pass
+ * re-rendered whenever anything under it changes; lite chrome is a frosted fill with the same edge,
+ * drawn straight onto the page. Changes apply on the next draw.
+ */
+object GlassQuality {
+    var lite by mutableStateOf(false)
 }
 
 /** Liquid glass needs AGSL (Android 13); below that chrome stays frosted and lenses aren't drawn. */

@@ -16,7 +16,9 @@ import dev.vyoma.connect.protocol.crypto.FileCredentialStore
 import dev.vyoma.connect.protocol.crypto.LocalCredentials
 import dev.vyoma.connect.protocol.device.DeviceHub
 import dev.vyoma.connect.protocol.device.FileTrustStore
+import dev.vyoma.connect.designsystem.GlassQuality
 import dev.vyoma.connect.platform.AndroidClipboard
+import dev.vyoma.connect.platform.FrameBudget
 import dev.vyoma.connect.platform.AndroidShareSink
 import dev.vyoma.connect.platform.AndroidContacts
 import dev.vyoma.connect.platform.AndroidSms
@@ -76,6 +78,15 @@ class VyomaApp : Application() {
             DemoDiagnostics.install(this)
         }
         container = AppContainer(this)
+        // Lighter glass: the user's setting, or found here when this phone can't keep up with the full kind.
+        val budget = FrameBudget { container.appScope.launch { container.settings.setLiteGlassDetected() } }
+        budget.install(this)
+        container.appScope.launch(Dispatchers.Main) {
+            container.settings.liteGlass.collect { glass ->
+                GlassQuality.lite = glass.on
+                if (glass.chosen || glass.detected) budget.stop()
+            }
+        }
         // Whether any of our activities is started: background work scales down when it isn't.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             private var started = 0
