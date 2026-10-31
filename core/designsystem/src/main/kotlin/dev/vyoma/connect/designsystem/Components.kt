@@ -131,7 +131,7 @@ fun CollapsingHeaderScaffold(
     listState: LazyListState = rememberLazyListState(),
     /** Applied to the list itself, e.g. [glassListGroup] to draw behind its items. */
     listModifier: Modifier = Modifier,
-    /** The hero's share of the screen: ~30% keeps content in thumb reach; Home takes less so its actions clear the tab bar. */
+    /** The hero's share of the screen: ~30% keeps content in thumb reach. The same on every page (One UI). */
     heroFraction: Float = 0.30f,
     content: LazyListScope.() -> Unit,
 ) {
@@ -167,16 +167,24 @@ fun CollapsingHeaderScaffold(
     // the snap above couldn't close it): room at the end lets any page that scrolls at all close
     // fully. Measured from the real items only, so the room never feeds back into itself.
     var room by remember { mutableIntStateOf(0) }
+    // A page whose content all shows above the tab bar doesn't scroll at all: scrolling only to
+    // collapse the title read as broken ("everything fits, why does it scroll?").
+    var fits by remember { mutableStateOf(false) }
+    val barClearance = with(density) { 24.dp.roundToPx() }
     LaunchedEffect(listState, distance) {
         snapshotFlow {
             val info = listState.layoutInfo
             val last = info.visibleItemsInfo.lastOrNull { it.key != ROOM_KEY } ?: return@snapshotFlow null
             if (listState.firstVisibleItemIndex != 0 || last.index != info.totalItemsCount - 2) return@snapshotFlow null
-            val end = last.offset + last.size + listState.firstVisibleItemScrollOffset + info.afterContentPadding
-            val overflow = end - info.viewportEndOffset
-            if (overflow <= 0) 0 else (distance.roundToInt() - overflow).coerceAtLeast(0)
-        }.collect { if (it != null) room = it }
+            val end = last.offset + last.size + listState.firstVisibleItemScrollOffset
+            // Where the floating tab bar (and the nav bar) begins: the list's end padding less its own gap.
+            val visibleEnd = info.viewportEndOffset - (info.afterContentPadding - barClearance)
+            val overflow = end + info.afterContentPadding - info.viewportEndOffset
+            Pair(end <= visibleEnd, if (overflow <= 0) 0 else (distance.roundToInt() - overflow).coerceAtLeast(0))
+        }.collect { if (it != null) { fits = it.first; room = if (it.first) 0 else it.second } }
     }
+    // Settles back to the top if the content shrank to fit while scrolled.
+    LaunchedEffect(fits) { if (fits && listState.firstVisibleItemScrollOffset > 0) listState.animateScrollToItem(0) }
 
     // The title is one piece of text that travels: it rests in the hero, and as the page scrolls it
     // rises and shrinks into the bar, where a bubble of glass forms around it like water.
@@ -240,6 +248,7 @@ fun CollapsingHeaderScaffold(
         // The backdrop records the canvas too: blurring only the cards would let sharp text show through.
         Box(Modifier.fillMaxSize().backdropSource(backdrop).aurora()) { LazyColumn(
             state = listState,
+            userScrollEnabled = !fits,
             contentPadding = PaddingValues(
                 start = side, end = side,
                 bottom = 24.dp + bottomInset + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
@@ -299,31 +308,11 @@ fun CollapsingHeaderScaffold(
         } }
 
         // The compact bar floats over the list in the same material as the tab bar: back and
-        // actions are liquid-glass buttons, and the title's bubble forms in the middle. Instead of a
-        // hard frosted strip, the status bar area fades softly to the canvas so content slips under it.
-        val edgeColor = MaterialTheme.colorScheme.background
+        // actions are liquid-glass buttons, and the title's bubble forms in the middle. No strip and
+        // no shade: content slides under clear glass.
         Box(Modifier.fillMaxWidth()) {
-            // The scroll edge effect (HIG): nearly opaque down to the bubbles' foot, then it fades out
-            // over 20 dp past them, so content resting under the bar (a card's rim, a line of text)
-            // vanishes behind them instead of reading beside them.
-            Box(
-                Modifier.matchParentSize().layout { m, c ->
-                    val extra = FADE_TAIL.roundToPx()
-                    val p = m.measure(c.copy(minHeight = c.minHeight + extra, maxHeight = c.maxHeight + extra))
-                    layout(p.width, p.height - extra) { p.place(0, 0) }
-                }.drawBehind {
-                    val a = collapse
-                    if (a < 0.01f) return@drawBehind
-                    val foot = (1f - FADE_TAIL.toPx() / size.height).coerceIn(0.5f, 0.95f)
-                    drawRect(
-                        Brush.verticalGradient(
-                            0f to edgeColor.copy(alpha = a),
-                            foot to edgeColor.copy(alpha = 0.94f * a),
-                            1f to Color.Transparent,
-                        ),
-                    )
-                },
-            )
+            // No shade behind the bar: the user wants the glass bubbles to show what passes under them
+            // (a dark scroll-edge fade hid the refraction; removed 2026-10-31).
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -420,7 +409,6 @@ fun CollapsingHeaderScaffold(
 private fun LazyListState.atTop() = firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset == 0
 
 private const val ROOM_KEY = "collapse-room"
-private val FADE_TAIL = 20.dp
 private val BAR_HEIGHT = 64.dp
 /** Every bubble in the bar (back, title, actions) is one height: a smaller title bubble looked like a different part. */
 private val CHROME_SIZE = 48.dp

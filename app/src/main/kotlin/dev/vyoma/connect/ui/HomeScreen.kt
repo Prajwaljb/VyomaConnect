@@ -7,9 +7,6 @@ import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.perform
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import dev.vyoma.connect.service.TransferLog
-import dev.vyoma.connect.protocol.plugin.builtin.Transfer
-import dev.vyoma.connect.protocol.plugin.builtin.Transfers
 import dev.vyoma.connect.designsystem.GlassDialog
 import dev.vyoma.connect.designsystem.DialogButton
 import androidx.compose.animation.core.Animatable
@@ -122,8 +119,6 @@ fun HomeScreen(
     val available = devices.filter { !it.isPaired && it.isReachable && it !in pairing }
     val offline = devices.filter { it.isPaired && !it.isReachable }
 
-    val transfers by Transfers.all.collectAsStateWithLifecycle()
-    val recent by remember { TransferLog.recent(context) }.collectAsStateWithLifecycle()
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     // A paired PC that's away keeps its Home (dimmed, last known state), so the commonest real state,
     // a sleeping laptop, isn't a different screen.
@@ -132,8 +127,6 @@ fun HomeScreen(
     val seen = remember(primary?.identity?.deviceId, live) { primary?.takeIf { !live }?.let { LastSeen.of(context, it.identity.deviceId) } }
 
     CollapsingHeaderScaffold(
-        // Shorter than other pages: the whole deck fits above the tab bar on the first view.
-        heroFraction = 0.2f,
         title = primary?.identity?.deviceName ?: "Vyoma",
         subtitle = when {
             primary == null -> "Looking for devices nearby"
@@ -205,20 +198,13 @@ fun HomeScreen(
                             artWidth = 92.dp,
                             modifier = card,
                         ) else NotPlayingCard(card)
-                        PcDashboard(vm, primary, DashboardSection.VOLUME, { onKeyboard(id) }, onClipboard, Modifier.width(DeckVolumeWidth))
+                        PcDashboard(vm, primary, DashboardSection.VOLUME, { onKeyboard(id) }, onClipboard, Modifier.width(deckVolumeWidth()))
                     }
                 }
             }
-            // Files on the move, and for a while after they land (they used to live only in notifications).
-            val fresh = recent.orEmpty().filter { System.currentTimeMillis() - it.at < FRESH_MS }.take(2)
-            val moving = transfers.filter { it.state == Transfer.State.RUNNING }
-            if (moving.isNotEmpty() || fresh.isNotEmpty()) {
-                item(key = "transfers-label") { SectionLabel("Transfers", Modifier.animateItem()) }
-                transferRows(moving, fresh, context, keyPrefix = "h")
-            }
             item(key = "controls") {
                 Staggered(2, Modifier.animateItem()) {
-                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onKeyboard(id) }, onClipboard, onBrowseFiles = { onBrowseFiles(id) })
+                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onKeyboard(id) }, onClipboard, onBrowseFiles = { onBrowseFiles(id) }, onFiles = onFiles)
                 }
             }
         }
@@ -475,8 +461,6 @@ private fun CompanionPromoCard(onDismiss: () -> Unit, modifier: Modifier = Modif
         PillButton("Got it", onClick = onDismiss, prominent = false)
     }
 }
-
-private const val FRESH_MS = 10 * 60_000L
 
 fun DeviceType.icon(): ImageVector = when (this) {
     DeviceType.DESKTOP -> Icons.Rounded.Computer
