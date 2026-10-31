@@ -27,6 +27,11 @@ import dev.vyoma.connect.designsystem.specularEdge
 import dev.vyoma.connect.designsystem.toned
 import dev.vyoma.connect.designsystem.glassRaised
 import dev.vyoma.connect.designsystem.glassCard
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.text.TextAutoSize
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.lerp
 import dev.vyoma.connect.designsystem.IconBadge
 import dev.vyoma.connect.designsystem.LiquidSlider
 import dev.vyoma.connect.designsystem.isDarkUi
@@ -633,20 +638,21 @@ private class Control(
 )
 
 /**
- * Four across in one glass card, like a home-screen folder: each action an app-icon squircle in
- * its colour, label under it. A toggle that's off is a clear glass squircle with a coloured glyph
- * and fills with its colour when on. Round buttons here read as plastic balls and per-action
- * tiles as a stack of pills; icons are what this is.
+ * Apple's Shortcuts widget: four across in one glass card, each action a square tile tinted in its
+ * colour, glyph top left and label bottom left, in white. A toggle that's off is clear glass with
+ * a coloured glyph and fills with its colour when on. Corners are concentric (card radius = tile
+ * radius + padding) and the gaps tight and even, as Apple's are. Tried before and rejected: round
+ * buttons (plastic balls), wide tiles two across (a stack of pills), app icons with labels under.
  */
 @Composable
 private fun ControlGrid(controls: List<Control>, modifier: Modifier = Modifier) {
     Column(
-        modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.extraLarge).padding(vertical = 18.dp, horizontal = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier.fillMaxWidth().glassCard(RoundedCornerShape(TileRadius + TilePad)).padding(TilePad),
+        verticalArrangement = Arrangement.spacedBy(TileGap),
     ) {
         controls.chunked(4).forEach { row ->
-            Row(Modifier.fillMaxWidth()) {
-                row.forEach { c -> ControlIcon(c, Modifier.weight(1f)) }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(TileGap)) {
+                row.forEach { c -> ControlTile(c, Modifier.weight(1f)) }
                 repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
@@ -654,33 +660,38 @@ private fun ControlGrid(controls: List<Control>, modifier: Modifier = Modifier) 
 }
 
 @Composable
-private fun ControlIcon(c: Control, modifier: Modifier) {
+private fun ControlTile(c: Control, modifier: Modifier) {
     val tone = c.color.color
-    val filled = !c.toggle || c.active
+    val on by animateFloatAsState(if (!c.toggle || c.active) 1f else 0f, VyomaMotion.effects(), label = "ctlOn")
     val haptic = when {
         !c.toggle -> Haptic.Tap
         c.active -> Haptic.ToggleOff
         else -> Haptic.ToggleOn
     }
-    Column(modifier.pressable(pressedScale = 1f, haptic = haptic, onClick = c.onClick), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.pressScale(0.88f)) {
-            Crossfade(filled, animationSpec = VyomaMotion.effects(), label = "ctlIcon") { on ->
-                if (on) {
-                    IconBadge(c.icon, tone, size = 52.dp)
-                } else {
-                    Box(Modifier.size(52.dp).glassRaised(IconShape), contentAlignment = Alignment.Center) {
-                        Icon(c.icon, null, tint = tone, modifier = Modifier.size(28.dp))
-                    }
-                }
-            }
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(c.label, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    val shape = RoundedCornerShape(TileRadius)
+    val ink = lerp(MaterialTheme.colorScheme.onSurface, Color.White, on)
+    Column(
+        modifier
+            .aspectRatio(1f)
+            .pressable(pressedScale = 0.94f, haptic = haptic, onClick = c.onClick)
+            .glassRaised(shape, if (on > 0.01f) tone.copy(alpha = 0.9f * on) else null)
+            .padding(10.dp),
+        verticalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Icon(c.icon, null, tint = lerp(tone, Color.White, on), modifier = Modifier.size(22.dp))
+        // Shrinks to fit rather than cutting a word ("Keyboard" in a narrow tile, larger fonts).
+        BasicText(
+            c.label,
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, color = ink),
+            maxLines = 1,
+            autoSize = TextAutoSize.StepBased(minFontSize = 9.sp, maxFontSize = MaterialTheme.typography.labelMedium.fontSize),
+        )
     }
 }
 
-/** IconBadge's squircle at 52 dp. */
-private val IconShape = RoundedCornerShape(52.dp * 0.28f)
+private val TileRadius = 18.dp
+private val TilePad = 10.dp
+private val TileGap = 8.dp
 
 /** "Just now" for the first minute, then "5 min. ago" and so on. */
 internal fun ago(time: Long): CharSequence {
