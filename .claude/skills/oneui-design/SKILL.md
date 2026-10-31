@@ -117,11 +117,22 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   POPS (swells 18%, 140 ms). A fixed 220 ms fade at a collapse threshold lagged fast flings (empty bubble behind the
   text). Forming and bursting each play `Haptic.Bubble`; a list flung into either end ticks (`Detent`). The hero fades by 75%.
   A trailing "collapse-room" item lets any page that scrolls at all collapse fully (no half-faded stuck title).
+  A page whose content ends ≥12 dp above the tab/nav bar doesn't scroll at all (`userScrollEnabled = false`). The
+  check re-runs on every layout and answers "overflows" whenever the last real item is off screen: once it kept a
+  stale "fits" from a short first load (folder loading, Home before the PC) and the grown page never scrolled.
   A page whose content all shows above the tab bar doesn't scroll at all (`userScrollEnabled = false`): scrolling
   only to collapse the title read as broken. The hero is the same height on EVERY page (`heroFraction` 0.30, One UI);
   Home once took less and the user called it inconsistent.
   A scroll that stops mid-collapse snaps open/closed; the snap runs in its own child job (run inline, a finger
   interrupting it threw a cancellation that killed the watcher, and nothing snapped again).
+- Long-press menus: `MenuHost` (wraps the app in MainActivity) + `LocalMenu.current.show(boundsInRoot, items, title)`,
+  triggered from `liquidPress(onLongClick)`. Drawn IN the app's window (a Popup is a separate window: it can't see the
+  page, so it was an opaque slab the user called broken): while open the app records into a backdrop and the menu is
+  `glassChrome(blur = 16.dp, bevel = 16.dp)` (blur above the tab bar's 8 so its text reads over a busy page), 24 dp
+  corners, 35% black scrim, tap outside or Back closes. It pours out of the tile's own rect (width `leading()`,
+  height `jelly()`), items fade in past ~55% formed, and flows back in on close. Placement: above the tile if it fits,
+  else below, else the roomier side, always inside the system bars. The lens takes the shape's corner radius from its
+  outline (it used to assume a capsule, which drew a second square outline around a rounded-rect menu).
 - Dialogs: `GlassDialog` (same API as AlertDialog): opaque `surfaceContainerHigh` slab with the card rim. Never
   Material `AlertDialog`.
 - Value bars (Apple's, `LiquidSlider`): with `knob` (default 24 dp) the iOS 26 slider: slim track, wide white

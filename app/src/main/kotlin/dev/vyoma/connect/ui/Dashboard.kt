@@ -77,10 +77,10 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.foundation.border
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material.icons.rounded.UnfoldMore
-import dev.vyoma.connect.designsystem.LiquidMenu
+import dev.vyoma.connect.designsystem.LocalMenu
 import dev.vyoma.connect.designsystem.MenuItem
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Screenshot
 import androidx.compose.material.icons.rounded.History
@@ -352,7 +352,7 @@ fun PcDashboard(
           ControlGrid(
             actions = listOf(
                 // One job per tap; a long press pours out a liquid glass menu of the tile's other jobs
-                // (LiquidMenu). Slots never move: without the companion, PC files becomes Files (the
+                // (LocalMenu). Slots never move: without the companion, PC files becomes Files (the
                 // tab), Screen becomes Ping and Camera becomes Send clip. Hues stay off the meters'
                 // green/yellow/red.
                 Control(
@@ -660,7 +660,7 @@ private class Control(
     val progress: Float? = null,
     /** Opens a sheet rather than acting at once: a small chevron says so. */
     val opens: Boolean = false,
-    /** What a long press offers, poured out of the tile as a [LiquidMenu]. */
+    /** What a long press offers, poured out of the tile as a menu ([LocalMenu]). */
     val menu: List<MenuItem>? = null,
     val menuTitle: String? = null,
     val onClick: () -> Unit,
@@ -695,14 +695,13 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
     val lum = remember(tone) { tone.luminance() }
     val fill = tileFill(tone, lum)
     val ink = if (lum > 0.5f) Color(0xFF1C1C1E) else Color.White
+    val menus = LocalMenu.current
     var bounds by remember { mutableStateOf(Rect.Zero) }
-    var open by remember { mutableStateOf(false) }
-    if (open && c.menu != null) LiquidMenu(bounds, TileRadius, c.menu, onDismiss = { open = false }, title = c.menuTitle)
     Column(
         modifier
             .graphicsLayer { if (!enabled) { alpha = 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha } }
-            .onGloballyPositioned { bounds = it.boundsInWindow() }
-            .liquidPress(enabled = enabled, onLongClickLabel = "More", onLongClick = c.menu?.let { { open = true } }, onClick = c.onClick)
+            .onGloballyPositioned { bounds = it.boundsInRoot() }
+            .liquidPress(enabled = enabled, onLongClickLabel = "More", onLongClick = c.menu?.let { m -> { menus.show(bounds, m, c.menuTitle) } }, onClick = c.onClick)
             .glassRaised(RoundedCornerShape(TileRadius), fill.copy(alpha = 0.92f))
             .padding(start = 10.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
