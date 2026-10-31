@@ -61,6 +61,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.Gradient
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material3.Icon
@@ -144,6 +145,14 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     modifier = Modifier.padding(horizontal = 20.dp),
                 )
                 Spacer(Modifier.height(8.dp))
+                val canvasGlow by vm.canvasGlow.collectAsStateWithLifecycle()
+                ListRow(
+                    title = "Background glow",
+                    subtitle = "Soft accent colour behind the top of each screen",
+                    icon = Icons.Rounded.Gradient,
+                    iconTint = SystemColor.BLUE.color,
+                    trailing = { VyomaSwitch(checked = canvasGlow, onCheckedChange = { vm.setCanvasGlow(it) }) },
+                )
                 val glass by vm.liteGlass.collectAsStateWithLifecycle()
                 ListRow(
                     title = "Lighter glass",

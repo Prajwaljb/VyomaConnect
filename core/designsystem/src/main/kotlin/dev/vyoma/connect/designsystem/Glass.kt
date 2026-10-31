@@ -132,7 +132,7 @@ enum class SystemColor(private val light: Long, private val dark: Long) {
 object Glass {
     val fill: Color
         @Composable @ReadOnlyComposable
-        get() = if (isDarkUi) Color.White.copy(alpha = 0.075f) else Color.White.copy(alpha = 0.72f)
+        get() = if (isDarkUi) Color.White.copy(alpha = 0.075f) else Color.White.copy(alpha = 0.42f)
 
     /** A step up from [fill], for buttons sitting on a glass card. */
     val raised: Color
@@ -142,7 +142,7 @@ object Glass {
     /** Tint laid over real backdrop blur. */
     val chrome: Color
         @Composable @ReadOnlyComposable
-        get() = if (isDarkUi) Color(0xFF1C1D21).copy(alpha = 0.56f) else Color.White.copy(alpha = 0.72f)
+        get() = if (isDarkUi) Color(0xFF1C1D21).copy(alpha = 0.56f) else Color.White.copy(alpha = 0.5f)
 
     val edge: Brush
         @Composable @ReadOnlyComposable
@@ -188,7 +188,8 @@ private val DarkDepth = GlassDepth(
     band = Color.White.copy(alpha = 0.42f),
 )
 private val LightDepth = GlassDepth(
-    fill = Color.White.copy(alpha = 0.72f),
+    // See-through, so the canvas's tint shows in the card (0.72 read as solid white blocks).
+    fill = Color.White.copy(alpha = 0.42f),
     // White on white can't show; a navy hairline gives the edge and the light lifts out of it.
     rimLit = Color.White, rimBase = Color(0xFF1A2B4C).copy(alpha = 0.06f),
     shadow = Color(0xFF1A2B4C).copy(alpha = 0.05f), shadowBlur = 14f, shadowDrop = 3f,
@@ -437,6 +438,7 @@ fun Modifier.cardSegment(first: Boolean, last: Boolean, radius: Dp = 26.dp): Mod
 fun Modifier.aurora(): Modifier = composed {
     val base = MaterialTheme.colorScheme.background
     val accent = MaterialTheme.colorScheme.primary
+    if (!AppCanvas.glow) return@composed background(base)
     val strength = if (isDarkUi) 0.16f else 0.20f
     drawWithCache {
         val w = (size.width / AURORA_SCALE).roundToInt().coerceAtLeast(1)
@@ -463,6 +465,11 @@ fun Modifier.aurora(): Modifier = composed {
 }
 
 private const val AURORA_SCALE = 4f
+
+/** The canvas's accent glows ([aurora]); the user can turn them off. Changes apply on recomposition. */
+object AppCanvas {
+    var glow by mutableStateOf(true)
+}
 
 /** What chrome blurs: one recorded display list of the content underneath. */
 @Stable
