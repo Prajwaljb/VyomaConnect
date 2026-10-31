@@ -1,5 +1,10 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.LayoutCoordinates
+import dev.vyoma.connect.designsystem.MenuItem
+import dev.vyoma.connect.designsystem.LocalMenu
 import androidx.compose.ui.graphics.luminance
 import dev.vyoma.connect.designsystem.DialogButton
 import dev.vyoma.connect.designsystem.RowChevron
@@ -208,19 +213,32 @@ fun MediaCard(
                     }
                     // Switching players is rare: a small button and a list, not a row of chips on the card.
                     if (np.players.size > 1) {
-                        var picking by remember { mutableStateOf(false) }
+                        val menus = LocalMenu.current
+                        val button = remember { arrayOfNulls<LayoutCoordinates>(1) }
                         Spacer(Modifier.width(6.dp))
                         Box(
                             Modifier
                                 .size(36.dp)
-                                .pressable(glass = true) { picking = true }
+                                .onPlaced { button[0] = it }
+                                // The players pour out of the button as a liquid glass menu (was a dialog).
+                                .pressable(glass = true) {
+                                    button[0]?.takeIf { it.isAttached }?.let { at ->
+                                        menus.show(
+                                            at.boundsInRoot(),
+                                            np.players.map { name ->
+                                                MenuItem(name.replaceFirstChar { it.uppercase() }, if (name == p.name) Icons.Rounded.Check else null) { onPickPlayer(name) }
+                                            },
+                                            title = "Players on the PC",
+                                            fromRadius = 18.dp,
+                                        )
+                                    }
+                                }
                                 .glassRaised(CircleShape, Color.White.copy(alpha = 0.14f))
                                 .semantics { contentDescription = "Choose player" },
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(Icons.Rounded.UnfoldMore, null, tint = Color.White, modifier = Modifier.size(20.dp))
                         }
-                        if (picking) PlayerPicker(np.players, p.name, onDismiss = { picking = false }) { onPickPlayer(it); picking = false }
                     }
                     if (onContinueHere != null) {
                         Spacer(Modifier.width(6.dp))
@@ -431,27 +449,3 @@ private fun trimBars(bmp: Bitmap): Bitmap {
 }
 
 /** The PC's media players, the one shown ticked. */
-@Composable
-private fun PlayerPicker(players: List<String>, current: String, onDismiss: () -> Unit, onPick: (String) -> Unit) {
-    GlassDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Players on the PC") },
-        text = {
-            Column {
-                players.forEachIndexed { i, name ->
-                    ListRow(
-                        title = name.replaceFirstChar { it.uppercase() },
-                        icon = Icons.Rounded.MusicNote,
-                        iconTint = SystemColor.PINK.color,
-                        showDivider = i < players.lastIndex,
-                        horizontalPadding = 0.dp,
-                        trailing = if (name == current) { { Icon(Icons.Rounded.Check, "Playing", tint = MaterialTheme.colorScheme.primary) } } else null,
-                        haptic = Haptic.Select,
-                        onClick = { onPick(name) },
-                    )
-                }
-            }
-        },
-        confirmButton = { DialogButton(onClick = onDismiss) { Text("Close") } },
-    )
-}

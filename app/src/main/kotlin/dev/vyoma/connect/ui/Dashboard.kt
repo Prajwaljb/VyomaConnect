@@ -539,7 +539,8 @@ internal fun VolumeBar(
     var level by remember(sink.name) { mutableFloatStateOf(sink.volume / max) }
     var dragging by remember { mutableStateOf(false) }
     var lastTouch by remember { mutableLongStateOf(0L) }
-    var picking by rememberSaveable { mutableStateOf(false) }
+    val menus = LocalMenu.current
+    val capsule = remember { arrayOfNulls<LayoutCoordinates>(1) }
     // The PC echoes every value we send, late. Ignore echoes while the finger is down and shortly
     // after; once they stop, settle on whatever the PC really ended up at.
     LaunchedEffect(sink.volume, dragging) {
@@ -580,7 +581,20 @@ internal fun VolumeBar(
                         .weight(1f, fill = false)
                         .offset(x = (-10).dp)
                         .semantics { contentDescription = "Output: $name. Choose output" }
-                        .pressable(glass = true) { picking = true }
+                        .onPlaced { capsule[0] = it }
+                        // The outputs pour out of the capsule as a liquid glass menu (was a dialog).
+                        .pressable(glass = true) {
+                            capsule[0]?.takeIf { it.isAttached }?.let { at ->
+                                menus.show(
+                                    at.boundsInRoot(),
+                                    outputs.map { o ->
+                                        MenuItem(prettySinkName(o.description), if (o.isDefault) Icons.Rounded.Check else null) { onOutput(o) }
+                                    },
+                                    title = "Play PC sound on",
+                                    fromRadius = 18.dp,
+                                )
+                            }
+                        }
                         .glassRaised(CircleShape)
                         .padding(start = 10.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -617,36 +631,9 @@ internal fun VolumeBar(
             Icon(if (sink.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null, tint = muted, modifier = Modifier.size(20.dp))
         }
     }
-    if (picking && outputs != null) OutputDialog(outputs, onDismiss = { picking = false }) { onOutput(it); picking = false }
 }
 
 /** Where the PC's sound plays, the current output ticked. */
-@Composable
-private fun OutputDialog(sinks: List<AudioSink>, onDismiss: () -> Unit, onPick: (AudioSink) -> Unit) {
-    GlassDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Play PC sound on") },
-        text = {
-            Column(Modifier.heightIn(max = 360.dp).fadingVerticalScroll(rememberScrollState())) {
-                sinks.forEachIndexed { i, sink ->
-                    ListRow(
-                        title = prettySinkName(sink.description),
-                        icon = Icons.Rounded.Speaker,
-                        iconTint = SystemColor.BLUE.color,
-                        showDivider = i < sinks.lastIndex,
-                        horizontalPadding = 0.dp,
-                        trailing = if (sink.isDefault) { { Icon(Icons.Rounded.Check, "Playing here", tint = MaterialTheme.colorScheme.primary) } } else null,
-                        haptic = Haptic.Select,
-                        onClick = { onPick(sink) },
-                    )
-                }
-            }
-        },
-        confirmButton = { DialogButton(onClick = onDismiss) { Text("Close") } },
-    )
-}
-
-
 private const val ECHO_QUIET_MS = 700L
 
 
@@ -733,7 +720,12 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
                 }
             }
             Spacer(Modifier.weight(1f))
-            if (c.opens) Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = ink.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+            // Tiles that hold more on a long press say so with a quiet "more" mark (the user wanted
+            // an indicator); it takes the chevron's corner, one mark per tile.
+            when {
+                c.menu != null -> Icon(Icons.Rounded.MoreHoriz, null, tint = ink.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
+                c.opens -> Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = ink.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+            }
         }
         TileLabel(c.label, ink)
     }
