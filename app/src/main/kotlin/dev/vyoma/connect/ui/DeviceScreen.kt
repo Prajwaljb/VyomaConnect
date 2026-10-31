@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.VyomaMotion
+import androidx.compose.animation.animateContentSize
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -144,9 +146,17 @@ fun DeviceScreen(
         item(key = "security-label") { SectionLabel("Security", Modifier.animateItem()) }
         item(key = "security") {
             SectionCard {
+                // One line until asked for: the full fingerprint is for comparing with the PC's.
+                var fullPrint by rememberSaveable { mutableStateOf(false) }
                 ListRow(
+                    modifier = Modifier.animateContentSize(VyomaMotion.spatial()),
                     title = "Certificate fingerprint",
-                    subtitle = fingerprint?.chunked(24)?.joinToString("\n") ?: "Unavailable",
+                    subtitle = when {
+                        fingerprint == null -> "Unavailable"
+                        fullPrint -> fingerprint.chunked(24).joinToString("\n")
+                        else -> fingerprint.take(11) + "…" + fingerprint.takeLast(8)
+                    },
+                    onClick = if (fingerprint != null) { { fullPrint = !fullPrint } } else null,
                     // Monospace so the hex pairs line up in columns, easy to compare with the PC's.
                     subtitleStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     icon = Icons.Rounded.Fingerprint,

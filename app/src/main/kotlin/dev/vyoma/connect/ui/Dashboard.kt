@@ -268,27 +268,15 @@ fun PcDashboard(
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     when (section) {
-        DashboardSection.BENTO -> Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            val phone by vm.phoneBattery.collectAsStateWithLifecycle()
-            BatteryTile(pc.battery, pc.batteryStale, phone, Modifier.weight(1f))
-            val clips by vm.clipHistory.collectAsStateWithLifecycle()
-            ClipboardTile(
-                clips.firstOrNull(),
-                Modifier.weight(1f),
-                onOpen = onClipboard,
-                onSend = {
-                    val to = vm.sendClipboard()
-                    haptics.perform(if (to != null) Haptic.Success else Haptic.Failure)
-                    toast(context, if (to != null) "Clipboard sent to $to" else "Copy something first")
-                },
-            )
-        }
-        DashboardSection.VITALS -> {
+        // One card for the PC's state: its battery, and with the companion its load and heat, as
+        // one row of gauges (a battery ring, a clipboard tile and a gauge card were three).
+        DashboardSection.STATUS -> {
             val devices by vm.devices.collectAsStateWithLifecycle()
             val companion = devices.firstOrNull { it.identity.companionOf == id && it.isPaired && it.isReachable }
             val plugin = remember(companion?.identity?.deviceId, companion?.plugins) {
                 companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
             }
+            var stats: PcStats? = null
             if (plugin != null) {
                 // Renew the companion's stats lease only while this card is on screen and the app is visible.
                 val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -300,9 +288,9 @@ fun PcDashboard(
                         }
                     }
                 }
-                val stats by plugin.stats.collectAsStateWithLifecycle()
-                PcVitals(stats, modifier)
+                stats = plugin.stats.collectAsStateWithLifecycle().value
             }
+            if (pc.battery != null || plugin != null) PcStatus(pc.battery, pc.batteryStale, stats, showLoad = plugin != null, modifier)
         }
         // Everything about sound in one place: the level, and where it plays when there's a choice.
         DashboardSection.VOLUME -> pc.sink?.let { sink ->
@@ -327,7 +315,8 @@ fun PcDashboard(
                 // Connect); PC files browses and uploads into a chosen folder, which needs the companion.
                 // Slots never move: the companion swaps Clipboard (also a tile and a tab) for PC files,
                 // Ping for Screen and Find PC for Camera (both stay in the PC's details).
-                Control(Icons.Rounded.UploadFile, "Send files", SystemColor.CYAN) { vm.pickFiles(context) },
+                // Files are blue (both file tiles), so Home carries fewer hues.
+                Control(Icons.Rounded.UploadFile, "Send files", SystemColor.BLUE) { vm.pickFiles(context) },
                 if (shots != null) Control(Icons.Rounded.Folder, "PC files", SystemColor.BLUE, onClick = onBrowseFiles)
                 else Control(Icons.Rounded.ContentPaste, "Clipboard", SystemColor.ORANGE, onClick = onClipboard),
                 // The touchpad has its own round button by the tab bar; this opens the same screen ready to type.
@@ -457,104 +446,10 @@ private fun CapturePreview(uri: Uri, mime: String, what: String, onDismiss: () -
     }
 }
 
-enum class DashboardSection { BENTO, VITALS, VOLUME, CONTROLS }
+enum class DashboardSection { STATUS, VOLUME, CONTROLS }
 
 private fun toast(context: Context, text: String) =
     Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
-
-/** Square tile: PC battery as the outer ring, this phone as the inner one. */
-@Composable
-private fun BatteryTile(pc: BatteryState?, stale: Boolean, phone: BatteryState?, modifier: Modifier) {
-    // A cached reading shows dimmed until the PC sends a fresh one.
-    val accent = SystemColor.GREEN.color.copy(alpha = if (stale) 0.45f else 1f)
-    val second = SystemColor.CYAN.color
-    val track = Glass.raised
-    val low = SystemColor.RED.color
-    val pcSweep by animateFloatAsState((pc?.charge ?: 0) / 100f, VyomaMotion.spatialSlow(), label = "pcRing")
-    val phoneSweep by animateFloatAsState((phone?.charge ?: 0) / 100f, VyomaMotion.spatialSlow(), label = "phoneRing")
-    val pcColor by animateColorAsState(if (pc != null && pc.charge <= 15 && !pc.charging) low else accent, VyomaMotion.effects(), label = "pcColor")
-
-    // Read-only: PC details has the header button and the hero glyph; a third way in hid what a tap did.
-    Box(modifier.aspectRatio(1f).glassCard(MaterialTheme.shapes.large)) {
-        Column(Modifier.padding(16.dp)) {
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Canvas(Modifier.fillMaxHeight().aspectRatio(1f)) {
-                    // The same 6 dp stroke as the gauges: one family of data visuals.
-                    val w = 6.dp.toPx()
-                    fun ring(inset: Float, sweep: Float, color: Color) {
-                        val topLeft = Offset(inset + w / 2, inset + w / 2)
-                        val s = Size(size.width - 2 * inset - w, size.height - 2 * inset - w)
-                        drawArc(track, 0f, 360f, false, topLeft, s, style = Stroke(w))
-                        if (sweep > 0f) drawArc(color, -90f, 360f * sweep.coerceIn(0f, 1f), false, topLeft, s, style = Stroke(w, cap = StrokeCap.Round))
-                    }
-                    ring(0f, pcSweep, pcColor)
-                    ring(w + 4.dp.toPx(), phoneSweep, second)
-                }
-                // Sized to sit in the inner ring with air around it, digits not jumping as they change.
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (pc?.charging == true) Icon(Icons.Rounded.Bolt, "Charging", tint = accent, modifier = Modifier.size(14.dp))
-                    Reading(pc?.let { "${it.charge}" }, "%", MaterialTheme.typography.titleMedium)
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            BatteryLegend("PC", pc, pcColor)
-            BatteryLegend("Phone", phone, second)
-        }
-    }
-}
-
-@Composable
-private fun BatteryLegend(label: String, b: BatteryState?, color: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-        Spacer(Modifier.width(6.dp))
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-        if (b?.charging == true) Icon(Icons.Rounded.Bolt, "Charging", tint = color, modifier = Modifier.size(12.dp))
-        Text(
-            b?.let { "${it.charge}%" } ?: "–",
-            style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
-        )
-    }
-}
-
-/** Square tile: the latest clip, where it came from, and a one-tap send. */
-@Composable
-private fun ClipboardTile(clip: ClipEntry?, modifier: Modifier, onOpen: () -> Unit, onSend: () -> Unit) {
-    Box(modifier.aspectRatio(1f).pressable(pressedScale = 0.97f, onClick = onOpen).glassCard(MaterialTheme.shapes.large)) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.ContentPaste, null, tint = SystemColor.ORANGE.color, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Clipboard", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                clip?.text?.trim() ?: "Copy something and it shows up here",
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (clip != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    clip?.let { (if (it.origin != null) "From PC\n" else "") + ago(it.timestamp) } ?: "",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Box(
-                    Modifier.size(40.dp).pressable(pressedScale = 0.84f, haptic = null, glass = true, onClick = onSend).clip(CircleShape).background(Glass.accent),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Rounded.Send, "Send to PC", tint = Color.White, modifier = Modifier.size(18.dp))
-                }
-            }
-        }
-    }
-}
 
 /**
  * The PC's volume, iOS style: the output's name and level over a slim slider with a liquid glass
@@ -768,18 +663,53 @@ private fun Reading(value: String?, unit: String, style: TextStyle) {
     }
 }
 
-/** CPU, memory, GPU and temperature as four small gauges, Control Center style. */
+/**
+ * The PC at a glance, Control Center style: its battery, then (with the companion) CPU, memory, GPU
+ * and temperature, one gauge each in one row. Without the companion, the battery alone with its
+ * state in words.
+ */
 @Composable
-private fun PcVitals(stats: PcStats?, modifier: Modifier = Modifier) {
-    val temp = stats?.cpuTemp
-    val tempColor = when {
-        temp == null -> SystemColor.GRAY
-        temp < 65f -> SystemColor.GREEN
-        temp < 85f -> SystemColor.YELLOW
-        else -> SystemColor.RED
+private fun PcStatus(battery: BatteryState?, stale: Boolean, stats: PcStats?, showLoad: Boolean, modifier: Modifier = Modifier) {
+    val charge = battery?.charge
+    val batteryColor = when {
+        battery == null -> SystemColor.GRAY
+        battery.charge <= 15 && !battery.charging -> SystemColor.RED
+        else -> SystemColor.GREEN
     }
-    val memFraction = stats?.takeIf { it.memTotal > 0 }?.let { it.memUsed.toFloat() / it.memTotal } ?: 0f
-    Row(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(vertical = 16.dp)) {
+    val batteryLabel = if (battery?.charging == true) "Charging" else "Battery"
+    Row(
+        modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(vertical = 16.dp, horizontal = if (showLoad) 4.dp else 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (battery != null) {
+            // A cached reading shows dimmed until the PC sends a fresh one.
+            Gauge(
+                batteryLabel, "$charge", "%", (charge ?: 0) / 100f, batteryColor,
+                Modifier.then(if (showLoad) Modifier.weight(1f) else Modifier).graphicsLayer { alpha = if (stale) 0.5f else 1f },
+            )
+        }
+        if (!showLoad) {
+            if (battery != null) {
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(if (battery.charging) "Charging" else if (battery.low) "Battery low" else "On battery", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        if (stale) "Last known level" else "PC battery",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            return@Row
+        }
+        val temp = stats?.cpuTemp
+        val tempColor = when {
+            temp == null -> SystemColor.GRAY
+            temp < 65f -> SystemColor.GREEN
+            temp < 85f -> SystemColor.YELLOW
+            else -> SystemColor.RED
+        }
+        val memFraction = stats?.takeIf { it.memTotal > 0 }?.let { it.memUsed.toFloat() / it.memTotal } ?: 0f
         val cpu = (stats?.cpu ?: 0f) / 100f
         val gpu = (stats?.gpu ?: 0) / 100f
         Gauge("CPU", stats?.let { "${it.cpu.roundToInt()}" }, "%", cpu, loadColor(cpu), Modifier.weight(1f))
@@ -819,7 +749,7 @@ private fun Gauge(label: String, value: String?, unit: String, fraction: Float, 
         }
     }
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.size(58.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(54.dp), contentAlignment = Alignment.Center) {
             // Read while drawing: the glide never recomposes.
             Canvas(Modifier.fillMaxSize()) {
                 val sweep = gauge.floatValue

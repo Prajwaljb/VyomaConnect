@@ -14,6 +14,13 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Dashboard actions: Apple Shortcuts-widget tiles, 4 across in one card, concentric corners (18 dp tile + 10 dp pad), white
   ink (dark on yellow-bright tones; tones of luminance 0.2–0.5 darkened 22% for 4.5:1), labels 12 sp. Toggle tiles keep
   one glyph and name ("Lock", "Mute"); only the fill says on.
+- Layers (iOS 26 rule, judge-reviewed 2026-10-31): full liquid glass (lens, band, rolled edge, full tilt sway) only on the
+  floating layer (header, title bubble, tab bar, touchpad button) and controls while held. Content cards are a thinner
+  pane: band 0.15 dark / 0.35 light, no rolled shade, highlights sway 40% (`SpecularLight.content`). Filled raised
+  controls: band 0.18, lit rim 0.35, band ≤3 dp under 64 dp. List IconBadges: edge 0.35/0.08 (hero glyph keeps 0.75).
+- Density: Clipboard puts history first (Send in the header, setup row at the end); Settings subtitles are one line;
+  Appearance (accent + theme) and Effects (glow, lighter glass) are separate cards; long command lists fold after 4;
+  the fingerprint is one line until tapped.
 - Data visuals share one system: 6 dp round-capped strokes on a `Glass.raised` track (gauges and the battery rings),
   numbers with a smaller muted unit (`Reading`), colour = load (green < 70% < yellow < 90% < red; temp 65/85 °C),
   never a fixed colour per gauge. The bolt is `Icons.Rounded.Bolt`, never an emoji.
@@ -36,7 +43,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a plain
   even fill plus a 0.9 dp specular hairline that follows the phone's tilt (a FIXED painted rim read as fake; the user
   asked for it back once it moved like iOS 26); pass `color` for accent/tinted or for chips over artwork (dark translucent).
-- Light: `SpecularLight.angle` (Light.kt) is where the light is on screen (250° = up, a little left, at rest; tilt sways it at most ±35°, soft limit), driven by the
+- Light: `SpecularLight.angle` (Light.kt) is where the light is on screen (250° = up, a little left, at rest; tilt sways it up to ±55°, soft limit, gain 2.2: ~10° of turn reaches straight up; the user found ±35° could never bring it to the centre), driven by the
   gravity sensor only while the UI is started (`TrackSpecularLight` in `VyomaTheme`), smoothed, 1.5° dead band. Every
   specular edge uses it: `specularRim(...)` (chrome stroke, raised controls) and the AGSL `light` uniform (lens rims).
 - Rims follow Apple's iOS 26 glass (user's reference shots): a broad highlight facing the light plus one ~80% as bright
@@ -143,8 +150,9 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - One job per button, named for what it does ("Send", "PC files", "Upload here"), never one button whose meaning
   changes with state. No two buttons on the same screen open the same thing. When a feature appears only
   sometimes (companion online), swap it into a fixed slot so the other buttons never move.
-- Where things live (IA): Home is the PC's control surface (gauges, media, volume + output picker, the 4x2 action
-  tiles; 8th tile = Commands, a sheet that runs one and closes). PC details (header Info button, or tap the hero glyph)
+- Where things live (IA): Home is the PC's control surface: ONE status card (battery gauge, plus CPU/memory/GPU/temp
+  gauges in the same row with the companion; no phone battery, no clipboard card), media (player switch = a small
+  button + list, no chip row), volume + output picker, the 4x2 action tiles; 8th tile = Commands, a sheet that runs one and closes). PC details (header Info button, or tap the hero glyph)
   holds only what's about the link: commands list + "Edit commands", Ping/Find this PC/battery, fingerprint, Unpair.
   Never duplicate Home's controls there. Header shows Refresh only while no PC is connected.
 - Horizontal chip rows never cut hard: `Modifier.fadingHorizontalScroll(state, bleed)` (designsystem/Scroll.kt) fades

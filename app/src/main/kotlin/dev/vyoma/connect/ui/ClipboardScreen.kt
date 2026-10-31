@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.RowChevron
 import androidx.compose.material.icons.rounded.ContentPaste
 import dev.vyoma.connect.designsystem.cardSegment
 import androidx.compose.material3.HorizontalDivider
@@ -62,35 +63,13 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
         title = "Clipboard",
         subtitle = if (background) "Syncing automatically" else "Syncs while Vyoma is open",
         navigation = onBack?.let { back -> { BounceIconButton(onClick = back) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } } },
+        // Sending is the one action, so it sits up top and the history comes first on the page.
         // Clearing can't be undone, so it asks first.
-        actions = { if (history.isNotEmpty()) BounceIconButton(onClick = { clearing = true }) { Icon(Icons.Rounded.DeleteSweep, "Clear history") } },
+        actions = {
+            BounceIconButton(onClick = { context.startActivity(ClipboardActivity.intent(context)) }) { Icon(Icons.AutoMirrored.Rounded.Send, "Send what's copied to PC") }
+            if (history.isNotEmpty()) BounceIconButton(onClick = { clearing = true }) { Icon(Icons.Rounded.DeleteSweep, "Clear history") }
+        },
     ) {
-        item(key = "send") {
-            SectionCard {
-                ListRow(
-                    title = "Send what's copied",
-                    subtitle = "Pushes this phone's clipboard to your PC",
-                    icon = Icons.Rounded.ContentPaste,
-                    iconTint = SystemColor.ORANGE.color,
-                    trailing = { PillButton("Send", onClick = { context.startActivity(ClipboardActivity.intent(context)) }) },
-                )
-            }
-        }
-        if (!background) {
-            item(key = "bg") {
-                SectionCard {
-                    // Opens the setup right here (it used to point at a Settings section by a wrong name).
-                    ListRow(
-                        title = "Sync when closed",
-                        subtitle = "Copies sync even when Vyoma is closed. One-time setup from your PC.",
-                        icon = Icons.Rounded.Sync,
-                        iconTint = SystemColor.ORANGE.color,
-                        trailing = { PillButton("Set up", onClick = { setup = true }, prominent = false) },
-                        onClick = { setup = true },
-                    )
-                }
-            }
-        }
         if (history.isNotEmpty()) item(key = "label") { SectionLabel("Recent") }
         else item(key = "empty") {
             Text(
@@ -130,6 +109,22 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     }
                 }
                 if (i != last) HorizontalDivider(Modifier.padding(horizontal = 20.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            }
+        }
+        if (!background) {
+            item(key = "bg") {
+                SectionCard(Modifier.padding(top = 8.dp)) {
+                    // Opens the setup right here (it used to point at a Settings section by a wrong name).
+                    ListRow(
+                        title = "Sync when closed",
+                        subtitle = "One-time setup from your PC",
+                        subtitleMaxLines = 1,
+                        icon = Icons.Rounded.Sync,
+                        iconTint = SystemColor.ORANGE.color,
+                        trailing = { RowChevron("Set up") },
+                        onClick = { setup = true },
+                    )
+                }
             }
         }
     }

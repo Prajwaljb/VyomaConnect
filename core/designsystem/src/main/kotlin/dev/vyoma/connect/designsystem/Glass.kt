@@ -196,8 +196,9 @@ private val DarkDepth = GlassDepth(
     rimLit = Color.White.copy(alpha = 0.42f), rimBase = Color.White.copy(alpha = 0.06f),
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
     glow = Color.White.copy(alpha = 0.04f),
-    band = Color.White.copy(alpha = 0.3f),
-    shade = Color.Black.copy(alpha = 0.4f),
+    // Content is a thinner pane than the floating chrome: half the chrome-like band, no rolled edge,
+    // so the bars read as a layer above the cards (with the same edge, on black they didn't).
+    band = Color.White.copy(alpha = 0.15f),
 )
 private val LightDepth = GlassDepth(
     // See-through, so the canvas's tint shows in the card (0.72 read as solid white blocks).
@@ -205,8 +206,7 @@ private val LightDepth = GlassDepth(
     // White on white can't show; a navy hairline gives the edge and the light lifts out of it.
     rimLit = Color.White, rimBase = Color(0xFF1A2B4C).copy(alpha = 0.06f),
     shadow = Color(0xFF1A2B4C).copy(alpha = 0.05f), shadowBlur = 14f, shadowDrop = 3f,
-    band = Color.White.copy(alpha = 0.7f),
-    shade = Color(0xFF1A2B4C).copy(alpha = 0.09f),
+    band = Color.White.copy(alpha = 0.35f),
 )
 
 /** The current theme's [GlassDepth]. */
@@ -363,7 +363,7 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
             clipPath(path, ClipOp.Difference) { drawIntoCanvas { it.nativeCanvas.drawPath(shadow, shadowPaint) } }
         }
         val fill = flat ?: d.fill
-        val light = SpecularLight.angle
+        val light = SpecularLight.content
         if (lit && d.glow.alpha > 0f) {
             // The glow is part of the fill (one gradient pass, not a second layer over the card):
             // brightest at the edge point facing the light, spreading in from there.
@@ -416,7 +416,7 @@ fun Modifier.glassLightOver(shape: Shape): Modifier = composed {
         val roll = 16f * density
         onDrawWithContent {
             drawContent()
-            with(glow) { draw(outline, d.band, band, SpecularLight.angle, shade = d.shade, depth = roll) }
+            with(glow) { draw(outline, d.band, band, SpecularLight.content, shade = d.shade, depth = roll) }
         }
     }
 }
@@ -434,7 +434,8 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
         .drawWithCache {
             val outline = shape.createOutline(size, layoutDirection, this)
             val fill = base ?: if (dark) Color.White.copy(alpha = 0.07f) else Color(0xFF1A2B4C).copy(alpha = 0.045f)
-            val lit = Color.White.copy(alpha = if (base != null) 0.5f else if (dark) 0.4f else 0.95f)
+            // Filled (coloured) controls get a quieter edge: a bright band on a saturated fill read as a candy bevel.
+            val lit = Color.White.copy(alpha = if (base != null) 0.35f else if (dark) 0.4f else 0.95f)
             val rimBase = when {
                 base != null -> Color.White.copy(alpha = 0.1f)
                 dark -> Color.White.copy(alpha = 0.05f)
@@ -443,8 +444,8 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
             val stroke = Stroke(0.9.dp.toPx())
             val center = Offset(size.width / 2, size.height / 2)
             val glow = InnerGlow()
-            val band = Color.White.copy(alpha = if (base != null) 0.42f else if (dark) 0.34f else 0.6f)
-            val bandWidth = (size.minDimension * 0.12f).coerceAtMost(4.dp.toPx())
+            val band = Color.White.copy(alpha = if (base != null) 0.18f else if (dark) 0.34f else 0.6f)
+            val bandWidth = (size.minDimension * 0.12f).coerceAtMost((if (size.minDimension < 64.dp.toPx()) 3 else 4).dp.toPx())
             onDrawBehind {
                 drawOutline(outline, fill)
                 // The light's angle is read here only, so tilting redraws the edge and nothing else.
