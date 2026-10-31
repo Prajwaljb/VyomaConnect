@@ -28,9 +28,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -351,11 +349,12 @@ private fun ScreenView(
                 }
             }
             if (plugin != null && live?.showing == true) {
+                // Top right, level with Close: the corners hold the controls, the middle the picture.
                 AnimatedVisibility(
                     shown,
-                    enter = fadeIn(tween(180)) + slideInHorizontally(CHROME_SPRING) { it / 2 },
-                    exit = fadeOut(tween(160)) + slideOutHorizontally(tween(200)) { it / 2 },
-                    modifier = Modifier.align(Alignment.CenterEnd),
+                    enter = fadeIn(tween(180)) + slideInVertically(CHROME_SPRING) { -it / 2 },
+                    exit = fadeOut(tween(160)) + slideOutVertically(tween(200)) { -it / 2 },
+                    modifier = Modifier.align(Alignment.TopEnd),
                 ) {
                     ScreenshotButton(backdrop, plugin, onFlash = { flash++ })
                 }
@@ -461,10 +460,10 @@ private fun ScreenshotButton(backdrop: Backdrop, plugin: CompanionPlugin, onFlas
     }
     val busy = shot == CaptureState.Capturing
     val scope = rememberCoroutineScope()
-    GlassButton(backdrop, "Take a screenshot", Icons.Rounded.Screenshot, size = 56.dp, enabled = !busy, onClick = { asked = true; scope.launch { plugin.screenshot.request() } }) {
+    GlassButton(backdrop, "Take a screenshot", Icons.Rounded.Screenshot, enabled = !busy, onClick = { asked = true; scope.launch { plugin.screenshot.request() } }) {
         Crossfade(busy, label = "shot") { b ->
             if (b) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
-            else Icon(Icons.Rounded.Screenshot, null, tint = Color.White, modifier = Modifier.size(24.dp))
+            else Icon(Icons.Rounded.Screenshot, null, tint = Color.White, modifier = Modifier.size(22.dp))
         }
     }
 }

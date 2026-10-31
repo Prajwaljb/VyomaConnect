@@ -336,13 +336,24 @@ fun CollapsingHeaderScaffold(
                 .clearAndSetSemantics {}
                 .graphicsLayer {
                     val rest = restY
+                    val inBar = statusTop + BAR_HEIGHT.toPx() / 2f
                     if (rest.isNaN()) {
-                        alpha = 0f
+                        // Its resting place is only measured while the header is on screen. A page
+                        // that comes back scrolled past it (from a rotation, say, leaving the PC
+                        // screen) is fully collapsed, and there the title simply sits in the bar.
+                        if (collapse < 1f) {
+                            alpha = 0f
+                            return@graphicsLayer
+                        }
+                        alpha = 1f
+                        translationY = inBar - size.height / 2f
+                        scaleX = shrink
+                        scaleY = shrink
                         return@graphicsLayer
                     }
+                    alpha = 1f
                     // It rides with the page until it reaches the bar (by 90% of the collapse at
                     // the latest), then stays there; it shrinks over the same trip.
-                    val inBar = statusTop + BAR_HEIGHT.toPx() / 2f
                     val trip = (rest - inBar).coerceAtLeast(1f)
                     val travelled = (collapse * maxOf(distance, trip / 0.9f)).coerceAtMost(trip)
                     translationY = rest - travelled - size.height / 2f
