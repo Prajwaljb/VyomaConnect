@@ -335,6 +335,14 @@ fun CollapsingHeaderScaffold(
         // The compact bar floats over the list in the same material as the tab bar: back and
         // actions are liquid-glass buttons, and the title's bubble forms in the middle. No strip and
         // no shade: content slides under clear glass.
+        // Under the status bar, content blurs and fades away (iOS 26's soft edge) so the clock never
+        // sits on raw cards; it stops 12 dp below the icons, above the glass buttons' refraction.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(with(density) { statusTop.toDp() } + 12.dp)
+                .scrollEdge(backdrop) { !listState.atTop() },
+        )
         Box(Modifier.fillMaxWidth()) {
             // No shade behind the bar: the user wants the glass bubbles to show what passes under them
             // (a dark scroll-edge fade hid the refraction; removed 2026-10-31).
@@ -437,7 +445,7 @@ private const val ROOM_KEY = "collapse-room"
 private const val HERO_GLYPH = "hero-glyph"
 private const val HERO_SUBTITLE = "hero-subtitle"
 /** Where the hero title's centre sits, as a share of the hero's height, on every page. */
-private const val TITLE_ANCHOR = 0.56f
+private const val TITLE_ANCHOR = 0.63f
 private val BAR_HEIGHT = 64.dp
 /** Every bubble in the bar (back, title, actions) is one height: a smaller title bubble looked like a different part. */
 private val CHROME_SIZE = 48.dp

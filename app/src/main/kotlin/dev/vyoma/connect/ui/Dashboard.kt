@@ -568,8 +568,9 @@ internal fun VolumeBar(
     }
 
     // The level sits at the right edge, over the loud speaker it belongs to; the output on the left.
-    // 16 dp above, 12 between the rows, 12 below: the slider's knob needs the room it reaches into.
-    Column(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 10.dp)) {
+    // The output capsule sits in the card's corner at an even 10 dp from the top and the side
+    // (concentric with the card's curve); it was 15 dp down but 10 dp in, which read as crooked.
+    Column(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 10.dp)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 36.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             val name = prettySinkName(sink.description)
             if (outputs != null) {
@@ -581,7 +582,7 @@ internal fun VolumeBar(
                         .semantics { contentDescription = "Output: $name. Choose output" }
                         .pressable(glass = true) { picking = true }
                         .glassRaised(CircleShape)
-                        .padding(start = 10.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
+                        .padding(start = 10.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
@@ -710,7 +711,8 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
                 onLongClick = c.menu?.let { m -> { placed[0]?.takeIf { it.isAttached }?.let { menus.show(it.boundsInRoot(), m, c.menuTitle) } } },
             )
             .glassRaised(RoundedCornerShape(TileRadius), fill.copy(alpha = 0.92f))
-            .padding(start = 10.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+            // Even on both sides (6 dp at the end ran "Commands" to the edge), and 9 dp so it fits at full size.
+            .padding(horizontal = 9.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
@@ -761,7 +763,7 @@ private fun ToggleTile(c: Control, modifier: Modifier, enabled: Boolean) {
             .glassRaised(shape, if (on > 0.01f) Color.White.copy(alpha = 0.96f * on) else null)
             // On a light card, white alone barely lifts: a hairline of the tone outlines it.
             .then(if (!dark && on > 0.01f) Modifier.border(1.dp, tone.copy(alpha = 0.55f * on), shape) else Modifier)
-            .padding(start = 10.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+            .padding(horizontal = 9.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
         Icon(c.icon, null, tint = lerp(offGlyph, onGlyph, on), modifier = Modifier.size(22.dp))
@@ -778,14 +780,14 @@ private fun tileFill(tone: Color, lum: Float) = if (lum in 0.2f..0.5f) tone.tone
 
 @Composable
 private fun TileLabel(text: String, ink: Color) {
-    // One size for every tile (12 sp), set a touch tight so the longest label ("Commands") fits at
-    // full size at the user's font scale too (it auto-shrank a size below its neighbours); at very
-    // large scales it still shrinks to 10 sp rather than cutting a word.
+    // One size for every tile, 11 sp like the app's other small labels (tabs, swatches, gauges):
+    // at 12 sp "Commands" either ran to the tile's edge or auto-shrank below its neighbours. At very
+    // large font scales it still shrinks to 10 sp rather than cutting a word.
     BasicText(
         text,
-        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, color = ink, letterSpacing = (-0.02).em),
+        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, color = ink, fontSize = 11.sp),
         maxLines = 1,
-        autoSize = TextAutoSize.StepBased(minFontSize = 10.sp, maxFontSize = 12.sp),
+        autoSize = TextAutoSize.StepBased(minFontSize = 10.sp, maxFontSize = 11.sp),
     )
 }
 
