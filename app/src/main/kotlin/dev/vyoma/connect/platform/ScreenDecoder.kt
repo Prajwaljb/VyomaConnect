@@ -46,6 +46,8 @@ class ScreenDecoder(
     /** PC-sent to shown, per frame, µs: the sum and count over the current window, and the session's best. */
     private val e2eSum = AtomicLong()
     private val e2eCount = AtomicLong()
+    /** The slowest frame of the current window, µs: a burst shows here before it moves an average. */
+    private val e2eWorst = AtomicLong()
     @Volatile var e2eBestUs = Long.MAX_VALUE
         private set
     /** Average PC-sent-to-shown delay above the session's best, ms: what's queueing up on the way. */
@@ -157,9 +159,10 @@ class ScreenDecoder(
                     if (count > 0) queuedMs = (sum / count - e2eBestUs) / 1000
                     val ic = inCount.getAndSet(0)
                     val onTheWay = if (ic > 0) (inSum.getAndSet(0) / ic - inBest) / 1000 else -1
-                    VLog.i(TAG, "%.0f fps (%d skipped), %.1f Mb/s, decode %d ms, PC-to-screen %d ms raw (best %d), queued %d ms (%d on the way)".format(
+                    VLog.i(TAG, "%.0f fps (%d skipped), %.1f Mb/s, decode %d ms, PC-to-screen %d ms raw (best %d), queued %d ms (%d on the way, worst %d)".format(
                         n * 1e9 / (now - mark), skipped.getAndSet(0), (bytes.get() - markBytes) * 8e3 / (now - mark), if (n > 0) (heldUs.get() - markHeld) / n / 1000 else 0,
                         if (count > 0) sum / count / 1000 else -1, if (e2eBestUs == Long.MAX_VALUE) -1 else e2eBestUs / 1000, queuedMs, onTheWay,
+                        e2eWorst.getAndSet(0).let { if (it > 0) (it - e2eBestUs) / 1000 else -1 },
                     ))
                     mark = now; markFrames = frames.get(); markBytes = bytes.get(); markHeld = heldUs.get()
                 }
@@ -185,6 +188,7 @@ class ScreenDecoder(
                         val e2e = System.currentTimeMillis() * 1000 - sent
                         if (e2e < e2eBestUs) e2eBestUs = e2e
                         e2eSum.addAndGet(e2e); e2eCount.incrementAndGet()
+                        e2eWorst.accumulateAndGet(e2e, ::maxOf)
                     }
                     if (frames.incrementAndGet() == 1L) onFirstFrame()
                 }
