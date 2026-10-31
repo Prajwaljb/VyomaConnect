@@ -16,6 +16,7 @@ import dev.vyoma.connect.protocol.crypto.FileCredentialStore
 import dev.vyoma.connect.protocol.crypto.LocalCredentials
 import dev.vyoma.connect.protocol.device.DeviceHub
 import dev.vyoma.connect.protocol.device.FileTrustStore
+import dev.vyoma.connect.designsystem.AppCanvas
 import dev.vyoma.connect.designsystem.GlassQuality
 import dev.vyoma.connect.platform.AndroidClipboard
 import dev.vyoma.connect.platform.FrameBudget
@@ -86,6 +87,9 @@ class VyomaApp : Application() {
                 GlassQuality.lite = glass.on
                 if (glass.chosen || glass.detected) budget.stop()
             }
+        }
+        container.appScope.launch(Dispatchers.Main) {
+            container.settings.canvasGlow.collect { AppCanvas.glow = it }
         }
         // Whether any of our activities is started: background work scales down when it isn't.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {

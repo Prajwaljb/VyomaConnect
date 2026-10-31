@@ -52,6 +52,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.Eagerly, ThemeSettings())
     val liteGlass: StateFlow<LiteGlass> = settings.liteGlass
         .stateIn(viewModelScope, SharingStarted.Eagerly, LiteGlass(on = false, chosen = false, detected = false))
+    val canvasGlow: StateFlow<Boolean> = settings.canvasGlow.stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     /** Every known device, ordered: connected, pairing, available, offline. */
     val devices: StateFlow<List<DeviceState>> = container.hub.filterNotNull()
@@ -203,6 +204,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setPalette(p: Palette) = viewModelScope.launch { settings.setPalette(p) }
     fun setDarkMode(m: DarkMode) = viewModelScope.launch { settings.setDarkMode(m) }
     fun setLiteGlass(enabled: Boolean) = viewModelScope.launch { settings.setLiteGlass(enabled) }
+    fun setCanvasGlow(enabled: Boolean) = viewModelScope.launch { settings.setCanvasGlow(enabled) }
 
     fun setDeviceName(name: String) = viewModelScope.launch {
         settings.setDeviceName(name)
