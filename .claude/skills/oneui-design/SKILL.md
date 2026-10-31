@@ -13,7 +13,9 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Wide windows (landscape, tablets): `CollapsingHeaderScaffold` centres a column of at most `MaxContentWidth` (560 dp).
 - Dashboard actions (user-approved 2026-10-31): SIX one-shot actions as filled Shortcuts tiles (16 dp radius, 12 dp
   card pad, 8 gap; tile size from `BoxWithConstraints`) + Lock and Mute as two SEPARATE square switch tiles (clear
-  glass with a coloured glyph when off, filled when on; `ToggleTile`). A 2-wide shared module was tried: the halves
+  glass with a coloured glyph when off, WHITE 0.96 with the deepened coloured glyph and dark label when on, + a 1 dp
+  tone hairline in light mode; `ToggleTile`). Shape rule (judge, from the user's CC refs + HIG): circles only for
+  icon-only controls; anything with words is a rounded square/capsule. Never make the switches circles. A 2-wide shared module was tried: the halves
   didn't read as two ("bad implementation"). An ON switch must never look like an action. Slots: Send files (live
   progress ring) · PC files|Files tab · Screen|Ping · Camera|Send clip / Find PC · Commands (chevron) · Lock · Mute.
   No Keyboard tile. Hues off the meters' scale: Ping CYAN, Camera ORANGE, Find PC TEAL. Mid-luminance tiles use
@@ -29,7 +31,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   to the Captures page; `CaptureStore` loads them when Home opens, and the strip holds its height while loading: loaded
   lazily, the list ended short and then jumped).
   Files: Send (three big tiles: Files / Photos / Clipboard), On the PC (Desktop, Documents, Downloads, Pictures, Music,
-  Videos tiles + Browse everything), Captures, Transfers, Clipboard.
+  Videos: clear 16 dp glass tiles with a BARE coloured glyph, no badge inside, + Browse everything), Captures, Transfers, Clipboard.
 - (Old) Dashboard actions: Apple Shortcuts-widget tiles, 4 across in one card, concentric corners (18 dp tile + 10 dp pad), white
   ink (dark on yellow-bright tones; tones of luminance 0.2–0.5 darkened 22% for 4.5:1), labels 12 sp. Toggle tiles keep
   fill AND name when on ("Locked", "Muted"): the user wants the state in words (a judge suggested constant labels; rejected).

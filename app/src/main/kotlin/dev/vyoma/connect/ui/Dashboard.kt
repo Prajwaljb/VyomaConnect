@@ -74,6 +74,7 @@ import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.perform
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.foundation.border
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material.icons.rounded.UnfoldMore
 import dev.vyoma.connect.designsystem.LiquidMenu
@@ -732,29 +733,32 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
 
 /**
  * A switch tile (Lock, Mute): the same square as the actions, so the row reads as one family, but
- * clear glass with its glyph in colour while off and filled with its colour while on, the Control
- * Center rule. An ON switch never looks like an action, and off still reads as live (full-contrast
+ * clear glass with its glyph in colour while off and WHITE with the coloured glyph while on (iOS
+ * reserves a white fill for "toggled on"; filled with its colour it looked like an action). An ON switch never looks like an action, and off still reads as live (full-contrast
  * label, coloured glyph). Each is its own tile: two halves in one module didn't read as two.
  */
 @Composable
 private fun ToggleTile(c: Control, modifier: Modifier, enabled: Boolean) {
     val tone = c.color.color
     val on by animateFloatAsState(if (c.active) 1f else 0f, VyomaMotion.effects(), label = "toggleOn")
-    val lum = remember(tone) { tone.luminance() }
-    val fill = tileFill(tone, lum)
-    val onInk = if (lum > 0.5f) Color(0xFF1C1C1E) else Color.White
-    // Off, the glyph carries the colour (deepened in light mode to hold 3:1 on clear glass).
-    val offGlyph = if (isDarkUi) tone else lerp(tone, Color.Black, 0.35f)
-    val ink = lerp(MaterialTheme.colorScheme.onSurface, onInk, on)
+    val dark = isDarkUi
+    // The glyph always carries the colour: on clear glass (off), and on white (on), deepened where
+    // the pale tone wouldn't hold 3:1 (light mode off, and on white in both themes).
+    val offGlyph = if (dark) tone else lerp(tone, Color.Black, 0.35f)
+    val onGlyph = lerp(tone, Color.Black, 0.35f)
+    val ink = lerp(MaterialTheme.colorScheme.onSurface, Color(0xFF1C1C1E), on)
+    val shape = RoundedCornerShape(TileRadius)
     Column(
         modifier
             .graphicsLayer { if (!enabled) { alpha = 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha } }
             .pressable(enabled = enabled && c.toggle, haptic = if (c.active) Haptic.ToggleOff else Haptic.ToggleOn, onClick = c.onClick)
-            .glassRaised(RoundedCornerShape(TileRadius), if (on > 0.01f) fill.copy(alpha = 0.92f * on) else null)
+            .glassRaised(shape, if (on > 0.01f) Color.White.copy(alpha = 0.96f * on) else null)
+            // On a light card, white alone barely lifts: a hairline of the tone outlines it.
+            .then(if (!dark && on > 0.01f) Modifier.border(1.dp, tone.copy(alpha = 0.55f * on), shape) else Modifier)
             .padding(start = 10.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        Icon(c.icon, null, tint = lerp(offGlyph, onInk, on), modifier = Modifier.size(22.dp))
+        Icon(c.icon, null, tint = lerp(offGlyph, onGlyph, on), modifier = Modifier.size(22.dp))
         TileLabel(c.label, ink)
     }
 }
