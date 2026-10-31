@@ -13,6 +13,7 @@ android {
         targetSdk = 37
         versionCode = 3
         versionName = "0.2.1"
+        buildConfigField("boolean", "DEMO", "false")
     }
 
     buildTypes {
@@ -26,10 +27,19 @@ android {
         debug {
             applicationIdSuffix = ".debug"
         }
+        // Self-contained showcase: a simulated PC inside the app, no network. Installs beside the real app.
+        create("demo") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".demo"
+            versionNameSuffix = "-demo"
+            matchingFallbacks += "release"
+            buildConfigField("boolean", "DEMO", "true")
+        }
     }
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {
