@@ -932,8 +932,8 @@ fun BounceIconButton(
     content: @Composable () -> Unit,
 ) {
     Box(
-        // On liquid chrome the chrome itself flexes, so only the glyph squishes here.
-        modifier.size(size).pressable(enabled = enabled, pressedScale = 0.8f, glass = !LocalOnChrome.current, onClick = onClick),
+        // On liquid chrome the chrome itself swells like a bubble, so the glyph holds still in it.
+        modifier.size(size).pressable(enabled = enabled, pressedScale = if (LocalOnChrome.current) 1f else 0.8f, glass = !LocalOnChrome.current, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { content() }
 }

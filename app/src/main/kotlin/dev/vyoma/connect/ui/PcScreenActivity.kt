@@ -389,7 +389,7 @@ private fun GlassButton(backdrop: Backdrop, label: String, icon: ImageVector, si
         Modifier
             .size(size)
             .glassChrome(backdrop, CircleShape, blur = 8.dp, tint = FROST, bevel = 16.dp, interactive = true)
-            .pressable(enabled = enabled, pressedScale = 0.82f, onClick = onClick)
+            .pressable(enabled = enabled, pressedScale = 1f, onClick = onClick)
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
