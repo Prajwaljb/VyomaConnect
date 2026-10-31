@@ -3,6 +3,7 @@ package dev.vyoma.connect.ui
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.SolidColor
 import dev.vyoma.connect.designsystem.Haptic
+import dev.vyoma.connect.designsystem.toned
 import dev.vyoma.connect.designsystem.DialogButton
 import androidx.compose.foundation.layout.fillMaxWidth
 import dev.vyoma.connect.designsystem.RowChevron
@@ -371,8 +372,9 @@ private fun PaletteSwatch(palette: Palette, selected: Boolean, modifier: Modifie
                 // Wallpaper option previews the live Material You primary with a soft sweep.
                 Brush.sweepGradient(listOf(MaterialTheme.colorScheme.primary, Color(0xFF5CE1E6), MaterialTheme.colorScheme.primary))
             } else {
-                // Flat: a dark-to-light gradient made them glossy balls.
-                SolidColor(if (dark) palette.dark else palette.light)
+                // Flat: a dark-to-light gradient made them glossy balls. The deep shade the accent fills
+                // with (switches, sliders), not the pastel dark-theme text tone, which read washed out.
+                SolidColor(if (dark) palette.dark.toned(1.2f, 0.5f) else palette.light)
             }
             Box(Modifier.size(44.dp).clip(CircleShape).background(fill), contentAlignment = Alignment.Center) {
                 if (selected) Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))

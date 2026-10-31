@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOff
@@ -223,8 +224,8 @@ private fun Breadcrumbs(path: String, onPick: (String) -> Unit, modifier: Modifi
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // "PC", not "Home": that's the tab's name.
-        Crumb("PC", current = parts.isEmpty()) { onPick("") }
+        // "PC", not "Home": that's the tab's name. Its glyph marks it as a place, not a section label.
+        Crumb("PC", current = parts.isEmpty(), icon = Icons.Rounded.Computer) { onPick("") }
         parts.forEachIndexed { i, name ->
             Icon(
                 Icons.AutoMirrored.Rounded.KeyboardArrowRight, null,
@@ -236,17 +237,23 @@ private fun Breadcrumbs(path: String, onPick: (String) -> Unit, modifier: Modifi
 }
 
 @Composable
-private fun Crumb(name: String, current: Boolean, onClick: () -> Unit) {
-    Text(
-        name,
-        // Accent means tappable everywhere: the folders you can jump back to, not the one you're in.
-        style = if (current) MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold) else MaterialTheme.typography.labelLarge,
-        color = if (current) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
-        maxLines = 1,
+private fun Crumb(name: String, current: Boolean, icon: ImageVector? = null, onClick: () -> Unit) {
+    val tint = if (current) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .then(if (current) Modifier else Modifier.pressable(haptic = Haptic.Select, glass = true, onClick = onClick))
             .padding(horizontal = 10.dp, vertical = 8.dp),
-    )
+    ) {
+      if (icon != null) Icon(icon, null, tint = tint, modifier = Modifier.padding(end = 6.dp).size(18.dp))
+      Text(
+        name,
+        // Accent means tappable everywhere: the folders you can jump back to, not the one you're in.
+        style = if (current) MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold) else MaterialTheme.typography.labelLarge,
+        color = tint,
+        maxLines = 1,
+      )
+    }
 }
 
 @Composable
