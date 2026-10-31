@@ -10,7 +10,7 @@ soft accent-tinted canvas, colorful feature icons, a floating glass tab bar. **P
 per-frame blur except on chrome that content scrolls under, and measure with `dumpsys gfxinfo` after visual changes.
 
 ## Glass (core/designsystem/Glass.kt)
-- Canvas: `Modifier.aurora()` (light: theme background + two cached accent glows; dark: true black, no glow).
+- Canvas: `Modifier.aurora()` (theme background + two cached accent glows near the top; dark: dimmer glows (0.16 vs 0.20), the rest true black).
   Dark mode IS pure black (AMOLED); there's no separate grey dark theme or toggle. No decorative textures (stars were tried and rejected: too specific).
 - Depth tokens: `glassDepth` (`GlassDepth` Dark (true black) / Light) drive every surface so the themes stay consistent.
 - Cards: `Modifier.glassCard(shape, fill?)` = a translucent even sheet (white 9.5% dark / 72% light;

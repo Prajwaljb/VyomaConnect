@@ -428,16 +428,16 @@ fun Modifier.cardSegment(first: Boolean, last: Boolean, radius: Dp = 26.dp): Mod
 }
 
 /**
- * The app canvas: the theme background with, in light mode, two soft glows of the accent near the
- * top. Dark mode is true black throughout, glow and all, for AMOLED screens. Painted once per size and colour into a quarter-resolution bitmap and drawn stretched:
+ * The app canvas: the theme background with two soft glows of the accent near the top. In dark mode
+ * they're dimmer and the rest stays true black (AMOLED); bare black left the glass nothing to show
+ * through or bend. Painted once per size and colour into a quarter-resolution bitmap and drawn stretched:
  * soft gradients survive the upscale untouched, and one textured quad is far cheaper for the GPU
  * than three full-screen gradient fills every frame (again for every glass element replaying it).
  */
 fun Modifier.aurora(): Modifier = composed {
     val base = MaterialTheme.colorScheme.background
     val accent = MaterialTheme.colorScheme.primary
-    if (isDarkUi) return@composed background(base)
-    val strength = 0.20f
+    val strength = if (isDarkUi) 0.16f else 0.20f
     drawWithCache {
         val w = (size.width / AURORA_SCALE).roundToInt().coerceAtLeast(1)
         val h = (size.height / AURORA_SCALE).roundToInt().coerceAtLeast(1)
