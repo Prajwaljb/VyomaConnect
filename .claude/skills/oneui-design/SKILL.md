@@ -29,6 +29,9 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   the switch's haptic; keys tick on touch-down. Every icon-only tappable has a TalkBack label.
 - Like elements, like sizes: every header bubble (back, title, actions) is `CHROME_SIZE` 48 dp; header padding = the page
   gutter; the scroll-edge fade reaches 12 dp below the bubbles. Round controls are true circles (`circle()` in the touchpad).
+- Portrait only (manifest), except the PC screen viewer (sensorLandscape): the user doesn't want landscape anywhere else.
+- The hero title at rest is the LIST's copy (stretches on overscroll with the page); the travelling copy takes over the
+  moment the page moves. Meter labels are one line ("RAM", not "Memory", which wrapped beside 14.6G).
 - Home hero is 24% of the screen (others 30%) so the first action row clears the tab bar. Toggle tiles off = a 0.22 pane
   of their colour (clear glass read as disabled); 0.2–0.5 luminance tones darken 30%. One filled accent (`Glass.accent`)
   for switches, slider fill, chips, keys, pills. Media tint is clamped deep (luminance ≤ 0.06) for 4.5:1 text.

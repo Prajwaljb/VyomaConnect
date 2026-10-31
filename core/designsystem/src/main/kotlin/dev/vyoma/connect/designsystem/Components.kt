@@ -267,14 +267,16 @@ fun CollapsingHeaderScaffold(
                         hero()
                         Spacer(Modifier.height(14.dp))
                     }
-                    // Holds the title's place; the travelling copy above the list is what shows.
+                    // Holds the title's place, and shows it while the page rests at the top: drawn by the
+                    // list, it stretches with everything else when the page is pulled down (the
+                    // travelling copy sits outside the list, so it stayed put while the rest stretched).
                     Text(
                         title,
                         style = heroStyle,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
-                            .graphicsLayer { alpha = 0f }
+                            .graphicsLayer { alpha = if (listState.atTop()) 1f else 0f }
                             .onGloballyPositioned { c ->
                                 val root = anchor.coordinates ?: return@onGloballyPositioned
                                 if (listState.firstVisibleItemIndex != 0 || !root.isAttached) return@onGloballyPositioned
@@ -395,7 +397,9 @@ fun CollapsingHeaderScaffold(
                         scaleY = shrink
                         return@graphicsLayer
                     }
-                    alpha = 1f
+                    // At rest the list's own copy shows (see the placeholder); this one takes over the
+                    // moment the page moves, at the same spot and size.
+                    alpha = if (listState.atTop()) 0f else 1f
                     // It rides with the page until it reaches the bar (by 90% of the collapse at
                     // the latest), then stays there; it shrinks over the same trip.
                     val trip = (rest - inBar).coerceAtLeast(1f)
@@ -409,6 +413,9 @@ fun CollapsingHeaderScaffold(
         )
     } }
 }
+
+/** Scrolled to the very top (pulling past it only stretches). */
+private fun LazyListState.atTop() = firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset == 0
 
 private const val ROOM_KEY = "collapse-room"
 private val BAR_HEIGHT = 64.dp
