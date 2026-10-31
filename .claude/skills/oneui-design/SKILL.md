@@ -10,6 +10,9 @@ soft accent-tinted canvas, colorful feature icons, a floating glass tab bar. **P
 per-frame blur except on chrome that content scrolls under, and measure with `dumpsys gfxinfo` after visual changes.
 
 ## Glass (core/designsystem/Glass.kt)
+- Wide windows (landscape, tablets): `CollapsingHeaderScaffold` centres a column of at most `MaxContentWidth` (560 dp).
+- Dashboard actions: Apple Shortcuts-widget tiles, 4 across in one card, concentric corners (18 dp tile + 10 dp pad), white
+  ink (dark on yellow-bright tones), labels 12 sp. Rejected: round buttons (plastic balls), wide 2-across tiles (abs), app icons.
 - Canvas: `Modifier.aurora()` (theme background + two cached accent glows near the top; dark: dimmer glows (0.16 vs 0.20), the rest true black; `AppCanvas.glow`, from Settings > Background glow, turns them off).
   Dark mode IS pure black (AMOLED); there's no separate grey dark theme or toggle. No decorative textures (stars were tried and rejected: too specific).
 - Depth tokens: `glassDepth` (`GlassDepth` Dark (true black) / Light) (light cards are see-through, white 0.42, so the canvas tint shows; never back to near-solid white) drive every surface so the themes stay consistent.

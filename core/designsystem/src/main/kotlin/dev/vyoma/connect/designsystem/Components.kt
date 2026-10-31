@@ -129,6 +129,9 @@ fun CollapsingHeaderScaffold(
     content: LazyListScope.() -> Unit,
 ) {
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    // Wide windows (landscape, tablets, foldables) keep a phone-width column in the middle: stretched
+    // edge to edge, square cards grew taller than the screen.
+    val side = ((LocalConfiguration.current.screenWidthDp.dp - MaxContentWidth) / 2).coerceAtLeast(16.dp)
     val headerHeight = (screenHeight * 0.30f).coerceIn(180.dp, 300.dp)
     val density = LocalDensity.current
     val headerPx = with(density) { headerHeight.toPx() }
@@ -208,7 +211,7 @@ fun CollapsingHeaderScaffold(
         Box(Modifier.fillMaxSize().backdropSource(backdrop).aurora()) { LazyColumn(
             state = listState,
             contentPadding = PaddingValues(
-                start = 16.dp, end = 16.dp,
+                start = side, end = side,
                 bottom = 24.dp + bottomInset + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -918,6 +921,9 @@ fun GlassDialog(
 
 /** True inside an interactive [glassChrome] button: content shouldn't add its own glass. */
 val LocalOnChrome = staticCompositionLocalOf { false }
+
+/** The widest a page's column gets; wider windows centre it. */
+val MaxContentWidth = 560.dp
 
 /**
  * An icon button that squishes and bounces like everything else (Material's IconButton only

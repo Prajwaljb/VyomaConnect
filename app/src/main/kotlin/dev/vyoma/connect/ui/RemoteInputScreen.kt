@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import dev.vyoma.connect.designsystem.BounceIconButton
@@ -278,7 +280,8 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                 Text(
                     "Tap to click · two fingers to scroll or right-click · hold to drag",
                     Modifier.align(Alignment.BottomCenter).padding(16.dp),
-                    style = MaterialTheme.typography.labelSmall,
+                    // Balanced lines, centred: no lone "drag" on a line of its own.
+                    style = MaterialTheme.typography.labelSmall.copy(lineBreak = LineBreak.Heading, textAlign = TextAlign.Center),
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 )
             }
