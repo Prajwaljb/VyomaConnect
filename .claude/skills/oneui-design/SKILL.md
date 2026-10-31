@@ -27,7 +27,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a plain
   even fill plus a 0.9 dp specular hairline that follows the phone's tilt (a FIXED painted rim read as fake; the user
   asked for it back once it moved like iOS 26); pass `color` for accent/tinted or for chips over artwork (dark translucent).
-- Light: `SpecularLight.angle` (Light.kt) is where the light is on screen (225° = top left at rest), driven by the
+- Light: `SpecularLight.angle` (Light.kt) is where the light is on screen (250° = up, a little left, at rest; gain 2.2x tilt), driven by the
   gravity sensor only while the UI is started (`TrackSpecularLight` in `VyomaTheme`), smoothed, 1.5° dead band. Every
   specular edge uses it: `specularRim(...)` (chrome stroke, raised controls) and the AGSL `light` uniform (lens rims).
   Read it only in draw lambdas, never in composition. A still phone renders ~0 frames; measured no jank cost.

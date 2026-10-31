@@ -21,12 +21,13 @@ import kotlin.math.hypot
 
 /**
  * Where the light comes from, as seen on the screen: the angle the specular edges are brightest
- * at, in degrees clockwise from 3 o'clock (225 = top left). It stays up in the room as the phone
+ * at, in degrees clockwise from 3 o'clock (270 = straight up). At rest it's up and a little to the
+ * left, like Apple's glass. It stays up in the room as the phone
  * tilts, like iOS's glass, so turning the phone slides the highlight around the edges. Read it only
  * while drawing: a change then redraws the highlights, never recomposes or relayouts.
  */
 object SpecularLight {
-    const val REST = 225f
+    const val REST = 250f
 
     var angle by mutableFloatStateOf(REST)
         private set
@@ -109,10 +110,10 @@ private class TiltListener(private val context: Context) : SensorEventListener {
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
     private companion object {
-        const val SMOOTH = 0.15f
+        const val SMOOTH = 0.2f
         const val WARMUP = 8
-        /** A little livelier than the room's real up, so ordinary handling visibly moves it. */
-        const val GAIN = 1.4f
-        const val RANGE = 110f
+        /** Livelier than the room's real up, so even small, ordinary handling visibly moves it. */
+        const val GAIN = 2.2f
+        const val RANGE = 140f
     }
 }
