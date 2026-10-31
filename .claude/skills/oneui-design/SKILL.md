@@ -255,9 +255,13 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   any release without a tap (slid off, scroll took it) still flows home with a soft wobble from wherever the dip
   was (a flat ease read as the press stalling halfway).
 - Long-press menu motion: opens width-first (spring 0.8/700) with the height pouring after (0.6/340); items fade in
-  past 60% formed. Closing: items out in 90 ms, then the empty drop drains home, height first (critically damped
-  520) and width after (300), no bounce; touches pass through the moment it starts closing. The pressed element
-  stays undimmed (scrim has a hole).
+  past 60% formed. Closing: items (110 ms) and the glass fade together while the drop drains toward the element,
+  height first (critically damped 340) and width after (220), no bounce; the glass is fully transparent by 35%
+  drained and the menu ends there (draining all the way, it sat over the button as an opaque blurred blob and then
+  vanished: the user called it glitchy). Touches pass through the moment it starts closing. The pressed element
+  stays undimmed (scrim has a hole). Pickers (PC output on the volume card, media player) use the same menu
+  poured from their capsule/button, current item checked; never a dialog. Tiles with a hold menu show a quiet
+  "•••" (MoreHoriz, 60% ink) in the chevron's corner; one mark per tile.
 - Things that hit a limit stretch (rubber band, diminishing) instead of stopping dead: see the volume bar.
 - Navigation: push slides the page in from the right over a parallaxed parent; back follows the thumb through
   `SeekableTransitionState` (linear timeline while seeking, spring on commit/cancel). Tabs drift 1/12 width in the

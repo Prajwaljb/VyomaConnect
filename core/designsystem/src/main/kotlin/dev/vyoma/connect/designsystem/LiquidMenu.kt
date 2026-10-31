@@ -143,13 +143,15 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
         if (closing) return
         closing = true
         scope.launch {
-            // Empties first, then drains back into the element: height leads, width trails, so it
-            // narrows into the tile like water running home rather than shrinking as a box.
+            // Drains back towards the element while the items and the glass fade together: height
+            // leads, width trails, so it narrows like water running home rather than shrinking as a box.
             launch { scrim.animateTo(0f, VyomaMotion.effects()) }
-            ink.animateTo(0f, INK_OUT)
-            val narrow = launch { wide.animateTo(0f, DRAIN_WIDE) }
-            tall.animateTo(0f, DRAIN_TALL)
-            narrow.join()
+            launch { ink.animateTo(0f, INK_OUT) }
+            launch { wide.animateTo(0f, DRAIN_WIDE) }
+            launch { tall.animateTo(0f, DRAIN_TALL) }
+            // The glass has faded out by here (see the drop's alpha): end without waiting for it
+            // to settle on the element.
+            snapshotFlow { minOf(wide.value, tall.value) <= GONE_AT }.first { it }
             onGone()
         }
         // Act at once; the drop flows home while it happens.
@@ -205,6 +207,16 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                 }
                 // Taps on the glass stay on the glass.
                 .then(if (closing) Modifier else Modifier.pointerInput(Unit) { detectTapGestures { } })
+                // Closing, the glass dissolves the whole way while it drains towards the element
+                // and is gone before it gets there: arriving whole, it sat over the button as an
+                // opaque blurred blob, then vanished in one frame.
+                .graphicsLayer {
+                    alpha = if (!closing) 1f else {
+                        val t = ((minOf(wide.value, tall.value) - GONE_AT) / (1f - GONE_AT)).coerceIn(0f, 1f)
+                        t * t * (3f - 2f * t)
+                    }
+                    compositingStrategy = CompositingStrategy.ModulateAlpha
+                }
                 .glassChrome(backdrop, MenuShape, blur = 13.dp, bevel = 16.dp)
                 .clip(MenuShape),
         ) {
@@ -264,6 +276,8 @@ private const val SCRIM = 0.35f
 private val POUR_WIDE = spring<Float>(dampingRatio = 0.8f, stiffness = 700f)
 private val POUR_TALL = spring<Float>(dampingRatio = 0.6f, stiffness = 340f)
 /** Closing: no overshoot (a drop flowing home doesn't bounce off the tile), height a beat ahead. */
-private val DRAIN_TALL = spring<Float>(dampingRatio = 1f, stiffness = 520f)
-private val DRAIN_WIDE = spring<Float>(dampingRatio = 1f, stiffness = 300f)
-private val INK_OUT = tween<Float>(90, easing = LinearEasing)
+private val DRAIN_TALL = spring<Float>(dampingRatio = 1f, stiffness = 340f)
+private val DRAIN_WIDE = spring<Float>(dampingRatio = 1f, stiffness = 220f)
+private val INK_OUT = tween<Float>(110, easing = LinearEasing)
+/** How far drained the drop is when it has faded out and the menu ends. */
+private const val GONE_AT = 0.35f
