@@ -30,6 +30,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Light: `SpecularLight.angle` (Light.kt) is where the light is on screen (250° = up, a little left, at rest; gain 2.2x tilt), driven by the
   gravity sensor only while the UI is started (`TrackSpecularLight` in `VyomaTheme`), smoothed, 1.5° dead band. Every
   specular edge uses it: `specularRim(...)` (chrome stroke, raised controls) and the AGSL `light` uniform (lens rims).
+- Rims follow Apple's iOS 26 glass (user's reference shots): a broad highlight facing the light plus one ~80% as bright
+  opposite (`specularRim(opposite = 0.8f)`), and `innerGlow(...)`, a soft band of light a few dp deep just inside the
+  edge (cards 7 dp at `GlassDepth.band`, chrome ≤4 dp at 30% white in dark, raised ≤4 dp). Hairline-only rims read
+  as dull grey slabs on true black; the band is what makes it glass. Lite glass keeps the band.
   Read it only in draw lambdas, never in composition. A still phone renders ~0 frames; measured no jank cost.
   Coloured solid objects (IconBadge, DeviceGlyph) take `Modifier.specularEdge(shape, width)` like iOS 26 icon edges.
   Tilt moves LIGHT only. A canvas parallax (aurora drifting up to 36 dp) was built and removed: unnoticeable behind
