@@ -27,9 +27,7 @@ import dev.vyoma.connect.designsystem.specularEdge
 import dev.vyoma.connect.designsystem.toned
 import dev.vyoma.connect.designsystem.glassRaised
 import dev.vyoma.connect.designsystem.glassCard
-import dev.vyoma.connect.designsystem.glassDepth
 import dev.vyoma.connect.designsystem.IconBadge
-import androidx.compose.ui.graphics.lerp
 import dev.vyoma.connect.designsystem.LiquidSlider
 import dev.vyoma.connect.designsystem.isDarkUi
 import androidx.compose.material.icons.automirrored.rounded.VolumeMute
@@ -68,6 +66,7 @@ import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.snap
@@ -634,60 +633,54 @@ private class Control(
 )
 
 /**
- * Two across, One UI quick-panel style: each action its own glass tile with a coloured icon badge
- * and its label, straight on the page (no card behind). Toggles fill with their colour while on.
- * Replaced round buttons in a card, which read as odd.
+ * Four across in one glass card, like a home-screen folder: each action an app-icon squircle in
+ * its colour, label under it. A toggle that's off is a clear glass squircle with a coloured glyph
+ * and fills with its colour when on. Round buttons here read as plastic balls and per-action
+ * tiles as a stack of pills; icons are what this is.
  */
 @Composable
 private fun ControlGrid(controls: List<Control>, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        controls.chunked(2).forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                row.forEach { c -> ControlTile(c, Modifier.weight(1f)) }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
+    Column(
+        modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.extraLarge).padding(vertical = 18.dp, horizontal = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        controls.chunked(4).forEach { row ->
+            Row(Modifier.fillMaxWidth()) {
+                row.forEach { c -> ControlIcon(c, Modifier.weight(1f)) }
+                repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }
 }
 
 @Composable
-private fun ControlTile(c: Control, modifier: Modifier) {
+private fun ControlIcon(c: Control, modifier: Modifier) {
     val tone = c.color.color
-    val on by animateFloatAsState(if (c.active) 1f else 0f, VyomaMotion.effects(), label = "ctlOn")
-    val base = glassDepth.fill
+    val filled = !c.toggle || c.active
     val haptic = when {
         !c.toggle -> Haptic.Tap
         c.active -> Haptic.ToggleOff
         else -> Haptic.ToggleOn
     }
-    Row(
-        modifier
-            .height(64.dp)
-            .pressable(haptic = haptic, onClick = c.onClick)
-            .glassCard(TileShape, fill = if (on > 0.01f) lerp(base, tone, on) else null)
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (on > 0.5f) {
-            // On: the tile carries the colour, so the badge turns white with a coloured glyph.
-            Box(Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(Color.White), contentAlignment = Alignment.Center) {
-                Icon(c.icon, null, tint = tone, modifier = Modifier.size(20.dp))
+    Column(modifier.pressable(pressedScale = 1f, haptic = haptic, onClick = c.onClick), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.pressScale(0.88f)) {
+            Crossfade(filled, animationSpec = VyomaMotion.effects(), label = "ctlIcon") { on ->
+                if (on) {
+                    IconBadge(c.icon, tone, size = 52.dp)
+                } else {
+                    Box(Modifier.size(52.dp).glassRaised(IconShape), contentAlignment = Alignment.Center) {
+                        Icon(c.icon, null, tint = tone, modifier = Modifier.size(28.dp))
+                    }
+                }
             }
-        } else {
-            IconBadge(c.icon, tone)
         }
-        Spacer(Modifier.width(10.dp))
-        Text(
-            c.label,
-            style = MaterialTheme.typography.titleSmall,
-            color = lerp(MaterialTheme.colorScheme.onSurface, Color.White, on),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Spacer(Modifier.height(6.dp))
+        Text(c.label, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
-private val TileShape = RoundedCornerShape(22.dp)
+/** IconBadge's squircle at 52 dp. */
+private val IconShape = RoundedCornerShape(52.dp * 0.28f)
 
 /** "Just now" for the first minute, then "5 min. ago" and so on. */
 internal fun ago(time: Long): CharSequence {
