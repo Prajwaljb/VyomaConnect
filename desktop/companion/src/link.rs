@@ -70,9 +70,28 @@ pub struct Link {
     pub phone_identity: Value,
 }
 
+/// Notices a phone that went away without a word (app reinstalled or killed, Wi-Fi dropped, its
+/// FIN lost on the way): probes after 15 s idle, every 5 s, 3 misses; unacknowledged data gives up
+/// after 30 s. Without it a half-open link looked alive for good, so the companion never redialled
+/// and the dashboard lost its gauges until a restart.
+fn keepalive(tcp: &TcpStream) {
+    use std::os::fd::AsRawFd;
+    let fd = tcp.as_raw_fd();
+    let set = |level: libc::c_int, name: libc::c_int, value: libc::c_int| {
+        // SAFETY: a plain setsockopt on a socket we own, with an int-sized value.
+        unsafe { libc::setsockopt(fd, level, name, (&value as *const libc::c_int).cast(), size_of::<libc::c_int>() as libc::socklen_t) };
+    };
+    set(libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1);
+    set(libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, 15);
+    set(libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, 5);
+    set(libc::IPPROTO_TCP, libc::TCP_KEEPCNT, 3);
+    set(libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT, 30_000);
+}
+
 pub async fn connect(addr: SocketAddr, me: &Identity, identity: &Value, phone_id: &str, pinned_cert: &[u8]) -> Result<Link> {
     let mut tcp = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr)).await.context("connect timed out")??;
     tcp.set_nodelay(true)?;
+    keepalive(&tcp);
     let mut hello = serde_json::to_vec(identity)?;
     hello.push(b'\n');
     tcp.write_all(&hello).await?;
