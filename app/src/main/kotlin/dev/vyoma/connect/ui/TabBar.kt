@@ -150,9 +150,8 @@ fun TabsRoot(tab: Tab, onTab: (Tab) -> Unit, onTouchpad: () -> Unit, content: @C
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TabBar(tab, onTab, backdrop)
-            // No swelling lens under the finger: it fought the glyph's squish, and the screen changes at once anyway.
             Box(
-                Modifier.size(BarHeight).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp).pressable(pressedScale = 0.82f, onClick = onTouchpad),
+                Modifier.size(BarHeight).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp, interactive = true).pressable(pressedScale = 1f, onClick = onTouchpad),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(Icons.Rounded.TouchApp, "Touchpad", tint = MaterialTheme.colorScheme.onBackground)

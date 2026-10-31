@@ -187,8 +187,8 @@ private val DarkDepth = GlassDepth(
     rimLit = Color.White.copy(alpha = 0.42f), rimBase = Color.White.copy(alpha = 0.06f),
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
     glow = Color.White.copy(alpha = 0.04f),
-    band = Color.White.copy(alpha = 0.42f),
-    shade = Color.Black.copy(alpha = 0.6f),
+    band = Color.White.copy(alpha = 0.34f),
+    shade = Color.Black.copy(alpha = 0.4f),
 )
 private val LightDepth = GlassDepth(
     // See-through, so the canvas's tint shows in the card (0.72 read as solid white blocks).
@@ -197,7 +197,7 @@ private val LightDepth = GlassDepth(
     rimLit = Color.White, rimBase = Color(0xFF1A2B4C).copy(alpha = 0.06f),
     shadow = Color(0xFF1A2B4C).copy(alpha = 0.05f), shadowBlur = 14f, shadowDrop = 3f,
     band = Color.White.copy(alpha = 0.7f),
-    shade = Color(0xFF1A2B4C).copy(alpha = 0.14f),
+    shade = Color(0xFF1A2B4C).copy(alpha = 0.09f),
 )
 
 /** The current theme's [GlassDepth]. */
@@ -290,9 +290,9 @@ half4 main(float2 xy) {
     // inside, with a shallow dip the other way past the roll (the liquid S of a thick drop).
     float v = clamp(-d / depth, 0.0, 1.0);
     float u = (v - 0.62) / 0.17;
-    float slope = (1.0 - v) * (1.0 - v) - 0.3 * exp(-u * u);
+    float slope = (1.0 - v) * (1.0 - v) - 0.2 * exp(-u * u);
     float lit = slope * f;
-    a = min(a + float(color.a) * 0.45 * max(lit, 0.0), 1.0);
+    a = min(a + float(color.a) * 0.3 * max(lit, 0.0), 1.0);
     float s = min(float(shade.a) * max(-lit, 0.0), 1.0);
     // White over the shade, premultiplied.
     return half4(color.rgb * half(a) + shade.rgb * half(s * (1.0 - a)), half(a + s * (1.0 - a)));
@@ -407,7 +407,7 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
             val glow = InnerGlow()
             val band = Color.White.copy(alpha = if (base != null) 0.42f else if (dark) 0.34f else 0.6f)
             val bandWidth = (size.minDimension * 0.12f).coerceAtMost(4.dp.toPx())
-            val shade = if (dark || base != null) Color.Black.copy(alpha = 0.45f) else Color(0xFF1A2B4C).copy(alpha = 0.12f)
+            val shade = if (dark || base != null) Color.Black.copy(alpha = 0.3f) else Color(0xFF1A2B4C).copy(alpha = 0.08f)
             val roll = (size.minDimension * 0.3f).coerceAtMost(12.dp.toPx())
             onDrawBehind {
                 drawOutline(outline, fill)
@@ -540,9 +540,10 @@ fun Modifier.glassChrome(
     edge: Boolean = true,
     bevel: Dp = 0.dp,
     /**
-     * A button made of this glass: under a finger it swells a little and magnifies what's behind
-     * it, in place. The glass never scales as a layer (that slid the blurred backdrop around
-     * inside it); the glyph inside squishes on its own.
+     * A button made of this glass: under a finger it swells like a bubble and wobbles back on
+     * release, glyph and all held still inside it (a glyph squishing the other way, or the glass
+     * magnifying, read as glitches). The glass never scales as a layer (that slid the blurred
+     * backdrop around inside it).
      */
     interactive: Boolean = false,
 ): Modifier = composed {
@@ -556,6 +557,7 @@ fun Modifier.glassChrome(
     // The rim's inner band of light (see InnerGlow).
     val glow = remember { InnerGlow() }
     val band = Color.White.copy(alpha = if (isDarkUi) 0.52f else 0.6f)
+    val shade = if (isDarkUi) Color.Black.copy(alpha = 0.35f) else Color(0xFF1A2B4C).copy(alpha = 0.08f)
     val edgeBrush = Glass.edge
     val dark = isDarkUi
     val lens = remember(bevel) { if (bevel > 0.dp && liquidGlassSupported) LiquidGlass() else null }
@@ -571,7 +573,8 @@ fun Modifier.glassChrome(
                     do {
                         val e = awaitPointerEvent()
                     } while (e.changes.any { it.pressed })
-                    scope.launch { press.animateTo(0f, VyomaMotion.release()) }
+                    // Thrown back: overshoots smaller and wobbles in, like a bubble settling.
+                    scope.launch { press.animateTo(0f, VyomaMotion.jelly(), initialVelocity = -4f) }
                 }
             },
         )
@@ -582,10 +585,11 @@ fun Modifier.glassChrome(
             if (size.width < 1f || size.height < 1f) return@drawBehind
             // Read while drawing, so switching it redraws every element in place.
             val bandWidth = (size.minDimension * 0.1f).coerceAtMost(4.dp.toPx())
+            val roll = (size.minDimension * 0.3f).coerceAtMost(14.dp.toPx())
             if (GlassQuality.lite) {
                 val outline = shape.createOutline(size, layoutDirection, this)
                 drawOutline(outline, liteFill)
-                with(glow) { draw(outline, band, bandWidth) }
+                with(glow) { draw(outline, band, bandWidth, shade = shade, depth = roll) }
                 // Without the lens the border modifier below draws the edge already.
                 if (edge && lens != null) drawOutline(outline, edgeBrush, style = Stroke(0.75.dp.toPx()))
                 return@drawBehind
@@ -597,7 +601,7 @@ fun Modifier.glassChrome(
                 blurred.record { translate(shift.x, shift.y) { drawLayer(backdrop.layer) } }
                 drawLayer(blurred)
                 drawRect(fill)
-                with(glow) { draw(shape.createOutline(size, layoutDirection, this@drawBehind), band, bandWidth) }
+                with(glow) { draw(shape.createOutline(size, layoutDirection, this@drawBehind), band, bandWidth, shade = shade, depth = roll) }
                 return@drawBehind
             }
             // The rim stays a fifth of the element at most, so small buttons are still mostly clear.
@@ -606,8 +610,9 @@ fun Modifier.glassChrome(
             // beyond its far side.
             val depth = rim * LensStyle.Chrome.depth
             val p = press.value
-            // Pressed, the glass grows past its bounds (drawn bigger, sampled bigger: nothing slides).
-            val grow = (size.minDimension * 0.08f * p).coerceAtLeast(0f)
+            // Pressed, the glass grows past its bounds (drawn bigger, sampled bigger: nothing slides);
+            // settling, it may dip a little under its size.
+            val grow = (size.minDimension * 0.08f * p).coerceAtLeast(-size.minDimension * 0.04f)
             val g = Size(size.width + 2 * grow, size.height + 2 * grow)
             // The far side plus what lies beyond it, and room for the inflated shape and the blur.
             val m = (rim * 2f).roundToInt() + 12
@@ -620,7 +625,7 @@ fun Modifier.glassChrome(
             val inflate = 2f / q
             val gs = Size(g.width + 2 * inflate, g.height + 2 * inflate)
             blurred.renderEffect = lens.effect(
-                gs * q, (m - inflate) * q, radius = gs.minDimension / 2 * q, bevel = rim * q, refract = depth * q, zoom = 1f + 0.14f * p,
+                gs * q, (m - inflate) * q, radius = gs.minDimension / 2 * q, bevel = rim * q, refract = depth * q, zoom = 1f,
                 // Clear in dark mode; light mode keeps more milk so dark labels stay legible over photos.
                 disperse = LensStyle.Chrome.disperse, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.92f),
                 spec = 0.15f + 0.2f * p.coerceIn(0f, 1f), shade = if (dark) 0f else 0.1f, blur = r * q,
@@ -635,7 +640,7 @@ fun Modifier.glassChrome(
             clipPath(edgePath) {
                 translate(-o, -o) { scale(1f / q, 1f / q, pivot = Offset.Zero) { drawLayer(blurred) } }
             }
-            with(glow) { draw(shape.createOutline(size, layoutDirection, this@drawBehind), band, bandWidth) }
+            with(glow) { draw(shape.createOutline(size, layoutDirection, this@drawBehind), band, bandWidth, shade = shade, depth = roll) }
             // The highlight: brightest where it faces the light and its opposite; it follows the tilt.
             val pr = p.coerceIn(0f, 1f)
             drawPath(
