@@ -21,7 +21,8 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Movie
-import dev.vyoma.connect.designsystem.IconBadge
+import dev.vyoma.connect.designsystem.isDarkUi
+import androidx.compose.ui.graphics.lerp
 import dev.vyoma.connect.designsystem.glassCard
 import dev.vyoma.connect.designsystem.glassRaised
 import dev.vyoma.connect.designsystem.pressable
@@ -211,18 +212,23 @@ private val PC_FOLDERS = listOf(
     PcFolderLink("Videos", "Videos", Icons.Rounded.Movie, SystemColor.ORANGE),
 )
 
-/** A PC folder as a clear glass tile: its glyph in a coloured badge, its name under. */
+/**
+ * A PC folder as a clear glass tile: its glyph bare in its colour, its name under. (A coloured
+ * badge inside the tile inside the card was three nested boxes.) 16 dp corners sit concentric in
+ * the 26 dp card's 10 dp padding.
+ */
 @Composable
 private fun FolderTile(f: PcFolderLink, modifier: Modifier, onClick: () -> Unit) {
+    val tone = f.color.color
     Column(
         modifier
             .height(88.dp)
             .pressable(onClick = onClick)
-            .glassRaised(RoundedCornerShape(18.dp))
+            .glassRaised(RoundedCornerShape(16.dp))
             .padding(12.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        IconBadge(f.icon, f.color.color)
+        Icon(f.icon, null, tint = if (isDarkUi) tone else lerp(tone, Color.Black, 0.35f), modifier = Modifier.size(28.dp))
         Text(f.name, style = MaterialTheme.typography.labelLarge, maxLines = 1)
     }
 }
