@@ -14,7 +14,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 
 /**
- * [pressable] with a second job on a long press, usually opening a [LiquidMenu] that pours out of
+ * [pressable] with a second job on a long press, usually opening a menu ([MenuHost]) that pours out of
  * the element. The element itself only dips like any press: a lens over the button (tried) didn't
  * match its shape and the user rejected it; the liquid glass belongs to the menu. Without
  * [onLongClick] it's a plain [pressable].

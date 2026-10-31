@@ -37,6 +37,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
+import dev.vyoma.connect.designsystem.MenuHost
 import dev.vyoma.connect.designsystem.StatusHost
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -98,7 +99,7 @@ class MainActivity : ComponentActivity() {
                     enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
                 }
                 val onboarding by vm.showOnboarding.collectAsStateWithLifecycle()
-                StatusHost { Crossfade(onboarding, animationSpec = VyomaMotion.effects(), label = "onboarding") { show ->
+                StatusHost { MenuHost { Crossfade(onboarding, animationSpec = VyomaMotion.effects(), label = "onboarding") { show ->
                     when (show) {
                         true -> OnboardingScreen(vm, onDone = { vm.finishOnboarding() })
                         false -> {
@@ -108,7 +109,7 @@ class MainActivity : ComponentActivity() {
                         // Still reading settings: just the themed background, no flash of Home.
                         null -> Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
                     }
-                } }
+                } } }
             }
         }
     }

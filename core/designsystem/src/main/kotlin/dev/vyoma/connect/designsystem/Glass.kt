@@ -663,8 +663,11 @@ fun Modifier.glassChrome(
             val q = CHROME_RES
             val inflate = 2f / q
             val gs = Size(g.width + 2 * inflate, g.height + 2 * inflate)
+            // The shape's own corner (a menu is a rounded rect); pills and circles come out as half the height.
+            val corner = ((shape.createOutline(size, layoutDirection, this) as? Outline.Rounded)?.roundRect?.topLeftCornerRadius?.x
+                ?: size.minDimension / 2).coerceAtMost(size.minDimension / 2) + grow
             blurred.renderEffect = lens.effect(
-                gs * q, (m - inflate) * q, radius = gs.minDimension / 2 * q, bevel = rim * q, refract = depth * q, zoom = 1f,
+                gs * q, (m - inflate) * q, radius = (corner + inflate) * q, bevel = rim * q, refract = depth * q, zoom = 1f,
                 // Clear in dark mode; light mode keeps more milk so dark labels stay legible over photos.
                 disperse = LensStyle.Chrome.disperse, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.92f),
                 spec = 0.15f + 0.2f * p.coerceIn(0f, 1f), shade = if (dark) 0f else 0.1f, blur = r * q,
@@ -675,7 +678,7 @@ fun Modifier.glassChrome(
                     translate(shift.x + o, shift.y + o) { drawLayer(backdrop.layer) }
                 }
             }
-            val edgePath = Path().apply { addRoundRect(RoundRect(-grow, -grow, size.width + grow, size.height + grow, CornerRadius(g.minDimension / 2))) }
+            val edgePath = Path().apply { addRoundRect(RoundRect(-grow, -grow, size.width + grow, size.height + grow, CornerRadius(corner))) }
             clipPath(edgePath) {
                 translate(-o, -o) { scale(1f / q, 1f / q, pivot = Offset.Zero) { drawLayer(blurred) } }
             }

@@ -170,18 +170,28 @@ fun CollapsingHeaderScaffold(
     // A page whose content all shows above the tab bar doesn't scroll at all: scrolling only to
     // collapse the title read as broken ("everything fits, why does it scroll?").
     var fits by remember { mutableStateOf(false) }
-    val barClearance = with(density) { 24.dp.roundToPx() }
+    // It must clear the tab bar (or the nav bar) by a real gap: ending flush against it read as cut
+    // off, a page that wouldn't scroll to show its last row.
+    val barClearance = with(density) { (24.dp - 12.dp).roundToPx() }
     LaunchedEffect(listState, distance) {
         snapshotFlow {
             val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull { it.key != ROOM_KEY } ?: return@snapshotFlow null
-            if (listState.firstVisibleItemIndex != 0 || last.index != info.totalItemsCount - 2) return@snapshotFlow null
+            val last = info.visibleItemsInfo.lastOrNull { it.key != ROOM_KEY }
+            // Scrolled, or the last real item is off screen: the page overflows, so it scrolls. (This
+            // used to leave the last answer standing: a page that first loaded short, like a folder
+            // still loading or Home before the PC appeared, stayed unscrollable once it grew.)
+            if (last == null || listState.firstVisibleItemIndex != 0 || last.index != info.totalItemsCount - 2) {
+                return@snapshotFlow Pair(false, null)
+            }
             val end = last.offset + last.size + listState.firstVisibleItemScrollOffset
-            // Where the floating tab bar (and the nav bar) begins: the list's end padding less its own gap.
+            // A gap above where the floating tab bar (and the nav bar) begins: the list's end padding less part of its own gap.
             val visibleEnd = info.viewportEndOffset - (info.afterContentPadding - barClearance)
             val overflow = end + info.afterContentPadding - info.viewportEndOffset
             Pair(end <= visibleEnd, if (overflow <= 0) 0 else (distance.roundToInt() - overflow).coerceAtLeast(0))
-        }.collect { if (it != null) { fits = it.first; room = if (it.first) 0 else it.second } }
+        }.collect { (f, r) ->
+            fits = f
+            if (f) room = 0 else if (r != null) room = r
+        }
     }
     // Settles back to the top if the content shrank to fit while scrolled.
     LaunchedEffect(fits) { if (fits && listState.firstVisibleItemScrollOffset > 0) listState.animateScrollToItem(0) }
