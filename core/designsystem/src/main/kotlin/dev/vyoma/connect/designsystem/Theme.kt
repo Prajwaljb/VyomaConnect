@@ -52,6 +52,7 @@ fun VyomaTheme(settings: ThemeSettings = ThemeSettings(), content: @Composable (
         DarkMode.DARK -> true
     }
     val context = LocalContext.current
+    remember(context) { Haptics.attach(context) }
     val target = remember(settings, dark) {
         val accentSource: ColorScheme? = if (settings.palette == Palette.DYNAMIC && Build.VERSION.SDK_INT >= 31) {
             if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)

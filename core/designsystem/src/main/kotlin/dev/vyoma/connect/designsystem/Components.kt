@@ -1,5 +1,8 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.Icons
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -185,8 +188,31 @@ fun CollapsingHeaderScaffold(
     // Leaving, the bubble pops: it keeps its size around the title and swells a little as it
     // fades (shrinking into a dot behind full-size text looked wrong).
     val bubblePop = remember { Animatable(0f) }
+    val haptics = LocalHapticFeedback.current
+    // A list flung into either end lands with a soft tick (only while scrolling, so a page that
+    // opens at the top stays quiet).
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.canScrollBackward to listState.canScrollForward }.collect { (back, fwd) ->
+            if (listState.isScrollInProgress && (!back || !fwd) && listState.layoutInfo.totalItemsCount > 0) haptics.perform(Haptic.Detent)
+        }
+    }
+    val barCentre = statusTop + with(density) { BAR_HEIGHT.toPx() } / 2f
+    // How far the travelling title sits below its place in the bar: 0 once docked.
+    fun titleDrop(): Float {
+        val rest = restY
+        if (rest.isNaN()) return if (collapse < 1f) Float.MAX_VALUE else 0f
+        val trip = (rest - barCentre).coerceAtLeast(1f)
+        return trip - (collapse * maxOf(distance, trip / 0.9f)).coerceAtMost(trip)
+    }
+    val dockSlop = with(density) { 6.dp.toPx() }
     LaunchedEffect(Unit) {
-        snapshotFlow { collapse > 0.72f }.collect { on ->
+        // The bubble belongs to the title: it forms as the title docks and bursts the moment it
+        // leaves, so a fast fling never leaves an empty bubble fading behind the text.
+        var first = true
+        snapshotFlow { titleDrop() < dockSlop }.collect { on ->
+            // Felt as it forms and as it bursts, not when a page opens already scrolled.
+            if (!first && (on || bubbleH.value > 0f)) haptics.perform(Haptic.Bubble)
+            first = false
             if (on) {
                 // Forming, the drop swells to full height first and then spreads sideways with a
                 // wobble; after a pop it starts again from a drop.
@@ -198,7 +224,7 @@ fun CollapsingHeaderScaffold(
                 launch { bubbleH.animateTo(1f, VyomaMotion.leading()) }
                 launch { bubbleW.animateTo(1f, VyomaMotion.jelly()) }
             } else if (bubbleH.value > 0f) {
-                launch { bubblePop.animateTo(1f, tween(220, easing = FastOutSlowInEasing)) }
+                launch { bubblePop.animateTo(1f, tween(140, easing = FastOutSlowInEasing)) }
             }
         }
     }
@@ -311,9 +337,13 @@ fun CollapsingHeaderScaffold(
                         }
                         .graphicsLayer {
                             val pop = bubblePop.value
-                            alpha = 1f - pop
-                            scaleX = 1f + 0.18f * pop
-                            scaleY = 1f + 0.12f * pop
+                            // Rides down with the leaving title and is gone within 16 dp of it.
+                            val drop = titleDrop().coerceAtMost(size.height * 2f)
+                            val away = ((drop - dockSlop) / 16.dp.toPx()).coerceIn(0f, 1f)
+                            alpha = (1f - pop) * (1f - away)
+                            translationY = drop
+                            scaleX = 1f + 0.18f * maxOf(pop, away)
+                            scaleY = 1f + 0.12f * maxOf(pop, away)
                         }
                         .drawWithContent { if (bubblePop.value < 1f) drawContent() }
                         .glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp),
@@ -410,6 +440,11 @@ fun ListRow(
     iconTint: Color = MaterialTheme.colorScheme.primary,
     showDivider: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
+    /** 20 dp in a card; 0 where the container already insets (a dialog's text column). */
+    horizontalPadding: Dp = 20.dp,
+    subtitleMaxLines: Int = Int.MAX_VALUE,
+    /** E.g. monospace for a command or a fingerprint. */
+    subtitleStyle: TextStyle? = null,
     onClick: (() -> Unit)? = null,
 ) {
     Column(modifier) {
@@ -417,7 +452,7 @@ fun ListRow(
             Modifier
                 .fillMaxWidth()
                 .then(if (onClick != null) Modifier.pressable(pressedScale = 0.985f, onClick = onClick) else Modifier)
-                .padding(horizontal = 20.dp, vertical = 14.dp),
+                .padding(horizontal = horizontalPadding, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (icon != null) {
@@ -427,7 +462,13 @@ fun ListRow(
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
                 if (subtitle != null) {
-                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        subtitle,
+                        style = subtitleStyle ?: MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = subtitleMaxLines,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
             if (trailing != null) {
@@ -437,10 +478,29 @@ fun ListRow(
         }
         if (showDivider) {
             HorizontalDivider(
-                Modifier.padding(start = if (icon != null) 70.dp else 20.dp, end = 20.dp),
+                Modifier.padding(start = horizontalPadding + if (icon != null) 50.dp else 0.dp, end = horizontalPadding),
                 color = MaterialTheme.colorScheme.outlineVariant,
             )
         }
+    }
+}
+
+/**
+ * A row's trailing affordance: an optional state ("On", "3 PCs") and a chevron, so every row that
+ * opens something looks like it does.
+ */
+@Composable
+fun RowChevron(state: String? = null) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (state != null) {
+            Text(state, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            Spacer(Modifier.width(2.dp))
+        }
+        Icon(
+            Icons.AutoMirrored.Rounded.KeyboardArrowRight, null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            modifier = Modifier.size(20.dp),
+        )
     }
 }
 
@@ -629,18 +689,19 @@ fun PillButton(
     val bg by animateColorAsState(
         when {
             !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-            prominent -> accent
+            prominent -> Glass.accent
             else -> accent.copy(alpha = 0.14f)
         },
         VyomaMotion.effects(), label = "pillBg",
     )
     val fg = when {
         !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-        prominent -> MaterialTheme.colorScheme.onPrimary
+        prominent -> Color.White
         else -> accent
     }
     Box(
         modifier
+            // 40 dp to look at; Compose already widens the touch target to 48 dp.
             .then(if (large) Modifier.fillMaxWidth().height(54.dp) else Modifier.height(40.dp))
             .pressable(enabled = enabled, pressedScale = if (large) 0.97f else 0.92f, haptic = haptic, glass = true, onClick = onClick)
             // Prominent pills are lit accent glass; the rest are raised glass with an accent label.

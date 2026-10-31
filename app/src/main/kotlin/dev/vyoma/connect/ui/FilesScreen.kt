@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.fadingHorizontalScroll
 import android.content.Intent
 import android.net.Uri
 import android.text.format.DateUtils
@@ -120,7 +121,8 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
     val listState = rememberLazyListState()
     CollapsingHeaderScaffold(
         listState = listState,
-        title = if (path.isEmpty()) "Home" else path.substringAfterLast('/'),
+        // The root is named like the tile that opens it ("Home" is the tab's name, and the first crumb's).
+        title = if (path.isEmpty()) "PC files" else path.substringAfterLast('/'),
         subtitle = when {
             plugin == null -> pcName
             shown == null || (shown.loading && shown.entries.isEmpty()) -> "$pcName · Loading…"
@@ -148,7 +150,8 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
 
         item(key = "crumbs") {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Breadcrumbs(path, onPick = { path = it }, modifier = Modifier.weight(1f))
+                // Inset so the first crumb's text lines up with the card text below.
+                Breadcrumbs(path, onPick = { path = it }, modifier = Modifier.weight(1f).padding(start = 10.dp))
                 // Into the folder on screen; the dashboard's Send drops files in the PC's Downloads instead.
                 PillButton("Upload here", prominent = false, onClick = { upload.launch(arrayOf("*/*")) })
             }
@@ -215,7 +218,7 @@ private fun Breadcrumbs(path: String, onPick: (String) -> Unit, modifier: Modifi
     // Deep paths keep the folder you're in visible.
     LaunchedEffect(path) { scroll.animateScrollTo(scroll.maxValue) }
     Row(
-        modifier.horizontalScroll(scroll).padding(bottom = 2.dp),
+        modifier.fadingHorizontalScroll(scroll).padding(end = 8.dp, bottom = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -247,9 +250,7 @@ private fun Crumb(name: String, current: Boolean, onClick: () -> Unit) {
 private fun FileRow(f: PcFile, busy: Boolean, showDivider: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val context = LocalContext.current
     val (icon, color) = if (f.isDir) Icons.Rounded.Folder to SystemColor.BLUE else kindOf(f.name)
-    val date = if (f.modified > 0) {
-        DateUtils.getRelativeTimeSpanString(f.modified, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_ALL).toString()
-    } else null
+    val date = if (f.modified > 0) ago(f.modified).toString() else null
     ListRow(
         title = f.name,
         subtitle = listOfNotNull(if (f.isDir) null else Formatter.formatShortFileSize(context, f.size), date).joinToString(" · ").ifEmpty { null },
@@ -281,8 +282,8 @@ private fun kindOf(name: String): Pair<ImageVector, SystemColor> = when (name.su
 
 private const val ENTRY = "entry"
 
-/** File rows are list items of their own; this cancels the list's gap so they sit edge to edge on one card. */
-private fun Modifier.joinNext() = layout { measurable, constraints ->
+/** Rows that are list items of their own (files, clipboard history); this cancels the list's gap so they sit edge to edge on one card. */
+internal fun Modifier.joinNext() = layout { measurable, constraints ->
     val p = measurable.measure(constraints)
     layout(p.width, p.height - 12.dp.roundToPx()) { p.place(0, 0) }
 }

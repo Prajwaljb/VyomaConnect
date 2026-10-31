@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.VyomaMotion
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.runtime.getValue
@@ -189,7 +190,8 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             ) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text("Touchpad", style = MaterialTheme.typography.titleLarge)
+                // Named for how it was opened: the Keyboard tile shouldn't land on a screen called Touchpad.
+                Text(if (startWithKeyboard) "Keyboard" else "Touchpad", style = MaterialTheme.typography.titleLarge)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     ConnectionOrb(if (target != null) OrbState.CONNECTED else OrbState.OFFLINE, size = 7.dp)
                     Text(target?.identity?.deviceName ?: "No PC connected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -459,7 +461,7 @@ private fun MouseButton(label: String, modifier: Modifier, onClick: () -> Unit) 
     Box(
         modifier.fillMaxSize().pressable(glass = true, onClick = onClick).glassRaised(CircleShape),
         contentAlignment = Alignment.Center,
-    ) { Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    ) { Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface) }
 }
 
 /** A key that shares its row evenly; either a short label or an icon. */
@@ -475,15 +477,15 @@ private fun RowScope.Key(
 ) {
     val bg by animateColorAsState(
         when {
-            selected -> MaterialTheme.colorScheme.primary
-            accent -> MaterialTheme.colorScheme.primaryContainer
+            selected -> Glass.accent
             else -> Glass.raised
         },
-        label = "key",
+        VyomaMotion.effects(), label = "key",
     )
+    // Only toggles fill (Fn, keyboard); Enter is marked by an accent glyph, so it never reads as "on".
     val fg = when {
-        selected -> MaterialTheme.colorScheme.onPrimary
-        accent -> MaterialTheme.colorScheme.onPrimaryContainer
+        selected -> Color.White
+        accent -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurface
     }
     Box(
@@ -582,7 +584,7 @@ private fun ScrollStrip(modifier: Modifier, onScroll: (Float) -> Unit, onClick: 
     }
 }
 
-private val KEY_HEIGHT = 46.dp
+private val KEY_HEIGHT = 48.dp
 
 /** Held arrows and backspace switch from characters to whole words after ~1 s of repeats. */
 private const val WORD_AFTER = 14

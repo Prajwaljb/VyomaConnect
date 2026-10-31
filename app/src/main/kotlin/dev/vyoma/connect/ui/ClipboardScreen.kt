@@ -1,5 +1,9 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.material.icons.rounded.ContentPaste
+import dev.vyoma.connect.designsystem.cardSegment
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.getValue
 import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.PillButton
@@ -62,14 +66,14 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
         actions = { if (history.isNotEmpty()) BounceIconButton(onClick = { clearing = true }) { Icon(Icons.Rounded.DeleteSweep, "Clear history") } },
     ) {
         item(key = "send") {
-            SectionCard(contentPadding = PaddingValues(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Send what's copied", style = MaterialTheme.typography.titleMedium)
-                        Text("Pushes this phone's clipboard to your PC", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    PillButton("Send", onClick = { context.startActivity(ClipboardActivity.intent(context)) })
-                }
+            SectionCard {
+                ListRow(
+                    title = "Send what's copied",
+                    subtitle = "Pushes this phone's clipboard to your PC",
+                    icon = Icons.Rounded.ContentPaste,
+                    iconTint = SystemColor.ORANGE.color,
+                    trailing = { PillButton("Send", onClick = { context.startActivity(ClipboardActivity.intent(context)) }) },
+                )
             }
         }
         if (!background) {
@@ -78,7 +82,7 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     // Opens the setup right here (it used to point at a Settings section by a wrong name).
                     ListRow(
                         title = "Sync when closed",
-                        subtitle = "Android only lets the open app read the clipboard. A one-time grant from your PC lifts that, no root.",
+                        subtitle = "Copies sync even when Vyoma is closed. One-time setup from your PC.",
                         icon = Icons.Rounded.Sync,
                         iconTint = SystemColor.ORANGE.color,
                         trailing = { PillButton("Set up", onClick = { setup = true }, prominent = false) },
@@ -97,14 +101,19 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 32.dp),
             )
         }
-        items(history, key = { it.timestamp.toString() + it.text.hashCode() }) { clip ->
-            Box(
-                Modifier.fillMaxWidth().animateItem().pressable(pressedScale = 0.98f) {
-                    vm.copyClip(clip.text)
-                    Toast.makeText(context, "Copied, and sent to your PC", Toast.LENGTH_SHORT).show()
-                }.glassCard(MaterialTheme.shapes.large),
+        // One grouped card, a slice per clip (the list's own items, so long histories stay lazy).
+        val last = history.lastIndex
+        itemsIndexed(history, key = { _, it -> it.timestamp.toString() + it.text.hashCode() }) { i, clip ->
+            Column(
+                Modifier.fillMaxWidth().animateItem()
+                    .then(if (i != last) Modifier.joinNext() else Modifier)
+                    .cardSegment(first = i == 0, last = i == last)
+                    .pressable(pressedScale = 0.985f) {
+                        vm.copyClip(clip.text)
+                        Toast.makeText(context, "Copied, and sent to your PC", Toast.LENGTH_SHORT).show()
+                    },
             ) {
-                Column(Modifier.padding(16.dp)) {
+                Column(Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) {
                     Text(clip.text, style = MaterialTheme.typography.bodyMedium, maxLines = 4, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -120,6 +129,7 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                         )
                     }
                 }
+                if (i != last) HorizontalDivider(Modifier.padding(horizontal = 20.dp), color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
     }

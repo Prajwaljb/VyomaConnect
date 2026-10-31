@@ -139,6 +139,15 @@ object Glass {
         @Composable @ReadOnlyComposable
         get() = if (isDarkUi) Color.White.copy(alpha = 0.07f) else Color.Black.copy(alpha = 0.04f)
 
+    /**
+     * A filled accent control (prominent pill, send button, the chosen chip): a deep shade of the
+     * accent under white ink in both themes. The accent itself is pastel in the dark and mid-tone in
+     * the light, and dark ink on either read muddy.
+     */
+    val accent: Color
+        @Composable @ReadOnlyComposable
+        get() = MaterialTheme.colorScheme.primary.toned(1.2f, if (isDarkUi) 0.56f else 0.5f)
+
     /** Tint laid over real backdrop blur. */
     val chrome: Color
         @Composable @ReadOnlyComposable

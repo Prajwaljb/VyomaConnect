@@ -12,7 +12,13 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 ## Glass (core/designsystem/Glass.kt)
 - Wide windows (landscape, tablets): `CollapsingHeaderScaffold` centres a column of at most `MaxContentWidth` (560 dp).
 - Dashboard actions: Apple Shortcuts-widget tiles, 4 across in one card, concentric corners (18 dp tile + 10 dp pad), white
-  ink (dark on yellow-bright tones), labels 12 sp. Rejected: round buttons (plastic balls), wide 2-across tiles (abs), app icons.
+  ink (dark on yellow-bright tones; tones of luminance 0.2–0.5 darkened 22% for 4.5:1), labels 12 sp. Toggle tiles keep
+  one glyph and name ("Lock", "Mute"); only the fill says on.
+- Data visuals share one system: 6 dp round-capped strokes on a `Glass.raised` track (gauges and the battery rings),
+  numbers with a smaller muted unit (`Reading`), colour = load (green < 70% < yellow < 90% < red; temp 65/85 °C),
+  never a fixed colour per gauge. The bolt is `Icons.Rounded.Bolt`, never an emoji.
+- Filled accent controls (prominent pill, send circle, chosen chip, toggled key) use `Glass.accent` (a deep shade of
+  the accent) with WHITE ink in both themes; dark ink on the accent read muddy. Rejected: round buttons (plastic balls), wide 2-across tiles (abs), app icons.
 - Canvas: `Modifier.aurora()` (theme background + two cached accent glows near the top; dark: dimmer glows (0.16 vs 0.20), the rest true black; `AppCanvas.glow`, from Settings > Background glow, turns them off).
   Dark mode IS pure black (AMOLED); there's no separate grey dark theme or toggle. No decorative textures (stars were tried and rejected: too specific).
 - Depth tokens: `glassDepth` (`GlassDepth` Dark (true black) / Light) (light cards are see-through, white 0.42, so the canvas tint shows; never back to near-solid white) drive every surface so the themes stay consistent.
@@ -64,8 +70,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Header (`CollapsingHeaderScaffold`): no slab. A soft status-bar fade; back in a 48 dp liquid circle; actions share
   one capsule. The title is ONE travelling Text (the hero copy is an invisible placeholder): it scrolls 1:1 with the
   page (no hero parallax, else it slid over the hero glyph), pins in the bar and shrinks to titleMedium; at collapse
-  > 0.72 a glass bubble forms around it (height leads, width wobbles out with `jelly()`). Leaving, it POPS (keeps
-  its size, swells 18% while fading in 220 ms); shrinking into a dot behind full-size text looked awkward. The hero fades by 75%.
+  docks (within 6 dp of its bar position) a glass bubble forms around it (height leads, width wobbles out with `jelly()`).
+  The bubble belongs to the title: the moment the title leaves, it rides down with it and is gone within 16 dp, then
+  POPS (swells 18%, 140 ms). A fixed 220 ms fade at a collapse threshold lagged fast flings (empty bubble behind the
+  text). Forming and bursting each play `Haptic.Bubble`; a list flung into either end ticks (`Detent`). The hero fades by 75%.
   A trailing "collapse-room" item lets any page that scrolls at all collapse fully (no half-faded stuck title).
   A scroll that stops mid-collapse snaps open/closed; the snap runs in its own child job (run inline, a finger
   interrupting it threw a cancellation that killed the watcher, and nothing snapped again).
@@ -139,6 +147,14 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   tiles; 8th tile = Commands, a sheet that runs one and closes). PC details (header Info button, or tap the hero glyph)
   holds only what's about the link: commands list + "Edit commands", Ping/Find this PC/battery, fingerprint, Unpair.
   Never duplicate Home's controls there. Header shows Refresh only while no PC is connected.
+- Horizontal chip rows never cut hard: `Modifier.fadingHorizontalScroll(state, bleed)` (designsystem/Scroll.kt) fades
+  each edge only while there's more that way; rows in the page gutter or a card bleed to its edge (`bleed` = the
+  padding, content padded back). Capped vertical lists in dialogs use `fadingVerticalScroll`.
+- One row anatomy: every tappable row is a `ListRow` (badge, 20 dp inset; `horizontalPadding = 0.dp` inside dialogs)
+  with a trailing `RowChevron(state?)` ("On"/"Off") or a pill. Commands and fingerprints: `subtitleStyle` monospace,
+  commands one line. Unbounded groups (clipboard history, files) are `cardSegment` slices + `joinNext()`.
+- Each fact once per screen (the details hero says how it's connected; the battery row owns the charge). One name per
+  feature everywhere ("Sync when closed"). No user-facing "ADB".
 - One clear primary action per card. Touch targets ≥ 48 dp; keep the bottom 70 px clear of the floating tab bar
   (`LocalBottomBarInset`).
 - Controls: `PillButton` (prominent = accent fill, else tinted), `SegmentedControl` for 2–4 exclusive choices,
@@ -177,6 +193,11 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   breathes 3 times on connect, then rests. Idle check: `gfxinfo reset`, wait 3 s, expect ~0 frames. Check `dumpsys gfxinfo` after motion work (target < 1% janky at 120 Hz).
 
 ## Haptics (`Haptic` in Motion.kt; always through `HapticFeedback.perform`)
+Pixel / O-Haptics style: each `Haptic` is a `VibrationEffect.Composition` of primitives (CLICK, TICK, LOW_TICK, THUD,
+QUICK_RISE; scaled, some paired: ToggleOn rises tick→click, ToggleOff falls click→low tick, Success two rising clicks),
+played by `Haptics` (attached in `VyomaTheme`) with USAGE_TOUCH so the system touch setting applies; phones without
+those primitives fall back to the view's stock constant. This S24 FE's THUD lasts 300 ms: use it only for Failure.
+Picking one of several (chips, players) is `Select`.
 Tap = buttons/cards · Key = keyboard-like keys · ToggleOn/ToggleOff = switches and toggle controls · Select = tabs,
 segments · Detent = steps while dragging a value (every 10% volume, scroll-wheel notches) · Edge = end stops and
 mode thresholds · Hold = long-press grab · Success/Failure = outcomes (sent, paired, declined). One haptic per action;
