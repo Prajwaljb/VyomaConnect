@@ -18,10 +18,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   floating layer (header, title bubble, tab bar, touchpad button) and controls while held. Content cards are a thinner
   pane: band 0.15 dark / 0.35 light, no rolled shade, highlights sway 40% (`SpecularLight.content`). Filled raised
   controls: band 0.18, lit rim 0.35, band ≤3 dp under 64 dp. List IconBadges: edge 0.35/0.08 (hero glyph keeps 0.75).
-- Density: Clipboard puts history first (Send in the header, setup row at the end); Settings subtitles are one line;
-  Appearance (accent + theme) and Effects (glow, lighter glass) are separate cards; long command lists fold after 4;
-  the fingerprint is one line until tapped.
-- PC status card: battery as a 96 dp hero ring (8 dp stroke, the only exception to 6 dp) + CPU/Memory/GPU/Temp as a
+- Density: Clipboard (a pushed page now) puts history first (Send in the header, setup row at the end); Settings
+  subtitles are one line; Appearance (accent + theme) and Effects (glow, lighter glass) are separate cards; commands
+  are one "Commands" row in PC details opening the sheet; the fingerprint is one line until tapped.
+- PC status card: battery as an 80 dp hero ring (7 dp stroke, the only exception to 6 dp) + CPU/Memory/GPU/Temp as a
   2×2 of `Meter`s (label, `Reading`, 6 dp capsule bar). Never 5 equal gauges in a row (user: "5 in a row isn't nice").
 - Touch, everywhere: `pressable` defaults to `PressAuto` (every edge moves 3 dp in, whatever the size) and a finger glow
   (white in dark, navy shade in light) on anything that dips. Order: `pressable` BEFORE the shape/glass modifiers so the
@@ -127,7 +127,8 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   squircle with a white glyph; give each feature a stable color (notifications RED, messages GREEN, clipboard ORANGE,
   files/connection BLUE, touchpad TEAL, find YELLOW, battery GREEN, destructive RED, info/neutral GRAY).
 - Control Center tiles: colored glyph on `glassRaised`; toggles fill with their color (white glyph) while on.
-- Root navigation: `TabsRoot` (app/ui/TabBar.kt), iOS 26 tab bar: Home / Clipboard / Settings in a glass pill, the
+- Root navigation: `TabsRoot` (app/ui/TabBar.kt), iOS 26 tab bar: Home / Files / Settings in a glass pill (user
+  approved 2026-10-31: clipboard sync is ambient, so it's a section of Files + a pushed full-history page), the
   selected tab on a plain neutral capsule (colour only in icon + label). The drop lifts on touch-DOWN, jumps to the
   touched tab, follows the finger (tick per tab), picks on release; it never lifts without a finger. `glide` ignores
   a repeat of the current target: re-gliding mid-flight swapped the leading/trailing springs and overshot one way only. Touchpad is a
@@ -164,11 +165,24 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - One job per button, named for what it does ("Send", "PC files", "Upload here"), never one button whose meaning
   changes with state. No two buttons on the same screen open the same thing. When a feature appears only
   sometimes (companion online), swap it into a fixed slot so the other buttons never move.
-- Where things live (IA): Home is the PC's control surface: ONE status card (battery gauge, plus CPU/memory/GPU/temp
-  gauges in the same row with the companion; no phone battery, no clipboard card), media (player switch = a small
-  button + list, no chip row), volume + output picker, the 4x2 action tiles; 8th tile = Commands, a sheet that runs one and closes). PC details (header Info button, or tap the hero glyph)
-  holds only what's about the link: commands list + "Edit commands", Ping/Find this PC/battery, fingerprint, Unpair.
-  Never duplicate Home's controls there. Header shows Refresh only while no PC is connected.
+- Where things live (IA, user-approved Control Center layout 2026-10-31): Home is the PC's control surface and fits
+  one screen: the PC's NAME is the hero (no glyph; subtitle = transport, or "Away · seen 12 min. ago"), ONE status
+  card (battery ring + CPU/RAM/GPU/Temp meters with the companion), then the deck: media card (art 92 dp; "Not
+  playing" card holds its place) beside the PC volume as a tall `VolumeCapsule` (80 dp wide, fills from the bottom,
+  relative vertical drag, tap = output list dialog; no chip rows), a Transfers strip only while files move or for
+  10 min after, then the 4x2 tiles (8th = Commands sheet). A paired PC that's AWAY keeps Home: an AwayCard (Try
+  again + Use USB), dimmed cached status, no deck, tiles at 40% and untappable. Files tab: Send / Browse PC files,
+  Transfers (running with capsule progress, then the `TransferLog` of finished ones; incoming open on tap), the 3
+  latest clips + "All clipboard history". PC details (header "i") leads with Connection (Link + Ping, Find this
+  PC + Ring, battery), then one Commands row, then Security. Never duplicate Home's controls there. Header shows
+  Refresh only while no PC is known.
+- Outcomes show in the status bubble (`LocalStatus.current.show(text, icon?, failure?, haptic?)`, designsystem/Status.kt):
+  an opaque glass capsule that drops from the top, swells on jelly, holds 1.6 s (2.6 s for failures). Never Toast
+  inside MainActivity (separate small activities and the VM still toast: they have no bubble host). Pass
+  `haptic = false` when the caller already played one.
+- First run: the radar sweeps 3 times and rests (tap it or "Search again" for more), three numbered steps, address
+  and USB folded behind "Other ways". After pairing, a one-time "Get more from your PC" card offers the companion.
+  The pairing code fills in a character at a time (40 ms apart, key tick each).
 - Horizontal chip rows never cut hard: `Modifier.fadingHorizontalScroll(state, bleed)` (designsystem/Scroll.kt) fades
   each edge only while there's more that way; rows in the page gutter or a card bleed to its edge (`bleed` = the
   padding, content padded back). Capped vertical lists in dialogs use `fadingVerticalScroll`.

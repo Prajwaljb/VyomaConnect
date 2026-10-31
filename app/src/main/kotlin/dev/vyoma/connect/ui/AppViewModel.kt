@@ -78,6 +78,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun cacheBattery(id: String, b: BatteryState) = batteryCache.edit { putString(id, "${b.charge},${b.charging}") }
 
+    private val uiPrefs by lazy { getApplication<Application>().getSharedPreferences("ui", Context.MODE_PRIVATE) }
+    private val promo = androidx.compose.runtime.mutableStateOf<Boolean?>(null)
+
+    /** Whether Home still offers the companion (once, until dismissed). */
+    fun companionPromo(): Boolean = promo.value ?: (!uiPrefs.getBoolean("companion_promo_seen", false)).also { promo.value = it }
+
+    fun dismissCompanionPromo() {
+        promo.value = false
+        uiPrefs.edit { putBoolean("companion_promo_seen", true) }
+    }
+
     /** Pushes this phone's clipboard to every connected PC; returns who got it, or null if nothing was sent. */
     fun sendClipboard(): String? {
         container.clipboard.readNow()

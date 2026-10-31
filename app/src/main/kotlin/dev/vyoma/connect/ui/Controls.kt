@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
 import dev.vyoma.connect.designsystem.glassCard
+import androidx.compose.ui.unit.Dp
 import dev.vyoma.connect.designsystem.glassLightOver
 import androidx.compose.material.icons.automirrored.rounded.SendToMobile
 import androidx.compose.ui.semantics.contentDescription
@@ -100,7 +101,6 @@ import dev.vyoma.connect.designsystem.SectionCard
 import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.pressable
 import dev.vyoma.connect.platform.NowPlaying
-import dev.vyoma.connect.protocol.plugin.builtin.RemoteCommand
 import kotlin.math.abs
 import kotlinx.coroutines.delay
 
@@ -156,6 +156,8 @@ fun MediaCard(
     showVolume: Boolean = true,
     /** Shown as a Continue on phone button when the PC can hand this off (companion). */
     onContinueHere: (() -> Unit)? = null,
+    /** Narrower beside Home's volume capsule. */
+    artWidth: Dp = ART_WIDTH,
 ) {
     val p = np.player
     val accent = MaterialTheme.colorScheme.primary
@@ -187,13 +189,13 @@ fun MediaCard(
         // The artwork fills the card's left side, top to bottom, melting into the card's colour;
         // everything else (volume, player chips too) sits in the column beside it.
         Box(Modifier.matchParentSize()) {
-            ArtPanel(art, p, accent, tint, Modifier.width(ART_WIDTH).fillMaxHeight())
+            ArtPanel(art, p, accent, tint, Modifier.width(artWidth).fillMaxHeight())
         }
-        Column(Modifier.fillMaxWidth().padding(start = ART_WIDTH)) {
+        Column(Modifier.fillMaxWidth().padding(start = artWidth)) {
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .heightIn(min = ART_WIDTH)
+                    .heightIn(min = artWidth)
                     .padding(start = 12.dp, end = 10.dp, top = 12.dp, bottom = 4.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
             ) {
@@ -290,6 +292,23 @@ private fun ArtPanel(art: Bitmap?, p: RemotePlayer, accent: Color, tint: Color, 
 }
 
 private val ART_WIDTH = 132.dp
+
+/**
+ * The media card's place when nothing plays, like Control Center's "Not Playing": the volume
+ * capsule keeps its neighbour, so Home's layout doesn't jump when a song starts or stops.
+ */
+@Composable
+fun NotPlayingCard(modifier: Modifier = Modifier) {
+    Column(
+        modifier.glassCard(MaterialTheme.shapes.large).padding(16.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(Icons.Rounded.MusicNote, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(32.dp))
+        Spacer(Modifier.height(8.dp))
+        Text("Not playing", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
 
 /** Players that are mostly for video, so their tile shows a film glyph rather than a note. */
 private val VIDEO_PLAYERS = listOf("mpv", "vlc", "celluloid", "totem", "haruna", "smplayer", "mplayer", "kodi", "showtime", "dragon")
@@ -395,47 +414,6 @@ fun prettySinkName(description: String): String {
     return name.ifBlank { description }
 }
 
-private const val COMMANDS_FOLDED = 4
-
-@Composable
-fun CommandsCard(commands: List<RemoteCommand>, onEdit: (() -> Unit)? = null, onRun: (RemoteCommand) -> Unit) {
-    // A long list shows its first few and a row for the rest, so it doesn't own the screen.
-    var all by rememberSaveable { mutableStateOf(false) }
-    val shown = if (all || commands.size <= COMMANDS_FOLDED + 1) commands else commands.take(COMMANDS_FOLDED)
-    SectionCard(Modifier.animateContentSize(VyomaMotion.spatial())) {
-        shown.forEachIndexed { i, cmd ->
-            ListRow(
-                title = cmd.name,
-                subtitle = cmd.command,
-                subtitleMaxLines = 1,
-                subtitleStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                icon = Icons.Rounded.Terminal,
-                iconTint = SystemColor.GRAY.color,
-                showDivider = i < shown.lastIndex || shown.size < commands.size || onEdit != null,
-                onClick = { onRun(cmd) },
-            )
-        }
-        if (shown.size < commands.size) {
-            ListRow(
-                title = "Show all",
-                icon = Icons.Rounded.UnfoldMore,
-                iconTint = SystemColor.GRAY.color,
-                showDivider = onEdit != null,
-                trailing = { RowChevron("${commands.size}") },
-                onClick = { all = true },
-            )
-        }
-        if (onEdit != null) {
-            ListRow(
-                title = "Edit commands",
-                subtitle = "Opens the list on the PC",
-                icon = Icons.Rounded.Edit,
-                iconTint = SystemColor.BLUE.color,
-                onClick = onEdit,
-            )
-        }
-    }
-}
 
 /**
  * Video thumbnails often come letter- or pillarboxed (black bars, or a solid colour beside square

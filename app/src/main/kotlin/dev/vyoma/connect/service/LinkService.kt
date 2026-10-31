@@ -119,6 +119,15 @@ class LinkService : LifecycleService() {
                 else combine(devices.values.map { it.state }) { states -> states.filter { it.isReachable && it.isPaired && !it.isCompanion } }
             }
 
+        // Remember when each PC drops, so Home can say how long it's been away.
+        lifecycleScope.launch {
+            var before = emptySet<String>()
+            connectedFlow.map { list -> list.map { it.identity.deviceId }.toSet() }.distinctUntilChanged().collect { now ->
+                (before - now).takeIf { it.isNotEmpty() }?.let { LastSeen.mark(this@LinkService, it) }
+                before = now
+            }
+        }
+
         // Keep the ongoing notification in sync with who's connected.
         lifecycleScope.launch {
             connectedFlow
@@ -148,6 +157,7 @@ class LinkService : LifecycleService() {
                 for (t in all) {
                     if (t.state != Transfer.State.RUNNING && announced.add(t.id)) {
                         Notifications.transferFinished(this@LinkService, t)
+                        TransferLog.add(this@LinkService, t)
                         lifecycleScope.launch { delay(60_000); Transfers.dismiss(t.id) }
                     }
                 }

@@ -1,5 +1,29 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.service.LastSeen
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.graphics.graphicsLayer
+import dev.vyoma.connect.designsystem.VyomaMotion
+import dev.vyoma.connect.designsystem.perform
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import dev.vyoma.connect.service.TransferLog
+import dev.vyoma.connect.protocol.plugin.builtin.Transfer
+import dev.vyoma.connect.protocol.plugin.builtin.Transfers
+import dev.vyoma.connect.designsystem.GlassDialog
+import dev.vyoma.connect.designsystem.DialogButton
+import androidx.compose.animation.core.Animatable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Lan
+import androidx.compose.material.icons.rounded.Usb
+
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
@@ -85,6 +109,7 @@ fun HomeScreen(
     onKeyboard: (String) -> Unit,
     onClipboard: () -> Unit,
     onBrowseFiles: (String) -> Unit,
+    onFiles: () -> Unit = {},
 ) {
     val allDevices by vm.devices.collectAsStateWithLifecycle()
     // Companions are part of their PC, never a separate computer.
@@ -97,21 +122,27 @@ fun HomeScreen(
     val available = devices.filter { !it.isPaired && it.isReachable && it !in pairing }
     val offline = devices.filter { it.isPaired && !it.isReachable }
 
+    val transfers by Transfers.all.collectAsStateWithLifecycle()
+    val recent by remember { TransferLog.recent(context) }.collectAsStateWithLifecycle()
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
-    val primary = connected.firstOrNull { it.identity.deviceId == selected } ?: connected.firstOrNull()
+    // A paired PC that's away keeps its Home (dimmed, last known state), so the commonest real state,
+    // a sleeping laptop, isn't a different screen.
+    val primary = connected.firstOrNull { it.identity.deviceId == selected } ?: connected.firstOrNull() ?: offline.firstOrNull()
+    val live = primary?.isReachable == true
+    val seen = remember(primary?.identity?.deviceId, live) { primary?.takeIf { !live }?.let { LastSeen.of(context, it.identity.deviceId) } }
 
     CollapsingHeaderScaffold(
-        // Shorter than other pages: the first row of actions clears the tab bar on the first view.
-        heroFraction = 0.24f,
+        // Shorter than other pages: the whole deck fits above the tab bar on the first view.
+        heroFraction = 0.2f,
         title = primary?.identity?.deviceName ?: "Vyoma",
         subtitle = when {
-            primary != null -> transportLabel(primary)
-            offline.isNotEmpty() -> "${offline.first().identity.deviceName} is away"
-            else -> "Looking for devices nearby"
+            primary == null -> "Looking for devices nearby"
+            live -> transportLabel(primary)
+            seen != null -> "Away · seen ${ago(seen).toString().replaceFirstChar { it.lowercase() }}"
+            else -> "Away"
         },
-        // The PC is what this page is about: its icon and the header button open its details.
-        // Refresh only matters while nothing's connected.
-        hero = primary?.let { p -> { Box(Modifier.semantics(mergeDescendants = true) { contentDescription = "PC details" }.pressable { onOpenDevice(p.identity.deviceId) }) { DeviceGlyph(p) } } },
+        // The PC's name is the hero: a glyph over it only restated it every day. Its details are the
+        // header button.
         actions = {
             if (primary != null) {
                 BounceIconButton(onClick = { onOpenDevice(primary.identity.deviceId) }) { Icon(InfoGlyph, "PC details") }
@@ -140,21 +171,28 @@ fun HomeScreen(
                     }
                 }
             }
+            if (!live) item(key = "away") { AwayCard(vm, Modifier.animateItem()) }
+            if (live && companionOnline.not() && vm.companionPromo()) {
+                item(key = "promo") { CompanionPromoCard(onDismiss = vm::dismissCompanionPromo, modifier = Modifier.animateItem()) }
+            }
             item(key = "status") {
                 Staggered(0, Modifier.animateItem()) {
                     PcDashboard(vm, primary, DashboardSection.STATUS, { onKeyboard(id) }, onClipboard)
                 }
             }
-            val np = nowPlaying?.takeIf { it.deviceId == id && it.player.hasMedia }
-            if (np != null) {
-                item(key = "media") {
-                    // Only when the companion says this exact video can continue here (a web page,
-                    // not mpv playing a local file).
-                    val companionUp = allDevices.any { it.identity.companionOf == id && it.isPaired && it.isReachable }
-                    val stats by remember(companionUp, id) { vm.companionOf(id)?.stats ?: flowOf(null) }.collectAsStateWithLifecycle(null)
-                    val offered = stats?.handoff?.let { sameVideo(it, np.player.title) } == true
-                    Staggered(2, Modifier.animateItem()) {
-                        MediaCard(
+            if (live) item(key = "deck") {
+                // Control Center's pair: what's playing, and beside it the PC's volume as a tall capsule.
+                // "Not playing" holds the media's place, so nothing jumps when a song starts.
+                val np = nowPlaying?.takeIf { it.deviceId == id && it.player.hasMedia }
+                // Only when the companion says this exact video can continue here (a web page,
+                // not mpv playing a local file).
+                val companionUp = allDevices.any { it.identity.companionOf == id && it.isPaired && it.isReachable }
+                val stats by remember(companionUp, id) { vm.companionOf(id)?.stats ?: flowOf(null) }.collectAsStateWithLifecycle(null)
+                val offered = np != null && stats?.handoff?.let { sameVideo(it, np.player.title) } == true
+                Staggered(1, Modifier.animateItem()) {
+                    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        val card = Modifier.weight(1f).fillMaxHeight().heightIn(min = DeckMinHeight)
+                        if (np != null) MediaCard(
                             np = np,
                             onPlayPause = vm::playPause,
                             onNext = vm::next,
@@ -164,17 +202,22 @@ fun HomeScreen(
                             onPickPlayer = vm::pickPlayer,
                             showVolume = false,
                             onContinueHere = if (offered) { { vm.continueOnPhone(id) } } else null,
-                        )
+                            artWidth = 92.dp,
+                            modifier = card,
+                        ) else NotPlayingCard(card)
+                        PcDashboard(vm, primary, DashboardSection.VOLUME, { onKeyboard(id) }, onClipboard, Modifier.width(DeckVolumeWidth))
                     }
                 }
             }
-            item(key = "volume") {
-                Staggered(3, Modifier.animateItem()) {
-                    PcDashboard(vm, primary, DashboardSection.VOLUME, { onKeyboard(id) }, onClipboard)
-                }
+            // Files on the move, and for a while after they land (they used to live only in notifications).
+            val fresh = recent.orEmpty().filter { System.currentTimeMillis() - it.at < FRESH_MS }.take(2)
+            val moving = transfers.filter { it.state == Transfer.State.RUNNING }
+            if (moving.isNotEmpty() || fresh.isNotEmpty()) {
+                item(key = "transfers-label") { SectionLabel("Transfers", Modifier.animateItem()) }
+                transferRows(moving, fresh, context, keyPrefix = "h")
             }
             item(key = "controls") {
-                Staggered(4, Modifier.animateItem()) {
+                Staggered(2, Modifier.animateItem()) {
                     PcDashboard(vm, primary, DashboardSection.CONTROLS, { onKeyboard(id) }, onClipboard, onBrowseFiles = { onBrowseFiles(id) })
                 }
             }
@@ -212,17 +255,19 @@ fun HomeScreen(
             }
         }
 
-        if (offline.isNotEmpty()) {
+        // Other paired PCs that are away (the first one is Home's own).
+        val away = offline.filter { it != primary }
+        if (away.isNotEmpty()) {
             item(key = "offline-label") { SectionLabel("Paired · not reachable", Modifier.animateItem()) }
             item(key = "offline") {
                 SectionCard(Modifier.animateItem()) {
-                    offline.forEachIndexed { i, state ->
+                    away.forEachIndexed { i, state ->
                         ListRow(
                             title = state.identity.deviceName,
                             subtitle = "Open KDE Connect on it, or join the same network",
                             icon = state.identity.deviceType.icon(),
                             iconTint = SystemColor.GRAY.color,
-                            showDivider = i < offline.lastIndex,
+                            showDivider = i < away.lastIndex,
                             trailing = { ConnectionOrb(OrbState.OFFLINE, size = 10.dp) },
                             onClick = { onOpenDevice(state.identity.deviceId) },
                         )
@@ -231,7 +276,7 @@ fun HomeScreen(
             }
         }
 
-        if (connected.isEmpty() && pairing.isEmpty() && available.isEmpty()) {
+        if (primary == null && pairing.isEmpty() && available.isEmpty()) {
             item(key = "searching") { SearchingCard(vm, Modifier.animateItem()) }
         }
     }
@@ -253,13 +298,7 @@ internal fun PairingCard(state: DeviceState, onAccept: () -> Unit, onReject: () 
         Spacer(Modifier.height(12.dp))
         Text("Make sure this code matches on both screens", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(8.dp))
-        Text(
-            (state.verificationKey ?: "········").chunked(4).joinToString("  "),
-            style = MaterialTheme.typography.displayMedium.copy(fontFamily = FontFamily.Monospace),
-            color = MaterialTheme.colorScheme.primary,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        PairingCode(state.verificationKey)
         AnimatedVisibility(incoming, enter = fadeIn(), exit = fadeOut()) {
             Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.End) {
                 PillButton("Decline", onClick = onReject, prominent = false, haptic = Haptic.Failure)
@@ -271,44 +310,173 @@ internal fun PairingCard(state: DeviceState, onAccept: () -> Unit, onReject: () 
 }
 
 /**
- * Radar sweep while nothing is around, with the two tips that solve 90% of "not found", and the
- * two ways round discovery right there (an address, the cable) instead of a dead end.
+ * The code to compare, filling in one character at a time (40 ms apart, each dropping into place
+ * with a key tick), so the eye reads it left to right like the PC's. Dots hold the places until
+ * the key arrives.
+ */
+@Composable
+private fun PairingCode(key: String?) {
+    val haptics = LocalHapticFeedback.current
+    val chars = (key ?: "········").toList()
+    val shown = remember(key) { List(chars.size) { Animatable(if (key == null) 1f else 0f) } }
+    LaunchedEffect(key) {
+        if (key == null) return@LaunchedEffect
+        shown.forEachIndexed { i, a ->
+            launch {
+                delay(40L * i)
+                haptics.perform(Haptic.Key)
+                a.animateTo(1f, VyomaMotion.release())
+            }
+        }
+    }
+    Row(Modifier.fillMaxWidth().semantics(mergeDescendants = true) { contentDescription = key?.let { "Code ${it.toList().joinToString(" ")}" } ?: "Waiting for the code" }, horizontalArrangement = Arrangement.Center) {
+        chars.forEachIndexed { i, c ->
+            if (i == 4) Spacer(Modifier.width(16.dp))
+            Text(
+                c.toString(),
+                style = MaterialTheme.typography.displayMedium.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.graphicsLayer {
+                    val p = shown[i].value
+                    alpha = p.coerceIn(0f, 1f)
+                    translationY = (1f - p) * -14.dp.toPx()
+                },
+            )
+        }
+    }
+}
+
+/**
+ * Three radar sweeps (nothing loops at rest; a refresh sweeps again), then the three steps that
+ * solve almost every "not found", and the ways round discovery (an address, the cable) folded
+ * behind one button instead of a dead end.
  */
 @Composable
 internal fun SearchingCard(vm: AppViewModel, modifier: Modifier = Modifier) {
     var adding by rememberSaveable { mutableStateOf(false) }
     var usb by rememberSaveable { mutableStateOf(false) }
+    var others by rememberSaveable { mutableStateOf(false) }
+    var round by remember { mutableIntStateOf(0) }
     val color = MaterialTheme.colorScheme.primary
-    val t = rememberInfiniteTransition(label = "radar")
-    val wave by t.animateFloat(0f, 1f, infiniteRepeatable(tween(2400, easing = LinearEasing), RepeatMode.Restart), label = "wave")
+    val wave = remember { Animatable(0f) }
+    LaunchedEffect(round) {
+        wave.snapTo(0f)
+        wave.animateTo(3f, tween(3 * 2400, easing = LinearEasing))
+    }
     SectionCard(modifier, contentPadding = PaddingValues(24.dp)) {
-        Box(Modifier.fillMaxWidth().height(140.dp), contentAlignment = Alignment.Center) {
-            Canvas(Modifier.size(140.dp)) {
+        Box(
+            Modifier.fillMaxWidth().height(120.dp)
+                .semantics { contentDescription = "Search again" }
+                .pressable { vm.refresh(); round++ },
+            contentAlignment = Alignment.Center,
+        ) {
+            Canvas(Modifier.size(120.dp)) {
+                val w = wave.value
                 for (i in 0 until 3) {
-                    val p = (wave + i / 3f) % 1f
-                    drawCircle(color.copy(alpha = 0.5f * (1f - p)), radius = size.minDimension / 2 * p, style = Stroke(width = 2.dp.toPx()))
+                    // Each ring runs its course and stops; at rest only the dot stays.
+                    val p = w - i / 3f
+                    if (p <= 0f || p >= 3f) continue
+                    val f = p % 1f
+                    drawCircle(color.copy(alpha = 0.5f * (1f - f)), radius = size.minDimension / 2 * f, style = Stroke(width = 2.dp.toPx()))
                 }
                 drawCircle(color, radius = 8.dp.toPx())
             }
         }
-        Text("Searching your network", style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Open KDE Connect or GSConnect on your computer and keep both on the same Wi-Fi, hotspot, or Tailscale network.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        Text("Looking for your PC", style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+        Spacer(Modifier.height(16.dp))
+        listOf(
+            "Open KDE Connect on your PC",
+            "Put both on the same Wi-Fi",
+            "Tap your PC when it shows up here",
+        ).forEachIndexed { i, step ->
+            Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(28.dp).glassRaised(CircleShape), contentAlignment = Alignment.Center) {
+                    Text("${i + 1}", style = MaterialTheme.typography.labelLarge)
+                }
+                Spacer(Modifier.width(12.dp))
+                Text(step, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
         Spacer(Modifier.height(16.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
-            PillButton("Enter address", onClick = { adding = true }, prominent = false)
-            PillButton("Use USB", onClick = { usb = true }, prominent = false)
+            PillButton("Search again", onClick = { vm.refresh(); round++ })
+            PillButton("Other ways", onClick = { others = true }, prominent = false)
         }
     }
+    if (others) GlassDialog(
+        onDismissRequest = { others = false },
+        title = { Text("Other ways to connect") },
+        text = {
+            Column {
+                ListRow(
+                    title = "Enter its address", subtitle = "For Tailscale, or when Wi-Fi hides it", subtitleMaxLines = 1,
+                    icon = Icons.Rounded.Lan, iconTint = SystemColor.BLUE.color, horizontalPadding = 0.dp, showDivider = true,
+                    onClick = { others = false; adding = true },
+                )
+                ListRow(
+                    title = "Use a USB cable", subtitle = "No network needed", subtitleMaxLines = 1,
+                    icon = Icons.Rounded.Usb, iconTint = SystemColor.GRAY.color, horizontalPadding = 0.dp,
+                    onClick = { others = false; usb = true },
+                )
+            }
+        },
+        confirmButton = { DialogButton(onClick = { others = false }) { Text("Close") } },
+    )
     if (adding) AddHostDialog(vm) { adding = false }
     if (usb) UsbHelpDialog { usb = false }
 }
+
+/**
+ * Home's PC is away: what to try, in one place, with one clear action. The rest of Home stays as it
+ * was (dimmed last known state), so it's still recognisably this PC's page.
+ */
+@Composable
+private fun AwayCard(vm: AppViewModel, modifier: Modifier = Modifier) {
+    var usb by rememberSaveable { mutableStateOf(false) }
+    SectionCard(modifier, contentPadding = PaddingValues(20.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ConnectionOrb(OrbState.OFFLINE, size = 10.dp)
+            Spacer(Modifier.width(8.dp))
+            Text("Not connected", style = MaterialTheme.typography.titleMedium)
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Wake the PC and open KDE Connect, on the same Wi-Fi as this phone.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(16.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PillButton("Try again", onClick = vm::refresh)
+            PillButton("Use USB", onClick = { usb = true }, prominent = false)
+        }
+    }
+    if (usb) UsbHelpDialog { usb = false }
+}
+
+/** Once, after the first pair: what the companion adds. Dismissed for good. */
+@Composable
+private fun CompanionPromoCard(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+    SectionCard(modifier, contentPadding = PaddingValues(20.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(SystemColor.BLUE.color), contentAlignment = Alignment.Center) {
+                Icon(Icons.Rounded.AutoAwesome, null, tint = Color.White, modifier = Modifier.size(20.dp))
+            }
+            Spacer(Modifier.width(12.dp))
+            Text("Get more from your PC", style = MaterialTheme.typography.titleMedium)
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "The Vyoma companion on your PC adds its live screen, camera, files and load to this page.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(16.dp))
+        PillButton("Got it", onClick = onDismiss, prominent = false)
+    }
+}
+
+private const val FRESH_MS = 10 * 60_000L
 
 fun DeviceType.icon(): ImageVector = when (this) {
     DeviceType.DESKTOP -> Icons.Rounded.Computer
