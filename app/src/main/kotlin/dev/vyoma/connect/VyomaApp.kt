@@ -7,6 +7,8 @@ import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import dev.vyoma.connect.data.SettingsRepository
+import dev.vyoma.connect.demo.Demo
+import dev.vyoma.connect.demo.DemoDiagnostics
 import dev.vyoma.connect.protocol.DeviceIdentity
 import dev.vyoma.connect.protocol.DeviceType
 import dev.vyoma.connect.protocol.VLog
@@ -69,6 +71,10 @@ class VyomaApp : Application() {
                 VLog.Level.ERROR -> Log.e("Vyoma/$tag", message, error)
             }
         }
+        if (BuildConfig.DEMO) {
+            Demo.seedClipboard(this)
+            DemoDiagnostics.install(this)
+        }
         container = AppContainer(this)
         // Whether any of our activities is started: background work scales down when it isn't.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
@@ -121,15 +127,17 @@ class AppContainer(private val app: Application) {
             val credentials = credStore.load()
                 ?: LocalCredentials.generate(DeviceIdentity.newDeviceId()).also(credStore::save)
             val name = settings.deviceName.first() ?: defaultDeviceName()
+            val trustStore = FileTrustStore(File(keyDir, "trusted.json"))
+            val demo = if (BuildConfig.DEMO) Demo.prepare(File(keyDir, "demo"), trustStore) else null
             DeviceHub(
                 credentials = credentials,
-                trustStore = FileTrustStore(File(keyDir, "trusted.json")),
+                trustStore = trustStore,
                 pluginSpecs = pluginSpecs(),
                 scope = appScope,
                 deviceName = name,
                 deviceType = if (app.resources.configuration.smallestScreenWidthDp >= 600) DeviceType.TABLET else DeviceType.PHONE,
-                lanConfig = network.lanConfig(),
-            )
+                lanConfig = network.lanConfig().let { if (demo != null) Demo.lanConfig(it) else it },
+            ).also { hub -> demo?.let { Demo.start(hub, it, appScope) } }
         }.also { _hub.value = it }
     }
 

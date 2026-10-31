@@ -9,6 +9,7 @@ import dev.vyoma.connect.platform.outgoingFile
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import dev.vyoma.connect.BuildConfig
 import dev.vyoma.connect.container
 import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.protocol.device.DeviceHub
@@ -80,12 +81,13 @@ class LinkService : LifecycleService() {
         val hub = container.obtainHub()
         this.hub = hub
         network.customHosts = container.settings.manualHosts.first().toList()
-        val usb = UsbLink(this, hub, lifecycleScope).also { this.usb = it }
+        // The demo's laptop is simulated in-app: nothing to find on the network or over a cable.
+        val usb = if (BuildConfig.DEMO) null else UsbLink(this, hub, lifecycleScope).also { this.usb = it }
         // Cable first: hold Wi-Fi back from the very first refresh, which hub.start() does.
-        if (usb.cableIn()) hub.cablePlugged()
+        if (usb?.cableIn() == true) hub.cablePlugged()
         hub.start()
-        mdns = MdnsDiscovery(this, hub).also { it.start() }
-        usb.start()
+        if (!BuildConfig.DEMO) mdns = MdnsDiscovery(this, hub).also { it.start() }
+        usb?.start()
         lifecycleScope.launch {
             container.settings.manualHosts.drop(1).collect { hosts ->
                 network.customHosts = hosts.toList()

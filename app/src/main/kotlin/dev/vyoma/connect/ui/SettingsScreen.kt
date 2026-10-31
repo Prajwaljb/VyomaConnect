@@ -50,6 +50,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import dev.vyoma.connect.BuildConfig
+import dev.vyoma.connect.demo.DemoDiagnostics
+import dev.vyoma.connect.demo.DemoPc
+import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.Laptop
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.Check
@@ -242,6 +249,41 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
             }
         }
 
+        if (BuildConfig.DEMO) {
+            item(key = "demo-label") { SectionLabel("Demo") }
+            item(key = "demo") {
+                val scope = rememberCoroutineScope()
+                var saving by remember { mutableStateOf(false) }
+                SectionCard {
+                    ListRow(
+                        title = "Simulated laptop",
+                        subtitle = "${DemoPc.NAME} runs inside this app. Nothing connects to a real PC or the network.",
+                        icon = Icons.Rounded.Laptop,
+                        iconTint = SystemColor.BLUE.color,
+                        showDivider = true,
+                    )
+                    ListRow(
+                        title = if (saving) "Saving log…" else "Generate log",
+                        subtitle = "Saves smoothness, phone details and the app's log to Downloads, to share for research",
+                        icon = Icons.Rounded.BugReport,
+                        iconTint = SystemColor.ORANGE.color,
+                        onClick = {
+                            if (!saving) {
+                                saving = true
+                                scope.launch {
+                                    DemoDiagnostics.writeLog(context).fold(
+                                        onSuccess = { toast(context, "Saved to Downloads: $it") },
+                                        onFailure = { toast(context, "Couldn't save the log: ${it.message}") },
+                                    )
+                                    saving = false
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+
         item(key = "about") {
             SectionCard {
                 ListRow(
@@ -415,3 +457,6 @@ private fun UsbHelpDialog(onDismiss: () -> Unit) {
         dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
 }
+
+private fun toast(context: android.content.Context, text: String) =
+    android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_LONG).show()

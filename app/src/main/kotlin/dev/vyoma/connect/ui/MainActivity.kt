@@ -39,6 +39,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import dev.vyoma.connect.BuildConfig
+import dev.vyoma.connect.demo.DemoDiagnostics
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -174,6 +176,14 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
     BackHandler(enabled = backStack.size == 1 && tab != Tab.HOME) { tab = Tab.HOME }
 
     val current = backStack.last()
+    if (BuildConfig.DEMO) LaunchedEffect(current, tab) {
+        DemoDiagnostics.screen = when (current) {
+            Screen.Home -> tab.name.lowercase().replaceFirstChar(Char::uppercase)
+            is Screen.DeviceDetail -> "Device"
+            is Screen.Touchpad -> if (current.keyboard) "Keyboard" else "Touchpad"
+            is Screen.Files -> "Files"
+        }
+    }
     val nav = remember { SeekableTransitionState<Screen>(current) }
     // True while a back swipe drives the transition (and while its release animates).
     var swiping by remember { mutableStateOf(false) }
