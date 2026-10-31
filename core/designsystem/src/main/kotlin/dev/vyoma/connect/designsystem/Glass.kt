@@ -386,6 +386,25 @@ fun Modifier.glassCard(shape: Shape, fill: Color? = null, lit: Boolean = true): 
 }
 
 /**
+ * A card's inner light (band and rolled edge, as [glassCard] draws them) laid over its content
+ * instead of under it: for cards whose content reaches the edge (the media card's artwork), where
+ * the light drawn underneath would stop dead where the content starts.
+ */
+fun Modifier.glassLightOver(shape: Shape): Modifier = composed {
+    val d = glassDepth
+    drawWithCache {
+        val outline = shape.createOutline(size, layoutDirection, this)
+        val glow = InnerGlow()
+        val band = 8f * density
+        val roll = 16f * density
+        onDrawWithContent {
+            drawContent()
+            with(glow) { draw(outline, d.band, band, SpecularLight.angle, shade = d.shade, depth = roll) }
+        }
+    }
+}
+
+/**
  * Raised controls sitting on a card (round buttons, chips, keys): an even fill one step up from
  * the card and a hairline specular edge that follows the phone's tilt ([SpecularLight]), so it reads
  * as lit glass rather than a painted ring. With [color] it's filled with that color instead (an
