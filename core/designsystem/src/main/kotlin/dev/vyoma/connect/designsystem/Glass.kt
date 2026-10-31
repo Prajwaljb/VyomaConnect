@@ -175,6 +175,8 @@ class GlassDepth internal constructor(
     val glow: Color = Color.Transparent,
     /** The soft band of light just inside the edge (see [InnerGlow]); transparent for none. */
     val band: Color = Color.Transparent,
+    /** The rolled edge's shaded side (see [InnerGlow]); transparent for none. */
+    val shade: Color = Color.Transparent,
 )
 
 // Dark is true black (AMOLED): glass glows instead of casting shadows.
@@ -186,6 +188,7 @@ private val DarkDepth = GlassDepth(
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
     glow = Color.White.copy(alpha = 0.04f),
     band = Color.White.copy(alpha = 0.42f),
+    shade = Color.Black.copy(alpha = 0.6f),
 )
 private val LightDepth = GlassDepth(
     // See-through, so the canvas's tint shows in the card (0.72 read as solid white blocks).
@@ -194,6 +197,7 @@ private val LightDepth = GlassDepth(
     rimLit = Color.White, rimBase = Color(0xFF1A2B4C).copy(alpha = 0.06f),
     shadow = Color(0xFF1A2B4C).copy(alpha = 0.05f), shadowBlur = 14f, shadowDrop = 3f,
     band = Color.White.copy(alpha = 0.7f),
+    shade = Color(0xFF1A2B4C).copy(alpha = 0.14f),
 )
 
 /** The current theme's [GlassDepth]. */
@@ -214,7 +218,9 @@ val glassDepth: GlassDepth
  * the edge faces the light and nearly as bright opposite (as [specularRim]), fading smoothly inward
  * with no steps. One small AGSL pass per element on Android 13+ (distance to a rounded rect, so
  * cards, pills and circles); before that, or for an odd shape, many faint nested strokes whose
- * steps are too fine to see. Needs nothing behind it: works on true black and in lighter glass.
+ * steps are too fine to see. With a [shade] (AGSL only) the edge is also modelled as a thick drop
+ * rolling over, [depth] deep: lit where it slopes towards the light, [shade] where it slopes away,
+ * and a shallow counter-curve further in, so even the flat sides read as 3D (Apple's WWDC25 glass). Needs nothing behind it: works on true black and in lighter glass.
  * One per element: it keeps that element's shader.
  */
 internal class InnerGlow {
@@ -222,7 +228,10 @@ internal class InnerGlow {
     private var path: Path? = null
     private var pathFor: Outline? = null
 
-    fun DrawScope.draw(outline: Outline, color: Color, width: Float, light: Float = SpecularLight.angle, opposite: Float = 0.8f) {
+    fun DrawScope.draw(
+        outline: Outline, color: Color, width: Float, light: Float = SpecularLight.angle, opposite: Float = 0.8f,
+        shade: Color = Color.Transparent, depth: Float = width,
+    ) {
         if (color.alpha <= 0f || width <= 0f || size.minDimension < 1f) return
         val radius = when (outline) {
             is Outline.Rectangle -> 0f
@@ -237,6 +246,8 @@ internal class InnerGlow {
             shader.setFloatUniform("light", cos(a).toFloat(), sin(a).toFloat())
             shader.setFloatUniform("opposite", opposite)
             shader.setFloatUniform("color", color.red, color.green, color.blue, color.alpha)
+            shader.setFloatUniform("depth", depth.coerceAtLeast(1f))
+            shader.setFloatUniform("shade", shade.red, shade.green, shade.blue, shade.alpha)
             drawOutline(outline, ShaderBrush(shader))
             return
         }
@@ -257,6 +268,8 @@ uniform float width;
 uniform float2 light;
 uniform float opposite;
 uniform half4 color;
+uniform float depth;
+uniform half4 shade;
 
 half4 main(float2 xy) {
     float2 c = size * 0.5;
@@ -273,7 +286,16 @@ half4 main(float2 xy) {
     // Spreads along the edge but gathers towards where it faces the light, so the lit corners stand out.
     float k = pow(max(f, 0.0), 1.6) + opposite * pow(max(-f, 0.0), 1.6);
     float a = float(color.a) * band * k;
-    return half4(color.rgb * half(a), half(a));
+    // The rolled edge: how steeply the surface falls away here, steepest at the rim and flat
+    // inside, with a shallow dip the other way past the roll (the liquid S of a thick drop).
+    float v = clamp(-d / depth, 0.0, 1.0);
+    float u = (v - 0.62) / 0.17;
+    float slope = (1.0 - v) * (1.0 - v) - 0.3 * exp(-u * u);
+    float lit = slope * f;
+    a = min(a + float(color.a) * 0.45 * max(lit, 0.0), 1.0);
+    float s = min(float(shade.a) * max(-lit, 0.0), 1.0);
+    // White over the shade, premultiplied.
+    return half4(color.rgb * half(a) + shade.rgb * half(s * (1.0 - a)), half(a + s * (1.0 - a)));
 }
 """
     }
@@ -307,6 +329,7 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
     private val drop = d.shadowDrop * density
     private val stroke = 1f * density
     private val band = 8f * density
+    private val roll = 22f * density
     private val glow = InnerGlow()
     private val shadowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         color = d.shadow.toArgb()
@@ -333,7 +356,7 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
             drawOutline(outline, fill)
         }
         if (!lit || d.rimLit.alpha <= 0f) return
-        with(glow) { draw(outline, d.band, band, light) }
+        with(glow) { draw(outline, d.band, band, light, shade = d.shade, depth = roll) }
         translate(inset, inset) {
             val c = Offset(width / 2 - inset, height / 2 - inset)
             drawOutline(edge, specularRim(d.rimLit, d.rimBase, c, light), style = Stroke(stroke))
@@ -384,11 +407,13 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
             val glow = InnerGlow()
             val band = Color.White.copy(alpha = if (base != null) 0.42f else if (dark) 0.34f else 0.6f)
             val bandWidth = (size.minDimension * 0.12f).coerceAtMost(4.dp.toPx())
+            val shade = if (dark || base != null) Color.Black.copy(alpha = 0.45f) else Color(0xFF1A2B4C).copy(alpha = 0.12f)
+            val roll = (size.minDimension * 0.3f).coerceAtMost(12.dp.toPx())
             onDrawBehind {
                 drawOutline(outline, fill)
                 // The light's angle is read here only, so tilting redraws the edge and nothing else.
                 val light = SpecularLight.angle
-                with(glow) { draw(outline, band, bandWidth, light) }
+                with(glow) { draw(outline, band, bandWidth, light, shade = shade, depth = roll) }
                 drawOutline(outline, specularRim(lit, rimBase, center, light), style = stroke)
             }
         }
