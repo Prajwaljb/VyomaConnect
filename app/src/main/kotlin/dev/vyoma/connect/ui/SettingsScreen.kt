@@ -250,7 +250,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
             SectionCard {
                 ListRow(
                     title = if (unrestricted) "Background activity allowed" else "Allow background activity",
-                    subtitle = if (unrestricted) "One UI won't put Vyoma to sleep" else "Recommended on Galaxy phones so devices stay connected",
+                    subtitle = if (unrestricted) "Your phone won't put Vyoma to sleep" else "Recommended so your PC stays connected in the background",
                     icon = Icons.Rounded.BatteryChargingFull,
                     iconTint = SystemColor.GREEN.color,
                     onClick = { if (!unrestricted) requestUnrestricted(context) },
@@ -308,39 +308,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
     if (showAdbHelp) ClipboardAdbDialog { showAdbHelp = false }
     if (showUsbHelp) UsbHelpDialog { showUsbHelp = false }
 
-    if (addingHost) {
-        var draft by rememberSaveable { mutableStateOf("") }
-        var invalid by rememberSaveable { mutableStateOf(false) }
-        GlassDialog(
-            onDismissRequest = { addingHost = false },
-            title = { Text("Add a PC") },
-            text = {
-                Column {
-                    Text(
-                        "Its IP address (for Tailscale, the 100.x address shown in the Tailscale app) or host name. " +
-                            "Vyoma will keep trying it alongside automatic discovery.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        draft,
-                        { draft = it; invalid = false },
-                        singleLine = true,
-                        isError = invalid,
-                        placeholder = { Text("192.168.1.20 or my-pc") },
-                        supportingText = if (invalid) ({ Text("That doesn't look like an address") }) else null,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (vm.addManualHost(draft)) addingHost = false else invalid = true
-                }) { Text("Add") }
-            },
-            dismissButton = { TextButton(onClick = { addingHost = false }) { Text("Cancel") } },
-        )
-    }
+    if (addingHost) AddHostDialog(vm) { addingHost = false }
 
     if (editingName) {
         var draft by rememberSaveable { mutableStateOf(name) }
@@ -390,6 +358,40 @@ internal fun requestUnrestricted(context: android.content.Context) {
     runCatching { context.startActivity(intent) }
 }
 
+/** A PC by IP or host name, for Tailscale or when discovery can't see it. */
+@Composable
+internal fun AddHostDialog(vm: AppViewModel, onDismiss: () -> Unit) {
+    var draft by rememberSaveable { mutableStateOf("") }
+    var invalid by rememberSaveable { mutableStateOf(false) }
+    GlassDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add a PC") },
+        text = {
+            Column {
+                Text(
+                    "Its IP address (for Tailscale, the 100.x address shown in the Tailscale app) or host name. " +
+                        "Vyoma will keep trying it alongside automatic discovery.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    draft,
+                    { draft = it; invalid = false },
+                    singleLine = true,
+                    isError = invalid,
+                    placeholder = { Text("192.168.1.20 or my-pc") },
+                    supportingText = if (invalid) ({ Text("That doesn't look like an address") }) else null,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { if (vm.addManualHost(draft)) onDismiss() else invalid = true }) { Text("Add") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
 /** How to grant automatic clipboard sync once over ADB (no root). */
 @Composable
 internal fun ClipboardAdbDialog(onDismiss: () -> Unit) {
@@ -426,7 +428,7 @@ internal fun ClipboardAdbDialog(onDismiss: () -> Unit) {
 
 /** The two ways to link over the cable; Vyoma picks either up on its own and prefers it to Wi-Fi. */
 @Composable
-private fun UsbHelpDialog(onDismiss: () -> Unit) {
+internal fun UsbHelpDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val cmd = "adb reverse tcp:${LanBackend.USB_REVERSE_PORT} tcp:1716"
     GlassDialog(

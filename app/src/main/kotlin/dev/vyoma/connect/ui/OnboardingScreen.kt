@@ -62,8 +62,9 @@ private fun Context.granted(permission: String) =
     ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
 /**
- * First run, as one checklist: allow what's needed to find the PC, opt into the extras, pair.
- * Every step can be done later from Settings, so nothing here blocks.
+ * First run, as one checklist in the order it matters: allow finding the PC, pair with it, then
+ * the optional extras (pairing used to sit below all four of them). Every step can be done later
+ * from Settings, so nothing here blocks.
  */
 @Composable
 fun OnboardingScreen(vm: AppViewModel, onDone: () -> Unit) {
@@ -100,7 +101,7 @@ fun OnboardingScreen(vm: AppViewModel, onDone: () -> Unit) {
 
     CollapsingHeaderScaffold(
         title = "Welcome",
-        subtitle = "Let's connect your phone and PC. Everything here can be changed later in Settings.",
+        subtitle = "Find your PC, pair, and you're set. The extras can wait for Settings.",
     ) {
         item(key = "needed-label") { SectionLabel("To find your PC") }
         item(key = "needed") {
@@ -110,24 +111,6 @@ fun OnboardingScreen(vm: AppViewModel, onDone: () -> Unit) {
                     if (coreOn) "Vyoma can look for your PC on this network" else "Lets Vyoma find your PC on Wi-Fi and stay connected",
                     done = coreOn,
                 ) { askCore.launch(corePermissions) }
-            }
-        }
-
-        item(key = "extras-label") { SectionLabel("Recommended") }
-        item(key = "extras") {
-            SectionCard(Modifier.padding(top = 8.dp)) {
-                Step(Icons.Rounded.BatteryChargingFull, SystemColor.GREEN, "Stay connected", "Keeps One UI from putting Vyoma to sleep", batteryOn, divider = true) {
-                    requestUnrestricted(context)
-                }
-                Step(Icons.Rounded.Notifications, SystemColor.RED, "Notifications on PC", "See, reply to and dismiss them from your PC", notifOn, divider = true) {
-                    runCatching { context.startActivity(NotificationBridge.settingsIntent(context)) }
-                }
-                Step(Icons.Rounded.Sms, SystemColor.GREEN, "Calls & messages", "Text from your PC and see who's calling", phoneOn, divider = true) {
-                    askPhone.launch(PhonePermissions.all)
-                }
-                Step(Icons.Rounded.ContentPaste, SystemColor.ORANGE, "Automatic clipboard", "One-time ADB grant, no root needed", clipOn, action = "How") {
-                    showAdbHelp = true
-                }
             }
         }
 
@@ -161,9 +144,27 @@ fun OnboardingScreen(vm: AppViewModel, onDone: () -> Unit) {
             }
         } else if (pairing.isEmpty()) {
             item(key = "searching") {
-                if (coreOn) SearchingCard(Modifier.padding(top = 8.dp).animateItem())
+                if (coreOn) SearchingCard(vm, Modifier.padding(top = 8.dp).animateItem())
                 else SectionCard(Modifier.padding(top = 8.dp)) {
                     ListRow(title = "Allow nearby devices first", subtitle = "Then open KDE Connect or GSConnect on your PC, on the same Wi-Fi")
+                }
+            }
+        }
+
+        item(key = "extras-label") { SectionLabel("Recommended") }
+        item(key = "extras") {
+            SectionCard(Modifier.padding(top = 8.dp)) {
+                Step(Icons.Rounded.BatteryChargingFull, SystemColor.GREEN, "Stay connected", "Keeps your phone from putting Vyoma to sleep", batteryOn, divider = true) {
+                    requestUnrestricted(context)
+                }
+                Step(Icons.Rounded.Notifications, SystemColor.RED, "Notifications on PC", "See, reply to and dismiss them from your PC", notifOn, divider = true) {
+                    runCatching { context.startActivity(NotificationBridge.settingsIntent(context)) }
+                }
+                Step(Icons.Rounded.Sms, SystemColor.GREEN, "Calls & messages", "Text from your PC and see who's calling", phoneOn, divider = true) {
+                    askPhone.launch(PhonePermissions.all)
+                }
+                Step(Icons.Rounded.ContentPaste, SystemColor.ORANGE, "Automatic clipboard", "One-time ADB grant, no root needed", clipOn, action = "How") {
+                    showAdbHelp = true
                 }
             }
         }
