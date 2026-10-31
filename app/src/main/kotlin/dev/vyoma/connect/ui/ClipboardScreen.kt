@@ -1,5 +1,8 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.rounded.ContentCopy
+import dev.vyoma.connect.designsystem.DialogButton
 import dev.vyoma.connect.designsystem.RowChevron
 import androidx.compose.material.icons.rounded.ContentPaste
 import dev.vyoma.connect.designsystem.cardSegment
@@ -43,7 +46,6 @@ import dev.vyoma.connect.designsystem.SectionLabel
 import dev.vyoma.connect.designsystem.pressable
 import android.widget.Toast
 import dev.vyoma.connect.designsystem.GlassDialog
-import androidx.compose.material3.TextButton
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
@@ -87,18 +89,18 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                 Modifier.fillMaxWidth().animateItem()
                     .then(if (i != last) Modifier.joinNext() else Modifier)
                     .cardSegment(first = i == 0, last = i == last)
-                    .pressable(pressedScale = 0.985f) {
+                    .pressable {
                         vm.copyClip(clip.text)
                         Toast.makeText(context, "Copied, and sent to your PC", Toast.LENGTH_SHORT).show()
                     },
             ) {
-                Column(Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) {
-                    Text(clip.text, style = MaterialTheme.typography.bodyMedium, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                Row(Modifier.padding(horizontal = 20.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) {
+                    Text(clip.text, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             if (clip.origin == null) Icons.Rounded.PhoneAndroid else Icons.Rounded.Laptop, null,
-                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(end = 6.dp).width(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(end = 6.dp).width(16.dp),
                         )
                         Text(
                             (if (clip.origin == null) "This phone" else vm.deviceName(clip.origin!!)) + " · " +
@@ -107,6 +109,10 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                }
+                    // What a tap does, said by the row itself (copies it again).
+                    Spacer(Modifier.width(12.dp))
+                    Icon(Icons.Rounded.ContentCopy, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
                 }
                 if (i != last) HorizontalDivider(Modifier.padding(horizontal = 20.dp), color = MaterialTheme.colorScheme.outlineVariant)
             }
@@ -134,8 +140,8 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
             onDismissRequest = { clearing = false },
             title = { Text("Clear clipboard history?") },
             text = { Text("Removes the list on this phone. What's copied right now stays.") },
-            confirmButton = { TextButton(onClick = { vm.clearClipHistory(); clearing = false }) { Text("Clear") } },
-            dismissButton = { TextButton(onClick = { clearing = false }) { Text("Cancel") } },
+            confirmButton = { DialogButton(onClick = { vm.clearClipHistory(); clearing = false }, destructive = true) { Text("Clear") } },
+            dismissButton = { DialogButton(onClick = { clearing = false }) { Text("Cancel") } },
         )
     }
 }

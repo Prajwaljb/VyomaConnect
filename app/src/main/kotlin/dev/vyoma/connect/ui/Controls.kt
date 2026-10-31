@@ -1,11 +1,12 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.graphics.luminance
+import dev.vyoma.connect.designsystem.DialogButton
 import dev.vyoma.connect.designsystem.RowChevron
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalHapticFeedback
 import dev.vyoma.connect.designsystem.perform
 import dev.vyoma.connect.designsystem.GlassDialog
-import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.UnfoldMore
 import dev.vyoma.connect.designsystem.Haptic
@@ -110,9 +111,9 @@ fun ActionTile(icon: ImageVector, label: String, modifier: Modifier = Modifier, 
     val fg = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
     Column(
         modifier
+            .pressable(onClick = onClick)
             .clip(MaterialTheme.shapes.large)
             .background(bg)
-            .pressable(onClick = onClick)
             .padding(vertical = 14.dp, horizontal = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -165,7 +166,9 @@ fun MediaCard(
         value = if (source == null) null else withContext(Dispatchers.Default) {
             val trimmed = trimBars(source)
             val swatch = Palette.from(trimmed).maximumColorCount(12).generate().let { it.getDarkMutedColor(it.getDominantColor(0xFF20242B.toInt())) }
-            trimmed to Color(swatch)
+            // Kept deep whatever the art: a mid-tone tint (bright art with no dark swatch) left the
+            // white secondary text at 2.5:1 and put a loud slab of colour on Home.
+            trimmed to Color(swatch).let { if (it.luminance() > 0.06f) it.toned(lightness = 0.2f) else it }
         }
     }
     val art = prepared?.first
@@ -198,7 +201,7 @@ fun MediaCard(
                     Column(Modifier.weight(1f).padding(top = 2.dp)) {
                         Text(p.title.ifBlank { p.name }, style = MaterialTheme.typography.titleMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         val sub = listOf(p.artist, p.album).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { p.name.takeIf { p.title.isNotBlank() }.orEmpty() }
-                        if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     // Switching players is rare: a small button and a list, not a row of chips on the card.
                     if (np.players.size > 1) {
@@ -207,9 +210,8 @@ fun MediaCard(
                         Box(
                             Modifier
                                 .size(36.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.14f))
-                                .pressable { picking = true }
+                                .pressable(glass = true) { picking = true }
+                                .glassRaised(CircleShape, Color.White.copy(alpha = 0.14f))
                                 .semantics { contentDescription = "Choose player" },
                             contentAlignment = Alignment.Center,
                         ) {
@@ -222,9 +224,8 @@ fun MediaCard(
                         Box(
                             Modifier
                                 .size(36.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.14f))
-                                .pressable(onClick = onContinueHere)
+                                .pressable(glass = true, onClick = onContinueHere)
+                                .glassRaised(CircleShape, Color.White.copy(alpha = 0.14f))
                                 .semantics { contentDescription = "Continue on phone" },
                             contentAlignment = Alignment.Center,
                         ) {
@@ -365,9 +366,9 @@ private fun Scrubber(np: NowPlaying, lengthMs: Long, underlay: Color, onSeek: (L
             underlay = underlay,
         )
         Row(Modifier.fillMaxWidth()) {
-            Text(formatTime(shownMs), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
+            Text(formatTime(shownMs), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
             Spacer(Modifier.weight(1f))
-            Text("-" + formatTime((lengthMs - shownMs).coerceAtLeast(0)), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
+            Text("-" + formatTime((lengthMs - shownMs).coerceAtLeast(0)), style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
         }
     }
 }
@@ -469,7 +470,6 @@ private fun trimBars(bmp: Bitmap): Bitmap {
 /** The PC's media players, the one shown ticked. */
 @Composable
 private fun PlayerPicker(players: List<String>, current: String, onDismiss: () -> Unit, onPick: (String) -> Unit) {
-    val haptics = LocalHapticFeedback.current
     GlassDialog(
         onDismissRequest = onDismiss,
         title = { Text("Players on the PC") },
@@ -483,11 +483,12 @@ private fun PlayerPicker(players: List<String>, current: String, onDismiss: () -
                         showDivider = i < players.lastIndex,
                         horizontalPadding = 0.dp,
                         trailing = if (name == current) { { Icon(Icons.Rounded.Check, "Playing", tint = MaterialTheme.colorScheme.primary) } } else null,
-                        onClick = { haptics.perform(Haptic.Select); onPick(name) },
+                        haptic = Haptic.Select,
+                        onClick = { onPick(name) },
                     )
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { DialogButton(onClick = onDismiss) { Text("Close") } },
     )
 }

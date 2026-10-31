@@ -1,5 +1,9 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.SolidColor
+import dev.vyoma.connect.designsystem.Haptic
+import dev.vyoma.connect.designsystem.DialogButton
 import androidx.compose.foundation.layout.fillMaxWidth
 import dev.vyoma.connect.designsystem.RowChevron
 import androidx.compose.runtime.getValue
@@ -70,7 +74,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -139,7 +142,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Palette.entries.forEach { p ->
-                        PaletteSwatch(p, selected = theme.palette == p) { vm.setPalette(p) }
+                        PaletteSwatch(p, selected = theme.palette == p, Modifier.weight(1f)) { vm.setPalette(p) }
                     }
                 }
                 Spacer(Modifier.height(20.dp))
@@ -163,18 +166,24 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     icon = Icons.Rounded.Gradient,
                     iconTint = SystemColor.BLUE.color,
                     showDivider = true,
-                    trailing = { VyomaSwitch(checked = canvasGlow, onCheckedChange = { vm.setCanvasGlow(it) }) },
+                    // The whole row toggles (like every other row acts), with the switch's haptic.
+                    haptic = if (canvasGlow) Haptic.ToggleOff else Haptic.ToggleOn,
+                    onClick = { vm.setCanvasGlow(!canvasGlow) },
+                    trailing = { VyomaSwitch(checked = canvasGlow, onCheckedChange = { vm.setCanvasGlow(it) }, contentDescription = "Background glow") },
                 )
                 val glass by vm.liteGlass.collectAsStateWithLifecycle()
                 ListRow(
                     title = "Lighter glass",
                     subtitle = when {
                         glass.detected && !glass.chosen -> "Turned on: this phone was too slow"
-                        else -> "Frosted bars, smoother on slower phones"
+                        else -> "Frosted bars for slower phones"
                     },
+                    subtitleMaxLines = 1,
                     icon = Icons.Rounded.Speed,
                     iconTint = SystemColor.GRAY.color,
-                    trailing = { VyomaSwitch(checked = glass.on, onCheckedChange = { vm.setLiteGlass(it) }) },
+                    haptic = if (glass.on) Haptic.ToggleOff else Haptic.ToggleOn,
+                    onClick = { vm.setLiteGlass(!glass.on) },
+                    trailing = { VyomaSwitch(checked = glass.on, onCheckedChange = { vm.setLiteGlass(it) }, contentDescription = "Lighter glass") },
                 )
             }
         }
@@ -295,6 +304,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                         subtitle = "Saves a diagnostics log to Downloads",
                         icon = Icons.Rounded.BugReport,
                         iconTint = SystemColor.ORANGE.color,
+                        trailing = { RowChevron() },
                         onClick = {
                             if (!saving) {
                                 saving = true
@@ -336,22 +346,23 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
             title = { Text("Device name") },
             text = { OutlinedTextField(draft, { draft = it.take(32) }, singleLine = true) },
             confirmButton = {
-                TextButton(enabled = draft.isNotBlank(), onClick = {
+                DialogButton(enabled = draft.isNotBlank(), onClick = {
                     vm.setDeviceName(draft.trim())
                     editingName = false
                 }) { Text("Save") }
             },
-            dismissButton = { TextButton(onClick = { editingName = false }) { Text("Cancel") } },
+            dismissButton = { DialogButton(onClick = { editingName = false }) { Text("Cancel") } },
         )
     }
 }
 
 @Composable
-private fun PaletteSwatch(palette: Palette, selected: Boolean, onClick: () -> Unit) {
+private fun PaletteSwatch(palette: Palette, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val dark = MaterialTheme.colorScheme.background.red < 0.5f
     val ring by animateColorAsState(if (selected) MaterialTheme.colorScheme.onSurface else Color.Transparent, label = "ring")
     val inset by animateDpAsState(if (selected) 5.dp else 0.dp, VyomaMotion.spatial(), label = "inset")
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.pressable(onClick = onClick)) {
+    // Equal shares (labels differ in width, so spreading the columns spaced the circles unevenly).
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.pressable(haptic = Haptic.Select, onClick = onClick)) {
         Box(
             Modifier.size(44.dp).clip(CircleShape).border(2.dp, ring, CircleShape).padding(inset.coerceAtLeast(0.dp)), // the spring overshoots below zero
             contentAlignment = Alignment.Center,
@@ -360,14 +371,16 @@ private fun PaletteSwatch(palette: Palette, selected: Boolean, onClick: () -> Un
                 // Wallpaper option previews the live Material You primary with a soft sweep.
                 Brush.sweepGradient(listOf(MaterialTheme.colorScheme.primary, Color(0xFF5CE1E6), MaterialTheme.colorScheme.primary))
             } else {
-                Brush.linearGradient(listOf(if (dark) palette.dark else palette.light, palette.light))
+                // Flat: a dark-to-light gradient made them glossy balls.
+                SolidColor(if (dark) palette.dark else palette.light)
             }
             Box(Modifier.size(44.dp).clip(CircleShape).background(fill), contentAlignment = Alignment.Center) {
                 if (selected) Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))
             }
         }
         Spacer(Modifier.height(6.dp))
-        Text(palette.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        // One line, allowed past its share ("Wallpaper" is a hair wider than a sixth of the card).
+        Text(palette.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false, overflow = TextOverflow.Visible)
     }
 }
 
@@ -405,9 +418,9 @@ internal fun AddHostDialog(vm: AppViewModel, onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(onClick = { if (vm.addManualHost(draft)) onDismiss() else invalid = true }) { Text("Add") }
+            DialogButton(onClick = { if (vm.addManualHost(draft)) onDismiss() else invalid = true }) { Text("Add") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { DialogButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
@@ -436,12 +449,12 @@ internal fun ClipboardAdbDialog(onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(onClick = {
+            DialogButton(onClick = {
                 context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("adb", cmd))
                 onDismiss()
             }) { Text("Copy command") }
         },
-        dismissButton = { TextButton(onClick = { onDismiss() }) { Text("Close") } },
+        dismissButton = { DialogButton(onClick = { onDismiss() }) { Text("Close") } },
     )
 }
 
@@ -479,12 +492,12 @@ internal fun UsbHelpDialog(onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(onClick = {
+            DialogButton(onClick = {
                 context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("adb", cmd))
                 onDismiss()
             }) { Text("Copy command") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        dismissButton = { DialogButton(onClick = onDismiss) { Text("Close") } },
     )
 }
 

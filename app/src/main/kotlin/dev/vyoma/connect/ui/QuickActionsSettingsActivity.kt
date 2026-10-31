@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.DialogButton
 import android.appwidget.AppWidgetManager
 import android.content.Intent
 import android.os.Bundle
@@ -16,7 +17,6 @@ import androidx.compose.material.icons.rounded.RemoveCircle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -71,7 +71,7 @@ class QuickActionsSettingsActivity : ComponentActivity() {
                     subtitle = "Pick the buttons and their order. Bigger widgets show more of them.",
                     navigation = { BounceIconButton(onClick = ::finish) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
                     actions = {
-                        TextButton(onClick = { save(QuickAction.DEFAULT) }) { Text("Reset") }
+                        DialogButton(onClick = { save(QuickAction.DEFAULT) }) { Text("Reset") }
                     },
                 ) {
                     item(key = "on-label") { SectionLabel("On the widget · ${picked.size}", Modifier.animateItem()) }

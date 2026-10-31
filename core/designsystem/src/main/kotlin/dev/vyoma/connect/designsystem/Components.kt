@@ -1,5 +1,7 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.Icons
 import androidx.compose.ui.text.TextStyle
@@ -129,13 +131,15 @@ fun CollapsingHeaderScaffold(
     listState: LazyListState = rememberLazyListState(),
     /** Applied to the list itself, e.g. [glassListGroup] to draw behind its items. */
     listModifier: Modifier = Modifier,
+    /** The hero's share of the screen: ~30% keeps content in thumb reach; Home takes less so its actions clear the tab bar. */
+    heroFraction: Float = 0.30f,
     content: LazyListScope.() -> Unit,
 ) {
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     // Wide windows (landscape, tablets, foldables) keep a phone-width column in the middle: stretched
     // edge to edge, square cards grew taller than the screen.
     val side = ((LocalConfiguration.current.screenWidthDp.dp - MaxContentWidth) / 2).coerceAtLeast(16.dp)
-    val headerHeight = (screenHeight * 0.30f).coerceIn(180.dp, 300.dp)
+    val headerHeight = (screenHeight * heroFraction).coerceIn(180.dp, 300.dp)
     val density = LocalDensity.current
     val headerPx = with(density) { headerHeight.toPx() }
     val distance = headerPx * 0.6f
@@ -297,14 +301,20 @@ fun CollapsingHeaderScaffold(
         // hard frosted strip, the status bar area fades softly to the canvas so content slips under it.
         val edgeColor = MaterialTheme.colorScheme.background
         Box(Modifier.fillMaxWidth()) {
+            // The scroll edge effect (HIG): it reaches 12 dp past the bubbles, so a card resting under the
+            // bar fades away behind them instead of its rim cutting through them.
             Box(
-                Modifier.matchParentSize().drawBehind {
+                Modifier.matchParentSize().layout { m, c ->
+                    val extra = 12.dp.roundToPx()
+                    val p = m.measure(c.copy(minHeight = c.minHeight + extra, maxHeight = c.maxHeight + extra))
+                    layout(p.width, p.height - extra) { p.place(0, 0) }
+                }.drawBehind {
                     val a = collapse
                     if (a < 0.01f) return@drawBehind
                     drawRect(
                         Brush.verticalGradient(
                             0f to edgeColor.copy(alpha = a),
-                            0.45f to edgeColor.copy(alpha = 0.85f * a),
+                            0.6f to edgeColor.copy(alpha = 0.9f * a),
                             1f to Color.Transparent,
                         ),
                     )
@@ -315,11 +325,12 @@ fun CollapsingHeaderScaffold(
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.statusBars)
                     .height(BAR_HEIGHT)
-                    .padding(horizontal = 12.dp),
+                    // The page's gutter: the bubbles line up with the cards' edges.
+                    .padding(horizontal = side),
             ) {
                 if (navigation != null) {
                     Box(
-                        Modifier.align(Alignment.CenterStart).size(48.dp).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp, interactive = true),
+                        Modifier.align(Alignment.CenterStart).size(CHROME_SIZE).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp, interactive = true),
                         contentAlignment = Alignment.Center,
                     ) { CompositionLocalProvider(LocalOnChrome provides true) { navigation() } }
                 }
@@ -330,7 +341,7 @@ fun CollapsingHeaderScaffold(
                         .align(Alignment.Center)
                         .layout { m, c ->
                             val full = (titleSize.width * shrink + 36.dp.toPx()).coerceAtMost(c.maxWidth - 120.dp.toPx())
-                            val h = (44.dp.toPx() * bubbleH.value).coerceAtLeast(0f)
+                            val h = (CHROME_SIZE.toPx() * bubbleH.value).coerceAtLeast(0f)
                             val w = maxOf(h, full * bubbleW.value).coerceAtLeast(0f)
                             val p = m.measure(Constraints.fixed(w.roundToInt(), h.roundToInt()))
                             layout(p.width, p.height) { p.place(0, 0) }
@@ -349,7 +360,7 @@ fun CollapsingHeaderScaffold(
                         .glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp),
                 )
                 Row(
-                    Modifier.align(Alignment.CenterEnd).height(48.dp).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp, interactive = true),
+                    Modifier.align(Alignment.CenterEnd).height(CHROME_SIZE).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp, interactive = true),
                     verticalAlignment = Alignment.CenterVertically,
                 ) { CompositionLocalProvider(LocalOnChrome provides true) { actions() } }
             }
@@ -401,6 +412,8 @@ fun CollapsingHeaderScaffold(
 
 private const val ROOM_KEY = "collapse-room"
 private val BAR_HEIGHT = 64.dp
+/** Every bubble in the bar (back, title, actions) is one height: a smaller title bubble looked like a different part. */
+private val CHROME_SIZE = 48.dp
 
 /** Plain holder: layout coordinates read in callbacks, never state. */
 private class CoordinatesHolder {
@@ -445,13 +458,15 @@ fun ListRow(
     subtitleMaxLines: Int = Int.MAX_VALUE,
     /** E.g. monospace for a command or a fingerprint. */
     subtitleStyle: TextStyle? = null,
+    /** The row's one haptic: a plain tap, or e.g. Select when it picks one of several. */
+    haptic: Haptic? = Haptic.Tap,
     onClick: (() -> Unit)? = null,
 ) {
     Column(modifier) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .then(if (onClick != null) Modifier.pressable(pressedScale = 0.985f, onClick = onClick) else Modifier)
+                .then(if (onClick != null) Modifier.pressable(haptic = haptic, onClick = onClick) else Modifier)
                 .padding(horizontal = horizontalPadding, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -591,7 +606,7 @@ fun Pill(text: String, modifier: Modifier = Modifier, icon: ImageVector? = null,
  * (the same knob as the sliders). A vertical swipe that starts on it still scrolls the page.
  */
 @Composable
-fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier, contentDescription: String? = null) {
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val position = remember { Animatable(if (checked) 1f else 0f) }
@@ -601,7 +616,8 @@ fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: 
     LaunchedEffect(checked) { if (!held) position.animateTo(if (checked) 1f else 0f, VyomaMotion.release()) }
     val swell = animateFloatAsState(if (held) 1f else 0f, if (held) VyomaMotion.spatial() else VyomaMotion.release(), label = "swell")
     val track by animateColorAsState(
-        if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f),
+        // The one filled accent (as on chips, pills and keys), not the pastel accent.
+        if (checked) Glass.accent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f),
         VyomaMotion.effects(), label = "track",
     )
     val card = MaterialTheme.colorScheme.surfaceContainerLow
@@ -632,6 +648,7 @@ fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: 
             .size(52.dp, 32.dp)
             .semantics {
                 role = Role.Switch
+                contentDescription?.let { this.contentDescription = it }
                 toggleableState = ToggleableState(checked)
                 onClick { settle(!checked); true }
             }
@@ -703,7 +720,7 @@ fun PillButton(
         modifier
             // 40 dp to look at; Compose already widens the touch target to 48 dp.
             .then(if (large) Modifier.fillMaxWidth().height(54.dp) else Modifier.height(40.dp))
-            .pressable(enabled = enabled, pressedScale = if (large) 0.97f else 0.92f, haptic = haptic, glass = true, onClick = onClick)
+            .pressable(enabled = enabled, haptic = haptic, glass = true, onClick = onClick)
             // Prominent pills are lit accent glass; the rest are raised glass with an accent label.
             .glassRaised(CircleShape, bg.takeIf { prominent && enabled })
             .padding(horizontal = 20.dp),
@@ -980,6 +997,38 @@ fun GlassDialog(
     }
 }
 
+/**
+ * A dialog's action: a text button that dips, glows and ticks like every other control (Material's
+ * TextButton only rippled, with no haptic). Same shape of API as TextButton; [destructive] colours
+ * it red. 48 dp tall.
+ */
+@Composable
+fun DialogButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    destructive: Boolean = false,
+    haptic: Haptic? = Haptic.Tap,
+    content: @Composable () -> Unit,
+) {
+    val color = when {
+        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+        destructive -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.primary
+    }
+    Box(
+        modifier
+            .heightIn(min = 48.dp)
+            .pressable(enabled = enabled, haptic = haptic, glass = true, onClick = onClick)
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        CompositionLocalProvider(LocalContentColor provides color) {
+            ProvideTextStyle(MaterialTheme.typography.labelLarge, content)
+        }
+    }
+}
+
 /** True inside an interactive [glassChrome] button: content shouldn't add its own glass. */
 val LocalOnChrome = staticCompositionLocalOf { false }
 
@@ -1000,7 +1049,7 @@ fun BounceIconButton(
 ) {
     Box(
         // On liquid chrome the chrome itself swells like a bubble, so the glyph holds still in it.
-        modifier.size(size).pressable(enabled = enabled, pressedScale = if (LocalOnChrome.current) 1f else 0.8f, glass = !LocalOnChrome.current, onClick = onClick),
+        modifier.size(size).pressable(enabled = enabled, pressedScale = if (LocalOnChrome.current) 1f else PressAuto, glass = !LocalOnChrome.current, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { content() }
 }
