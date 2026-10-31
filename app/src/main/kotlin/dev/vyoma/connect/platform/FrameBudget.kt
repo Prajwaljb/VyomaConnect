@@ -5,6 +5,8 @@ import android.app.Application
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Process
+import android.os.SystemClock
 import android.view.FrameMetrics
 import android.view.Window
 import dev.vyoma.connect.protocol.VLog
@@ -14,8 +16,11 @@ import dev.vyoma.connect.ui.PcScreenActivity
  * Finds phones that can't keep up with the full liquid glass, from how long the app's own frames
  * take. Only frames drawn back to back count (a scroll, an animation): a lone frame after a pause
  * is slow on any phone, its CPU still clocked down. When the median of a window of such frames
- * takes at least [SLOW_RATIO] times the display's frame interval, twice running, [onSlow] is called
- * once and watching stops. A phone that keeps up just keeps being watched, cheaply, until it stops.
+ * takes at least [SLOW_RATIO] times the display's frame interval, [SLOW_WINDOWS] times running,
+ * [onSlow] is called once and watching stops for this launch. A phone that keeps up just keeps
+ * being watched, cheaply. Nothing counts in a launch's first [WARMUP_MS]: right after an install or
+ * update the code isn't compiled yet and every phone stutters (an S24 FE hit 2.4x there). One slow
+ * launch isn't proof either: the caller turns lighter glass on only after two.
  *
  * Measured (median frame time over the display's interval while scrolling): a Galaxy S24 FE
  * 0.95-1.55x at 120 Hz; a moto g52 2.4-2.8x at 90 Hz (frames of ~27-31 ms against 11), which
@@ -72,6 +77,7 @@ class FrameBudget(private val onSlow: (ratio: Float) -> Unit) {
 
     private fun sample(m: FrameMetrics, interval: Long) {
         if (done || m.getMetric(FrameMetrics.FIRST_DRAW_FRAME) == 1L) return
+        if (SystemClock.uptimeMillis() - Process.getStartUptimeMillis() < WARMUP_MS) return
         val vsync = m.getMetric(FrameMetrics.INTENDED_VSYNC_TIMESTAMP)
         // Back to back means within two intervals: a slow phone misses some vsyncs while scrolling.
         val streaming = lastVsync > 0 && vsync - lastVsync <= interval * 2
@@ -84,9 +90,9 @@ class FrameBudget(private val onSlow: (ratio: Float) -> Unit) {
         // In testers' demo logs: how close this phone runs to its limit.
         VLog.d(TAG, "median frame %.2fx the display's interval over %d frames".format(median, WINDOW))
         slowWindows = if (median >= SLOW_RATIO) slowWindows + 1 else 0
-        if (slowWindows >= 2) {
+        if (slowWindows >= SLOW_WINDOWS) {
             done = true
-            VLog.i(TAG, "frames take %.1fx the display's interval: lighter glass".format(median))
+            VLog.i(TAG, "frames take %.1fx the display's interval: a slow launch".format(median))
             onSlow(median)
         }
     }
@@ -95,5 +101,7 @@ class FrameBudget(private val onSlow: (ratio: Float) -> Unit) {
         const val TAG = "FrameBudget"
         const val WINDOW = 240
         const val SLOW_RATIO = 2.2f
+        const val SLOW_WINDOWS = 3
+        const val WARMUP_MS = 30_000L
     }
 }
