@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import dev.vyoma.connect.designsystem.BounceIconButton
@@ -60,12 +61,8 @@ fun DeviceScreen(
     val battery by (device?.plugin<BatteryPlugin>(BatteryPlugin.ID)?.remote ?: remember { MutableStateFlow(null) }).collectAsState()
     val commands by (device?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands ?: remember { MutableStateFlow(emptyList()) }).collectAsState()
 
-    val subtitle = state?.let {
-        listOfNotNull(
-            transportLabel(it),
-            battery?.let { b -> "${b.charge}%${if (b.charging) " · charging" else ""}" },
-        ).joinToString(" · ")
-    }
+    // How it's connected; the battery row below owns the charge (each fact said once).
+    val subtitle = state?.let { transportLabel(it) }
 
     CollapsingHeaderScaffold(
         title = state?.identity?.deviceName ?: "Device",
@@ -114,7 +111,7 @@ fun DeviceScreen(
         item(key = "info") {
             SectionCard(Modifier.animateItem()) {
                 ListRow(
-                    title = if (state.isReachable) transportLabel(state) else "Not reachable",
+                    title = if (state.isReachable) "Link" else "Not reachable",
                     subtitle = if (state.isReachable) "${state.plugins.size} features active" else "Open KDE Connect on it, or join the same network",
                     icon = if (TransportKind.USB in state.transports) Icons.Rounded.Usb else Icons.Rounded.Wifi,
                     iconTint = if (state.isReachable) SystemColor.BLUE.color else SystemColor.GRAY.color,
@@ -150,6 +147,8 @@ fun DeviceScreen(
                 ListRow(
                     title = "Certificate fingerprint",
                     subtitle = fingerprint?.chunked(24)?.joinToString("\n") ?: "Unavailable",
+                    // Monospace so the hex pairs line up in columns, easy to compare with the PC's.
+                    subtitleStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     icon = Icons.Rounded.Fingerprint,
                     iconTint = SystemColor.TEAL.color,
                     showDivider = state.isPaired,

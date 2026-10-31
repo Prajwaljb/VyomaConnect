@@ -1,5 +1,9 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.path
+import dev.vyoma.connect.designsystem.fadingHorizontalScroll
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -106,7 +110,7 @@ fun HomeScreen(
         hero = primary?.let { p -> { Box(Modifier.pressable { onOpenDevice(p.identity.deviceId) }) { DeviceGlyph(p) } } },
         actions = {
             if (primary != null) {
-                BounceIconButton(onClick = { onOpenDevice(primary.identity.deviceId) }) { Icon(Icons.Rounded.Info, "PC details") }
+                BounceIconButton(onClick = { onOpenDevice(primary.identity.deviceId) }) { Icon(InfoGlyph, "PC details") }
             } else {
                 BounceIconButton(onClick = vm::refresh) { Icon(Icons.Rounded.Refresh, "Refresh") }
             }
@@ -116,7 +120,7 @@ fun HomeScreen(
             val id = primary.identity.deviceId
             if (connected.size > 1) {
                 item(key = "switcher") {
-                    Row(Modifier.animateItem().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.animateItem().fadingHorizontalScroll(rememberScrollState(), bleed = 16.dp).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         connected.forEach { d ->
                             val on = d.identity.deviceId == id
                             Text(
@@ -133,13 +137,13 @@ fun HomeScreen(
             }
             item(key = "bento") {
                 Staggered(0, Modifier.animateItem()) {
-                    PcDashboard(vm, primary, DashboardSection.BENTO, { onOpenDevice(id) }, { onKeyboard(id) }, onClipboard)
+                    PcDashboard(vm, primary, DashboardSection.BENTO, { onKeyboard(id) }, onClipboard)
                 }
             }
             if (companionOnline) {
                 item(key = "vitals") {
                     Staggered(1, Modifier.animateItem()) {
-                        PcDashboard(vm, primary, DashboardSection.VITALS, { onOpenDevice(id) }, { onKeyboard(id) }, onClipboard)
+                        PcDashboard(vm, primary, DashboardSection.VITALS, { onKeyboard(id) }, onClipboard)
                     }
                 }
             }
@@ -168,12 +172,12 @@ fun HomeScreen(
             }
             item(key = "volume") {
                 Staggered(3, Modifier.animateItem()) {
-                    PcDashboard(vm, primary, DashboardSection.VOLUME, { onOpenDevice(id) }, { onKeyboard(id) }, onClipboard)
+                    PcDashboard(vm, primary, DashboardSection.VOLUME, { onKeyboard(id) }, onClipboard)
                 }
             }
             item(key = "controls") {
                 Staggered(4, Modifier.animateItem()) {
-                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onOpenDevice(id) }, { onKeyboard(id) }, onClipboard, onBrowseFiles = { onBrowseFiles(id) })
+                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onKeyboard(id) }, onClipboard, onBrowseFiles = { onBrowseFiles(id) })
                 }
             }
         }
@@ -328,4 +332,34 @@ private fun sameVideo(a: String, b: String): Boolean {
     val x = a.trim().lowercase()
     val y = b.trim().lowercase()
     return x.isNotEmpty() && y.isNotEmpty() && (x == y || x.startsWith(y) || y.startsWith(x))
+}
+
+/**
+ * A bare "i" for the PC details button: the glass circle is already its ring, so Material's
+ * filled info circle read as a white disc inside a bubble.
+ */
+private val InfoGlyph: ImageVector by lazy {
+    ImageVector.Builder("Info", 24.dp, 24.dp, 24f, 24f).apply {
+        path(fill = SolidColor(Color.Black)) {
+            // The dot.
+            moveTo(12f, 3.6f)
+            arcToRelative(1.9f, 1.9f, 0f, true, true, 0f, 3.8f)
+            arcToRelative(1.9f, 1.9f, 0f, true, true, 0f, -3.8f)
+            close()
+            // The stem with a short foot, rounded like Inter's.
+            moveTo(10.2f, 10f)
+            horizontalLineTo(12.4f)
+            arcToRelative(1.1f, 1.1f, 0f, false, true, 1.1f, 1.1f)
+            verticalLineTo(18.6f)
+            horizontalLineTo(14.6f)
+            arcToRelative(0.9f, 0.9f, 0f, false, true, 0f, 1.8f)
+            horizontalLineTo(9.4f)
+            arcToRelative(0.9f, 0.9f, 0f, false, true, 0f, -1.8f)
+            horizontalLineTo(10.9f)
+            verticalLineTo(11.8f)
+            horizontalLineTo(10.2f)
+            arcToRelative(0.9f, 0.9f, 0f, false, true, 0f, -1.8f)
+            close()
+        }
+    }.build()
 }

@@ -1,5 +1,8 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.text.TextStyle
+import dev.vyoma.connect.designsystem.fadingVerticalScroll
+import dev.vyoma.connect.designsystem.fadingHorizontalScroll
 import dev.vyoma.connect.designsystem.ListRow
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.verticalScroll
@@ -253,7 +256,6 @@ fun PcDashboard(
     vm: AppViewModel,
     state: DeviceState,
     section: DashboardSection,
-    onOpenDevice: () -> Unit,
     onTouchpad: () -> Unit,
     onClipboard: () -> Unit,
     modifier: Modifier = Modifier,
@@ -268,7 +270,7 @@ fun PcDashboard(
     when (section) {
         DashboardSection.BENTO -> Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             val phone by vm.phoneBattery.collectAsStateWithLifecycle()
-            BatteryTile(pc.battery, pc.batteryStale, phone, Modifier.weight(1f), onClick = onOpenDevice)
+            BatteryTile(pc.battery, pc.batteryStale, phone, Modifier.weight(1f))
             val clips by vm.clipHistory.collectAsStateWithLifecycle()
             ClipboardTile(
                 clips.firstOrNull(),
@@ -304,10 +306,10 @@ fun PcDashboard(
         }
         // Everything about sound in one place: the level, and where it plays when there's a choice.
         DashboardSection.VOLUME -> pc.sink?.let { sink ->
-            Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                VolumeBar(sink, onVolume = { vm.setSinkVolume(id, sink.name, it) })
-                if (pc.sinks.size > 1) OutputPicker(pc.sinks, onDefault = { vm.makeSinkDefault(id, it.name) })
-            }
+            VolumeBar(
+                sink, onVolume = { vm.setSinkVolume(id, sink.name, it) }, modifier,
+                outputs = pc.sinks.takeIf { it.size > 1 }, onOutput = { vm.makeSinkDefault(id, it.name) },
+            )
         }
         DashboardSection.CONTROLS -> {
           val devices by vm.devices.collectAsStateWithLifecycle()
@@ -325,7 +327,7 @@ fun PcDashboard(
                 // Connect); PC files browses and uploads into a chosen folder, which needs the companion.
                 // Slots never move: the companion swaps Clipboard (also a tile and a tab) for PC files,
                 // Ping for Screen and Find PC for Camera (both stay in the PC's details).
-                Control(Icons.Rounded.UploadFile, "Send", SystemColor.CYAN) { vm.pickFiles(context) },
+                Control(Icons.Rounded.UploadFile, "Send files", SystemColor.CYAN) { vm.pickFiles(context) },
                 if (shots != null) Control(Icons.Rounded.Folder, "PC files", SystemColor.BLUE, onClick = onBrowseFiles)
                 else Control(Icons.Rounded.ContentPaste, "Clipboard", SystemColor.ORANGE, onClick = onClipboard),
                 // The touchpad has its own round button by the tab bar; this opens the same screen ready to type.
@@ -333,16 +335,17 @@ fun PcDashboard(
                 // The live screen; its shutter takes full-resolution screenshots.
                 if (shots != null) Control(Icons.Rounded.ScreenShare, "Screen", SystemColor.PINK) { PcScreenActivity.open(context, id) }
                 else Control(Icons.Rounded.Sensors, "Ping", SystemColor.GREEN) { vm.ping(id) },
+                // Toggles keep their glyph and name; the fill alone says on (Control Center style).
                 Control(
-                    if (pc.locked == true) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
-                    if (pc.locked == true) "Locked" else "Lock",
+                    Icons.Rounded.Lock,
+                    "Lock",
                     SystemColor.MINT,
                     active = pc.locked == true,
                     toggle = true,
                 ) { vm.setPcLocked(id, pc.locked != true) },
                 Control(
-                    if (pc.sink?.muted == true) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
-                    if (pc.sink?.muted == true) "Muted" else "Mute",
+                    Icons.AutoMirrored.Rounded.VolumeOff,
+                    "Mute",
                     SystemColor.RED,
                     active = pc.sink?.muted == true,
                     toggle = pc.sink != null,
@@ -461,7 +464,7 @@ private fun toast(context: Context, text: String) =
 
 /** Square tile: PC battery as the outer ring, this phone as the inner one. */
 @Composable
-private fun BatteryTile(pc: BatteryState?, stale: Boolean, phone: BatteryState?, modifier: Modifier, onClick: () -> Unit) {
+private fun BatteryTile(pc: BatteryState?, stale: Boolean, phone: BatteryState?, modifier: Modifier) {
     // A cached reading shows dimmed until the PC sends a fresh one.
     val accent = SystemColor.GREEN.color.copy(alpha = if (stale) 0.45f else 1f)
     val second = SystemColor.CYAN.color
@@ -471,11 +474,13 @@ private fun BatteryTile(pc: BatteryState?, stale: Boolean, phone: BatteryState?,
     val phoneSweep by animateFloatAsState((phone?.charge ?: 0) / 100f, VyomaMotion.spatialSlow(), label = "phoneRing")
     val pcColor by animateColorAsState(if (pc != null && pc.charge <= 15 && !pc.charging) low else accent, VyomaMotion.effects(), label = "pcColor")
 
-    Box(modifier.aspectRatio(1f).pressable(pressedScale = 0.97f, onClick = onClick).glassCard(MaterialTheme.shapes.large)) {
+    // Read-only: PC details has the header button and the hero glyph; a third way in hid what a tap did.
+    Box(modifier.aspectRatio(1f).glassCard(MaterialTheme.shapes.large)) {
         Column(Modifier.padding(16.dp)) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Canvas(Modifier.fillMaxHeight().aspectRatio(1f)) {
-                    val w = size.minDimension * 0.085f
+                    // The same 6 dp stroke as the gauges: one family of data visuals.
+                    val w = 6.dp.toPx()
                     fun ring(inset: Float, sweep: Float, color: Color) {
                         val topLeft = Offset(inset + w / 2, inset + w / 2)
                         val s = Size(size.width - 2 * inset - w, size.height - 2 * inset - w)
@@ -483,18 +488,12 @@ private fun BatteryTile(pc: BatteryState?, stale: Boolean, phone: BatteryState?,
                         if (sweep > 0f) drawArc(color, -90f, 360f * sweep.coerceIn(0f, 1f), false, topLeft, s, style = Stroke(w, cap = StrokeCap.Round))
                     }
                     ring(0f, pcSweep, pcColor)
-                    ring(w * 1.3f, phoneSweep, second)
+                    ring(w + 4.dp.toPx(), phoneSweep, second)
                 }
                 // Sized to sit in the inner ring with air around it, digits not jumping as they change.
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     if (pc?.charging == true) Icon(Icons.Rounded.Bolt, "Charging", tint = accent, modifier = Modifier.size(14.dp))
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Text(
-                            pc?.let { "${it.charge}" } ?: "–",
-                            style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
-                        )
-                        if (pc != null) Text("%", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 1.dp, bottom = 2.dp))
-                    }
+                    Reading(pc?.let { "${it.charge}" }, "%", MaterialTheme.typography.titleMedium)
                 }
             }
             Spacer(Modifier.height(10.dp))
@@ -510,9 +509,10 @@ private fun BatteryLegend(label: String, b: BatteryState?, color: Color) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(color))
         Spacer(Modifier.width(6.dp))
         Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+        if (b?.charging == true) Icon(Icons.Rounded.Bolt, "Charging", tint = color, modifier = Modifier.size(12.dp))
         Text(
-            b?.let { "${it.charge}%" + if (it.charging) " ⚡" else "" } ?: "—",
-            style = MaterialTheme.typography.labelMedium,
+            b?.let { "${it.charge}%" } ?: "–",
+            style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
         )
     }
 }
@@ -546,10 +546,10 @@ private fun ClipboardTile(clip: ClipEntry?, modifier: Modifier, onOpen: () -> Un
                     modifier = Modifier.weight(1f),
                 )
                 Box(
-                    Modifier.size(40.dp).pressable(pressedScale = 0.84f, haptic = null, glass = true, onClick = onSend).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+                    Modifier.size(40.dp).pressable(pressedScale = 0.84f, haptic = null, glass = true, onClick = onSend).clip(CircleShape).background(Glass.accent),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Rounded.Send, "Send to PC", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Rounded.Send, "Send to PC", tint = Color.White, modifier = Modifier.size(18.dp))
                 }
             }
         }
@@ -563,7 +563,14 @@ private fun ClipboardTile(clip: ClipEntry?, modifier: Modifier, onOpen: () -> Un
  * a firmer one at the ends.
  */
 @Composable
-internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modifier = Modifier) {
+internal fun VolumeBar(
+    sink: AudioSink,
+    onVolume: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    /** With a choice of outputs, they sit under the slider and name it; the title is then just "Volume". */
+    outputs: List<AudioSink>? = null,
+    onOutput: (AudioSink) -> Unit = {},
+) {
     val max = sink.maxVolume.coerceAtLeast(1).toFloat()
     var level by remember(sink.name) { mutableFloatStateOf(sink.volume / max) }
     var dragging by remember { mutableStateOf(false) }
@@ -595,10 +602,10 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
         onVolume((n * max).roundToInt())
     }
 
-    Column(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(start = 18.dp, end = 18.dp, top = 14.dp, bottom = 8.dp)) {
+    Column(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(start = 18.dp, end = 18.dp, top = 14.dp, bottom = if (outputs != null) 14.dp else 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                prettySinkName(sink.description),
+                if (outputs != null) "Volume" else prettySinkName(sink.description),
                 style = MaterialTheme.typography.labelLarge,
                 color = muted,
                 maxLines = 1,
@@ -627,6 +634,7 @@ internal fun VolumeBar(sink: AudioSink, onVolume: (Int) -> Unit, modifier: Modif
             )
             Icon(if (sink.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null, tint = muted, modifier = Modifier.size(20.dp))
         }
+        if (outputs != null) OutputPicker(outputs, onOutput, Modifier.padding(top = 4.dp), bleed = 18.dp)
     }
 }
 
@@ -678,9 +686,9 @@ private fun ControlTile(c: Control, modifier: Modifier) {
     }
     val shape = RoundedCornerShape(TileRadius)
     // Legible on every colour: the brightest (yellow) keeps its tone and takes dark ink; mid tones
-    // (cyan, teal) deepen a little so white text holds (darkening yellow only made it mustard).
+    // (cyan, teal, gray) deepen so white text holds 4.5:1 (darkening yellow only made it mustard).
     val lum = remember(tone) { tone.luminance() }
-    val fill = if (lum in 0.3f..0.5f) lerp(tone, Color.Black, 0.15f) else tone
+    val fill = if (lum in 0.2f..0.5f) lerp(tone, Color.Black, 0.22f) else tone
     val onFill = if (lum > 0.5f) Color(0xFF1C1C1E) else Color.White
     val ink = lerp(MaterialTheme.colorScheme.onSurface, onFill, on)
     Column(
@@ -716,21 +724,47 @@ internal fun ago(time: Long): CharSequence {
 
 /** Where the PC's sound goes: one chip per output, the default one filled. */
 @Composable
-internal fun OutputPicker(sinks: List<AudioSink>, onDefault: (AudioSink) -> Unit, modifier: Modifier = Modifier) {
-    Row(modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+internal fun OutputPicker(sinks: List<AudioSink>, onDefault: (AudioSink) -> Unit, modifier: Modifier = Modifier, bleed: Dp = 16.dp) {
+    // Runs out to the card's edge and fades there, instead of stopping at its padding.
+    Row(modifier.fadingHorizontalScroll(rememberScrollState(), bleed = bleed).padding(horizontal = bleed), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         sinks.sortedByDescending { it.isDefault }.forEach { sink ->
             val bg by animateColorAsState(
-                if (sink.isDefault) MaterialTheme.colorScheme.primary else Glass.raised,
+                if (sink.isDefault) Glass.accent else Glass.raised,
                 VyomaMotion.effects(), label = "outBg",
             )
             Text(
                 prettySinkName(sink.description),
                 style = MaterialTheme.typography.labelLarge,
-                color = if (sink.isDefault) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                color = if (sink.isDefault) Color.White else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
-                modifier = Modifier.glassRaised(CircleShape, bg.takeIf { sink.isDefault }).pressable { onDefault(sink) }.padding(horizontal = 14.dp, vertical = 9.dp),
+                modifier = Modifier.glassRaised(CircleShape, bg.takeIf { sink.isDefault }).pressable(haptic = Haptic.Select) { onDefault(sink) }.padding(horizontal = 14.dp, vertical = 9.dp),
             )
         }
+    }
+}
+
+/**
+ * Colour means how hard it's working, the same on every gauge (temperature has its own cut-offs
+ * into the same three): fixed colours per gauge made a quiet GPU look like a warning in orange.
+ */
+private fun loadColor(f: Float) = when {
+    f < 0.7f -> SystemColor.GREEN
+    f < 0.9f -> SystemColor.YELLOW
+    else -> SystemColor.RED
+}
+
+/** A number with its unit smaller and quieter beside it, as on every reading on Home. */
+@Composable
+private fun Reading(value: String?, unit: String, style: TextStyle) {
+    Row(verticalAlignment = Alignment.Bottom) {
+        Text(value ?: "–", style = style.copy(fontFeatureSettings = "tnum"), maxLines = 1)
+        if (value != null) Text(
+            unit,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.padding(bottom = 2.dp),
+        )
     }
 }
 
@@ -746,18 +780,20 @@ private fun PcVitals(stats: PcStats?, modifier: Modifier = Modifier) {
     }
     val memFraction = stats?.takeIf { it.memTotal > 0 }?.let { it.memUsed.toFloat() / it.memTotal } ?: 0f
     Row(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(vertical = 16.dp)) {
-        Gauge("CPU", stats?.let { "${it.cpu.roundToInt()}%" }, (stats?.cpu ?: 0f) / 100f, SystemColor.BLUE, Modifier.weight(1f))
+        val cpu = (stats?.cpu ?: 0f) / 100f
+        val gpu = (stats?.gpu ?: 0) / 100f
+        Gauge("CPU", stats?.let { "${it.cpu.roundToInt()}" }, "%", cpu, loadColor(cpu), Modifier.weight(1f))
         Gauge(
-            "Memory", stats?.takeIf { it.memTotal > 0 }?.let { "%.1f".format(it.memUsed / 1e9) + "G" },
-            memFraction, SystemColor.MINT, Modifier.weight(1f),
+            "Memory", stats?.takeIf { it.memTotal > 0 }?.let { "%.1f".format(it.memUsed / 1e9) }, "G",
+            memFraction, loadColor(memFraction), Modifier.weight(1f),
         )
-        Gauge("GPU", stats?.gpu?.let { "$it%" }, (stats?.gpu ?: 0) / 100f, SystemColor.ORANGE, Modifier.weight(1f))
-        Gauge("Temp", temp?.let { "${it.roundToInt()}°" }, (temp ?: 0f) / 100f, tempColor, Modifier.weight(1f))
+        Gauge("GPU", stats?.gpu?.let { "$it" }, "%", gpu, loadColor(gpu), Modifier.weight(1f))
+        Gauge("Temp", temp?.let { "${it.roundToInt()}" }, "°", (temp ?: 0f) / 100f, tempColor, Modifier.weight(1f))
     }
 }
 
 @Composable
-private fun Gauge(label: String, value: String?, fraction: Float, color: SystemColor, modifier: Modifier) {
+private fun Gauge(label: String, value: String?, unit: String, fraction: Float, color: SystemColor, modifier: Modifier) {
     val tone = color.color
     val track = Glass.raised
     // Readings arrive every 2 s and wobble by a point or two. Whole percent steps and a short glide
@@ -794,7 +830,7 @@ private fun Gauge(label: String, value: String?, fraction: Float, color: SystemC
                 drawArc(track, 135f, 270f, false, inset, arc, style = Stroke(w, cap = StrokeCap.Round))
                 if (sweep > 0f) drawArc(tone, 135f, 270f * sweep, false, inset, arc, style = Stroke(w, cap = StrokeCap.Round))
             }
-            Text(value ?: "–", style = MaterialTheme.typography.labelLarge, maxLines = 1)
+            Reading(value, unit, MaterialTheme.typography.labelLarge)
         }
         Spacer(Modifier.height(4.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -814,14 +850,15 @@ private fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) {
             if (commands.isEmpty()) {
                 Text("None yet. Add shutdown, sleep or your own scripts on the PC, and run them from here.")
             } else {
-                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                Column(Modifier.heightIn(max = 360.dp).fadingVerticalScroll(rememberScrollState())) {
                     commands.forEachIndexed { i, cmd ->
+                        // Names only: the shell line is for editing, on the PC or in its details.
                         ListRow(
                             title = cmd.name,
-                            subtitle = cmd.command,
                             icon = Icons.Rounded.Terminal,
                             iconTint = SystemColor.GRAY.color,
                             showDivider = i < commands.lastIndex,
+                            horizontalPadding = 0.dp,
                             onClick = {
                                 vm.runCommand(id, cmd.key)
                                 toast(context, "Running ${cmd.name}")

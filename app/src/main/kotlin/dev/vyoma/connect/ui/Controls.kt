@@ -1,5 +1,9 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.Haptic
+import dev.vyoma.connect.designsystem.glassRaised
+import androidx.compose.ui.text.font.FontFamily
+import dev.vyoma.connect.designsystem.fadingHorizontalScroll
 import androidx.compose.material.icons.rounded.Edit
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -234,18 +238,19 @@ fun MediaCard(
             }
             if (np.players.size > 1) {
                 Row(
-                    Modifier.horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 16.dp, top = 6.dp, bottom = 12.dp),
+                    Modifier.fadingHorizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 16.dp, top = 6.dp, bottom = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     np.players.forEach { name ->
                         val selected = name == p.name
+                        // The house chip (raised glass), in white over the artwork.
                         Text(
-                            name,
+                            name.replaceFirstChar { it.uppercase() },
                             style = MaterialTheme.typography.labelMedium,
                             color = if (selected) tint else Color.White,
-                            modifier = Modifier.clip(CircleShape)
-                                .background(if (selected) Color.White else Color.White.copy(alpha = 0.14f))
-                                .pressable { onPickPlayer(name) }
+                            modifier = Modifier
+                                .glassRaised(CircleShape, Color.White.copy(alpha = if (selected) 0.9f else 0.14f))
+                                .pressable(haptic = Haptic.Select) { onPickPlayer(name) }
                                 .padding(horizontal = 12.dp, vertical = 6.dp),
                         )
                     }
@@ -391,6 +396,8 @@ fun CommandsCard(commands: List<RemoteCommand>, onEdit: (() -> Unit)? = null, on
             ListRow(
                 title = cmd.name,
                 subtitle = cmd.command,
+                subtitleMaxLines = 1,
+                subtitleStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 icon = Icons.Rounded.Terminal,
                 iconTint = SystemColor.GRAY.color,
                 showDivider = i < commands.lastIndex || onEdit != null,

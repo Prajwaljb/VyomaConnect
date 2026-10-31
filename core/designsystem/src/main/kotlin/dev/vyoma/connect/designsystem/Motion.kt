@@ -1,5 +1,18 @@
 package dev.vyoma.connect.designsystem
 
+import android.content.ContentResolver
+import android.content.Context
+import android.os.Build
+import android.os.VibrationAttributes
+import android.os.VibrationEffect
+import android.os.VibrationEffect.Composition.PRIMITIVE_CLICK
+import android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK
+import android.os.VibrationEffect.Composition.PRIMITIVE_QUICK_RISE
+import android.os.VibrationEffect.Composition.PRIMITIVE_THUD
+import android.os.VibrationEffect.Composition.PRIMITIVE_TICK
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.provider.Settings
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.Spring
@@ -64,29 +77,74 @@ object VyomaMotion {
 }
 
 /**
- * What a haptic means, so the same kind of action feels the same everywhere. Goes through the
- * view's haptics, which respect the user's "touch feedback" setting and cost nothing to call.
+ * What a haptic means, so the same kind of action feels the same everywhere. Each one is composed
+ * from the vibrator's own primitives, like Pixel and OnePlus O-Haptics do (crisp clicks, low ticks,
+ * thuds, rises, shaped and paired), where the phone's motor supports them; elsewhere it falls back
+ * to the view's stock haptic. [Haptics] honours the system's touch feedback setting either way.
  */
-enum class Haptic(internal val type: HapticFeedbackType) {
+enum class Haptic(internal val type: HapticFeedbackType, internal val notes: List<Note>) {
     /** A button or card did something. */
-    Tap(HapticFeedbackType.ContextClick),
+    Tap(HapticFeedbackType.ContextClick, listOf(Note(PRIMITIVE_CLICK, 0.62f))),
     /** A key on a keyboard-like surface: lighter, for rapid repeats. */
-    Key(HapticFeedbackType.KeyboardTap),
-    ToggleOn(HapticFeedbackType.ToggleOn),
-    ToggleOff(HapticFeedbackType.ToggleOff),
+    Key(HapticFeedbackType.KeyboardTap, listOf(Note(PRIMITIVE_TICK, 0.9f))),
+    /** Snaps in: a small rise and a firm click. */
+    ToggleOn(HapticFeedbackType.ToggleOn, listOf(Note(PRIMITIVE_TICK, 0.45f), Note(PRIMITIVE_CLICK, 0.85f, 34))),
+    /** Lets go: a click falling away into a low tick. */
+    ToggleOff(HapticFeedbackType.ToggleOff, listOf(Note(PRIMITIVE_CLICK, 0.6f), Note(PRIMITIVE_LOW_TICK, 0.5f, 38))),
     /** Moving onto a new option: tabs, segmented choices. */
-    Select(HapticFeedbackType.SegmentTick),
+    Select(HapticFeedbackType.SegmentTick, listOf(Note(PRIMITIVE_TICK, 0.7f))),
     /** A detent while dragging a value: volume steps, scroll notches. */
-    Detent(HapticFeedbackType.SegmentFrequentTick),
-    /** Hitting an end stop or crossing a commit threshold. */
-    Edge(HapticFeedbackType.GestureThresholdActivate),
-    /** A hold turned into a grab. */
-    Hold(HapticFeedbackType.LongPress),
-    Success(HapticFeedbackType.Confirm),
-    Failure(HapticFeedbackType.Reject),
+    Detent(HapticFeedbackType.SegmentFrequentTick, listOf(Note(PRIMITIVE_LOW_TICK, 0.75f))),
+    /** Hitting an end stop or crossing a commit threshold: one firm click. */
+    Edge(HapticFeedbackType.GestureThresholdActivate, listOf(Note(PRIMITIVE_CLICK, 1f))),
+    /** A hold turned into a grab: a swell that lands. */
+    Hold(HapticFeedbackType.LongPress, listOf(Note(PRIMITIVE_QUICK_RISE, 0.5f), Note(PRIMITIVE_CLICK, 0.9f, 10))),
+    /** Glass forming or bursting (the header's title bubble): barely there. */
+    Bubble(HapticFeedbackType.SegmentFrequentTick, listOf(Note(PRIMITIVE_LOW_TICK, 0.38f))),
+    /** Two rising clicks. */
+    Success(HapticFeedbackType.Confirm, listOf(Note(PRIMITIVE_CLICK, 0.55f), Note(PRIMITIVE_CLICK, 1f, 70))),
+    /** A heavy thud (this motor's lasts 300 ms, so one is plenty) and a dull tick after it. */
+    Failure(HapticFeedbackType.Reject, listOf(Note(PRIMITIVE_THUD, 0.8f), Note(PRIMITIVE_LOW_TICK, 0.7f, 60))),
 }
 
-fun HapticFeedback.perform(h: Haptic) = performHapticFeedback(h.type)
+/** One primitive in a [Haptic], [delayMs] after the previous one ends. */
+internal class Note(val primitive: Int, val scale: Float, val delayMs: Int = 0)
+
+/** Plays [Haptic]s on the vibrator directly; [VyomaTheme] attaches it. */
+object Haptics {
+    private var vibrator: Vibrator? = null
+    private var resolver: ContentResolver? = null
+    private val playable = HashMap<Haptic, VibrationEffect?>()
+    private val touch by lazy {
+        if (Build.VERSION.SDK_INT >= 33) VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH) else null
+    }
+
+    fun attach(context: Context) {
+        if (vibrator != null) return
+        vibrator = context.getSystemService(VibratorManager::class.java)?.defaultVibrator?.takeIf { it.hasVibrator() }
+        resolver = context.applicationContext.contentResolver
+    }
+
+    /** True when it played (or the user turned touch feedback off); false: use the fallback. */
+    internal fun play(h: Haptic): Boolean {
+        val v = vibrator ?: return false
+        val effect = playable.getOrPut(h) {
+            if (!v.areAllPrimitivesSupported(*h.notes.map { it.primitive }.toIntArray())) null
+            else VibrationEffect.startComposition().apply {
+                h.notes.forEach { addPrimitive(it.primitive, it.scale, it.delayMs) }
+            }.compose()
+        } ?: return false
+        // Android 13+ applies the touch feedback setting to USAGE_TOUCH itself; before that, read it.
+        val attrs = touch
+        if (attrs != null) v.vibrate(effect, attrs)
+        else if (resolver?.let { Settings.System.getInt(it, Settings.System.HAPTIC_FEEDBACK_ENABLED, 1) } != 0) v.vibrate(effect)
+        return true
+    }
+}
+
+fun HapticFeedback.perform(h: Haptic) {
+    if (!Haptics.play(h)) performHapticFeedback(h.type)
+}
 
 /**
  * Clickable that squishes on press and bounces back on release, with a [haptic] on click: the

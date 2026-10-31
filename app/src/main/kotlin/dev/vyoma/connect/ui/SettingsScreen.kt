@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.foundation.layout.fillMaxWidth
+import dev.vyoma.connect.designsystem.RowChevron
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import dev.vyoma.connect.designsystem.BounceIconButton
@@ -112,6 +114,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
         title = "Settings",
         navigation = onBack?.let { back -> { BounceIconButton(onClick = back) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } } },
     ) {
+        item(key = "device-label") { SectionLabel("This phone") }
         item(key = "device") {
             SectionCard {
                 ListRow(
@@ -119,6 +122,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     subtitle = name,
                     icon = Icons.Rounded.Edit,
                     iconTint = SystemColor.BLUE.color,
+                    trailing = { RowChevron() },
                     onClick = { editingName = true },
                 )
             }
@@ -129,9 +133,10 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
             SectionCard(contentPadding = PaddingValues(vertical = 16.dp)) {
                 Text("Accent", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(horizontal = 20.dp))
                 Spacer(Modifier.height(12.dp))
+                // All six in view, evenly spread: a sixth sliver at the edge hid one choice.
                 Row(
-                    Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Palette.entries.forEach { p ->
                         PaletteSwatch(p, selected = theme.palette == p) { vm.setPalette(p) }
@@ -151,6 +156,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     subtitle = "Soft accent colour behind the top of each screen",
                     icon = Icons.Rounded.Gradient,
                     iconTint = SystemColor.BLUE.color,
+                    showDivider = true,
                     trailing = { VyomaSwitch(checked = canvasGlow, onCheckedChange = { vm.setCanvasGlow(it) }) },
                 )
                 val glass by vm.liteGlass.collectAsStateWithLifecycle()
@@ -190,6 +196,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     icon = Icons.Rounded.Notifications,
                     iconTint = SystemColor.RED.color,
                     showDivider = true,
+                    trailing = { RowChevron(if (notifOn) "On" else "Off") },
                     onClick = { runCatching { context.startActivity(NotificationBridge.settingsIntent(context)) } },
                 )
                 ListRow(
@@ -199,14 +206,17 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     icon = Icons.Rounded.Sms,
                     iconTint = SystemColor.GREEN.color,
                     showDivider = true,
+                    trailing = { RowChevron(if (phoneOn) "On" else "Off") },
                     onClick = { if (!phoneOn) askPhone.launch(PhonePermissions.all) },
                 )
                 ListRow(
-                    title = "Automatic clipboard sync",
-                    subtitle = if (clipOn) "On: copies sync even while Vyoma is closed"
-                    else "Needs a one-time ADB grant (no root). Tap for the command.",
+                    // Named as on the Clipboard tab: one feature, one name.
+                    title = "Sync when closed",
+                    subtitle = if (clipOn) "Copies sync even while Vyoma is closed"
+                    else "Copies sync even when Vyoma is closed. One-time setup from your PC.",
                     icon = Icons.Rounded.ContentPaste,
                     iconTint = SystemColor.ORANGE.color,
+                    trailing = { RowChevron(if (clipOn) "On" else "Off") },
                     onClick = { if (!clipOn) showAdbHelp = true },
                 )
             }
@@ -233,6 +243,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     icon = Icons.Rounded.Add,
                     iconTint = SystemColor.BLUE.color,
                     showDivider = true,
+                    trailing = { RowChevron() },
                     onClick = { addingHost = true },
                 )
                 ListRow(
@@ -240,6 +251,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     subtitle = "Faster and steadier than Wi-Fi; works with no network at all",
                     icon = Icons.Rounded.Usb,
                     iconTint = SystemColor.CYAN.color,
+                    trailing = { RowChevron() },
                     onClick = { showUsbHelp = true },
                 )
             }
@@ -253,6 +265,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     subtitle = if (unrestricted) "Your phone won't put Vyoma to sleep" else "Recommended so your PC stays connected in the background",
                     icon = Icons.Rounded.BatteryChargingFull,
                     iconTint = SystemColor.GREEN.color,
+                    trailing = { RowChevron(if (unrestricted) "On" else "Off") },
                     onClick = { if (!unrestricted) requestUnrestricted(context) },
                 )
             }
@@ -334,7 +347,7 @@ private fun PaletteSwatch(palette: Palette, selected: Boolean, onClick: () -> Un
     val inset by animateDpAsState(if (selected) 5.dp else 0.dp, VyomaMotion.spatial(), label = "inset")
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.pressable(onClick = onClick)) {
         Box(
-            Modifier.size(52.dp).clip(CircleShape).border(2.dp, ring, CircleShape).padding(inset.coerceAtLeast(0.dp)), // the spring overshoots below zero
+            Modifier.size(44.dp).clip(CircleShape).border(2.dp, ring, CircleShape).padding(inset.coerceAtLeast(0.dp)), // the spring overshoots below zero
             contentAlignment = Alignment.Center,
         ) {
             val fill = if (palette == Palette.DYNAMIC) {
@@ -343,8 +356,8 @@ private fun PaletteSwatch(palette: Palette, selected: Boolean, onClick: () -> Un
             } else {
                 Brush.linearGradient(listOf(if (dark) palette.dark else palette.light, palette.light))
             }
-            Box(Modifier.size(52.dp).clip(CircleShape).background(fill), contentAlignment = Alignment.Center) {
-                if (selected) Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(20.dp))
+            Box(Modifier.size(44.dp).clip(CircleShape).background(fill), contentAlignment = Alignment.Center) {
+                if (selected) Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))
             }
         }
         Spacer(Modifier.height(6.dp))
