@@ -56,6 +56,8 @@ interface DeviceEnvironment {
     val pluginSpecs: List<PluginSpec>
     val scope: CoroutineScope
     fun onPairRequest(device: Device)
+    /** Whether [deviceId] is linked over the USB tunnel right now. */
+    fun usbTunnelUp(deviceId: String): Boolean = false
 }
 
 /**
@@ -180,6 +182,18 @@ class Device internal constructor(
     suspend fun openPayload(packet: NetworkPacket): InputStream? {
         if (!packet.hasPayload) return null
         var failure: java.io.IOException? = null
+        // A companion only links over Wi-Fi, but its PC's USB tunnel mirrors the payload ports too:
+        // the cable is far quicker and steadier (it's what keeps the live screen from lagging).
+        val host = identity.companionOf
+        if (host != null && links.none { it.transport == TransportKind.USB } && env.usbTunnelUp(host)) {
+            links.firstOrNull { !it.isClosed && it.payloads != null }?.let { link ->
+                try {
+                    return link.payloads!!.open(link, packet, java.net.InetAddress.getLoopbackAddress())
+                } catch (e: java.io.IOException) {
+                    failure = e
+                }
+            }
+        }
         for (link in links.filterNot { it.isClosed }.sortedBy { it.transport.ordinal }.filter { it.payloads != null }) {
             try {
                 return link.payloads!!.open(link, packet)

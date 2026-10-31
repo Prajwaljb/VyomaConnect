@@ -35,6 +35,9 @@ async fn offer_sized(sender: &Sender, me: &Identity, pinned: &[u8], mut packet: 
 
     let (tcp, _) = tokio::time::timeout(Duration::from_secs(15), listener.accept()).await.context("phone never fetched the payload")??;
     tcp.set_nodelay(true)?;
+    if size < 0 {
+        live(&tcp);
+    }
     let acceptor = TlsAcceptor::from(Arc::new(crate::link::server_config(me)?));
     let mut tls = tokio::time::timeout(Duration::from_secs(10), acceptor.accept(tcp)).await.context("payload TLS timed out")??;
     let peer = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).context("phone sent no certificate")?;
@@ -60,6 +63,18 @@ pub async fn fetch(me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value) 
         bail!("payload peer isn't the paired phone");
     }
     Ok(tls.take(size))
+}
+
+/// A live stream must not queue: the kernel would otherwise take megabytes of unsent video when
+/// the link slows (Wi-Fi hiccups), seconds behind. With little unsent allowed, a slow link stalls
+/// the writer instead, back up to the encoder, which then drops frames rather than delaying them.
+fn live(tcp: &TcpStream) {
+    use std::os::fd::AsRawFd;
+    let lowat: libc::c_int = 16 * 1024;
+    // SAFETY: a plain setsockopt on a socket we own, with an int-sized value.
+    unsafe {
+        libc::setsockopt(tcp.as_raw_fd(), libc::IPPROTO_TCP, libc::TCP_NOTSENT_LOWAT, (&lowat as *const libc::c_int).cast(), size_of::<libc::c_int>() as libc::socklen_t);
+    }
 }
 
 async fn bind() -> Result<TcpListener> {

@@ -36,8 +36,11 @@ interface PayloadTransport {
     /** Announces [packet] with [source] attached and streams it. Returns true once fully sent. */
     suspend fun send(link: DeviceLink, packet: NetworkPacket, source: PayloadSource, timeoutMs: Int, onProgress: (Long) -> Unit): Boolean
 
-    /** Connects to the payload announced in [packet]. The stream ends after `payloadSize` bytes. */
-    suspend fun open(link: DeviceLink, packet: NetworkPacket): InputStream
+    /**
+     * Connects to the payload announced in [packet]. The stream ends after `payloadSize` bytes.
+     * [via] reaches the peer at another address than the link's (the PC's USB tunnel).
+     */
+    suspend fun open(link: DeviceLink, packet: NetworkPacket, via: java.net.InetAddress? = null): InputStream
 }
 
 internal class LanPayloads(
@@ -73,16 +76,17 @@ internal class LanPayloads(
         }
     }
 
-    override suspend fun open(link: DeviceLink, packet: NetworkPacket): InputStream = withContext(Dispatchers.IO) {
+    override suspend fun open(link: DeviceLink, packet: NetworkPacket, via: java.net.InetAddress?): InputStream = withContext(Dispatchers.IO) {
         val port = (packet.payloadTransferInfo?.get("port") as? JsonPrimitive)?.let { it.intOrNull ?: it.content.toIntOrNull() }
             ?: throw ProtocolException("Payload without port")
         // Over the adb tunnel the PC's payload port is reached through its mirror on this phone
         // (the companion reverses each one, shifted clear of our own payload ports).
-        val target = if (link.remoteAddress.isLoopbackAddress) port + USB_PAYLOAD_SHIFT else port
+        val host = via ?: link.remoteAddress
+        val target = if (host.isLoopbackAddress) port + USB_PAYLOAD_SHIFT else port
         val plain = Socket()
         try {
-            route(plain, link.remoteAddress)
-            plain.connect(InetSocketAddress(link.remoteAddress, target), CONNECT_TIMEOUT_MS)
+            route(plain, host)
+            plain.connect(InetSocketAddress(host, target), CONNECT_TIMEOUT_MS)
             tuneSocket(plain)
             val ssl = tls.wrap(plain, asServer = false)
             ssl.soTimeout = IO_TIMEOUT_MS

@@ -77,10 +77,16 @@ body fields before implementing one.
 - `vyoma.files.put {path(folder), name}` + payload (phone serves it; the companion connects as TLS client with its
   cert and pins the phone's) → `vyoma.files.saved {path, name, error?}`. Written as `.name.vyoma-part`, renamed when
   complete, never overwrites (`name (2).ext`). A refusal before connecting makes the phone stop waiting.
-- `vyoma.screen.request` → `vyoma.screen {codec:"h264", width, height}` + an open-ended payload (`payloadSize` -1), or
-  `{error}`. The companion casts one monitor via the ScreenCast portal (persist_mode 2; restore token in
-  `~/.config/vyoma-companion/screencast-token`, so Plasma asks once), encodes with GStreamer `vah264enc` (VBR 8 Mbps,
-  no B-frames, ≤1920 wide) and streams Annex-B with SPS/PPS before every IDR. The phone waits up to 60 s (the portal
-  dialog), decodes with MediaCodec (`KEY_LOW_LATENCY`) into a TextureView. `vyoma.screen.stop` (or closing the payload)
-  ends it; a new request replaces a running cast.
+- `vyoma.screen.request` → `vyoma.screen {codec:"h264", framing:"avc4", width, height}` + an open-ended payload
+  (`payloadSize` -1), or `{error}`. The companion casts one monitor via the ScreenCast portal (persist_mode 2; restore
+  token in `~/.config/vyoma-companion/screencast-token`, so Plasma asks once), asks KWin for ≤60 fps (`max-framerate`
+  caps; videorate can't cap the variable-rate capture), encodes with `vah264enc` (VBR 8 Mbps, no B-frames, one slice,
+  ≤1920 wide, IDR every 5 s with SPS/PPS). Framing: 4-byte big-endian length + NAL; before each slice a stamp NAL
+  `06 'VYTS' <u64 µs epoch>` (13 bytes) the phone strips and uses for its latency log. Small buffers end to end (16 KiB
+  pipe and relay, `TCP_NOTSENT_LOWAT` 16 KiB) so a slow link drops raw frames at the leaky queue instead of queueing
+  seconds. The phone fetches a companion's payloads through the PC's USB tunnel mirror when the PC is linked over USB
+  (`DeviceEnvironment.usbTunnelUp`), holds a low-latency Wi-Fi lock while viewing, waits up to 60 s (portal dialog),
+  decodes with MediaCodec (`KEY_LOW_LATENCY`) into a TextureView and shows only the newest of a burst.
+  `vyoma.screen.stop` (or closing the payload) ends it; a new request replaces a running cast.
+  `VYOMA_SCREEN_TEST=1` on the companion casts a moving test pattern, no portal (safe to screenshot).
 

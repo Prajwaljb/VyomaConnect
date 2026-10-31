@@ -1543,6 +1543,7 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "hex",
+ "libc",
  "mdns-sd",
  "p256",
  "rcgen",
