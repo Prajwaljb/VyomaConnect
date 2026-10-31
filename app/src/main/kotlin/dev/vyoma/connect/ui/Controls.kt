@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.material.icons.rounded.Edit
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
@@ -384,7 +385,7 @@ fun prettySinkName(description: String): String {
 }
 
 @Composable
-fun CommandsCard(commands: List<RemoteCommand>, onRun: (RemoteCommand) -> Unit) {
+fun CommandsCard(commands: List<RemoteCommand>, onEdit: (() -> Unit)? = null, onRun: (RemoteCommand) -> Unit) {
     SectionCard {
         commands.forEachIndexed { i, cmd ->
             ListRow(
@@ -392,8 +393,17 @@ fun CommandsCard(commands: List<RemoteCommand>, onRun: (RemoteCommand) -> Unit) 
                 subtitle = cmd.command,
                 icon = Icons.Rounded.Terminal,
                 iconTint = SystemColor.GRAY.color,
-                showDivider = i < commands.lastIndex,
+                showDivider = i < commands.lastIndex || onEdit != null,
                 onClick = { onRun(cmd) },
+            )
+        }
+        if (onEdit != null) {
+            ListRow(
+                title = "Edit commands",
+                subtitle = "Opens the list on the PC",
+                icon = Icons.Rounded.Edit,
+                iconTint = SystemColor.BLUE.color,
+                onClick = onEdit,
             )
         }
     }
