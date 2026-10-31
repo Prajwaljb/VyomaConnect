@@ -18,12 +18,13 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
+import kotlin.math.tanh
 
 /**
  * Where the light comes from, as seen on the screen: the angle the specular edges are brightest
  * at, in degrees clockwise from 3 o'clock (270 = straight up). At rest it's up and a little to the
- * left, like Apple's glass. It stays up in the room as the phone
- * tilts, like iOS's glass, so turning the phone slides the highlight around the edges. Read it only
+ * left, like Apple's glass, and stays there: tilting the phone only sways it a little (at most
+ * 35° either way), so the highlight shifts along the edges without circling them. Read it only
  * while drawing: a change then redraws the highlights, never recomposes or relayouts.
  */
 object SpecularLight {
@@ -104,7 +105,9 @@ private class TiltListener(private val context: Context) : SensorEventListener {
         if (turn < -180f) turn += 360f
         // Lying flat there's no "up" on the screen: settle back to the resting light.
         val upright = ((hypot(sx, sy) / SensorManager.GRAVITY_EARTH - 0.15f) / 0.35f).coerceIn(0f, 1f)
-        SpecularLight.publish(SpecularLight.REST + (turn * GAIN).coerceIn(-RANGE, RANGE) * upright)
+        // The light stays put, up and a little left, like Apple's: tilting only sways it, and a
+        // bigger turn eases into the limit instead of carrying it round the element.
+        SpecularLight.publish(SpecularLight.REST + MAX_SWAY * tanh(turn * GAIN / MAX_SWAY) * upright)
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -114,6 +117,7 @@ private class TiltListener(private val context: Context) : SensorEventListener {
         const val WARMUP = 8
         /** Livelier than the room's real up, so even small, ordinary handling visibly moves it. */
         const val GAIN = 1.45f
-        const val RANGE = 140f
+        /** How far the light can sway from rest, either way. */
+        const val MAX_SWAY = 35f
     }
 }
