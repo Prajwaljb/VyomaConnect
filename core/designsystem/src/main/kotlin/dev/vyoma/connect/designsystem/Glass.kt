@@ -935,14 +935,14 @@ fun Modifier.scrollEdge(backdrop: Backdrop, active: () -> Boolean): Modifier = c
         .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
         .drawBehind {
             if (!active() || size.height < 1f) return@drawBehind
-            val fade = Brush.verticalGradient(0f to Color.Black, 0.55f to Color.Black.copy(alpha = 0.75f), 1f to Color.Transparent)
+            val fade = Brush.verticalGradient(0f to Color.Black, 0.45f to Color.Black.copy(alpha = 0.85f), 1f to Color.Transparent)
             if (!GlassQuality.lite) {
                 val shift = backdrop.origin - position
-                blurred.renderEffect = blurs[10.dp.toPx()]
+                blurred.renderEffect = blurs[16.dp.toPx()]
                 blurred.record { translate(shift.x, shift.y) { drawLayer(backdrop.layer) } }
                 drawLayer(blurred)
             }
-            drawRect(canvas.copy(alpha = if (GlassQuality.lite) 0.9f else 0.45f))
+            drawRect(canvas.copy(alpha = if (GlassQuality.lite) 0.9f else 0.55f))
             drawRect(fade, blendMode = BlendMode.DstIn)
         }
 }
