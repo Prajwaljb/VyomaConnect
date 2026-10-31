@@ -303,20 +303,22 @@ fun CollapsingHeaderScaffold(
         // hard frosted strip, the status bar area fades softly to the canvas so content slips under it.
         val edgeColor = MaterialTheme.colorScheme.background
         Box(Modifier.fillMaxWidth()) {
-            // The scroll edge effect (HIG): it reaches 12 dp past the bubbles, so a card resting under the
-            // bar fades away behind them instead of its rim cutting through them.
+            // The scroll edge effect (HIG): nearly opaque down to the bubbles' foot, then it fades out
+            // over 20 dp past them, so content resting under the bar (a card's rim, a line of text)
+            // vanishes behind them instead of reading beside them.
             Box(
                 Modifier.matchParentSize().layout { m, c ->
-                    val extra = 12.dp.roundToPx()
+                    val extra = FADE_TAIL.roundToPx()
                     val p = m.measure(c.copy(minHeight = c.minHeight + extra, maxHeight = c.maxHeight + extra))
                     layout(p.width, p.height - extra) { p.place(0, 0) }
                 }.drawBehind {
                     val a = collapse
                     if (a < 0.01f) return@drawBehind
+                    val foot = (1f - FADE_TAIL.toPx() / size.height).coerceIn(0.5f, 0.95f)
                     drawRect(
                         Brush.verticalGradient(
                             0f to edgeColor.copy(alpha = a),
-                            0.6f to edgeColor.copy(alpha = 0.9f * a),
+                            foot to edgeColor.copy(alpha = 0.94f * a),
                             1f to Color.Transparent,
                         ),
                     )
@@ -418,6 +420,7 @@ fun CollapsingHeaderScaffold(
 private fun LazyListState.atTop() = firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset == 0
 
 private const val ROOM_KEY = "collapse-room"
+private val FADE_TAIL = 20.dp
 private val BAR_HEIGHT = 64.dp
 /** Every bubble in the bar (back, title, actions) is one height: a smaller title bubble looked like a different part. */
 private val CHROME_SIZE = 48.dp

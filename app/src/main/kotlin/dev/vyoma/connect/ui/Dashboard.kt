@@ -316,14 +316,15 @@ fun PcDashboard(
                 // Connect); PC files browses and uploads into a chosen folder, which needs the companion.
                 // Slots never move: the companion swaps Clipboard (also a tile and a tab) for PC files,
                 // Ping for Screen and Find PC for Camera (both stay in the PC's details).
-                // Files are blue (both file tiles), so Home carries fewer hues.
+                // Files are blue (both file tiles), so Home carries fewer hues. Screen is pink: deepened
+                // orange read brown beside the yellow camera.
                 Control(Icons.Rounded.UploadFile, "Send files", SystemColor.BLUE) { vm.pickFiles(context) },
                 if (shots != null) Control(Icons.Rounded.Folder, "PC files", SystemColor.BLUE, onClick = onBrowseFiles)
                 else Control(Icons.Rounded.ContentPaste, "Clipboard", SystemColor.ORANGE, onClick = onClipboard),
                 // The touchpad has its own round button by the tab bar; this opens the same screen ready to type.
                 Control(Icons.Rounded.Keyboard, "Keyboard", SystemColor.TEAL, onClick = onTouchpad),
                 // The live screen; its shutter takes full-resolution screenshots.
-                if (shots != null) Control(Icons.Rounded.ScreenShare, "Screen", SystemColor.ORANGE) { PcScreenActivity.open(context, id) }
+                if (shots != null) Control(Icons.Rounded.ScreenShare, "Screen", SystemColor.PINK) { PcScreenActivity.open(context, id) }
                 else Control(Icons.Rounded.Sensors, "Ping", SystemColor.GREEN) { vm.ping(id) },
                 // Toggles say their state when on ("Locked", "Muted"): the user wants it in words, not
                 // only in the fill.
@@ -589,13 +590,15 @@ private fun ControlTile(c: Control, modifier: Modifier) {
     val onFill = if (lum > 0.5f) Color(0xFF1C1C1E) else Color.White
     val ink = lerp(MaterialTheme.colorScheme.onSurface, onFill, on)
     // A toggle that's off is a faint pane of its colour, not clear glass: clear read as disabled
-    // beside six filled tiles. Its glyph deepens in light mode to hold 3:1 on the pale pane.
+    // beside six filled tiles. Light mode needs more of it (0.22 read pastel there), and its glyph
+    // deepens to hold 3:1 on the pane.
     val offGlyph = if (isDarkUi) tone else lerp(tone, Color.Black, 0.35f)
+    val offPane = if (isDarkUi) 0.22f else 0.32f
     Column(
         modifier
             .aspectRatio(1f)
             .pressable(haptic = haptic, onClick = c.onClick)
-            .glassRaised(shape, fill.copy(alpha = 0.22f + 0.70f * on))
+            .glassRaised(shape, fill.copy(alpha = offPane + (0.92f - offPane) * on))
             .padding(start = 10.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
