@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -41,6 +40,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.Path
@@ -74,7 +84,22 @@ class MenuItem(
     val onClick: () -> Unit,
 )
 
-internal class MenuRequest(val id: Long, val from: Rect, val fromRadius: Dp, val items: List<MenuItem>, val title: String?)
+internal class MenuRequest(
+    val id: Long,
+    val from: Rect,
+    val fromRadius: Dp,
+    val items: List<MenuItem>,
+    val title: String?,
+    val morph: MenuMorph?,
+)
+
+/**
+ * The pressed element turns INTO the menu: the drop starts as an exact copy of it ([color] and
+ * [face], its own content at its own size) that clears into glass as it grows, and closing turns
+ * back into it before handing over, so nothing swaps. The element hides itself while
+ * [MenuController.covers] says so.
+ */
+class MenuMorph(val owner: Any, val color: Color, val face: @Composable () -> Unit)
 
 /** Opens long-press menus; get it from [LocalMenu]. */
 class MenuController {
@@ -85,9 +110,12 @@ class MenuController {
      * [from] is the pressed element's bounds in root coordinates (`boundsInRoot()`), [fromRadius]
      * its corner: it stays lit through the dim, like iOS, so you see where the menu came from.
      */
-    fun show(from: Rect, items: List<MenuItem>, title: String? = null, fromRadius: Dp = 16.dp) {
-        request = MenuRequest(++seq, from, fromRadius, items, title)
+    fun show(from: Rect, items: List<MenuItem>, title: String? = null, fromRadius: Dp = 16.dp, morph: MenuMorph? = null) {
+        request = MenuRequest(++seq, from, fromRadius, items, title, morph)
     }
+
+    /** True while [owner]'s menu stands in for it (read it in a graphicsLayer to hide the element). */
+    fun covers(owner: Any): Boolean = request?.morph?.owner === owner
 }
 
 val LocalMenu = staticCompositionLocalOf { MenuController() }
@@ -130,6 +158,18 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
     val ink = remember { Animatable(0f) }
     var closing by remember { mutableStateOf(false) }
     val bars = WindowInsets.systemBars
+    // Where the drop is this frame (set while laying it out), so the element's face can hold still.
+    val origin = remember { FloatArray(2) }
+    fun formed() = minOf(wide.value, tall.value).coerceIn(0f, 1f)
+    // Its corners round from the element's into the menu's as it forms (read while drawing).
+    val shape = remember(r.id) {
+        object : Shape {
+            override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+                val corner = with(density) { lerp(r.fromRadius.toPx(), MENU_RADIUS.toPx(), formed()) }
+                return Outline.Rounded(RoundRect(0f, 0f, size.width, size.height, CornerRadius(corner)))
+            }
+        }
+    }
     LaunchedEffect(Unit) {
         haptics.perform(Haptic.Hold)
         launch { scrim.animateTo(1f, VyomaMotion.effects()) }
@@ -147,11 +187,16 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
             // leads, width trails, so it narrows like water running home rather than shrinking as a box.
             launch { scrim.animateTo(0f, VyomaMotion.effects()) }
             launch { ink.animateTo(0f, INK_OUT) }
-            launch { wide.animateTo(0f, DRAIN_WIDE) }
-            launch { tall.animateTo(0f, DRAIN_TALL) }
-            // The glass has faded out by here (see the drop's alpha): end without waiting for it
-            // to settle on the element.
-            snapshotFlow { minOf(wide.value, tall.value) <= GONE_AT }.first { it }
+            val narrow = launch { wide.animateTo(0f, DRAIN_WIDE) }
+            val lower = launch { tall.animateTo(0f, DRAIN_TALL) }
+            if (r.morph != null) {
+                // Turns all the way back into the element, then hands over to it: identical by then.
+                narrow.join(); lower.join()
+            } else {
+                // The glass has faded out by here (see the drop's alpha): end without waiting for it
+                // to settle on the element.
+                snapshotFlow { minOf(wide.value, tall.value) <= GONE_AT }.first { it }
+            }
             onGone()
         }
         // Act at once; the drop flows home while it happens.
@@ -165,6 +210,8 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
             .drawBehind {
                 val a = scrim.value.coerceIn(0f, 1f) * SCRIM
                 if (a < 0.005f) return@drawBehind
+                // A morphing element became the menu, so there's nothing left there to keep lit.
+                if (r.morph != null) { drawRect(Color.Black, alpha = a); return@drawBehind }
                 val hole = Path().apply { addRoundRect(RoundRect(r.from, CornerRadius(r.fromRadius.toPx()))) }
                 clipPath(hole, ClipOp.Difference) { drawRect(Color.Black, alpha = a) }
             }
@@ -200,6 +247,7 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                     val rr = lerp(from.right, left + menuW, w)
                     val t = lerp(from.top, top, h)
                     val b = lerp(from.bottom, top + menuH, h)
+                    origin[0] = l; origin[1] = t
                     val width = (rr - l).roundToInt().coerceAtLeast(1)
                     val height = (b - t).roundToInt().coerceAtLeast(1)
                     val p = m.measure(Constraints.fixed(width, height))
@@ -211,15 +259,35 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                 // and is gone before it gets there: arriving whole, it sat over the button as an
                 // opaque blurred blob, then vanished in one frame.
                 .graphicsLayer {
-                    alpha = if (!closing) 1f else {
+                    alpha = if (!closing || r.morph != null) 1f else {
                         val t = ((minOf(wide.value, tall.value) - GONE_AT) / (1f - GONE_AT)).coerceIn(0f, 1f)
                         t * t * (3f - 2f * t)
                     }
                     compositingStrategy = CompositingStrategy.ModulateAlpha
                 }
-                .glassChrome(backdrop, MenuShape, blur = 13.dp, bevel = 16.dp)
-                .clip(MenuShape),
+                .glassChrome(backdrop, shape, blur = 13.dp, bevel = 16.dp)
+                // Morphing, the element's own colour, clearing into glass as the drop grows.
+                .then(
+                    if (r.morph == null) Modifier else Modifier.drawBehind {
+                        val a = r.morph.color.alpha * (1f - smooth(formed() / 0.5f))
+                        if (a > 0.003f) drawOutline(shape.createOutline(size, layoutDirection, this), r.morph.color.copy(alpha = a))
+                    },
+                )
+                .clip(shape),
         ) {
+            // The element's face, held where the element is, fading as the menu forms.
+            if (r.morph != null) {
+                Box(
+                    Modifier
+                        .wrapContentSize(Alignment.TopStart, unbounded = true)
+                        .offset { IntOffset((r.from.left - origin[0]).roundToInt(), (r.from.top - origin[1]).roundToInt()) }
+                        .requiredSize(with(LocalDensity.current) { DpSize(r.from.width.toDp(), r.from.height.toDp()) })
+                        .graphicsLayer {
+                            alpha = 1f - smooth(formed() / 0.25f)
+                            compositingStrategy = CompositingStrategy.ModulateAlpha
+                        },
+                ) { r.morph.face() }
+            }
             // Laid out at full size from the start and revealed by the drop, so nothing reflows.
             Column(
                 Modifier
@@ -265,7 +333,9 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
     }
 }
 
-private val MenuShape = RoundedCornerShape(24.dp)
+private val MENU_RADIUS = 24.dp
+
+private fun smooth(x: Float): Float { val t = x.coerceIn(0f, 1f); return t * t * (3f - 2f * t) }
 private val MENU_WIDTH = 240.dp
 private val ROW_HEIGHT = 48.dp
 private val TITLE_HEIGHT = 32.dp

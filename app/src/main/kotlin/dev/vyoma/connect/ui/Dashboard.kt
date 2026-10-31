@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.MenuMorph
 import dev.vyoma.connect.designsystem.LocalStatus
 
 import androidx.compose.foundation.layout.widthIn
@@ -660,12 +661,14 @@ private class Control(
  * Apple's Shortcuts widget for the actions, Control Center for the switches. Six one-shot actions
  * are filled square tiles (glyph top left, label bottom left, white ink); the two switches sit in
  * the thumb's corner as clear glass tiles that fill only when on ([ToggleTile]).
- * Corners are concentric (card radius = tile radius + padding). Rejected before: round buttons
- * (plastic balls), wide tiles two across (a stack of pills), app icons with labels under.
+ * They float on the canvas like Control Center modules, 16 dp apart: inside a card (8 dp gaps,
+ * 12 dp pad) nine lit outlines crowded one small area and the user found Home congested.
+ * Rejected before: round buttons (plastic balls), wide tiles two across (a stack of pills), app
+ * icons with labels under.
  */
 @Composable
 private fun ControlGrid(actions: List<Control>, toggles: List<Control>, modifier: Modifier = Modifier, enabled: Boolean = true) {
-    BoxWithConstraints(modifier.fillMaxWidth().glassCard(RoundedCornerShape(TileRadius + TilePad)).padding(TilePad)) {
+    BoxWithConstraints(modifier.fillMaxWidth()) {
         val tile = (maxWidth - TileGap * 3) / 4
         Column(verticalArrangement = Arrangement.spacedBy(TileGap)) {
             Row(horizontalArrangement = Arrangement.spacedBy(TileGap)) {
@@ -683,23 +686,40 @@ private fun ControlGrid(actions: List<Control>, toggles: List<Control>, modifier
 private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true) {
     val tone = c.color.color
     val lum = remember(tone) { tone.luminance() }
-    val fill = tileFill(tone, lum)
+    val fill = tileFill(tone, lum).copy(alpha = 0.92f)
     val ink = if (lum > 0.5f) Color(0xFF1C1C1E) else Color.White
     val menus = LocalMenu.current
     // Where the tile is, read only when a long press opens its menu. Not state: written on every
     // scroll frame, a state write per tile woke the main thread each frame (7% of its time).
     val placed = remember { arrayOfNulls<LayoutCoordinates>(1) }
-    Column(
+    Box(
         modifier
-            .graphicsLayer { if (!enabled) { alpha = 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha } }
+            .graphicsLayer {
+                // Its menu is this tile, grown: hidden while the menu stands in for it.
+                val covered = menus.covers(placed)
+                if (!enabled || covered) { alpha = if (covered) 0f else 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha }
+            }
             .onPlaced { placed[0] = it }
             .liquidPress(
                 enabled = enabled, onLongClickLabel = "More", onClick = c.onClick,
-                onLongClick = c.menu?.let { m -> { placed[0]?.takeIf { it.isAttached }?.let { menus.show(it.boundsInRoot(), m, c.menuTitle) } } },
+                onLongClick = c.menu?.let { m ->
+                    {
+                        placed[0]?.takeIf { it.isAttached }?.let {
+                            menus.show(it.boundsInRoot(), m, c.menuTitle, fromRadius = TileRadius, morph = MenuMorph(placed, fill) { TileFace(c, ink) })
+                        }
+                    }
+                },
             )
-            .glassRaised(RoundedCornerShape(TileRadius), fill.copy(alpha = 0.92f))
-            // Even on both sides (6 dp at the end ran "Commands" to the edge), and 9 dp so it fits at full size.
-            .padding(horizontal = 9.dp, vertical = 10.dp),
+            .glassRaised(RoundedCornerShape(TileRadius), fill),
+    ) { TileFace(c, ink) }
+}
+
+/** A tile's glyph, corner mark and label; also what its menu grows out of. */
+@Composable
+private fun TileFace(c: Control, ink: Color) {
+    Column(
+        // Even on both sides (6 dp at the end ran "Commands" to the edge), and 9 dp so it fits at full size.
+        Modifier.fillMaxSize().padding(horizontal = 9.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
@@ -748,11 +768,13 @@ private fun ToggleTile(c: Control, modifier: Modifier, enabled: Boolean) {
     val onGlyph = lerp(tone, Color.Black, 0.35f)
     val ink = lerp(MaterialTheme.colorScheme.onSurface, Color(0xFF1C1C1E), on)
     val shape = RoundedCornerShape(TileRadius)
+    // Off, a body of its own: on the bare canvas (no card under it any more) the faint raised fill vanished.
+    val toggleOff = if (dark) Color.White.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.55f)
     Column(
         modifier
             .graphicsLayer { if (!enabled) { alpha = 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha } }
             .pressable(enabled = enabled && c.toggle, haptic = if (c.active) Haptic.ToggleOff else Haptic.ToggleOn, onClick = c.onClick)
-            .glassRaised(shape, if (on > 0.01f) Color.White.copy(alpha = 0.96f * on) else null)
+            .glassRaised(shape, lerp(toggleOff, Color.White.copy(alpha = 0.96f), on))
             // On a light card, white alone barely lifts: a hairline of the tone outlines it.
             .then(if (!dark && on > 0.01f) Modifier.border(1.dp, tone.copy(alpha = 0.55f * on), shape) else Modifier)
             .padding(horizontal = 9.dp, vertical = 10.dp),
@@ -784,8 +806,7 @@ private fun TileLabel(text: String, ink: Color) {
 }
 
 private val TileRadius = 16.dp
-private val TilePad = 12.dp
-private val TileGap = 8.dp
+private val TileGap = 16.dp
 
 /** "Just now" for the first minute, then "5 min. ago" and so on. */
 internal fun ago(time: Long): CharSequence {

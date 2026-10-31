@@ -921,10 +921,11 @@ val liquidGlassSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 /**
  * iOS 26's soft scroll edge under the status bar: what passes beneath is blurred and fades out
  * into the canvas, strongest at the top and clear by the bottom of this strip, so the clock and
- * icons never sit on raw content. Not a shade: the canvas colour only thinly, never a dark band
+ * icons never sit on raw content. Stack two (a heavy one over a short band, a light one reaching
+ * further) for a progressive blur that thickens towards the top. Not a shade: the canvas colour only thinly, never a dark band
  * (the user rejected the header shade). Only while [active] (content is actually under it).
  */
-fun Modifier.scrollEdge(backdrop: Backdrop, active: () -> Boolean): Modifier = composed {
+fun Modifier.scrollEdge(backdrop: Backdrop, blur: Dp = 16.dp, tint: Float = 0.55f, active: () -> Boolean): Modifier = composed {
     val blurred = rememberGraphicsLayer()
     val blurs = remember { BlurCache() }
     var position by remember { mutableStateOf(Offset.Zero) }
@@ -938,11 +939,11 @@ fun Modifier.scrollEdge(backdrop: Backdrop, active: () -> Boolean): Modifier = c
             val fade = Brush.verticalGradient(0f to Color.Black, 0.45f to Color.Black.copy(alpha = 0.85f), 1f to Color.Transparent)
             if (!GlassQuality.lite) {
                 val shift = backdrop.origin - position
-                blurred.renderEffect = blurs[16.dp.toPx()]
+                blurred.renderEffect = blurs[blur.toPx()]
                 blurred.record { translate(shift.x, shift.y) { drawLayer(backdrop.layer) } }
                 drawLayer(blurred)
             }
-            drawRect(canvas.copy(alpha = if (GlassQuality.lite) 0.9f else 0.55f))
+            drawRect(canvas.copy(alpha = if (GlassQuality.lite) 0.9f else tint))
             drawRect(fade, blendMode = BlendMode.DstIn)
         }
 }
