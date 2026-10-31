@@ -40,7 +40,6 @@ import dev.vyoma.connect.designsystem.SectionLabel
 import dev.vyoma.connect.protocol.plugin.builtin.BatteryPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.LockPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
-import dev.vyoma.connect.protocol.plugin.builtin.SystemVolumePlugin
 import kotlinx.coroutines.flow.MutableStateFlow
 
 @Composable
@@ -48,9 +47,6 @@ fun DeviceScreen(
     vm: AppViewModel,
     deviceId: String,
     onBack: () -> Unit,
-    onTouchpad: (keyboard: Boolean) -> Unit,
-    onClipboard: () -> Unit,
-    onBrowseFiles: () -> Unit,
 ) {
     val devices by vm.devices.collectAsStateWithLifecycle()
     val state = devices.firstOrNull { it.identity.deviceId == deviceId }
@@ -62,10 +58,7 @@ fun DeviceScreen(
     // Plugin instances change when the link reconnects; key on the loaded set.
     val device = remember(state?.plugins) { vm.device(deviceId) }
     val battery by (device?.plugin<BatteryPlugin>(BatteryPlugin.ID)?.remote ?: remember { MutableStateFlow(null) }).collectAsState()
-    val sinks by (device?.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.sinks ?: remember { MutableStateFlow(emptyList()) }).collectAsState()
     val commands by (device?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands ?: remember { MutableStateFlow(emptyList()) }).collectAsState()
-    val locked by (device?.plugin<LockPlugin>(LockPlugin.ID)?.locked ?: remember { MutableStateFlow(null) }).collectAsState()
-    val nowPlaying by vm.nowPlaying.collectAsStateWithLifecycle()
 
     val subtitle = state?.let {
         listOfNotNull(
@@ -83,51 +76,12 @@ fun DeviceScreen(
         if (state == null) return@CollapsingHeaderScaffold
         val live = state.isPaired && state.isReachable
 
-        if (live) {
-            item(key = "actions") {
-                Staggered(0, Modifier.animateItem()) {
-                    PcDashboard(
-                        vm, state, DashboardSection.CONTROLS,
-                        onOpenDevice = {}, onTouchpad = { onTouchpad(true) }, onClipboard = onClipboard, inDetails = true, onBrowseFiles = onBrowseFiles,
-                    )
-                }
-            }
-        }
-
-        val np = nowPlaying?.takeIf { it.deviceId == deviceId && it.player.hasMedia }
-        if (live && np != null) {
-            item(key = "media") {
-                MediaCard(
-                    np = np,
-                    onPlayPause = vm::playPause,
-                    onNext = vm::next,
-                    onPrevious = vm::previous,
-                    onSeek = vm::seekTo,
-                    onVolume = vm::setPlayerVolume,
-                    onPickPlayer = vm::pickPlayer,
-                    showVolume = false,
-                    modifier = Modifier.animateItem(),
-                    onContinueHere = if (companionOnline) { { vm.continueOnPhone(deviceId) } } else null,
-                )
-            }
-        }
-
-        if (live && sinks.isNotEmpty()) {
-            item(key = "volume-label") { SectionLabel("PC sound", Modifier.animateItem()) }
-            item(key = "volume") {
-                val main = sinks.firstOrNull { it.isDefault } ?: sinks.first()
-                Column(Modifier.animateItem(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    VolumeBar(main, onVolume = { vm.setSinkVolume(deviceId, main.name, it) })
-                    if (sinks.size > 1) OutputPicker(sinks, onDefault = { vm.makeSinkDefault(deviceId, it.name) })
-                }
-            }
-        }
-
+        // Home has the controls, the player and the sound: details are what it doesn't.
         if (live) {
             item(key = "commands-label") { SectionLabel("Commands", Modifier.animateItem()) }
             item(key = "commands") {
                 if (commands.isNotEmpty()) {
-                    CommandsCard(commands) { vm.runCommand(deviceId, it.key); toast(context, "Running ${it.name}") }
+                    CommandsCard(commands, onEdit = { vm.openCommandSetup(deviceId) }) { vm.runCommand(deviceId, it.key); toast(context, "Running ${it.name}") }
                 } else {
                     SectionCard(Modifier.animateItem()) {
                         ListRow(

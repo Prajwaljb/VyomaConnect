@@ -135,6 +135,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - One job per button, named for what it does ("Send", "PC files", "Upload here"), never one button whose meaning
   changes with state. No two buttons on the same screen open the same thing. When a feature appears only
   sometimes (companion online), swap it into a fixed slot so the other buttons never move.
+- Where things live (IA): Home is the PC's control surface (gauges, media, volume + output picker, the 4x2 action
+  tiles; 8th tile = Commands, a sheet that runs one and closes). PC details (header Info button, or tap the hero glyph)
+  holds only what's about the link: commands list + "Edit commands", Ping/Find this PC/battery, fingerprint, Unpair.
+  Never duplicate Home's controls there. Header shows Refresh only while no PC is connected.
 - One clear primary action per card. Touch targets ≥ 48 dp; keep the bottom 70 px clear of the floating tab bar
   (`LocalBottomBarInset`).
 - Controls: `PillButton` (prominent = accent fill, else tinted), `SegmentedControl` for 2–4 exclusive choices,

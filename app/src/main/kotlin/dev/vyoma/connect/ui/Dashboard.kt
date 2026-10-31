@@ -1,5 +1,11 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.ListRow
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.TextButton
+import dev.vyoma.connect.designsystem.GlassDialog
+import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -160,7 +166,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /** Live plugin state for one PC; plugins come and go with the link, so this re-reads on every plugin change. */
-private class PcState(val battery: BatteryState?, val batteryStale: Boolean, val sink: AudioSink?, val locked: Boolean?)
+private class PcState(val battery: BatteryState?, val batteryStale: Boolean, val sink: AudioSink?, val locked: Boolean?, val sinks: List<AudioSink> = emptyList())
 
 @Composable
 private fun rememberPcState(vm: AppViewModel, state: DeviceState): PcState {
@@ -171,7 +177,7 @@ private fun rememberPcState(vm: AppViewModel, state: DeviceState): PcState {
     val id = state.identity.deviceId
     LaunchedEffect(id, battery) { battery?.let { vm.cacheBattery(id, it) } }
     val cached = remember(id) { vm.cachedBattery(id) }
-    return PcState(battery ?: cached, battery == null && cached != null, sinks.firstOrNull { it.isDefault } ?: sinks.firstOrNull(), locked)
+    return PcState(battery ?: cached, battery == null && cached != null, sinks.firstOrNull { it.isDefault } ?: sinks.firstOrNull(), locked, sinks)
 }
 
 /** Hero glyph: the PC in a deep accent squircle whose edge catches the light, with the live orb pinned to its corner. */
@@ -251,11 +257,12 @@ fun PcDashboard(
     onTouchpad: () -> Unit,
     onClipboard: () -> Unit,
     modifier: Modifier = Modifier,
-    inDetails: Boolean = false,
     onBrowseFiles: () -> Unit = {},
 ) {
     val id = state.identity.deviceId
     val pc = rememberPcState(vm, state)
+    var showCommands by rememberSaveable { mutableStateOf(false) }
+    if (showCommands) CommandsSheet(vm, id) { showCommands = false }
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     when (section) {
@@ -295,12 +302,12 @@ fun PcDashboard(
                 PcVitals(stats, modifier)
             }
         }
+        // Everything about sound in one place: the level, and where it plays when there's a choice.
         DashboardSection.VOLUME -> pc.sink?.let { sink ->
-            VolumeBar(
-                sink,
-                onVolume = { vm.setSinkVolume(id, sink.name, it) },
-                modifier = modifier,
-            )
+            Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                VolumeBar(sink, onVolume = { vm.setSinkVolume(id, sink.name, it) })
+                if (pc.sinks.size > 1) OutputPicker(pc.sinks, onDefault = { vm.makeSinkDefault(id, it.name) })
+            }
         }
         DashboardSection.CONTROLS -> {
           val devices by vm.devices.collectAsStateWithLifecycle()
@@ -348,8 +355,8 @@ fun PcDashboard(
                     active = photo == CaptureState.Capturing,
                 ) { vm.capture(shots.photo) }
                 else Control(Icons.Rounded.NotificationsActive, "Find PC", SystemColor.YELLOW) { vm.ringPc(id) },
-                if (inDetails) Control(Icons.Rounded.Terminal, "Commands", SystemColor.GRAY) { vm.openCommandSetup(id) }
-                else Control(Icons.Rounded.MoreHoriz, "More", SystemColor.GRAY, onClick = onOpenDevice),
+                // The PC's details have their own button in the header now; this slot runs commands.
+                Control(Icons.Rounded.Terminal, "Commands", SystemColor.GRAY) { showCommands = true },
             ),
             modifier,
           )
@@ -792,4 +799,42 @@ private fun Gauge(label: String, value: String?, fraction: Float, color: SystemC
         Spacer(Modifier.height(4.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
+}
+
+/** The PC's commands, run from where you are; set up (or edited) on the PC itself. */
+@Composable
+private fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val device = remember(id) { vm.device(id) }
+    val commands by (device?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands ?: remember { MutableStateFlow(emptyList()) }).collectAsState()
+    GlassDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Commands") },
+        text = {
+            if (commands.isEmpty()) {
+                Text("None yet. Add shutdown, sleep or your own scripts on the PC, and run them from here.")
+            } else {
+                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                    commands.forEachIndexed { i, cmd ->
+                        ListRow(
+                            title = cmd.name,
+                            subtitle = cmd.command,
+                            icon = Icons.Rounded.Terminal,
+                            iconTint = SystemColor.GRAY.color,
+                            showDivider = i < commands.lastIndex,
+                            onClick = {
+                                vm.runCommand(id, cmd.key)
+                                toast(context, "Running ${cmd.name}")
+                                onDismiss()
+                            },
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        dismissButton = {
+            TextButton(onClick = { vm.openCommandSetup(id); onDismiss() }) { Text(if (commands.isEmpty()) "Set up on PC" else "Edit on PC") }
+        },
+    )
 }

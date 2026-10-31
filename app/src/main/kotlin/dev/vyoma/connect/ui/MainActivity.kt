@@ -259,13 +259,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                         Tab.SETTINGS -> SettingsScreen(vm)
                     }
                 }
-                is Screen.DeviceDetail -> DeviceScreen(
-                    vm, screen.id,
-                    onBack = pop,
-                    onTouchpad = { kb -> backStack.add(Screen.Touchpad(screen.id, kb)) },
-                    onClipboard = { toTab(Tab.CLIPBOARD) },
-                    onBrowseFiles = { backStack.add(Screen.Files(screen.id)) },
-                )
+                is Screen.DeviceDetail -> DeviceScreen(vm, screen.id, onBack = pop)
                 is Screen.Touchpad -> RemoteInputScreen(vm, screen.deviceId, screen.keyboard, onBack = pop)
                 is Screen.Files -> FilesScreen(vm, screen.pcId, onBack = pop)
             }

@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -100,9 +101,15 @@ fun HomeScreen(
             offline.isNotEmpty() -> "${offline.first().identity.deviceName} is away"
             else -> "Looking for devices nearby"
         },
-        hero = primary?.let { { DeviceGlyph(it) } },
+        // The PC is what this page is about: its icon and the header button open its details.
+        // Refresh only matters while nothing's connected.
+        hero = primary?.let { p -> { Box(Modifier.pressable { onOpenDevice(p.identity.deviceId) }) { DeviceGlyph(p) } } },
         actions = {
-            BounceIconButton(onClick = vm::refresh) { Icon(Icons.Rounded.Refresh, "Refresh") }
+            if (primary != null) {
+                BounceIconButton(onClick = { onOpenDevice(primary.identity.deviceId) }) { Icon(Icons.Rounded.Info, "PC details") }
+            } else {
+                BounceIconButton(onClick = vm::refresh) { Icon(Icons.Rounded.Refresh, "Refresh") }
+            }
         },
     ) {
         if (primary != null) {
