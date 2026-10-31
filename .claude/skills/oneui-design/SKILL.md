@@ -18,10 +18,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   linear-gradient rim misaligned) plus, in the dark, a soft glow on the lit side baked INTO the fill as one radial
   gradient (a separate glow pass over the card cost 0.4 ms GPU/frame; in-fill is ~free). Measured ≈ +0.1–0.2 ms.
   Card slices (`cardSegment`) pass `lit = false`. Refraction belongs only to things that float.
-- Media card (`MediaCard`): compact like iOS (people found the full-bleed artwork card too big): 56 dp art thumbnail
-  (or a deep-accent tile with a note/film glyph), title + artist, Continue on phone as a 40 dp round button at the
-  row's end, thin scrubber, plain white glyph controls (no white disc), on the art's dark-muted palette colour or
-  `accent.toned(0.8f, 0.2f)`. Art trimming/palette run off the main thread.
+- Media card (`MediaCard`): iOS-widget compact (full-bleed art was "too big", a thumbnail in a plain card "too
+  plain"): artwork fills the left 132 dp edge to edge, fading into the art's dark-muted colour; title/artist with
+  Continue on phone as a 36 dp round button, thin scrubber, plain glyph controls on the right. Card = `glassCard`
+  (tint fill + lit glow) with `specularEdge` drawn over everything. Art trimming/palette run off the main thread.
 - Liquid drops (`LensPainter`: tab drop, slider/switch/segmented knobs) get the tilt-lit `specularRim` stroke like
   chrome; a clear drop over a plain track otherwise had no visible rim.
 - Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a plain
