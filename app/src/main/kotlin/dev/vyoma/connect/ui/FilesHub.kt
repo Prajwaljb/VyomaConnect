@@ -5,6 +5,27 @@ import android.content.Intent
 import android.net.Uri
 import android.text.format.Formatter
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.ContentPasteGo
+import androidx.compose.material.icons.rounded.FolderOff
+import androidx.compose.material.icons.rounded.DesktopWindows
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Movie
+import dev.vyoma.connect.designsystem.IconBadge
+import dev.vyoma.connect.designsystem.glassCard
+import dev.vyoma.connect.designsystem.glassRaised
+import dev.vyoma.connect.designsystem.pressable
+import dev.vyoma.connect.designsystem.toned
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -54,7 +75,7 @@ import dev.vyoma.connect.service.TransferLog
  * history a tap away. Clipboard sync runs by itself, so it no longer needs a tab of its own.
  */
 @Composable
-fun FilesHubScreen(vm: AppViewModel, onBrowse: (String) -> Unit, onClipboard: () -> Unit) {
+fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipboard: () -> Unit) {
     val context = LocalContext.current
     val status = LocalStatus.current
     val devices by vm.devices.collectAsStateWithLifecycle()
@@ -70,30 +91,56 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String) -> Unit, onClipboard: ()
         title = "Files",
         subtitle = pc?.let { "With ${it.identity.deviceName}" } ?: "No PC connected",
     ) {
-        item(key = "pc") {
-            SectionCard(Modifier.animateItem()) {
-                ListRow(
-                    title = "Send files",
-                    subtitle = "To the PC's Downloads",
-                    subtitleMaxLines = 1,
-                    icon = Icons.Rounded.UploadFile,
-                    iconTint = SystemColor.BLUE.color,
-                    showDivider = true,
-                    enabled = pc != null,
-                    trailing = { RowChevron() },
-                    onClick = { vm.pickFiles(context) },
-                )
-                ListRow(
-                    title = "Browse PC files",
-                    subtitle = if (companion || pc == null) "Its home folder, to open or upload into" else "Needs the Vyoma companion on the PC",
-                    subtitleMaxLines = 1,
-                    icon = Icons.Rounded.Folder,
-                    iconTint = SystemColor.BLUE.color,
-                    enabled = companion,
-                    trailing = { RowChevron() },
-                    onClick = { pc?.let { onBrowse(it.identity.deviceId) } },
-                )
+        // Sending is the job people come here for: three big glass tiles, one per kind of thing.
+        item(key = "send-label") { SectionLabel(pc?.let { "Send to ${it.identity.deviceName}" } ?: "Send to your PC", Modifier.animateItem()) }
+        item(key = "send") {
+            Row(Modifier.animateItem().fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SendTile(Icons.Rounded.UploadFile, "Files", SystemColor.BLUE, pc != null, Modifier.weight(1f)) { vm.pickFiles(context) }
+                SendTile(Icons.Rounded.PhotoLibrary, "Photos", SystemColor.PINK, pc != null, Modifier.weight(1f)) { vm.pickPhotos(context) }
+                SendTile(Icons.Rounded.ContentPasteGo, "Clipboard", SystemColor.ORANGE, pc != null, Modifier.weight(1f)) {
+                    if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied to send", failure = true)
+                }
             }
+        }
+
+        // The PC's usual folders, a tap from here (the companion lists and fetches them).
+        item(key = "pc-label") { SectionLabel("On the PC", Modifier.animateItem()) }
+        item(key = "pc") {
+            if (companion && pc != null) {
+                Column(Modifier.animateItem().glassCard(MaterialTheme.shapes.large).padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PC_FOLDERS.chunked(3).forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            row.forEach { f -> FolderTile(f, Modifier.weight(1f)) { onBrowse(pc.identity.deviceId, f.path) } }
+                        }
+                    }
+                    ListRow(
+                        title = "Browse everything",
+                        subtitle = "Its home folder, to open or upload into",
+                        subtitleMaxLines = 1,
+                        icon = Icons.Rounded.Folder,
+                        iconTint = SystemColor.BLUE.color,
+                        horizontalPadding = 10.dp,
+                        trailing = { RowChevron() },
+                        onClick = { onBrowse(pc.identity.deviceId, "") },
+                    )
+                }
+            } else {
+                SectionCard(Modifier.animateItem()) {
+                    ListRow(
+                        title = "Browse PC files",
+                        subtitle = if (pc == null) "Connect to your PC first" else "Needs the Vyoma companion on the PC",
+                        subtitleMaxLines = 1,
+                        icon = Icons.Rounded.FolderOff,
+                        iconTint = SystemColor.GRAY.color,
+                    )
+                }
+            }
+        }
+
+        item(key = "captures-label") { SectionLabel("Captures", Modifier.animateItem()) }
+        item(key = "captures") {
+            val plugin = remember(companion, pc?.identity?.deviceId, devices) { pc?.let { vm.companionOf(it.identity.deviceId) } }
+            CapturesStrip(refresh = null, onTake = plugin?.let { c -> { vm.capture(c.screenshot) } }, modifier = Modifier.animateItem())
         }
 
         if (moving.isNotEmpty() || done.isNotEmpty()) {
@@ -130,6 +177,52 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String) -> Unit, onClipboard: ()
                 )
             }
         }
+    }
+}
+
+/** One of the Send tiles: a filled Shortcuts tile, wider than Home's, glyph over its name. */
+@Composable
+private fun SendTile(icon: ImageVector, label: String, color: SystemColor, enabled: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val tone = color.color
+    val fill = if (tone.luminance() in 0.2f..0.5f) tone.toned(lightness = 0.38f) else tone
+    Column(
+        modifier
+            .height(96.dp)
+            .graphicsLayer { if (!enabled) alpha = 0.4f }
+            .pressable(enabled = enabled, onClick = onClick)
+            .glassRaised(RoundedCornerShape(20.dp), fill.copy(alpha = 0.92f))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Icon(icon, null, tint = Color.White, modifier = Modifier.size(26.dp))
+        Text(label, style = MaterialTheme.typography.titleSmall, color = Color.White, maxLines = 1)
+    }
+}
+
+private class PcFolderLink(val name: String, val path: String, val icon: ImageVector, val color: SystemColor)
+
+private val PC_FOLDERS = listOf(
+    PcFolderLink("Desktop", "Desktop", Icons.Rounded.DesktopWindows, SystemColor.BLUE),
+    PcFolderLink("Documents", "Documents", Icons.Rounded.Description, SystemColor.CYAN),
+    PcFolderLink("Downloads", "Downloads", Icons.Rounded.Download, SystemColor.GREEN),
+    PcFolderLink("Pictures", "Pictures", Icons.Rounded.Image, SystemColor.PINK),
+    PcFolderLink("Music", "Music", Icons.Rounded.MusicNote, SystemColor.RED),
+    PcFolderLink("Videos", "Videos", Icons.Rounded.Movie, SystemColor.ORANGE),
+)
+
+/** A PC folder as a clear glass tile: its glyph in a coloured badge, its name under. */
+@Composable
+private fun FolderTile(f: PcFolderLink, modifier: Modifier, onClick: () -> Unit) {
+    Column(
+        modifier
+            .height(88.dp)
+            .pressable(onClick = onClick)
+            .glassRaised(RoundedCornerShape(18.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.SpaceBetween,
+    ) {
+        IconBadge(f.icon, f.color.color)
+        Text(f.name, style = MaterialTheme.typography.labelLarge, maxLines = 1)
     }
 }
 

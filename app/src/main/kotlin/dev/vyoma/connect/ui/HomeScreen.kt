@@ -1,6 +1,12 @@
 package dev.vyoma.connect.ui
 
 import dev.vyoma.connect.service.LastSeen
+import dev.vyoma.connect.designsystem.LocalStatus
+import androidx.compose.material.icons.rounded.Terminal
+import kotlinx.coroutines.flow.MutableStateFlow
+import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.RemoteCommand
+import dev.vyoma.connect.protocol.plugin.builtin.CaptureState
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.graphics.graphicsLayer
 import dev.vyoma.connect.designsystem.VyomaMotion
@@ -13,7 +19,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -114,6 +119,7 @@ fun HomeScreen(
     val companionOnline = allDevices.any { it.identity.companionOf != null && it.isPaired && it.isReachable }
     val nowPlaying by vm.nowPlaying.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val status = LocalStatus.current
     val connected = devices.filter { it.isPaired && it.isReachable }
     val pairing = devices.filter { it.pairState == PairState.REQUESTED_BY_PEER || it.pairState == PairState.REQUESTED_BY_US }
     val available = devices.filter { !it.isPaired && it.isReachable && it !in pairing }
@@ -124,6 +130,12 @@ fun HomeScreen(
     // a sleeping laptop, isn't a different screen.
     val primary = connected.firstOrNull { it.identity.deviceId == selected } ?: connected.firstOrNull() ?: offline.firstOrNull()
     val live = primary?.isReachable == true
+    val commands by remember(primary?.identity?.deviceId, primary?.plugins) {
+        primary?.let { vm.device(it.identity.deviceId)?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands } ?: MutableStateFlow(emptyList())
+    }.collectAsStateWithLifecycle()
+    val companionPlugin = remember(companionOnline, primary?.identity?.deviceId, allDevices) { primary?.let { vm.companionOf(it.identity.deviceId) } }
+    val shot by (companionPlugin?.screenshot?.state ?: remember { MutableStateFlow(CaptureState.Idle) }).collectAsStateWithLifecycle()
+    val photo by (companionPlugin?.photo?.state ?: remember { MutableStateFlow(CaptureState.Idle) }).collectAsStateWithLifecycle()
     val seen = remember(primary?.identity?.deviceId, live) { primary?.takeIf { !live }?.let { LastSeen.of(context, it.identity.deviceId) } }
 
     CollapsingHeaderScaffold(
@@ -173,38 +185,52 @@ fun HomeScreen(
                     PcDashboard(vm, primary, DashboardSection.STATUS, { onKeyboard(id) }, onClipboard)
                 }
             }
-            if (live) item(key = "deck") {
-                // Control Center's pair: what's playing, and beside it the PC's volume as a tall capsule.
-                // "Not playing" holds the media's place, so nothing jumps when a song starts.
-                val np = nowPlaying?.takeIf { it.deviceId == id && it.player.hasMedia }
+            // What's playing, then the sound (order by frequency: state, what you adjust, actions).
+            val np = nowPlaying?.takeIf { it.deviceId == id && it.player.hasMedia }
+            if (live && np != null) item(key = "media") {
                 // Only when the companion says this exact video can continue here (a web page,
                 // not mpv playing a local file).
                 val companionUp = allDevices.any { it.identity.companionOf == id && it.isPaired && it.isReachable }
                 val stats by remember(companionUp, id) { vm.companionOf(id)?.stats ?: flowOf(null) }.collectAsStateWithLifecycle(null)
-                val offered = np != null && stats?.handoff?.let { sameVideo(it, np.player.title) } == true
+                val offered = stats?.handoff?.let { sameVideo(it, np.player.title) } == true
                 Staggered(1, Modifier.animateItem()) {
-                    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        val card = Modifier.weight(1f).fillMaxHeight().heightIn(min = DeckMinHeight)
-                        if (np != null) MediaCard(
-                            np = np,
-                            onPlayPause = vm::playPause,
-                            onNext = vm::next,
-                            onPrevious = vm::previous,
-                            onSeek = vm::seekTo,
-                            onVolume = vm::setPlayerVolume,
-                            onPickPlayer = vm::pickPlayer,
-                            showVolume = false,
-                            onContinueHere = if (offered) { { vm.continueOnPhone(id) } } else null,
-                            artWidth = 92.dp,
-                            modifier = card,
-                        ) else NotPlayingCard(card)
-                        PcDashboard(vm, primary, DashboardSection.VOLUME, { onKeyboard(id) }, onClipboard, Modifier.width(deckVolumeWidth()))
-                    }
+                    MediaCard(
+                        np = np,
+                        onPlayPause = vm::playPause,
+                        onNext = vm::next,
+                        onPrevious = vm::previous,
+                        onSeek = vm::seekTo,
+                        onVolume = vm::setPlayerVolume,
+                        onPickPlayer = vm::pickPlayer,
+                        showVolume = false,
+                        onContinueHere = if (offered) { { vm.continueOnPhone(id) } } else null,
+                    )
+                }
+            }
+            if (live) item(key = "volume") {
+                Staggered(2, Modifier.animateItem()) {
+                    PcDashboard(vm, primary, DashboardSection.VOLUME, { onKeyboard(id) }, onClipboard)
                 }
             }
             item(key = "controls") {
                 Staggered(2, Modifier.animateItem()) {
                     PcDashboard(vm, primary, DashboardSection.CONTROLS, { onKeyboard(id) }, onClipboard, onBrowseFiles = { onBrowseFiles(id) }, onFiles = onFiles)
+                }
+            }
+            if (live) {
+                // The PC's commands, one tap each (the tile opens the full list to edit).
+                if (commands.isNotEmpty()) {
+                    item(key = "run-label") { SectionLabel("Run on PC", Modifier.animateItem()) }
+                    item(key = "run") { CommandChips(commands, Modifier.animateItem()) { cmd -> vm.runCommand(id, cmd.key); status.show("Running ${cmd.name}", icon = Icons.Rounded.Terminal) } }
+                }
+                // What the PC's screen and camera sent, newest first.
+                item(key = "captures-label") { SectionLabel("Captures", Modifier.animateItem()) }
+                item(key = "captures") {
+                    CapturesStrip(
+                        refresh = (shot as? CaptureState.Done)?.at to (photo as? CaptureState.Done)?.at,
+                        onTake = companionPlugin?.let { c -> { vm.capture(c.screenshot) } },
+                        modifier = Modifier.animateItem(),
+                    )
                 }
             }
         }
@@ -264,6 +290,30 @@ fun HomeScreen(
 
         if (primary == null && pairing.isEmpty() && available.isEmpty()) {
             item(key = "searching") { SearchingCard(vm, Modifier.animateItem()) }
+        }
+    }
+}
+
+/** Commands as glass capsules in a row that scrolls to the edge; a tap runs one. */
+@Composable
+private fun CommandChips(commands: List<RemoteCommand>, modifier: Modifier = Modifier, onRun: (RemoteCommand) -> Unit) {
+    Row(
+        modifier.fillMaxWidth().fadingHorizontalScroll(rememberScrollState(), bleed = 16.dp).padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        commands.forEach { cmd ->
+            Row(
+                Modifier
+                    .height(48.dp)
+                    .pressable(glass = true) { onRun(cmd) }
+                    .glassRaised(CircleShape)
+                    .padding(start = 14.dp, end = 18.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Rounded.Terminal, null, tint = SystemColor.GRAY.color, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(cmd.name, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+            }
         }
     }
 }

@@ -78,7 +78,7 @@ import dev.vyoma.connect.protocol.plugin.builtin.PcFileEvent
  * the folder on screen.
  */
 @Composable
-fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
+fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit, initialPath: String = "") {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     val status = LocalStatus.current
@@ -89,7 +89,7 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit) {
         companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
     }
 
-    var path by rememberSaveable { mutableStateOf("") }
+    var path by rememberSaveable { mutableStateOf(initialPath) }
     BackHandler(enabled = path.isNotEmpty()) { path = path.substringBeforeLast('/', "") }
     LaunchedEffect(plugin, path) { plugin?.listFiles(path) }
 
