@@ -254,7 +254,7 @@ internal class InnerGlow {
             return
         }
         val p = path.takeIf { pathFor === outline } ?: Path().apply { addOutline(outline) }.also { path = it; pathFor = outline }
-        val brush = specularRim(color, Color.Transparent, Offset(area.width / 2, area.height / 2), light, opposite)
+        val brush = specularRim(color, Color.Transparent, Offset(area.width / 2, area.height / 2), light, opposite, area)
         clipPath(p) {
             // Narrowing strokes, each adding a little: the light piles up towards the edge.
             for (i in STEPS downTo 1) drawPath(p, brush, alpha = 1.6f / STEPS, style = Stroke(width * 2f * i / STEPS))
@@ -306,7 +306,11 @@ half4 main(float2 xy) {
 /** Where [specularRim]'s sweep puts the light before turning it (0.625 of a turn from 3 o'clock). */
 private const val RIM_LAYOUT_DEG = 225f
 
-internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float = SpecularLight.angle, opposite: Float = 0.8f): Brush {
+/**
+ * [size] is the shape's: the sweep runs in its normalised space (as InnerGlow's facing does), so a
+ * long pill catches the light along its edges the way a card does instead of only near its middle.
+ */
+internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float = SpecularLight.angle, opposite: Float = 0.8f, size: Size? = null): Brush {
     val b = base.toArgb()
     fun at(k: Float) = lerp(base, lit, k).toArgb()
     val o = opposite
@@ -319,7 +323,11 @@ internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float =
         // Laid out with the light at 0.625 of the sweep (225°), then turned to where it is now.
         floatArrayOf(0f, 0.125f, 0.236f, 0.347f, 0.403f, 0.514f, 0.625f, 0.736f, 0.847f, 0.903f, 1f),
     )
-    shader.setLocalMatrix(android.graphics.Matrix().apply { setRotate(light - RIM_LAYOUT_DEG, center.x, center.y) })
+    val stretch = size?.takeIf { it.height > 0f }?.let { it.width / it.height } ?: 1f
+    shader.setLocalMatrix(android.graphics.Matrix().apply {
+        setRotate(light - RIM_LAYOUT_DEG, center.x, center.y)
+        postScale(stretch, 1f, center.x, center.y)
+    })
     return ShaderBrush(shader)
 }
 
@@ -361,7 +369,7 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
         with(glow) { draw(outline, d.band, band, light, shade = d.shade, depth = roll) }
         translate(inset, inset) {
             val c = Offset(width / 2 - inset, height / 2 - inset)
-            drawOutline(edge, specularRim(d.rimLit, d.rimBase, c, light), style = Stroke(stroke))
+            drawOutline(edge, specularRim(d.rimLit, d.rimBase, c, light, size = Size(width, height)), style = Stroke(stroke))
         }
     }
 }
@@ -434,7 +442,7 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
                 val light = SpecularLight.angle
                 // No rolled shading here: on small round controls it turned them into plastic balls.
                 with(glow) { draw(outline, band, bandWidth, light) }
-                drawOutline(outline, specularRim(lit, rimBase, center, light), style = stroke)
+                drawOutline(outline, specularRim(lit, rimBase, center, light, size = size), style = stroke)
             }
         }
         .clip(shape)
@@ -454,7 +462,7 @@ fun Modifier.specularEdge(shape: Shape, width: Dp = 1.dp, lit: Color = Color.Whi
         val center = Offset(size.width / 2, size.height / 2)
         onDrawWithContent {
             drawContent()
-            translate(w / 2, w / 2) { drawOutline(edge, specularRim(lit, base, center - Offset(w / 2, w / 2)), style = stroke) }
+            translate(w / 2, w / 2) { drawOutline(edge, specularRim(lit, base, center - Offset(w / 2, w / 2), size = size), style = stroke) }
         }
     }
 
@@ -674,6 +682,7 @@ fun Modifier.glassChrome(
                     Color.White.copy(alpha = (if (dark) 0.55f else 1f) * (0.75f + 0.25f * pr) + 0.25f * pr),
                     if (dark) Color.White.copy(alpha = 0.08f) else Color(0xFF1A2B4C).copy(alpha = 0.12f),
                     center,
+                    size = g,
                 ),
                 style = Stroke(1.dp.toPx()),
             )
@@ -833,6 +842,7 @@ internal class LensPainter(private val graphics: GraphicsContext) {
                 Color.White.copy(alpha = if (dark) 0.6f else 1f),
                 if (dark) Color.White.copy(alpha = 0.1f) else Color(0xFF1A2B4C).copy(alpha = 0.14f),
                 edge.center,
+                size = edge.size,
             ),
             edge.topLeft, edge.size, CornerRadius(edge.height / 2), alpha = a, style = Stroke(1.dp.toPx()),
         )
@@ -961,9 +971,12 @@ half4 main(float2 p) {
     col.rgb = mix(col.rgb, half3(tint.rgb) * col.a, half(tint.a));
     // A thin specular rim, brightest where it faces the light and its opposite.
     float rim = 1.0 - smoothstep(0.0, 1.8, -d);
-    float facing = abs(dot(n, light));
-    // Linear in how squarely the edge faces it: a broad highlight, not a glint.
-    float light = rim * (0.25 + 0.75 * pow(facing, 1.3)) + t * t * t * 0.12;
+    // Lit by the same facing as the inner band and the rim stroke (the shape's normalised position,
+    // not its true normal), so bars and cards catch the light alike.
+    float f = dot(normalize(rel / max(c, float2(1.0)) + 1e-4), light);
+    // As the band: full facing the light, 0.8 on the far side, gathered towards both.
+    float facing = pow(max(f, 0.0), 1.6) + 0.8 * pow(max(-f, 0.0), 1.6);
+    float light = rim * (0.25 + 0.75 * facing) + t * t * t * 0.12;
     col.rgb += half3(light * spec) * col.a;
     // On light backgrounds a highlight alone vanishes: a faint shaded underside gives the edge.
     col.rgb -= half3(rim * shade * (0.4 + 0.6 * max(n.y, 0.0))) * col.a;
