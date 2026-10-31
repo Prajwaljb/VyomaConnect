@@ -149,11 +149,17 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     onSelect = { vm.setDarkMode(DarkMode.entries[it]) },
                     modifier = Modifier.padding(horizontal = 20.dp),
                 )
-                Spacer(Modifier.height(8.dp))
+            }
+        }
+
+        // The look's on/off effects, apart from the choices above (four kinds of control in one card read busy).
+        item(key = "effects-label") { SectionLabel("Effects") }
+        item(key = "effects") {
+            SectionCard {
                 val canvasGlow by vm.canvasGlow.collectAsStateWithLifecycle()
                 ListRow(
                     title = "Background glow",
-                    subtitle = "Soft accent colour behind the top of each screen",
+                    subtitle = "Accent glow behind each screen",
                     icon = Icons.Rounded.Gradient,
                     iconTint = SystemColor.BLUE.color,
                     showDivider = true,
@@ -163,8 +169,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                 ListRow(
                     title = "Lighter glass",
                     subtitle = when {
-                        glass.detected && !glass.chosen -> "On by itself: this phone couldn't redraw the full glass in time"
-                        else -> "Frosted bars instead of live blur, for smoother scrolling on slower phones"
+                        glass.detected && !glass.chosen -> "Turned on: this phone was too slow"
+                        else -> "Frosted bars, smoother on slower phones"
                     },
                     icon = Icons.Rounded.Speed,
                     iconTint = SystemColor.GRAY.color,
@@ -192,7 +198,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
             SectionCard {
                 ListRow(
                     title = "Notifications on PC",
-                    subtitle = if (notifOn) "On: reply and dismiss from your PC" else "Allow notification access to mirror them",
+                    subtitle = if (notifOn) "Reply and dismiss from your PC" else "Mirror them to your PC",
                     icon = Icons.Rounded.Notifications,
                     iconTint = SystemColor.RED.color,
                     showDivider = true,
@@ -201,8 +207,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                 )
                 ListRow(
                     title = "Calls & messages on PC",
-                    subtitle = if (phoneOn) "On: text from the PC, see who's calling, synced contacts"
-                    else "Text from your PC and see who's calling",
+                    subtitle = if (phoneOn) "Texts, calls and contacts on your PC"
+                    else "Text and see calls from your PC",
                     icon = Icons.Rounded.Sms,
                     iconTint = SystemColor.GREEN.color,
                     showDivider = true,
@@ -212,8 +218,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                 ListRow(
                     // Named as on the Clipboard tab: one feature, one name.
                     title = "Sync when closed",
-                    subtitle = if (clipOn) "Copies sync even while Vyoma is closed"
-                    else "Copies sync even when Vyoma is closed. One-time setup from your PC.",
+                    subtitle = if (clipOn) "Copies sync even when Vyoma is closed"
+                    else "One-time setup from your PC",
                     icon = Icons.Rounded.ContentPaste,
                     iconTint = SystemColor.ORANGE.color,
                     trailing = { RowChevron(if (clipOn) "On" else "Off") },
@@ -239,7 +245,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                 }
                 ListRow(
                     title = "Add a PC by IP or name",
-                    subtitle = "For Tailscale, or when your PC isn't found automatically",
+                    subtitle = "For Tailscale, or when it isn't found",
                     icon = Icons.Rounded.Add,
                     iconTint = SystemColor.BLUE.color,
                     showDivider = true,
@@ -248,7 +254,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                 )
                 ListRow(
                     title = "Over a USB cable",
-                    subtitle = "Faster and steadier than Wi-Fi; works with no network at all",
+                    subtitle = "Faster and steadier than Wi-Fi",
                     icon = Icons.Rounded.Usb,
                     iconTint = SystemColor.CYAN.color,
                     trailing = { RowChevron() },
@@ -262,7 +268,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
             SectionCard {
                 ListRow(
                     title = if (unrestricted) "Background activity allowed" else "Allow background activity",
-                    subtitle = if (unrestricted) "Your phone won't put Vyoma to sleep" else "Recommended so your PC stays connected in the background",
+                    subtitle = if (unrestricted) "Vyoma won't be put to sleep" else "Keeps your PC connected",
                     icon = Icons.Rounded.BatteryChargingFull,
                     iconTint = SystemColor.GREEN.color,
                     trailing = { RowChevron(if (unrestricted) "On" else "Off") },
@@ -279,14 +285,14 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                 SectionCard {
                     ListRow(
                         title = "Simulated laptop",
-                        subtitle = "${DemoPc.NAME} runs inside this app. Nothing connects to a real PC or the network.",
+                        subtitle = "${DemoPc.NAME} is simulated, offline",
                         icon = Icons.Rounded.Laptop,
                         iconTint = SystemColor.BLUE.color,
                         showDivider = true,
                     )
                     ListRow(
                         title = if (saving) "Saving log…" else "Generate log",
-                        subtitle = "Saves smoothness, phone details and the app's log to Downloads, to share for research",
+                        subtitle = "Saves a diagnostics log to Downloads",
                         icon = Icons.Rounded.BugReport,
                         iconTint = SystemColor.ORANGE.color,
                         onClick = {

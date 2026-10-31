@@ -135,16 +135,9 @@ fun HomeScreen(
                     }
                 }
             }
-            item(key = "bento") {
+            item(key = "status") {
                 Staggered(0, Modifier.animateItem()) {
-                    PcDashboard(vm, primary, DashboardSection.BENTO, { onKeyboard(id) }, onClipboard)
-                }
-            }
-            if (companionOnline) {
-                item(key = "vitals") {
-                    Staggered(1, Modifier.animateItem()) {
-                        PcDashboard(vm, primary, DashboardSection.VITALS, { onKeyboard(id) }, onClipboard)
-                    }
+                    PcDashboard(vm, primary, DashboardSection.STATUS, { onKeyboard(id) }, onClipboard)
                 }
             }
             val np = nowPlaying?.takeIf { it.deviceId == id && it.player.hasMedia }

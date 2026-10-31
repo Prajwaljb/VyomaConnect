@@ -1,5 +1,13 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.RowChevron
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalHapticFeedback
+import dev.vyoma.connect.designsystem.perform
+import dev.vyoma.connect.designsystem.GlassDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.UnfoldMore
 import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.glassRaised
 import androidx.compose.ui.text.font.FontFamily
@@ -192,6 +200,23 @@ fun MediaCard(
                         val sub = listOf(p.artist, p.album).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { p.name.takeIf { p.title.isNotBlank() }.orEmpty() }
                         if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
+                    // Switching players is rare: a small button and a list, not a row of chips on the card.
+                    if (np.players.size > 1) {
+                        var picking by remember { mutableStateOf(false) }
+                        Spacer(Modifier.width(6.dp))
+                        Box(
+                            Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.14f))
+                                .pressable { picking = true }
+                                .semantics { contentDescription = "Choose player" },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Rounded.UnfoldMore, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                        }
+                        if (picking) PlayerPicker(np.players, p.name, onDismiss = { picking = false }) { onPickPlayer(it); picking = false }
+                    }
                     if (onContinueHere != null) {
                         Spacer(Modifier.width(6.dp))
                         Box(
@@ -234,26 +259,6 @@ fun MediaCard(
                         modifier = Modifier.padding(start = 10.dp).weight(1f),
                         underlay = tint,
                     )
-                }
-            }
-            if (np.players.size > 1) {
-                Row(
-                    Modifier.fadingHorizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 16.dp, top = 6.dp, bottom = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    np.players.forEach { name ->
-                        val selected = name == p.name
-                        // The house chip (raised glass), in white over the artwork.
-                        Text(
-                            name.replaceFirstChar { it.uppercase() },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (selected) tint else Color.White,
-                            modifier = Modifier
-                                .glassRaised(CircleShape, Color.White.copy(alpha = if (selected) 0.9f else 0.14f))
-                                .pressable(haptic = Haptic.Select) { onPickPlayer(name) }
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
-                        )
-                    }
                 }
             }
         }
@@ -389,10 +394,15 @@ fun prettySinkName(description: String): String {
     return name.ifBlank { description }
 }
 
+private const val COMMANDS_FOLDED = 4
+
 @Composable
 fun CommandsCard(commands: List<RemoteCommand>, onEdit: (() -> Unit)? = null, onRun: (RemoteCommand) -> Unit) {
-    SectionCard {
-        commands.forEachIndexed { i, cmd ->
+    // A long list shows its first few and a row for the rest, so it doesn't own the screen.
+    var all by rememberSaveable { mutableStateOf(false) }
+    val shown = if (all || commands.size <= COMMANDS_FOLDED + 1) commands else commands.take(COMMANDS_FOLDED)
+    SectionCard(Modifier.animateContentSize(VyomaMotion.spatial())) {
+        shown.forEachIndexed { i, cmd ->
             ListRow(
                 title = cmd.name,
                 subtitle = cmd.command,
@@ -400,8 +410,18 @@ fun CommandsCard(commands: List<RemoteCommand>, onEdit: (() -> Unit)? = null, on
                 subtitleStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 icon = Icons.Rounded.Terminal,
                 iconTint = SystemColor.GRAY.color,
-                showDivider = i < commands.lastIndex || onEdit != null,
+                showDivider = i < shown.lastIndex || shown.size < commands.size || onEdit != null,
                 onClick = { onRun(cmd) },
+            )
+        }
+        if (shown.size < commands.size) {
+            ListRow(
+                title = "Show all",
+                icon = Icons.Rounded.UnfoldMore,
+                iconTint = SystemColor.GRAY.color,
+                showDivider = onEdit != null,
+                trailing = { RowChevron("${commands.size}") },
+                onClick = { all = true },
             )
         }
         if (onEdit != null) {
@@ -444,4 +464,30 @@ private fun trimBars(bmp: Bitmap): Bitmap {
     // A whole flat third means a flat image (a dark scene, a plain cover), not bars.
     if (l >= w / 3 || t >= h / 3) return bmp
     return Bitmap.createBitmap(bmp, l, t, r - l + 1, b - t + 1)
+}
+
+/** The PC's media players, the one shown ticked. */
+@Composable
+private fun PlayerPicker(players: List<String>, current: String, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    val haptics = LocalHapticFeedback.current
+    GlassDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Players on the PC") },
+        text = {
+            Column {
+                players.forEachIndexed { i, name ->
+                    ListRow(
+                        title = name.replaceFirstChar { it.uppercase() },
+                        icon = Icons.Rounded.MusicNote,
+                        iconTint = SystemColor.PINK.color,
+                        showDivider = i < players.lastIndex,
+                        horizontalPadding = 0.dp,
+                        trailing = if (name == current) { { Icon(Icons.Rounded.Check, "Playing", tint = MaterialTheme.colorScheme.primary) } } else null,
+                        onClick = { haptics.perform(Haptic.Select); onPick(name) },
+                    )
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }

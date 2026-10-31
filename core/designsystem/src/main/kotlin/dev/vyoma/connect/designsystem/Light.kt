@@ -23,8 +23,8 @@ import kotlin.math.tanh
 /**
  * Where the light comes from, as seen on the screen: the angle the specular edges are brightest
  * at, in degrees clockwise from 3 o'clock (270 = straight up). At rest it's up and a little to the
- * left, like Apple's glass, and stays there: tilting the phone only sways it a little (at most
- * 35° either way), so the highlight shifts along the edges without circling them. Read it only
+ * left, like Apple's glass; tilting the phone sways it up to 55° either way, so a small turn carries
+ * it to straight up (a 35° soft limit made the top centre take a deliberate tilt), without circling. Read it only
  * while drawing: a change then redraws the highlights, never recomposes or relayouts.
  */
 object SpecularLight {
@@ -32,6 +32,12 @@ object SpecularLight {
 
     var angle by mutableFloatStateOf(REST)
         private set
+
+    /**
+     * The light as content (cards) sees it: it sways 40% as far as on the floating chrome, so a
+     * tilt moves the layer above more than the page and two dozen card edges don't all shimmer.
+     */
+    val content: Float get() = REST + (angle - REST) * 0.4f
 
     internal fun publish(a: Float) {
         // Hand tremor is a degree or two: below that nothing is redrawn.
@@ -104,7 +110,8 @@ private class TiltListener(private val context: Context) : SensorEventListener {
         if (turn > 180f) turn -= 360f
         if (turn < -180f) turn += 360f
         // Lying flat there's no "up" on the screen: settle back to the resting light.
-        val upright = ((hypot(sx, sy) / SensorManager.GRAVITY_EARTH - 0.15f) / 0.35f).coerceIn(0f, 1f)
+        // Phones are held tilted back: full sway from about 15° off flat.
+        val upright = ((hypot(sx, sy) / SensorManager.GRAVITY_EARTH - 0.08f) / 0.18f).coerceIn(0f, 1f)
         // The light stays put, up and a little left, like Apple's: tilting only sways it, and a
         // bigger turn eases into the limit instead of carrying it round the element.
         SpecularLight.publish(SpecularLight.REST + MAX_SWAY * tanh(turn * GAIN / MAX_SWAY) * upright)
@@ -116,8 +123,8 @@ private class TiltListener(private val context: Context) : SensorEventListener {
         const val SMOOTH = 0.2f
         const val WARMUP = 8
         /** Livelier than the room's real up, so even small, ordinary handling visibly moves it. */
-        const val GAIN = 1.45f
+        const val GAIN = 2.2f
         /** How far the light can sway from rest, either way. */
-        const val MAX_SWAY = 35f
+        const val MAX_SWAY = 55f
     }
 }
