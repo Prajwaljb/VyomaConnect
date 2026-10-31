@@ -74,6 +74,7 @@ import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.perform
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material.icons.rounded.UnfoldMore
 import dev.vyoma.connect.designsystem.LiquidMenu
 import dev.vyoma.connect.designsystem.MenuItem
@@ -563,34 +564,37 @@ internal fun VolumeBar(
         onVolume((n * max).roundToInt())
     }
 
-    Column(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    // The level sits at the right edge, over the loud speaker it belongs to; the output on the left.
+    // 16 dp above, 12 between the rows, 12 below: the slider's knob needs the room it reaches into.
+    Column(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 10.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 36.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             val name = prettySinkName(sink.description)
             if (outputs != null) {
                 // Pressed, the glass capsule dips; it bleeds left by its padding so its text lines up.
                 Row(
                     Modifier
-                        .weight(3f, fill = false)
+                        .weight(1f, fill = false)
                         .offset(x = (-10).dp)
                         .semantics { contentDescription = "Output: $name. Choose output" }
                         .pressable(glass = true) { picking = true }
                         .glassRaised(CircleShape)
-                        .padding(start = 10.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                        .padding(start = 10.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     Icon(Icons.Rounded.UnfoldMore, null, tint = muted, modifier = Modifier.padding(start = 4.dp).size(18.dp))
                 }
-                Spacer(Modifier.weight(1f))
             } else {
-                Text(name, style = MaterialTheme.typography.labelLarge, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text(name, style = MaterialTheme.typography.labelLarge, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             }
             Text(
                 if (sink.muted) "Muted" else "${(level * 100).roundToInt()}%",
-                style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
-                modifier = Modifier.padding(start = 12.dp),
+                style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+                textAlign = TextAlign.End,
+                modifier = Modifier.padding(start = 16.dp).widthIn(min = 44.dp),
             )
         }
+        Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.AutoMirrored.Rounded.VolumeMute, null, tint = muted, modifier = Modifier.size(20.dp))
             LiquidSlider(

@@ -75,7 +75,7 @@ import dev.vyoma.connect.service.TransferLog
  * history a tap away. Clipboard sync runs by itself, so it no longer needs a tab of its own.
  */
 @Composable
-fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipboard: () -> Unit) {
+fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipboard: () -> Unit, onCaptures: () -> Unit = {}) {
     val context = LocalContext.current
     val status = LocalStatus.current
     val devices by vm.devices.collectAsStateWithLifecycle()
@@ -84,6 +84,7 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
     val running by Transfers.all.collectAsStateWithLifecycle()
     val recent by remember { TransferLog.recent(context) }.collectAsStateWithLifecycle()
     val clips by vm.clipHistory.collectAsStateWithLifecycle()
+    RefreshCaptures(null)
     val moving = running.filter { it.state == Transfer.State.RUNNING }
     val done = recent.orEmpty().take(RECENT_SHOWN)
 
@@ -140,7 +141,7 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
         item(key = "captures-label") { SectionLabel("Captures", Modifier.animateItem()) }
         item(key = "captures") {
             val plugin = remember(companion, pc?.identity?.deviceId, devices) { pc?.let { vm.companionOf(it.identity.deviceId) } }
-            CapturesStrip(refresh = null, onTake = plugin?.let { c -> { vm.capture(c.screenshot) } }, modifier = Modifier.animateItem())
+            CapturesStrip(onTake = plugin?.let { c -> { vm.capture(c.screenshot) } }, onSeeAll = onCaptures, modifier = Modifier.animateItem())
         }
 
         if (moving.isNotEmpty() || done.isNotEmpty()) {

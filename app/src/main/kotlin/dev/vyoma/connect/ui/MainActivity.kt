@@ -59,6 +59,7 @@ sealed interface Screen {
     /** The tabs (Home, Files, Settings) under the floating bar. */
     data object Home : Screen
     data object Clipboard : Screen
+    data object Captures : Screen
     data class DeviceDetail(val id: String) : Screen
     data class Touchpad(val deviceId: String?, val keyboard: Boolean) : Screen
     data class Files(val pcId: String, val path: String = "") : Screen
@@ -71,6 +72,7 @@ private val Screen.depth get() = when (this) {
     is Screen.Touchpad -> 2
     is Screen.Files -> 2
     Screen.Clipboard -> 1
+    Screen.Captures -> 1
 }
 
 class MainActivity : ComponentActivity() {
@@ -187,6 +189,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
             is Screen.Touchpad -> if (current.keyboard) "Keyboard" else "Touchpad"
             is Screen.Files -> "PC files"
             Screen.Clipboard -> "Clipboard"
+            Screen.Captures -> "Captures"
         }
     }
     val nav = remember { SeekableTransitionState<Screen>(current) }
@@ -260,11 +263,13 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                             onClipboard = { backStack.add(Screen.Clipboard) },
                             onBrowseFiles = { id -> backStack.add(Screen.Files(id)) },
                             onFiles = { toTab(Tab.FILES) },
+                            onCaptures = { backStack.add(Screen.Captures) },
                         )
                         Tab.FILES -> FilesHubScreen(
                             vm = vm,
                             onBrowse = { id, path -> backStack.add(Screen.Files(id, path)) },
                             onClipboard = { backStack.add(Screen.Clipboard) },
+                            onCaptures = { backStack.add(Screen.Captures) },
                         )
                         Tab.SETTINGS -> SettingsScreen(vm)
                     }
@@ -273,6 +278,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                 is Screen.Touchpad -> RemoteInputScreen(vm, screen.deviceId, screen.keyboard, onBack = pop)
                 is Screen.Files -> FilesScreen(vm, screen.pcId, onBack = pop, initialPath = screen.path)
                 Screen.Clipboard -> ClipboardScreen(vm, onBack = pop)
+                Screen.Captures -> CapturesScreen(onBack = pop)
             }
         } }
     }
