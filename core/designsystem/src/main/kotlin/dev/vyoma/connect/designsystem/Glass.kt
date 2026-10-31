@@ -179,11 +179,12 @@ class GlassDepth internal constructor(
 
 // Dark is true black (AMOLED): glass glows instead of casting shadows.
 private val DarkDepth = GlassDepth(
-    fill = Color.White.copy(alpha = 0.095f),
+    // Dark glass, so the lit edge has something to stand out from (lighter read as milky).
+    fill = Color.White.copy(alpha = 0.06f),
     // Bright, like Apple's: on true black the lit edge is what makes it glass.
     rimLit = Color.White.copy(alpha = 0.42f), rimBase = Color.White.copy(alpha = 0.06f),
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
-    glow = Color.White.copy(alpha = 0.05f),
+    glow = Color.White.copy(alpha = 0.04f),
     band = Color.White.copy(alpha = 0.42f),
 )
 private val LightDepth = GlassDepth(
