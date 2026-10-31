@@ -1,5 +1,8 @@
 package dev.vyoma.connect.service
 
+import android.app.NotificationManager
+import android.content.ClipboardManager
+import android.content.ClipData
 import android.app.Application
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -37,6 +40,18 @@ object Commands {
     const val STOP_RINGING = "dev.vyoma.connect.cmd.STOP_RINGING"
     const val DISMISS_TRANSFERS = "dev.vyoma.connect.cmd.DISMISS_TRANSFERS"
     const val EXTRA_DEVICE = "device"
+    /** Puts [EXTRA_TEXT] on this phone's clipboard and clears notification [EXTRA_NOTIFICATION]. */
+    const val COPY_TEXT = "dev.vyoma.connect.cmd.COPY_TEXT"
+    const val EXTRA_TEXT = "text"
+    const val EXTRA_NOTIFICATION = "notification"
+
+    fun copyPending(context: Context, text: String, notificationId: Int): PendingIntent = PendingIntent.getBroadcast(
+        context,
+        notificationId,
+        Intent(context, CommandReceiver::class.java).setAction(COPY_TEXT)
+            .putExtra(EXTRA_TEXT, text).putExtra(EXTRA_NOTIFICATION, notificationId),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     fun pending(context: Context, action: String, deviceId: String? = null): PendingIntent = PendingIntent.getBroadcast(
         context,
@@ -89,6 +104,12 @@ object Commands {
 class CommandReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
+        if (action == Commands.COPY_TEXT) {
+            val text = intent.getStringExtra(Commands.EXTRA_TEXT) ?: return
+            context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Vyoma", text))
+            context.getSystemService(NotificationManager::class.java).cancel(intent.getIntExtra(Commands.EXTRA_NOTIFICATION, 0))
+            return
+        }
         val pending = goAsync()
         val app = context.applicationContext as Application
         app.container.appScope.launch {

@@ -61,7 +61,7 @@ object Notifications {
 
     fun service(context: Context, connected: List<DeviceState>): Notification {
         val title = when (connected.size) {
-            0 -> "Looking for devices"
+            0 -> "Looking for your PC"
             1 -> "Connected to ${connected.first().identity.deviceName}"
             else -> "Connected to ${connected.size} devices"
         }
@@ -173,13 +173,18 @@ object Notifications {
 
     fun linkReceived(context: Context, from: String, url: String) {
         val open = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val id = ("url" + url).hashCode()
+        val openPending = PendingIntent.getActivity(context, url.hashCode(), open, PendingIntent.FLAG_IMMUTABLE)
         notify(
-            context, ("url" + url).hashCode(),
+            context, id,
             NotificationCompat.Builder(context, CH_RECEIVED)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("Link from $from")
                 .setContentText(url)
-                .setContentIntent(PendingIntent.getActivity(context, url.hashCode(), open, PendingIntent.FLAG_IMMUTABLE))
+                .setContentIntent(openPending)
+                // Often you want the link somewhere else than the browser: copying it is one tap too.
+                .addAction(0, "Open", openPending)
+                .addAction(0, "Copy", Commands.copyPending(context, url, id))
                 .setAutoCancel(true)
                 .build(),
         )

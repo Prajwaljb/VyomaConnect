@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.Haptic
+import dev.vyoma.connect.designsystem.PillButton
 import androidx.compose.runtime.getValue
 import android.app.Activity
 import android.app.PendingIntent
@@ -33,8 +35,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.PhoneAndroid
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -78,7 +78,7 @@ class ClipboardActivity : Activity() {
         }
         val targets = c.hub.value?.devices?.value?.values?.filter { it.state.value.isPaired && it.state.value.isReachable }.orEmpty()
         if (targets.isEmpty()) {
-            Toast.makeText(this, "No PC connected", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "No PC connected. Open Vyoma to connect.", Toast.LENGTH_SHORT).show()
         } else {
             c.appScope.launch { targets.forEach { it.plugin<ClipboardPlugin>(ClipboardPlugin.ID)?.push(text) } }
             Toast.makeText(this, "Clipboard sent to ${targets.joinToString { it.name }}", Toast.LENGTH_SHORT).show()
@@ -131,7 +131,8 @@ class ShareActivity : ComponentActivity() {
         val c = application.container
         val target = Commands.primary(c)
         if (target == null) {
-            Toast.makeText(this, "No PC connected", Toast.LENGTH_SHORT).show()
+            // Says what to do, not just that it failed.
+            Toast.makeText(this, "No PC connected. Open Vyoma to connect, then share again.", Toast.LENGTH_LONG).show()
             return
         }
         val service = Intent(this, LinkService::class.java).setAction(LinkService.ACTION_SEND)
@@ -218,11 +219,12 @@ private fun RingingScreen(from: String, onStop: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             Text("$from is looking for this phone", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Button(
+        PillButton(
+            "Found it",
             onClick = onStop,
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(24.dp).fillMaxWidth().height(60.dp),
-            shape = MaterialTheme.shapes.extraLarge,
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-        ) { Text("Found it", style = MaterialTheme.typography.titleMedium) }
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(24.dp).fillMaxWidth(),
+            large = true,
+            haptic = Haptic.Success,
+        )
     }
 }
