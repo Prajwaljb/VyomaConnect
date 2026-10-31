@@ -10,10 +10,10 @@ soft accent-tinted canvas, colorful feature icons, a floating glass tab bar. **P
 per-frame blur except on chrome that content scrolls under, and measure with `dumpsys gfxinfo` after visual changes.
 
 ## Glass (core/designsystem/Glass.kt)
-- Canvas: `Modifier.aurora()` (theme background + two cached accent glows; in pure black a tighter glow that
-  leaves the bottom true black). No decorative textures (stars were tried and rejected: too specific).
-- Depth tokens: `glassDepth` (`GlassDepth` Dark / Amoled / Light) drive every surface so the themes stay consistent.
-- Cards: `Modifier.glassCard(shape, fill?)` = a translucent even sheet (white 8.5% dark / 9.5% true black / 72% light;
+- Canvas: `Modifier.aurora()` (light: theme background + two cached accent glows; dark: true black, no glow).
+  Dark mode IS pure black (AMOLED); there's no separate grey dark theme or toggle. No decorative textures (stars were tried and rejected: too specific).
+- Depth tokens: `glassDepth` (`GlassDepth` Dark (true black) / Light) drive every surface so the themes stay consistent.
+- Cards: `Modifier.glassCard(shape, fill?)` = a translucent even sheet (white 9.5% dark / 72% light;
   the user found opaque #1C1C1E "too grey" once cards had lit edges), faint shadow in light mode. Edge: a faint tilt-lit SWEEP hairline (`specularRim`; the user found a
   linear-gradient rim misaligned) plus, in the dark, a soft glow on the lit side baked INTO the fill as one radial
   gradient (a separate glow pass over the card cost 0.4 ms GPU/frame; in-fill is ~free). Measured ≈ +0.1–0.2 ms.
@@ -97,7 +97,11 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Type: bundled Inter variable (`res/font/inter.ttf`, OFL in `core/designsystem/licenses`): display optical size
   for title/headline/display styles, text cut below; tight negative tracking on large sizes; `tnum` for live numbers.
 - `VyomaTheme(ThemeSettings)`: palettes `DYNAMIC` (wallpaper accent, neutral surfaces), `OCEAN`, `GRAPHITE`, `EMBER`,
-  `MINT`, `SAND`; DarkMode SYSTEM/LIGHT/DARK; `amoled` = true black.
+  `MINT`, `SAND`; DarkMode SYSTEM/LIGHT/DARK (dark = true black).
+- Lighter glass: `GlassQuality.lite` (set by the app from Settings > Lighter glass, or by `FrameBudget` when the
+  median scrolling frame takes ≥2.2x the refresh interval twice running). `glassChrome` then draws a 92% frosted
+  fill + edge instead of blur/refraction (read in the draw phase, so it switches live); gauges jump, no glide.
+  Every new live-glass element must honour it.
 - Canvas `aurora()`, cards `glassCard`, raised chips `glassRaised`, dialogs `GlassDialog`.
 - Status colors via `Status.connected/pending/offline(dark)`, the same in every palette.
 - Contrast (user asked for more, 2026-10-31): text #F7F8FA / #0B0C0E, secondary #AEB3BB / #50565F, light canvas

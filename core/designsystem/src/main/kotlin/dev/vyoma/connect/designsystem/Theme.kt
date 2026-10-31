@@ -36,13 +36,12 @@ enum class DarkMode { SYSTEM, LIGHT, DARK }
 data class ThemeSettings(
     val palette: Palette = Palette.DYNAMIC,
     val darkMode: DarkMode = DarkMode.SYSTEM,
-    val amoled: Boolean = false,
 )
 
-// One UI-like neutral surfaces: soft gray canvas, bright cards that stand clearly off it.
+// One UI-like neutral surfaces: soft gray canvas, bright cards that stand clearly off it. Dark is
+// true black (AMOLED): pixels off, glass cards lit against it.
 private val LightCanvas = Color(0xFFEDEEF2)
 private val LightCard = Color(0xFFFFFFFF)
-private val DarkCanvas = Color(0xFF0E0F11)
 private val DarkCard = Color(0xFF1C1C1E)
 
 @Composable
@@ -74,7 +73,7 @@ private fun buildScheme(settings: ThemeSettings, dark: Boolean, dynamic: ColorSc
     // Material You's accents are muted; a little more colour at the same lightness reads crisper
     // without changing how legible a label on it is.
     val accent = dynamic?.primary?.saturate(1.35f) ?: if (dark) settings.palette.dark else settings.palette.light
-    val canvas = if (dark) { if (settings.amoled) Color.Black else DarkCanvas } else LightCanvas
+    val canvas = if (dark) Color.Black else LightCanvas
     val card = if (dark) DarkCard else LightCard
     // Secondary text is where contrast was weakest: lifted toward the primary, still clearly second.
     val onSurface = if (dark) Color(0xFFF7F8FA) else Color(0xFF0B0C0E)
