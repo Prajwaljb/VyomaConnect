@@ -45,7 +45,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.material.icons.rounded.Screenshot
+import androidx.compose.material.icons.rounded.ScreenShare
 import dev.vyoma.connect.protocol.plugin.builtin.CaptureState
 import kotlin.math.abs
 import kotlin.math.sign
@@ -308,18 +308,14 @@ fun PcDashboard(
                 // One job per button. Send drops phone files in the PC's Downloads (works with plain KDE
                 // Connect); PC files browses and uploads into a chosen folder, which needs the companion.
                 // Slots never move: the companion swaps Clipboard (also a tile and a tab) for PC files,
-                // Ping for Screenshot and Find PC for Camera (both stay in the PC's details).
+                // Ping for Screen and Find PC for Camera (both stay in the PC's details).
                 Control(Icons.Rounded.UploadFile, "Send", SystemColor.CYAN) { vm.pickFiles(context) },
                 if (shots != null) Control(Icons.Rounded.Folder, "PC files", SystemColor.BLUE, onClick = onBrowseFiles)
                 else Control(Icons.Rounded.ContentPaste, "Clipboard", SystemColor.ORANGE, onClick = onClipboard),
                 // The touchpad has its own round button by the tab bar; this opens the same screen ready to type.
                 Control(Icons.Rounded.Keyboard, "Keyboard", SystemColor.TEAL, onClick = onTouchpad),
-                if (shots != null) Control(
-                    Icons.Rounded.Screenshot,
-                    if (shot == CaptureState.Capturing) "Capturing" else "Screenshot",
-                    SystemColor.PINK,
-                    active = shot == CaptureState.Capturing,
-                ) { vm.capture(shots.screenshot) }
+                // The live screen; its shutter takes full-resolution screenshots.
+                if (shots != null) Control(Icons.Rounded.ScreenShare, "Screen", SystemColor.PINK) { PcScreenActivity.open(context, id) }
                 else Control(Icons.Rounded.Sensors, "Ping", SystemColor.GREEN) { vm.ping(id) },
                 Control(
                     if (pc.locked == true) Icons.Rounded.Lock else Icons.Rounded.LockOpen,

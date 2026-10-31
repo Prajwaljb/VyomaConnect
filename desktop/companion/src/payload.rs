@@ -18,7 +18,16 @@ use crate::link::Sender;
 
 const PAYLOAD_PORTS: std::ops::RangeInclusive<u16> = 1739..=1764;
 
-pub async fn offer(sender: &Sender, me: &Identity, pinned: &[u8], mut packet: Value, size: u64, mut source: impl AsyncRead + Unpin) -> Result<()> {
+pub async fn offer(sender: &Sender, me: &Identity, pinned: &[u8], packet: Value, size: u64, source: impl AsyncRead + Unpin) -> Result<()> {
+    offer_sized(sender, me, pinned, packet, size as i64, source).await
+}
+
+/// An open-ended payload (`payloadSize` -1): streams until [source] ends or the phone hangs up.
+pub async fn offer_stream(sender: &Sender, me: &Identity, pinned: &[u8], packet: Value, source: impl AsyncRead + Unpin) -> Result<()> {
+    offer_sized(sender, me, pinned, packet, -1, source).await
+}
+
+async fn offer_sized(sender: &Sender, me: &Identity, pinned: &[u8], mut packet: Value, size: i64, mut source: impl AsyncRead + Unpin) -> Result<()> {
     let listener = bind().await?;
     packet["payloadSize"] = json!(size);
     packet["payloadTransferInfo"] = json!({ "port": listener.local_addr()?.port() });
