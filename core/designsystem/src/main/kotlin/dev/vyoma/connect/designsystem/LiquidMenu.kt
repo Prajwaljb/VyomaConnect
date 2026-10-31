@@ -27,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -63,6 +64,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.layer.CompositingStrategy as LayerCompositing
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -126,6 +128,9 @@ class MenuController {
         request = MenuRequest(++seq, from, fromRadius, items, title, morph)
     }
 
+    /** True while a menu is up. The page under it is a cached texture then, and every change to it re-renders the whole of it. */
+    val isOpen: Boolean get() = request != null
+
     /** True while [owner]'s menu stands in for it (read it in a graphicsLayer to hide the element). */
     fun covers(owner: Any): Boolean = request?.morph?.owner === owner
 }
@@ -142,10 +147,19 @@ val LocalMenu = staticCompositionLocalOf { MenuController() }
 fun MenuHost(content: @Composable () -> Unit) {
     val controller = remember { MenuController() }
     val backdrop = rememberBackdrop()
+    // The page holds still under a menu, so it's rendered once into a cached texture: each frame of
+    // the pour then draws that texture twice (on screen, and into the glass) instead of replaying
+    // the whole page, cards, glows and chrome glass included, twice. Only kept while a menu is up.
+    val open = controller.request != null
+    SideEffect { backdrop.layer.compositingStrategy = if (open) LayerCompositing.Offscreen else LayerCompositing.Auto }
     CompositionLocalProvider(LocalMenu provides controller) {
         Box(Modifier.fillMaxSize()) {
-            // Recording costs a little every frame, so only while a menu is open.
-            Box(Modifier.fillMaxSize().then(if (controller.request != null) Modifier.backdropSource(backdrop) else Modifier)) { content() }
+            // Always recorded: it re-runs only when the page's own layer redraws, which it does anyway,
+            // and switching it on as a menu opened re-recorded the whole page in that first frame
+            // (~7 ms). The page and the menu each get their own layer: sharing the root one, every
+            // frame of the menu re-ran this recording, which marked the cached page dirty, and the
+            // whole page was drawn again.
+            Box(Modifier.fillMaxSize().graphicsLayer().backdropSource(backdrop)) { content() }
             controller.request?.let { r ->
                 key(r.id) { MenuOverlay(r, backdrop) { if (controller.request?.id == r.id) controller.request = null } }
             }
@@ -231,6 +245,7 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
     Box(
         Modifier
             .fillMaxSize()
+            .graphicsLayer()
             .drawBehind {
                 val a = scrim.value.coerceIn(0f, 1f) * SCRIM
                 if (a < 0.005f) return@drawBehind
@@ -239,8 +254,13 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                 val hole = Path().apply { addRoundRect(RoundRect(r.from, CornerRadius(r.fromRadius.toPx()))) }
                 clipPath(hole, ClipOp.Difference) { drawRect(Color.Black, alpha = a) }
             }
-            // Closing, touches already reach the page again.
-            .then(if (closing) Modifier else Modifier.pointerInput(Unit) { detectTapGestures { close() } }),
+            // Closing, the page stays still until the drop is home: a scroll under the draining
+            // glass slid the element away from where it was flowing back to.
+            .then(
+                if (closing) Modifier.pointerInput(Unit) {
+                    awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
+                } else Modifier.pointerInput(Unit) { detectTapGestures { close() } },
+            ),
     ) {
         Box(
             Modifier

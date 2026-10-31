@@ -927,10 +927,12 @@ private fun PcStatus(battery: BatteryState?, stale: Boolean, stats: PcStats?, sh
 private fun rememberGlide(fraction: Float): androidx.compose.runtime.FloatState {
     val step = (fraction.coerceIn(0f, 1f) * 100).roundToInt() / 100f
     val value = remember { mutableFloatStateOf(step) }
+    val menus = LocalMenu.current
     LaunchedEffect(step) {
         val from = value.floatValue
-        // Lighter glass: every frame of a glide costs too much on this phone, so it jumps too.
-        if (abs(step - from) < 0.03f || GlassQuality.lite) {
+        // Lighter glass: every frame of a glide costs too much on this phone, so it jumps too. Under
+        // a menu (dimmed, and the page cached) each frame re-rendered the whole page: it jumps there too.
+        if (abs(step - from) < 0.03f || GlassQuality.lite || menus.isOpen) {
             value.floatValue = step
             return@LaunchedEffect
         }

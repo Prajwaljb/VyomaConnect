@@ -263,7 +263,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   past 60% formed. Closing: items (110 ms) and the glass fade together while the drop drains toward the element,
   height first (critically damped 340) and width after (220), no bounce; the glass is fully transparent by 35%
   drained and the menu ends there (draining all the way, it sat over the button as an opaque blurred blob and then
-  vanished: the user called it glitchy). Touches pass through the moment it starts closing. The pressed element
+  vanished: the user called it glitchy). While it closes the overlay swallows touches, so the page can't scroll until the drop is home (user request). The pressed element
   stays undimmed (scrim has a hole). Tiles MORPH instead (`MenuMorph(owner, color, face)`): the tile hides
   (`covers(owner)`), the drop starts as an exact copy (its colour + `TileFace`, held in place) whose colour clears
   into glass over the first half of forming, corners 16 -> 24 dp; closing drains fully back, refills the colour,
@@ -327,6 +327,13 @@ Short, friendly, specific ("Connected via Wi-Fi", "Make sure this code matches o
 - Check: `/proc/<pid>/stat` ticks over 60 s in background (target ≲ 20 ticks), `dumpsys wifi` for locks.
 
 ## Rendering cost (glass makes every redraw expensive)
+- Menus (`MenuHost`): the page and the overlay each have their own `graphicsLayer()`. Sharing the root layer, every
+  menu frame re-ran the backdrop recording and re-rendered the whole page. While a menu is up the backdrop layer is
+  `Offscreen` (a cached texture drawn twice: on screen and into the glass); recording stays on always (toggling it
+  re-recorded the page, ~7 ms). Measured: pour frames' GPU median 8.4 -> ~5 ms. Anything that changes the page under a
+  menu re-renders the whole texture (~10-15 ms), so hand-paced glides (`rememberGlide`) jump while `menus.isOpen`.
+- Tried and dropped: quarter-res `scrollEdge` blur (no measurable gain; Skia already downsamples big blurs).
+  Compare builds A/B alternately (`ab.sh`-style), never one after another: thermal drift is as big as the effect.
 - Every chrome element replays the page behind it, so a page-level offscreen buffer is multiplied by the number of
   glass elements. Never fade pages/large content with a default layer alpha: use
   `compositingStrategy = CompositingStrategy.ModulateAlpha`, or draw a shade (push/pop dims the page below this way).
