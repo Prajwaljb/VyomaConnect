@@ -1,6 +1,9 @@
 package dev.vyoma.connect.ui
 
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import dev.vyoma.connect.designsystem.glassCard
 import androidx.compose.material.icons.automirrored.rounded.SendToMobile
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -22,7 +25,6 @@ import dev.vyoma.connect.designsystem.toned
 import dev.vyoma.connect.protocol.plugin.builtin.RemotePlayer
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.rounded.Movie
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedContent
@@ -58,7 +60,6 @@ import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -121,10 +122,11 @@ fun ActionGrid(actions: List<Triple<ImageVector, String, () -> Unit>>, columns: 
 }
 
 /**
- * Now-playing card, compact like iOS's: the artwork as a thumbnail beside the title and artist, a
- * thin scrubber, and plain glyph controls, on a deep colour sampled from the artwork (a deep shade
- * of the accent without art). Continue on phone is a round button at the end of the title row,
- * where Apple Music keeps AirPlay. (A full-bleed artwork card was felt to be too big.)
+ * Now-playing card, compact like an iOS widget: the artwork fills the left side edge to edge and
+ * melts into a deep colour sampled from it; the title, a thin scrubber and the controls sit on the
+ * right, with Continue on phone as a round button beside the title. The card is the same lit glass
+ * as the others (tilt-lit rim, lit-side glow). A full-bleed artwork card was felt to be too big, and
+ * a thumbnail in a plain card too plain.
  */
 @Composable
 fun MediaCard(
@@ -154,112 +156,123 @@ fun MediaCard(
     }
     val art = prepared?.first
     val tint by animateColorAsState(prepared?.second ?: accent.toned(0.8f, 0.2f), VyomaMotion.effects(), label = "tint")
-    Surface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large, color = tint) {
-        Column(Modifier.animateContentSize(VyomaMotion.spatial()).padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                ArtTile(art, p, accent)
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(p.title.ifBlank { p.name }, style = MaterialTheme.typography.titleMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    val sub = listOf(p.artist, p.album).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { p.name.takeIf { p.title.isNotBlank() }.orEmpty() }
-                    if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                if (onContinueHere != null) {
-                    Spacer(Modifier.width(8.dp))
-                    Box(
-                        Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.14f))
-                            .pressable(onClick = onContinueHere)
-                            .semantics { contentDescription = "Continue on phone" },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(Icons.AutoMirrored.Rounded.SendToMobile, null, tint = Color.White, modifier = Modifier.size(20.dp))
+    val shape = MaterialTheme.shapes.large
+    Column(
+        modifier
+            .fillMaxWidth()
+            // The cards' glass: lit-side glow in the fill, and the tilt-lit rim drawn over everything
+            // (the artwork included) so the edge reads as one pane.
+            .specularEdge(shape, 1.dp, Color.White.copy(alpha = 0.4f), Color.White.copy(alpha = 0.07f))
+            .glassCard(shape, fill = tint)
+            .animateContentSize(VyomaMotion.spatial()),
+    ) {
+        Box(Modifier.fillMaxWidth()) {
+            // The artwork fills the card's left side, edge to edge, melting into the card's colour.
+            Box(Modifier.matchParentSize()) {
+                ArtPanel(art, p, accent, tint, Modifier.width(ART_WIDTH).fillMaxHeight())
+            }
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = ART_WIDTH)
+                    .padding(start = ART_WIDTH + 12.dp, end = 10.dp, top = 12.dp, bottom = 4.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(verticalAlignment = Alignment.Top) {
+                    Column(Modifier.weight(1f).padding(top = 2.dp)) {
+                        Text(p.title.ifBlank { p.name }, style = MaterialTheme.typography.titleMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val sub = listOf(p.artist, p.album).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { p.name.takeIf { p.title.isNotBlank() }.orEmpty() }
+                        if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (onContinueHere != null) {
+                        Spacer(Modifier.width(6.dp))
+                        Box(
+                            Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.14f))
+                                .pressable(onClick = onContinueHere)
+                                .semantics { contentDescription = "Continue on phone" },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.AutoMirrored.Rounded.SendToMobile, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        }
                     }
                 }
-            }
-            Column(Modifier.padding(end = 4.dp)) {
                 // Browsers blank the length for a moment now and then (ads, hover previews): keep the track's last one.
                 val length = remember(p.name, p.title) { mutableLongStateOf(0L) }
                 if (p.lengthMs > 0 && length.longValue != p.lengthMs) length.longValue = p.lengthMs
-                if (length.longValue > 0) {
-                    Spacer(Modifier.height(6.dp))
-                    Scrubber(np, length.longValue, tint, onSeek)
-                } else {
-                    Spacer(Modifier.height(4.dp))
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                if (length.longValue > 0) Scrubber(np, length.longValue, tint, onSeek)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                     MediaButton(Icons.Rounded.SkipPrevious, "Previous", enabled = p.canPrevious, onClick = onPrevious)
-                    Spacer(Modifier.width(28.dp))
-                    BounceIconButton(onClick = onPlayPause, size = 56.dp) {
+                    BounceIconButton(onClick = onPlayPause, size = 52.dp) {
                         AnimatedContent(p.isPlaying, transitionSpec = { (scaleIn() + fadeIn()).togetherWith(scaleOut() + fadeOut()) }, label = "ppicon") { playing ->
-                            Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playing) "Pause" else "Play", tint = Color.White, modifier = Modifier.size(42.dp))
+                            Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playing) "Pause" else "Play", tint = Color.White, modifier = Modifier.size(40.dp))
                         }
                     }
-                    Spacer(Modifier.width(28.dp))
                     MediaButton(Icons.Rounded.SkipNext, "Next", enabled = p.canNext, onClick = onNext)
                 }
-                if (showVolume && p.volume >= 0) {
-                    var vol by remember(p.name) { mutableFloatStateOf(p.volume.toFloat()) }
-                    var dragging by remember { mutableStateOf(false) }
-                    LaunchedEffect(p.volume) { if (!dragging) vol = p.volume.toFloat() }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.AutoMirrored.Rounded.VolumeUp, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
-                        LiquidSlider(
-                            value = { vol / 100f },
-                            onChange = { dragging = true; vol = it * 100f; onVolume(vol.toInt()) },
-                            onDone = { dragging = false },
-                            modifier = Modifier.padding(start = 10.dp).weight(1f),
-                            underlay = tint,
-                        )
-                    }
-                }
-                if (np.players.size > 1) {
-                    Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 2.dp, bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        np.players.forEach { name ->
-                            val selected = name == p.name
-                            Text(
-                                name,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (selected) tint else Color.White,
-                                modifier = Modifier.clip(CircleShape)
-                                    .background(if (selected) Color.White else Color.White.copy(alpha = 0.14f))
-                                    .pressable { onPickPlayer(name) }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                            )
-                        }
-                    }
+            }
+        }
+        if (showVolume && p.volume >= 0) {
+            var vol by remember(p.name) { mutableFloatStateOf(p.volume.toFloat()) }
+            var dragging by remember { mutableStateOf(false) }
+            LaunchedEffect(p.volume) { if (!dragging) vol = p.volume.toFloat() }
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.AutoMirrored.Rounded.VolumeUp, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                LiquidSlider(
+                    value = { vol / 100f },
+                    onChange = { dragging = true; vol = it * 100f; onVolume(vol.toInt()) },
+                    onDone = { dragging = false },
+                    modifier = Modifier.padding(start = 10.dp).weight(1f),
+                    underlay = tint,
+                )
+            }
+        }
+        if (np.players.size > 1) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                np.players.forEach { name ->
+                    val selected = name == p.name
+                    Text(
+                        name,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (selected) tint else Color.White,
+                        modifier = Modifier.clip(CircleShape)
+                            .background(if (selected) Color.White else Color.White.copy(alpha = 0.14f))
+                            .pressable { onPickPlayer(name) }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
                 }
             }
         }
     }
 }
 
-/** The artwork thumbnail, or without art a deep accent tile with the player's glyph. */
+/**
+ * The card's left side: the artwork filling it edge to edge, its right edge fading into the card's
+ * [tint]; without art, a deep accent panel with the player's glyph.
+ */
 @Composable
-private fun ArtTile(art: Bitmap?, p: RemotePlayer, accent: Color) {
-    val tile = RoundedCornerShape(12.dp)
-    Box(
-        Modifier
-            .size(56.dp)
-            .specularEdge(tile, 0.8.dp)
-            .clip(tile)
-            .background(Brush.linearGradient(listOf(accent.toned(1.2f, 0.62f), accent.toned(1.2f, 0.46f)))),
-        contentAlignment = Alignment.Center,
-    ) {
-        Crossfade(art, label = "art") { a ->
+private fun ArtPanel(art: Bitmap?, p: RemotePlayer, accent: Color, tint: Color, modifier: Modifier) {
+    Box(modifier.background(Brush.linearGradient(listOf(accent.toned(1.2f, 0.58f), accent.toned(1.2f, 0.42f))))) {
+        Crossfade(art, Modifier.fillMaxSize(), label = "art") { a ->
             if (a != null) {
                 Image(a.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             } else {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     val video = VIDEO_PLAYERS.any { p.name.contains(it, ignoreCase = true) }
-                    Icon(if (video) Icons.Rounded.Movie else Icons.Rounded.MusicNote, null, tint = Color.White, modifier = Modifier.size(28.dp))
+                    Icon(if (video) Icons.Rounded.Movie else Icons.Rounded.MusicNote, null, tint = Color.White, modifier = Modifier.size(40.dp))
                 }
             }
         }
+        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0.72f to Color.Transparent, 1f to tint)))
     }
 }
+
+private val ART_WIDTH = 132.dp
 
 /** Players that are mostly for video, so their tile shows a film glyph rather than a note. */
 private val VIDEO_PLAYERS = listOf("mpv", "vlc", "celluloid", "totem", "haruna", "smplayer", "mplayer", "kodi", "showtime", "dragon")
