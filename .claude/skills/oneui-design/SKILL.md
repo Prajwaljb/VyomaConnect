@@ -11,17 +11,23 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 
 ## Glass (core/designsystem/Glass.kt)
 - Wide windows (landscape, tablets): `CollapsingHeaderScaffold` centres a column of at most `MaxContentWidth` (560 dp).
-- Dashboard actions (judge option A, user-approved 2026-10-31): SIX one-shot actions as filled Shortcuts tiles
-  (16 dp radius, 12 dp card pad, 8 gap; tile size from `BoxWithConstraints`) + Lock/Mute in ONE 2-wide glass toggle
-  module (bottom right): halves clear with a coloured glyph when off, filled when on. An ON toggle must never look
-  like an action. Slots: Send files (live progress ring; long-press = photo picker) · PC files|Files tab · Screen
-  (long-press = screenshot)|Ping · Camera|Send clipboard (long-press = history) / Find PC · Commands (chevron; long-press
-  = last-run command) · [Lock|Mute]. No Keyboard tile (the touchpad button opens it). Hues stay off the meters'
-  green/yellow/red: Ping CYAN, Camera ORANGE, Find PC TEAL. Mid-luminance tiles use `toned(lightness = 0.38)` (mixing
-  black turned orange brown). Volume capsule width = one tile column + card pad (`deckVolumeWidth()`), edges line up.
-- Long presses are watery (`Modifier.liquidPress`, designsystem/Hold.kt): after 120 ms the element swells 7% and
-  becomes a `liquidLens` of itself, filling to the long-press timeout; fires with `Haptic.Hold` + overshoot, wobbles
-  back on `release()`. Lens only while HELD (plain taps keep no lens, as the user decided before).
+- Dashboard actions (user-approved 2026-10-31): SIX one-shot actions as filled Shortcuts tiles (16 dp radius, 12 dp
+  card pad, 8 gap; tile size from `BoxWithConstraints`) + Lock and Mute as two SEPARATE square switch tiles (clear
+  glass with a coloured glyph when off, filled when on; `ToggleTile`). A 2-wide shared module was tried: the halves
+  didn't read as two ("bad implementation"). An ON switch must never look like an action. Slots: Send files (live
+  progress ring) · PC files|Files tab · Screen|Ping · Camera|Send clip / Find PC · Commands (chevron) · Lock · Mute.
+  No Keyboard tile. Hues off the meters' scale: Ping CYAN, Camera ORANGE, Find PC TEAL. Mid-luminance tiles use
+  `toned(lightness = 0.38)` (mixing black turned orange brown). 
+- Long press = a `LiquidMenu` (designsystem/LiquidMenu.kt) that POURS OUT of the pressed element: it starts as the
+  element's own rect and radius, width on `leading()`, height on `jelly()`, into a 240 dp menu above (or below) it,
+  with a tilt-lit rim, inner light band and soft shadow; items fade in once formed; dismissing flows it back into the
+  element. The element itself only dips (`liquidPress`): a lens over the button was rejected ("doesn't even match the
+  shape"). Menus: Send files (files / photos / clipboard), Screen (watch / screenshot), Send clip (send / history),
+  Commands (the commands themselves).
+- Pages earn their scroll with real content, never empty space (user: "make that content, make it impressive").
+  Home after the tiles: "Run on PC" command capsules and "Captures" (Pictures/Vyoma thumbnails, `CapturesStrip`).
+  Files: Send (three big tiles: Files / Photos / Clipboard), On the PC (Desktop, Documents, Downloads, Pictures, Music,
+  Videos tiles + Browse everything), Captures, Transfers, Clipboard.
 - (Old) Dashboard actions: Apple Shortcuts-widget tiles, 4 across in one card, concentric corners (18 dp tile + 10 dp pad), white
   ink (dark on yellow-bright tones; tones of luminance 0.2–0.5 darkened 22% for 4.5:1), labels 12 sp. Toggle tiles keep
   fill AND name when on ("Locked", "Muted"): the user wants the state in words (a judge suggested constant labels; rejected).
@@ -179,17 +185,14 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - One job per button, named for what it does ("Send", "PC files", "Upload here"), never one button whose meaning
   changes with state. No two buttons on the same screen open the same thing. When a feature appears only
   sometimes (companion online), swap it into a fixed slot so the other buttons never move.
-- Where things live (IA, user-approved Control Center layout 2026-10-31): Home is the PC's control surface (same hero
-  height as every page, so its tiles run under the tab bar's glass): the PC's NAME is the hero (no glyph; subtitle = transport, or "Away · seen 12 min. ago"), ONE status
-  card (battery ring + CPU/RAM/GPU/Temp meters with the companion), then the deck: media card (art 92 dp; "Not
-  playing" card holds its place) beside the PC volume as a tall `VolumeCapsule` (80 dp wide, fills from the bottom,
-  relative vertical drag, tap = output list dialog; no chip rows), then the tile card (Send files rings while files move; the
-  Transfers list lives in the Files tab) (8th = Commands sheet). A paired PC that's AWAY keeps Home: an AwayCard (Try
-  again + Use USB), dimmed cached status, no deck, tiles at 40% and untappable. Files tab: Send / Browse PC files,
-  Transfers (running with capsule progress, then the `TransferLog` of finished ones; incoming open on tap), the 3
-  latest clips + "All clipboard history". PC details (header "i") leads with Connection (Link + Ping, Find this
-  PC + Ring, battery), then one Commands row, then Security. Never duplicate Home's controls there. Header shows
-  Refresh only while no PC is known.
+- Where things live (IA): Home is the PC's control surface, stacked (the Control Center deck with a vertical volume
+  capsule was built and SCRAPPED by the user, 2026-10-31): the PC's NAME is the hero (no glyph; subtitle = transport,
+  or "Away · seen 12 min. ago"), ONE status card (battery ring + CPU/RAM/GPU/Temp meters with the companion), the
+  media card (only while something plays), the volume card (output name as a capsule that opens the output list;
+  no chip rows), the tile card, then "Run on PC" command capsules and "Captures". A paired PC that's AWAY keeps Home:
+  an AwayCard (Try again + Use USB), dimmed cached status, no media/volume, tiles at 40% and untappable. Files tab:
+  Send tiles, On the PC folders, Captures, Transfers, latest clips + "All clipboard history". PC details (header
+  "i") leads with Connection (Link + Ping, Find this PC + Ring, battery), then one Commands row, then Security.
 - Outcomes show in the status bubble (`LocalStatus.current.show(text, icon?, failure?, haptic?)`, designsystem/Status.kt):
   an opaque glass capsule that drops from the top, swells on jelly, holds 1.6 s (2.6 s for failures). Never Toast
   inside MainActivity (separate small activities and the VM still toast: they have no bubble host). Pass

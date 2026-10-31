@@ -61,7 +61,7 @@ sealed interface Screen {
     data object Clipboard : Screen
     data class DeviceDetail(val id: String) : Screen
     data class Touchpad(val deviceId: String?, val keyboard: Boolean) : Screen
-    data class Files(val pcId: String) : Screen
+    data class Files(val pcId: String, val path: String = "") : Screen
 }
 
 /** How deep a screen sits; deeper means the transition is a push. */
@@ -263,7 +263,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                         )
                         Tab.FILES -> FilesHubScreen(
                             vm = vm,
-                            onBrowse = { id -> backStack.add(Screen.Files(id)) },
+                            onBrowse = { id, path -> backStack.add(Screen.Files(id, path)) },
                             onClipboard = { backStack.add(Screen.Clipboard) },
                         )
                         Tab.SETTINGS -> SettingsScreen(vm)
@@ -271,7 +271,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                 }
                 is Screen.DeviceDetail -> DeviceScreen(vm, screen.id, onBack = pop)
                 is Screen.Touchpad -> RemoteInputScreen(vm, screen.deviceId, screen.keyboard, onBack = pop)
-                is Screen.Files -> FilesScreen(vm, screen.pcId, onBack = pop)
+                is Screen.Files -> FilesScreen(vm, screen.pcId, onBack = pop, initialPath = screen.path)
                 Screen.Clipboard -> ClipboardScreen(vm, onBack = pop)
             }
         } }

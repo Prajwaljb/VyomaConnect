@@ -74,6 +74,14 @@ import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.perform
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.material.icons.rounded.UnfoldMore
+import dev.vyoma.connect.designsystem.LiquidMenu
+import dev.vyoma.connect.designsystem.MenuItem
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.Screenshot
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.platform.LocalConfiguration
 import dev.vyoma.connect.designsystem.MaxContentWidth
@@ -319,7 +327,7 @@ fun PcDashboard(
         }
         // Everything about sound in one place: the level, and where it plays when there's a choice.
         DashboardSection.VOLUME -> pc.sink?.let { sink ->
-            VolumeCapsule(
+            VolumeBar(
                 sink, onVolume = { vm.setSinkVolume(id, sink.name, it) }, modifier,
                 outputs = pc.sinks.takeIf { it.size > 1 }, onOutput = { vm.makeSinkDefault(id, it.name) },
             )
@@ -341,27 +349,50 @@ fun PcDashboard(
           val sending = moving.takeIf { it.isNotEmpty() }?.let { m -> m.sumOf { it.doneBytes }.toFloat() / m.sumOf { it.totalBytes }.coerceAtLeast(1) }
           ControlGrid(
             actions = listOf(
-                // One job per tap, a second on a long press (held like water, see liquidPress). Slots
-                // never move: without the companion, PC files becomes Files (the tab), Screen becomes
-                // Ping and Camera becomes Send clipboard. Hues stay off the meters' green/yellow/red.
-                Control(Icons.Rounded.UploadFile, "Send files", SystemColor.BLUE, progress = sending, longLabel = "Send photos", onLong = { vm.pickPhotos(context) }) { vm.pickFiles(context) },
+                // One job per tap; a long press pours out a liquid glass menu of the tile's other jobs
+                // (LiquidMenu). Slots never move: without the companion, PC files becomes Files (the
+                // tab), Screen becomes Ping and Camera becomes Send clip. Hues stay off the meters'
+                // green/yellow/red.
+                Control(
+                    Icons.Rounded.UploadFile, "Send files", SystemColor.BLUE, progress = sending,
+                    menu = listOf(
+                        MenuItem("Choose files", Icons.Rounded.UploadFile) { vm.pickFiles(context) },
+                        MenuItem("Photos and videos", Icons.Rounded.PhotoLibrary) { vm.pickPhotos(context) },
+                        MenuItem("What's copied", Icons.Rounded.ContentPasteGo) {
+                            if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied to send", failure = true)
+                        },
+                    ),
+                ) { vm.pickFiles(context) },
                 if (shots != null) Control(Icons.Rounded.Folder, "PC files", SystemColor.BLUE, onClick = onBrowseFiles)
                 else Control(Icons.Rounded.Folder, "Files", SystemColor.BLUE, onClick = onFiles),
-                if (shots != null) Control(Icons.Rounded.ScreenShare, "Screen", SystemColor.PINK, longLabel = "Take a screenshot", onLong = { vm.capture(shots.screenshot) }) { PcScreenActivity.open(context, id) }
+                if (shots != null) Control(
+                    Icons.Rounded.ScreenShare, "Screen", SystemColor.PINK,
+                    menu = listOf(
+                        MenuItem("Watch the screen", Icons.Rounded.ScreenShare) { PcScreenActivity.open(context, id) },
+                        MenuItem("Take a screenshot", Icons.Rounded.Screenshot) { vm.capture(shots.screenshot) },
+                    ),
+                ) { PcScreenActivity.open(context, id) }
                 else Control(Icons.Rounded.Sensors, "Ping", SystemColor.CYAN) { vm.ping(id); status.show("Pinged: look for it on the PC") },
                 if (shots != null) Control(Icons.Rounded.PhotoCamera, "Camera", SystemColor.ORANGE) { vm.capture(shots.photo) }
-                else Control(Icons.Rounded.ContentPasteGo, "Send clip", SystemColor.ORANGE, longLabel = "Clipboard history", onLong = onClipboard) {
+                else Control(
+                    Icons.Rounded.ContentPasteGo, "Send clip", SystemColor.ORANGE,
+                    menu = listOf(
+                        MenuItem("Send what's copied", Icons.Rounded.ContentPasteGo) {
+                            if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied to send", failure = true)
+                        },
+                        MenuItem("Clipboard history", Icons.Rounded.History, onClick = onClipboard),
+                    ),
+                ) {
                     if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied to send", failure = true)
                 },
                 Control(Icons.Rounded.NotificationsActive, "Find PC", SystemColor.TEAL) { vm.ringPc(id); status.show("Ringing the PC", icon = Icons.Rounded.NotificationsActive, haptic = false) },
+                // Held, the commands themselves: run one straight from Home.
                 Control(
                     Icons.Rounded.Terminal, "Commands", SystemColor.GRAY, opens = true,
-                    longLabel = "Run the last command",
-                    onLong = {
-                        val last = vm.lastCommand(id)?.let { key -> commandList.firstOrNull { it.key == key } }
-                        if (last != null) { vm.runCommand(id, last.key); status.show("Running ${last.name}", icon = Icons.Rounded.Terminal, haptic = false) }
-                        else showCommands = true
-                    },
+                    menuTitle = "Run on the PC",
+                    menu = commandList.take(6).map { cmd ->
+                        MenuItem(cmd.name, Icons.Rounded.Terminal) { vm.runCommand(id, cmd.key); status.show("Running ${cmd.name}", icon = Icons.Rounded.Terminal) }
+                    }.ifEmpty { null },
                 ) { showCommands = true },
             ),
             // Toggles say their state when on ("Locked", "Muted"): the user wants it in words, not
@@ -486,13 +517,14 @@ private fun toast(context: Context, text: String) =
     Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
 
 /**
- * The PC's volume as iOS Control Center has it: a tall glass capsule beside the media card that
- * fills from the bottom. Drag anywhere on it, relative like iOS (a touch never jumps the level; it
- * swells a little while held); a detent every 10%, a firmer one at the ends. With a choice of
- * outputs, a tap lists them (chips under a wide slider were cut off by the card's edge).
+ * The PC's volume, iOS style: where it's playing and the level over a slim slider with a liquid
+ * glass knob, between a quiet and a loud speaker. Drag relative like iOS (a vertical swipe still
+ * scrolls the page); it tracks the finger 1:1 and springs to the PC's value otherwise. A detent
+ * every 10%, a firmer one at the ends. With a choice of outputs, the output's name is a capsule
+ * that lists them (a row of chips under the slider got cut off at the card's edge).
  */
 @Composable
-internal fun VolumeCapsule(
+internal fun VolumeBar(
     sink: AudioSink,
     onVolume: (Int) -> Unit,
     modifier: Modifier = Modifier,
@@ -511,13 +543,14 @@ internal fun VolumeCapsule(
         delay((ECHO_QUIET_MS - (System.currentTimeMillis() - lastTouch)).coerceAtLeast(0))
         level = sink.volume / max
     }
-    val shown = animateFloatAsState(level, if (dragging) snap() else VyomaMotion.spatial(), label = "vol")
-    val swell by animateFloatAsState(if (dragging) 1.04f else 1f, VyomaMotion.release(), label = "volSwell")
+    val shown by animateFloatAsState(level, if (dragging) snap() else VyomaMotion.spatial(), label = "vol")
     val haptics = LocalHapticFeedback.current
     val fill by animateColorAsState(
         if (sink.muted) MaterialTheme.colorScheme.onSurfaceVariant else Glass.accent,
         VyomaMotion.effects(), label = "volFill",
     )
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val card = MaterialTheme.colorScheme.surfaceContainerLow
 
     fun set(v: Float) {
         val n = v.coerceIn(0f, 1f)
@@ -529,59 +562,52 @@ internal fun VolumeCapsule(
         level = n
         onVolume((n * max).roundToInt())
     }
-    val pick by rememberUpdatedState(outputs?.let { { haptics.perform(Haptic.Tap); picking = true } })
-    val percent = "${(level * 100).roundToInt()}%"
-    Box(
-        modifier
-            .fillMaxHeight()
-            .heightIn(min = DeckMinHeight)
-            .graphicsLayer { scaleX = swell; scaleY = swell }
-            .semantics(mergeDescendants = true) {
-                contentDescription = "PC volume"
-                stateDescription = if (sink.muted) "Muted" else percent
-                progressBarRangeInfo = ProgressBarRangeInfo(level, 0f..1f)
-                setProgress { set(it); true }
-                pick?.let { onClick("Choose output") { it(); true } }
-            }
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    val start = awaitVerticalTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
-                    if (start != null) {
-                        dragging = true
-                        verticalDrag(start.id) { c ->
-                            set(level - c.positionChange().y / size.height)
-                            c.consume()
-                        }
-                        lastTouch = System.currentTimeMillis()
-                        dragging = false
-                    } else {
-                        // A tap only if the finger lifted here, not if a scroll took it.
-                        val up = currentEvent.changes.firstOrNull { it.id == down.id }
-                        if (up != null && !up.pressed && !up.isConsumed) pick?.invoke()
-                    }
+
+    Column(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val name = prettySinkName(sink.description)
+            if (outputs != null) {
+                // Pressed, the glass capsule dips; it bleeds left by its padding so its text lines up.
+                Row(
+                    Modifier
+                        .weight(3f, fill = false)
+                        .offset(x = (-10).dp)
+                        .semantics { contentDescription = "Output: $name. Choose output" }
+                        .pressable(glass = true) { picking = true }
+                        .glassRaised(CircleShape)
+                        .padding(start = 10.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    Icon(Icons.Rounded.UnfoldMore, null, tint = muted, modifier = Modifier.padding(start = 4.dp).size(18.dp))
                 }
+                Spacer(Modifier.weight(1f))
+            } else {
+                Text(name, style = MaterialTheme.typography.labelLarge, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             }
-            .glassCard(MaterialTheme.shapes.large),
-    ) {
-        // Read while drawing: a glide or a drag never recomposes the card.
-        Canvas(Modifier.matchParentSize()) {
-            val h = size.height * shown.value
-            if (h > 0f) drawRect(fill, topLeft = Offset(0f, size.height - h), size = Size(size.width, h))
+            Text(
+                if (sink.muted) "Muted" else "${(level * 100).roundToInt()}%",
+                style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
+                modifier = Modifier.padding(start = 12.dp),
+            )
         }
-        val high = shown.value > 0.86f
-        val low = shown.value > 0.14f
-        Text(
-            if (sink.muted) "Off" else percent,
-            style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
-            color = if (high) Color.White else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 14.dp),
-        )
-        Icon(
-            if (sink.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null,
-            tint = if (low) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp).size(24.dp),
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.AutoMirrored.Rounded.VolumeMute, null, tint = muted, modifier = Modifier.size(20.dp))
+            LiquidSlider(
+                value = { if (dragging) level else shown },
+                onChange = { dragging = true; set(it) },
+                onDone = {
+                    lastTouch = System.currentTimeMillis()
+                    dragging = false
+                },
+                modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                fill = fill,
+                track = MaterialTheme.colorScheme.onSurface.copy(alpha = if (isDarkUi) 0.16f else 0.1f),
+                underlay = card,
+                edgeHaptics = false,
+            )
+            Icon(if (sink.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null, tint = muted, modifier = Modifier.size(20.dp))
+        }
     }
     if (picking && outputs != null) OutputDialog(outputs, onDismiss = { picking = false }) { onOutput(it); picking = false }
 }
@@ -612,8 +638,6 @@ private fun OutputDialog(sinks: List<AudioSink>, onDismiss: () -> Unit, onPick: 
     )
 }
 
-/** The media card and the volume capsule share a row at least this tall. */
-internal val DeckMinHeight = 148.dp
 
 private const val ECHO_QUIET_MS = 700L
 
@@ -631,18 +655,17 @@ private class Control(
     val progress: Float? = null,
     /** Opens a sheet rather than acting at once: a small chevron says so. */
     val opens: Boolean = false,
-    val longLabel: String? = null,
-    val onLong: (() -> Unit)? = null,
+    /** What a long press offers, poured out of the tile as a [LiquidMenu]. */
+    val menu: List<MenuItem>? = null,
+    val menuTitle: String? = null,
     val onClick: () -> Unit,
 )
 
 /**
  * Apple's Shortcuts widget for the actions, Control Center for the switches. Six one-shot actions
- * are filled square tiles (glyph top left, label bottom left, white ink); the two toggles share
- * one 2-wide glass module in the thumb's corner, each half clear with a coloured glyph when off and
- * filled with its colour when on, so an ON switch never looks like an action (they did as tiles).
- * Corners are concentric (card radius = tile radius + padding); the tile size is shared with the
- * volume capsule above so their edges line up ([deckVolumeWidth]). Rejected before: round buttons
+ * are filled square tiles (glyph top left, label bottom left, white ink); the two switches sit in
+ * the thumb's corner as clear glass tiles that fill only when on ([ToggleTile]).
+ * Corners are concentric (card radius = tile radius + padding). Rejected before: round buttons
  * (plastic balls), wide tiles two across (a stack of pills), app icons with labels under.
  */
 @Composable
@@ -655,18 +678,10 @@ private fun ControlGrid(actions: List<Control>, toggles: List<Control>, modifier
             }
             Row(horizontalArrangement = Arrangement.spacedBy(TileGap)) {
                 actions.drop(4).forEach { ControlTile(it, Modifier.size(tile), enabled) }
-                ToggleModule(toggles, Modifier.size(tile * 2 + TileGap, tile), enabled)
+                toggles.forEach { ToggleTile(it, Modifier.size(tile), enabled) }
             }
         }
     }
-}
-
-/** The capsule beside the media card is one tile column plus the card's padding wide, so it lines up with the grid. */
-@Composable
-internal fun deckVolumeWidth(): Dp {
-    val config = LocalConfiguration.current
-    val card = minOf(config.screenWidthDp.dp, MaxContentWidth) - 32.dp
-    return (card - TilePad * 2 - TileGap * 3) / 4 + TilePad
 }
 
 @Composable
@@ -675,10 +690,14 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
     val lum = remember(tone) { tone.luminance() }
     val fill = tileFill(tone, lum)
     val ink = if (lum > 0.5f) Color(0xFF1C1C1E) else Color.White
+    var bounds by remember { mutableStateOf(Rect.Zero) }
+    var open by remember { mutableStateOf(false) }
+    if (open && c.menu != null) LiquidMenu(bounds, TileRadius, c.menu, onDismiss = { open = false }, title = c.menuTitle)
     Column(
         modifier
             .graphicsLayer { if (!enabled) { alpha = 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha } }
-            .liquidPress(enabled = enabled, onLongClickLabel = c.longLabel, onLongClick = c.onLong, onClick = c.onClick)
+            .onGloballyPositioned { bounds = it.boundsInWindow() }
+            .liquidPress(enabled = enabled, onLongClickLabel = "More", onLongClick = c.menu?.let { { open = true } }, onClick = c.onClick)
             .glassRaised(RoundedCornerShape(TileRadius), fill.copy(alpha = 0.92f))
             .padding(start = 10.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
@@ -707,39 +726,32 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
     }
 }
 
-/** Lock and Mute in one glass module: clear halves with coloured glyphs when off, filled when on. */
+/**
+ * A switch tile (Lock, Mute): the same square as the actions, so the row reads as one family, but
+ * clear glass with its glyph in colour while off and filled with its colour while on, the Control
+ * Center rule. An ON switch never looks like an action, and off still reads as live (full-contrast
+ * label, coloured glyph). Each is its own tile: two halves in one module didn't read as two.
+ */
 @Composable
-private fun ToggleModule(toggles: List<Control>, modifier: Modifier, enabled: Boolean) {
-    Row(
+private fun ToggleTile(c: Control, modifier: Modifier, enabled: Boolean) {
+    val tone = c.color.color
+    val on by animateFloatAsState(if (c.active) 1f else 0f, VyomaMotion.effects(), label = "toggleOn")
+    val lum = remember(tone) { tone.luminance() }
+    val fill = tileFill(tone, lum)
+    val onInk = if (lum > 0.5f) Color(0xFF1C1C1E) else Color.White
+    // Off, the glyph carries the colour (deepened in light mode to hold 3:1 on clear glass).
+    val offGlyph = if (isDarkUi) tone else lerp(tone, Color.Black, 0.35f)
+    val ink = lerp(MaterialTheme.colorScheme.onSurface, onInk, on)
+    Column(
         modifier
             .graphicsLayer { if (!enabled) { alpha = 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha } }
-            .glassRaised(RoundedCornerShape(TileRadius))
-            .padding(ModulePad),
-        horizontalArrangement = Arrangement.spacedBy(ModulePad),
+            .pressable(enabled = enabled && c.toggle, haptic = if (c.active) Haptic.ToggleOff else Haptic.ToggleOn, onClick = c.onClick)
+            .glassRaised(RoundedCornerShape(TileRadius), if (on > 0.01f) fill.copy(alpha = 0.92f * on) else null)
+            .padding(start = 10.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+        verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        toggles.forEach { c ->
-            val tone = c.color.color
-            val on by animateFloatAsState(if (c.active) 1f else 0f, VyomaMotion.effects(), label = "toggleOn")
-            val lum = remember(tone) { tone.luminance() }
-            val fill = tileFill(tone, lum)
-            val onInk = if (lum > 0.5f) Color(0xFF1C1C1E) else Color.White
-            // Off, the glyph carries the colour (deepened in light mode to hold 3:1 on clear glass).
-            val offGlyph = if (isDarkUi) tone else lerp(tone, Color.Black, 0.35f)
-            val ink = lerp(MaterialTheme.colorScheme.onSurface, onInk, on)
-            Column(
-                Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .pressable(enabled = enabled && c.toggle, haptic = if (c.active) Haptic.ToggleOff else Haptic.ToggleOn, onClick = c.onClick)
-                    .clip(RoundedCornerShape(TileRadius - ModulePad))
-                    .background(fill.copy(alpha = 0.92f * on))
-                    .padding(start = 8.dp, end = 4.dp, top = 8.dp, bottom = 6.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Icon(c.icon, null, tint = lerp(offGlyph, onInk, on), modifier = Modifier.size(22.dp))
-                TileLabel(c.label, ink)
-            }
-        }
+        Icon(c.icon, null, tint = lerp(offGlyph, onInk, on), modifier = Modifier.size(22.dp))
+        TileLabel(c.label, ink)
     }
 }
 
@@ -765,7 +777,6 @@ private fun TileLabel(text: String, ink: Color) {
 private val TileRadius = 16.dp
 private val TilePad = 12.dp
 private val TileGap = 8.dp
-private val ModulePad = 4.dp
 
 /** "Just now" for the first minute, then "5 min. ago" and so on. */
 internal fun ago(time: Long): CharSequence {

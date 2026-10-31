@@ -293,22 +293,6 @@ private fun ArtPanel(art: Bitmap?, p: RemotePlayer, accent: Color, tint: Color, 
 
 private val ART_WIDTH = 132.dp
 
-/**
- * The media card's place when nothing plays, like Control Center's "Not Playing": the volume
- * capsule keeps its neighbour, so Home's layout doesn't jump when a song starts or stops.
- */
-@Composable
-fun NotPlayingCard(modifier: Modifier = Modifier) {
-    Column(
-        modifier.glassCard(MaterialTheme.shapes.large).padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Icon(Icons.Rounded.MusicNote, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(32.dp))
-        Spacer(Modifier.height(8.dp))
-        Text("Not playing", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
 
 /** Players that are mostly for video, so their tile shows a film glyph rather than a note. */
 private val VIDEO_PLAYERS = listOf("mpv", "vlc", "celluloid", "totem", "haruna", "smplayer", "mplayer", "kodi", "showtime", "dragon")
