@@ -77,4 +77,10 @@ body fields before implementing one.
 - `vyoma.files.put {path(folder), name}` + payload (phone serves it; the companion connects as TLS client with its
   cert and pins the phone's) → `vyoma.files.saved {path, name, error?}`. Written as `.name.vyoma-part`, renamed when
   complete, never overwrites (`name (2).ext`). A refusal before connecting makes the phone stop waiting.
+- `vyoma.screen.request` → `vyoma.screen {codec:"h264", width, height}` + an open-ended payload (`payloadSize` -1), or
+  `{error}`. The companion casts one monitor via the ScreenCast portal (persist_mode 2; restore token in
+  `~/.config/vyoma-companion/screencast-token`, so Plasma asks once), encodes with GStreamer `vah264enc` (VBR 8 Mbps,
+  no B-frames, ≤1920 wide) and streams Annex-B with SPS/PPS before every IDR. The phone waits up to 60 s (the portal
+  dialog), decodes with MediaCodec (`KEY_LOW_LATENCY`) into a TextureView. `vyoma.screen.stop` (or closing the payload)
+  ends it; a new request replaces a running cast.
 

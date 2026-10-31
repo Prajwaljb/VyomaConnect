@@ -292,6 +292,32 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         )
     }
 
+    /** The PC's screen as a live stream: the open payload and the picture size. Close [video] to stop. */
+    class ScreenStream(val width: Int, val height: Int, val video: java.io.InputStream)
+
+    private var pendingScreen: CompletableDeferred<NetworkPacket>? = null
+
+    /**
+     * Starts a live cast of the PC's screen. The first time, Plasma asks on the PC which screen to
+     * share, so this waits up to a minute for the answer.
+     */
+    suspend fun openScreen(): Result<ScreenStream> {
+        val reply = CompletableDeferred<NetworkPacket>()
+        pendingScreen = reply
+        if (!ctx.send(packet(SCREEN_REQUEST))) return Result.failure(IllegalStateException("The PC isn't reachable"))
+        val answer = withTimeoutOrNull(SCREEN_TIMEOUT_MS) { reply.await() }
+            ?: return Result.failure(IllegalStateException("The PC didn't answer. Is screen sharing waiting for you there?"))
+        answer.string("error")?.let { return Result.failure(IllegalStateException(it)) }
+        if (!answer.hasPayload) return Result.failure(IllegalStateException("The PC sent no video"))
+        return runCatching {
+            val video = withContext(Dispatchers.IO) { ctx.device.openPayload(answer) } ?: error("Couldn't open the video stream")
+            ScreenStream(answer.int("width") ?: 0, answer.int("height") ?: 0, video)
+        }
+    }
+
+    /** Ends the cast on the PC (closing the stream does too; this is quicker and says so). */
+    suspend fun stopScreen() = ctx.send(packet(SCREEN_STOP))
+
     /** The PC's whole desktop. */
     val screenshot = Capture(SCREENSHOT_REQUEST, "PC screenshot")
 
@@ -302,6 +328,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         if (packet.type == SCREENSHOT) screenshot.receive(packet)
         if (packet.type == CAMERA) photo.receive(packet)
         if (packet.type == HANDOFF) receiveHandoff(packet)
+        if (packet.type == SCREEN) pendingScreen?.also { pendingScreen = null }?.complete(packet)
         if (packet.type == FILES_LISTING) receiveListing(packet)
         if (packet.type == FILES_FILE) receiveFile(packet)
         if (packet.type == FILES_SAVED) receiveSaved(packet)
@@ -336,13 +363,17 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val FILES_FILE = "vyoma.files.file"
         const val FILES_PUT = "vyoma.files.put"
         const val FILES_SAVED = "vyoma.files.saved"
+        const val SCREEN = "vyoma.screen"
+        const val SCREEN_REQUEST = "vyoma.screen.request"
+        const val SCREEN_STOP = "vyoma.screen.stop"
+        private const val SCREEN_TIMEOUT_MS = 60_000L
         private const val CAPTURE_TIMEOUT_MS = 30_000L
         private const val TAG = "Companion"
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT),
+            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN),
+            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP),
         ) { CompanionPlugin(it, sink) }
     }
 }

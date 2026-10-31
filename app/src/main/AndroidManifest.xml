@@ -83,6 +83,12 @@
         </activity>
 
         <activity
+            android:name=".ui.PcScreenActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:screenOrientation="sensorLandscape" />
+
+        <activity
             android:name=".ui.FindMyPhoneActivity"
             android:exported="false"
             android:excludeFromRecents="true"

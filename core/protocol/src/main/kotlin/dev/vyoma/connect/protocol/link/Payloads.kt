@@ -88,7 +88,8 @@ internal class LanPayloads(
             ssl.soTimeout = IO_TIMEOUT_MS
             ssl.startHandshake()
             verifyPeer(ssl, link.peerCertificate)
-            if (packet.payloadSize < 0) ssl.inputStream else BoundedInputStream(ssl.inputStream, packet.payloadSize, ssl)
+            // An open-ended stream (the PC's live screen) goes quiet whenever nothing changes: no read timeout.
+            if (packet.payloadSize < 0) ssl.also { it.soTimeout = 0 }.inputStream else BoundedInputStream(ssl.inputStream, packet.payloadSize, ssl)
         } catch (e: Exception) {
             runCatching { plain.close() }
             throw e
