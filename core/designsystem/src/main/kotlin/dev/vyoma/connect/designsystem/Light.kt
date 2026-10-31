@@ -113,7 +113,7 @@ private class TiltListener(private val context: Context) : SensorEventListener {
         const val SMOOTH = 0.2f
         const val WARMUP = 8
         /** Livelier than the room's real up, so even small, ordinary handling visibly moves it. */
-        const val GAIN = 1.7f
+        const val GAIN = 1.45f
         const val RANGE = 140f
     }
 }
