@@ -26,6 +26,13 @@ const SCREENCAST: &str = "org.freedesktop.portal.ScreenCast";
 /// The phone's screen is about 1080 px tall in landscape: more than 1920 wide is wasted bits.
 const MAX_WIDTH: i32 = 1920;
 const BITRATE_KBPS: u32 = 8000;
+/// The encoder's buffer (CPB), in kbit: about 60 ms of the peak rate. Its default allows frames of
+/// hundreds of KB when the whole screen changes at once (a desktop switch, a window sliding in),
+/// and each one stalls the stream for its transfer time; capped, such a frame is just blurrier.
+const CPB_KBITS: u32 = 600;
+/// The longest gap the encoder allows between keyframes. TCP never loses one, so they're only
+/// needed to start; every one is a burst, so as few as possible.
+const KEYFRAME_FRAMES: u32 = 1024;
 /// Half the phone's 120 Hz: its screen always keeps up, so frames never queue on the way.
 const MAX_FPS: u32 = 60;
 const RELAY_BYTES: usize = 16 * 1024;
@@ -117,18 +124,17 @@ fn encoder(source: &str, fd: Option<zvariant::OwnedFd>, w: i32, h: i32) -> Resul
     // Latency first. The capture has a variable frame rate (KWin sends one per change, up to the
     // monitor's 200 Hz); `max-framerate` asks KWin itself to send no more than [MAX_FPS] (videorate
     // can't cap it: the capture's timestamps let it through at ~100). At most one frame waits
-    // before the encoder, no B-frames, the fastest preset, a keyframe every 5 s (TCP never loses
-    // one; big keyframes stutter), and length-prefixed output ("avc"), one picture per write, so
+    // before the encoder, no B-frames, the fastest preset, a small buffer and rare keyframes so
+    // no frame is a burst, and length-prefixed output ("avc"), one picture per write, so
     // the phone can show each frame the moment it lands.
     let pipeline = format!(
         "{source} \
          ! video/x-raw(ANY),max-framerate={MAX_FPS}/1 \
          ! queue max-size-buffers=1 leaky=downstream \
          ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h} \
-         ! vah264enc rate-control=vbr bitrate={BITRATE_KBPS} key-int-max={keyframes} b-frames=0 num-slices=1 target-usage=7 \
+         ! vah264enc rate-control=vbr bitrate={BITRATE_KBPS} cpb-size={CPB_KBITS} key-int-max={KEYFRAME_FRAMES} b-frames=0 num-slices=1 target-usage=7 \
          ! h264parse config-interval=-1 ! video/x-h264,stream-format=avc,alignment=au \
          ! fdsink fd=1 sync=false",
-        keyframes = MAX_FPS * 5,
     );
     tokio::process::Command::new("gst-launch-1.0")
         .arg("-q")

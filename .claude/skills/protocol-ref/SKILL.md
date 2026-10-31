@@ -81,7 +81,7 @@ body fields before implementing one.
   (`payloadSize` -1), or `{error}`. The companion casts one monitor via the ScreenCast portal (persist_mode 2; restore
   token in `~/.config/vyoma-companion/screencast-token`, so Plasma asks once), asks KWin for ≤60 fps (`max-framerate`
   caps; videorate can't cap the variable-rate capture), encodes with `vah264enc` (VBR 8 Mbps, no B-frames, one slice,
-  ≤1920 wide, IDR every 5 s with SPS/PPS). Framing: 4-byte big-endian length + NAL; before each slice a stamp NAL
+  ≤1920 wide, 600 kbit CPB so a full-screen change can't make a burst frame, IDR only every 1024 frames, with SPS/PPS). Framing: 4-byte big-endian length + NAL; before each slice a stamp NAL
   `06 'VYTS' <u64 µs epoch>` (13 bytes) the phone strips and uses for its latency log. Small buffers end to end (16 KiB
   pipe and relay, `TCP_NOTSENT_LOWAT` 16 KiB) so a slow link drops raw frames at the leaky queue instead of queueing
   seconds. The phone fetches a companion's payloads through the PC's USB tunnel mirror when the PC is linked over USB
