@@ -18,10 +18,12 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   linear-gradient rim misaligned) plus, in the dark, a soft glow on the lit side baked INTO the fill as one radial
   gradient (a separate glow pass over the card cost 0.4 ms GPU/frame; in-fill is ~free). Measured ≈ +0.1–0.2 ms.
   Card slices (`cardSegment`) pass `lit = false`. Refraction belongs only to things that float.
-- Media card without artwork (mpv, failed art) or with a thumbnail < 400 px (YouTube Music's mini player gives 60 px):
-  compact Apple Music-style header (72 dp tile with the thumbnail or a note/film glyph, title/artist/player, and
-  Continue on phone as a 44 dp round button at the row's end, not a chip under the title) on `accent.toned(0.8f, 0.2f)`
-  or the art's palette; never a big empty or blurry frame. Art trimming/palette run off the main thread.
+- Media card (`MediaCard`): compact like iOS (people found the full-bleed artwork card too big): 56 dp art thumbnail
+  (or a deep-accent tile with a note/film glyph), title + artist, Continue on phone as a 40 dp round button at the
+  row's end, thin scrubber, plain white glyph controls (no white disc), on the art's dark-muted palette colour or
+  `accent.toned(0.8f, 0.2f)`. Art trimming/palette run off the main thread.
+- Liquid drops (`LensPainter`: tab drop, slider/switch/segmented knobs) get the tilt-lit `specularRim` stroke like
+  chrome; a clear drop over a plain track otherwise had no visible rim.
 - Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a plain
   even fill plus a 0.9 dp specular hairline that follows the phone's tilt (a FIXED painted rim read as fake; the user
   asked for it back once it moved like iOS 26); pass `color` for accent/tinted or for chips over artwork (dark translucent).
