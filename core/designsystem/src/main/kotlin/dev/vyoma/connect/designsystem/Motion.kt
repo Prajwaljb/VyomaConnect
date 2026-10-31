@@ -178,7 +178,8 @@ fun Modifier.pressable(
  * Shrinks the moment a finger lands (no tap-timeout lag like interaction-based presses) and
  * springs back when it lifts like a drop of water: width and height settle on different springs,
  * so it wobbles out of step instead of just scaling. Even a quick tap visibly dips first. If a
- * scrolling parent takes the gesture over, it eases back without the bounce.
+ * scrolling parent takes the gesture over, or the finger slides off, it flows back with a softer
+ * wobble; sliding back on dips it again.
  *
  * By default ([PressAuto]) everything dips by the same few dp at its edges, so a 48 dp button and a
  * full-width row feel like one material (iOS's presses work this way): hand-picked scales per
@@ -211,6 +212,8 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
     /** How lit the glass is under the finger: up while held, eases out after. Only with [glass]. */
     private val clear = Animatable(0f)
     private var held = false
+    /** A finger that landed here and still owns the gesture (no scroll took it), held or slid off. */
+    private var tracking = false
     private var job: Job? = null
     private var glassJob: Job? = null
     /** Where the finger is, for the glow. */
@@ -264,18 +267,34 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
         }
         when (pass) {
             PointerEventPass.Initial ->
-                if (!held && pointerEvent.changes.any { it.changedToDownIgnoreConsumed() }) press()
-            PointerEventPass.Final -> if (held) {
+                if (!held && pointerEvent.changes.any { it.changedToDownIgnoreConsumed() }) {
+                    tracking = true
+                    press()
+                }
+            PointerEventPass.Final -> if (tracking) {
                 // Moves consumed by someone else mean a scroll or drag owns this gesture now.
                 val stolen = pointerEvent.changes.any { it.pressed && it.isConsumed && it.positionChangedIgnoreConsumed() }
-                if (stolen) release(bounce = false)
-                else if (pointerEvent.changes.none { it.pressed }) release(bounce = true)
+                val finger = pointerEvent.changes.firstOrNull { it.pressed }
+                when {
+                    stolen -> { tracking = false; if (held) release(bounce = false) }
+                    finger == null -> { tracking = false; if (held) release(bounce = true) }
+                    // Slid off (on purpose, to not tap): it lets go, and dips again if the finger
+                    // comes back, like iOS. A margin keeps a wobbly thumb on the edge from flickering.
+                    else -> {
+                        val m = SLIDE_MARGIN_DP * requireDensity().density
+                        val p = finger.position
+                        val inside = p.x >= -m && p.y >= -m && p.x <= bounds.width + m && p.y <= bounds.height + m
+                        if (held && !inside) release(bounce = false)
+                        else if (!held && inside) press()
+                    }
+                }
             }
             else -> Unit
         }
     }
 
     override fun onCancelPointerInput() {
+        tracking = false
         if (held) release(bounce = false)
     }
 
@@ -309,8 +328,12 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
                 launch { sy.animateTo(1f, VyomaMotion.jelly(), initialVelocity = kick * 0.8f) }
                 sx.animateTo(1f, VyomaMotion.release(), initialVelocity = kick)
             } else {
-                launch { sy.animateTo(1f, VyomaMotion.effects()) }
-                sx.animateTo(1f, VyomaMotion.effects())
+                // Let go without a tap (a scroll took it, or the finger slid off): it still flows
+                // home like water, a softer wobble from wherever the dip had got to. A flat ease
+                // here read as the press stalling halfway.
+                val kick = (1f - minOf(sx.value, sy.value)) * 14f
+                launch { sy.animateTo(1f, VyomaMotion.jelly(), initialVelocity = kick * 0.8f) }
+                sx.animateTo(1f, VyomaMotion.release(), initialVelocity = kick)
             }
         }
     }
@@ -333,5 +356,7 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
         const val GLASS_PRESSED = 0.9f
         /** How far every edge moves in on a press. */
         const val PRESS_TRAVEL_DP = 3f
+        /** How far past its edge a finger can stray before the press lets go. */
+        const val SLIDE_MARGIN_DP = 12f
     }
 }

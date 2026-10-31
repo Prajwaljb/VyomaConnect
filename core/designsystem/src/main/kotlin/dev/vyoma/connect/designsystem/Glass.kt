@@ -62,6 +62,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.DrawModifierNode
@@ -233,7 +235,7 @@ val glassDepth: GlassDepth
  * One per element: it keeps that element's shader.
  */
 internal class InnerGlow {
-    private val shader = if (liquidGlassSupported) RuntimeShader(BAND_AGSL) else null
+    private val shader = if (liquidGlassSupported) bandShader else null
     private var path: Path? = null
     private var pathFor: Outline? = null
 
@@ -272,6 +274,14 @@ internal class InnerGlow {
 
     private companion object {
         const val STEPS = 10
+
+        /**
+         * One compiled shader for every element (each card and button used to compile its own on
+         * the UI thread whenever its draw cache was rebuilt). Sharing is safe: a draw takes a copy
+         * of the uniforms as they are then, and all of this runs on the UI thread.
+         */
+        val bandShader by lazy(LazyThreadSafetyMode.NONE) { RuntimeShader(BAND_AGSL) }
+
         const val BAND_AGSL = """
 uniform float2 size;
 uniform float radius;
@@ -507,6 +517,29 @@ fun Modifier.aurora(): Modifier = composed {
     drawWithCache {
         val w = (size.width / AURORA_SCALE).roundToInt().coerceAtLeast(1)
         val h = (size.height / AURORA_SCALE).roundToInt().coerceAtLeast(1)
+        val bitmap = AuroraCache.get(w, h, base, accent, strength)
+        val dst = IntSize(size.width.roundToInt(), size.height.roundToInt())
+        onDrawBehind { drawImage(bitmap, dstSize = dst, filterQuality = FilterQuality.Low) }
+    }
+}
+
+private const val AURORA_SCALE = 4f
+
+/**
+ * Canvas bitmaps by size and colours, shared by every page: they were painted on the CPU (UI
+ * thread) each time a page opened, a few ms of the first frame of every push. A handful of sizes
+ * (full screen, with and without the keyboard) covers the app.
+ */
+private object AuroraCache {
+    private class Key(val w: Int, val h: Int, val base: Color, val accent: Color, val strength: Float) {
+        override fun equals(other: Any?) = other is Key && other.w == w && other.h == h && other.base == base && other.accent == accent && other.strength == strength
+        override fun hashCode() = ((w * 31 + h) * 31 + base.hashCode()) * 31 + accent.hashCode() + strength.hashCode()
+    }
+    private val entries = LinkedHashMap<Key, ImageBitmap>(8, 0.75f, true)
+
+    fun get(w: Int, h: Int, base: Color, accent: Color, strength: Float): ImageBitmap {
+        val key = Key(w, h, base, accent, strength)
+        entries[key]?.let { return it }
         val small = Size(w.toFloat(), h.toFloat())
         val r = small.maxDimension * 0.75f
         val left = Brush.radialGradient(
@@ -518,17 +551,16 @@ fun Modifier.aurora(): Modifier = composed {
             center = Offset(small.width * 0.5f, small.height * 0.3f), radius = r * 0.7f,
         )
         val bitmap = ImageBitmap(w, h)
-        CanvasDrawScope().draw(this, layoutDirection, Canvas(bitmap), small) {
+        CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, Canvas(bitmap), small) {
             drawRect(base)
             drawRect(left)
             drawRect(right)
         }
-        val dst = IntSize(size.width.roundToInt(), size.height.roundToInt())
-        onDrawBehind { drawImage(bitmap, dstSize = dst, filterQuality = FilterQuality.Low) }
+        entries[key] = bitmap
+        if (entries.size > 4) entries.remove(entries.keys.first())
+        return bitmap
     }
 }
-
-private const val AURORA_SCALE = 4f
 
 /** The canvas's accent glows ([aurora]); the user can turn them off. Changes apply on recomposition. */
 object AppCanvas {
@@ -899,7 +931,8 @@ private class BlurCache {
  */
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal class LiquidGlass {
-    private val shader = RuntimeShader(AGSL)
+    // Shared, compiled once (see InnerGlow's): a RenderEffect copies the uniforms when it's built.
+    private val shader = sharedShader
     private var last = FloatArray(17) { Float.NaN }
     private var effect: RenderEffect? = null
 
@@ -934,6 +967,8 @@ internal class LiquidGlass {
     }
 
     private companion object {
+        val sharedShader by lazy(LazyThreadSafetyMode.NONE) { RuntimeShader(AGSL) }
+
         const val AGSL = """
 uniform shader content;
 uniform float2 size;

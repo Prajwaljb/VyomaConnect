@@ -151,7 +151,7 @@ fun TabsRoot(tab: Tab, onTab: (Tab) -> Unit, onTouchpad: () -> Unit, content: @C
         ) {
             TabBar(tab, onTab, backdrop)
             Box(
-                Modifier.size(BarHeight).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp, interactive = true).pressable(pressedScale = 1f, onClick = onTouchpad),
+                Modifier.size(BarHeight).glassChrome(backdrop, CircleShape, blur = 6.dp, bevel = 16.dp, interactive = true).pressable(pressedScale = 1f, onClick = onTouchpad),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(Icons.Rounded.TouchApp, "Touchpad", tint = MaterialTheme.colorScheme.onBackground)
@@ -219,7 +219,7 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
         Modifier
             .height(BarHeight)
             .liquidLens(backdrop, strength = { lift.value }, zoom = { 1f + 0.1f * lift.value.coerceIn(0f, 1f) }, style = LensStyle.Lift, rect = { pill() })
-            .glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp)
+            .glassChrome(backdrop, CircleShape, blur = 6.dp, bevel = 16.dp)
             .drawBehind {
                 // The resting pill is gone early in the lift: magnified inside the growing drop, its
                 // grey read as a white haze (where drops can be drawn).

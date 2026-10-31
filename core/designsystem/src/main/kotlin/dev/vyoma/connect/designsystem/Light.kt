@@ -23,7 +23,7 @@ import kotlin.math.tanh
 /**
  * Where the light comes from, as seen on the screen: the angle the specular edges are brightest
  * at, in degrees clockwise from 3 o'clock (270 = straight up). At rest it's straight up, centred
- * (the user asked for it there, not up-left); tilting the phone sways it up to 55° either way, so a small turn carries
+ * (the user asked for it there, not up-left); tilting the phone sways it up to 45° either way (55° at a 2.2x gain was too twitchy), so a small turn carries
  * it to straight up (a 35° soft limit made the top centre take a deliberate tilt), without circling. Read it only
  * while drawing: a change then redraws the highlights, never recomposes or relayouts.
  */
@@ -123,8 +123,8 @@ private class TiltListener(private val context: Context) : SensorEventListener {
         const val SMOOTH = 0.2f
         const val WARMUP = 8
         /** Livelier than the room's real up, so even small, ordinary handling visibly moves it. */
-        const val GAIN = 2.2f
+        const val GAIN = 1.7f
         /** How far the light can sway from rest, either way. */
-        const val MAX_SWAY = 55f
+        const val MAX_SWAY = 45f
     }
 }

@@ -53,8 +53,8 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Portrait only (manifest), except the PC screen viewer (sensorLandscape): the user doesn't want landscape anywhere else.
 - The hero title at rest is the LIST's copy (stretches on overscroll with the page); the travelling copy takes over the
   moment the page moves. Meter labels are one line ("RAM", not "Memory", which wrapped beside 14.6G).
-- Home hero is 24% of the screen (others 30%) so the first action row clears the tab bar. Toggle tiles off = a 0.22 pane
-  of their colour (clear glass read as disabled); 0.2–0.5 luminance tones darken 30%. One filled accent (`Glass.accent`)
+- Every hero is 30% of the screen, Home included; Home's tiles pass under the tab bar at rest (the user wants the
+  glass to show content). Toggle tiles are clear glass off and white on (see ToggleTile); 0.2–0.5 luminance tones darken. One filled accent (`Glass.accent`)
   for switches, slider fill, chips, keys, pills. Media tint is clamped deep (luminance ≤ 0.06) for 4.5:1 text.
 - Data visuals share one system: 6 dp round-capped strokes on a `Glass.raised` track (gauges and the battery rings),
   numbers with a smaller muted unit (`Reading`), colour = load (green < 70% < yellow < 90% < red; temp 65/85 °C),
@@ -107,7 +107,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   shader's shape inflated 2 low-res px so the visible outline is a full-res anti-aliased clip, plus a full-res
   `specularRim` stroke (light mode: dark hairline base). Measured alternatives: full res +3 ms GPU; one shared
   full-page blur was slower (replays the whole page). Every
-  chrome element uses the tab bar's values: `blur = 8.dp, bevel = 16.dp`. The bar must not be inside
+  chrome element uses the tab bar's values: `blur = 6.dp, bevel = 16.dp` (8 until the user asked for slightly less blur, 2026-10-31). The bar must not be inside
   the source. Compose/draw chrome only while visible.
 - Header (`CollapsingHeaderScaffold`): no slab, no fade (content slides under clear glass). Back in a 48 dp liquid circle; actions share
   one capsule. The title is ONE travelling Text (the hero copy is an invisible placeholder): it scrolls 1:1 with the
@@ -116,6 +116,9 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   The bubble belongs to the title: the moment the title leaves, it rides down with it and is gone within 16 dp, then
   POPS (swells 18%, 140 ms). A fixed 220 ms fade at a collapse threshold lagged fast flings (empty bubble behind the
   text). Forming and bursting each play `Haptic.Bubble`; a list flung into either end ticks (`Detent`). The hero fades by 75%.
+  The hero title's centre sits at a fixed 56% of the hero on every page (custom Layout, displayMedium everywhere):
+  the device glyph (64 dp) hangs 14 dp above it, the subtitle 6 dp below. Centring the whole block moved the title
+  by up to 46 dp between pages.
   A trailing "collapse-room" item lets any page that scrolls at all collapse fully (no half-faded stuck title).
   A page whose content ends ≥12 dp above the tab/nav bar doesn't scroll at all (`userScrollEnabled = false`). The
   check re-runs on every layout and answers "overflows" whenever the last real item is off screen: once it kept a
@@ -128,7 +131,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Long-press menus: `MenuHost` (wraps the app in MainActivity) + `LocalMenu.current.show(boundsInRoot, items, title)`,
   triggered from `liquidPress(onLongClick)`. Drawn IN the app's window (a Popup is a separate window: it can't see the
   page, so it was an opaque slab the user called broken): while open the app records into a backdrop and the menu is
-  `glassChrome(blur = 16.dp, bevel = 16.dp)` (blur above the tab bar's 8 so its text reads over a busy page), 24 dp
+  `glassChrome(blur = 13.dp, bevel = 16.dp)` (blur above the tab bar's 6 so its text reads over a busy page), 24 dp
   corners, 35% black scrim, tap outside or Back closes. It pours out of the tile's own rect (width `leading()`,
   height `jelly()`), items fade in past ~55% formed, and flows back in on close. Placement: above the tile if it fits,
   else below, else the roomier side, always inside the system bars. The lens takes the shape's corner radius from its
@@ -242,6 +245,13 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Respond on touch-down, not on tap-up: `pressable` / `pressScale` dip immediately (Modifier.Node, layer-only) and
   bounce on release like water: width settles on `release()`, height on the softer `jelly()`, so it wobbles out of
   step instead of just scaling. If a scroll steals the gesture they ease back without the bounce.
+- A finger that slides off a pressed element lets it go (12 dp margin) and dips it again if it comes back, like iOS;
+  any release without a tap (slid off, scroll took it) still flows home with a soft wobble from wherever the dip
+  was (a flat ease read as the press stalling halfway).
+- Long-press menu motion: opens width-first (spring 0.8/700) with the height pouring after (0.6/340); items fade in
+  past 60% formed. Closing: items out in 90 ms, then the empty drop drains home, height first (critically damped
+  520) and width after (300), no bounce; touches pass through the moment it starts closing. The pressed element
+  stays undimmed (scrim has a hole).
 - Things that hit a limit stretch (rubber band, diminishing) instead of stopping dead: see the volume bar.
 - Navigation: push slides the page in from the right over a parallaxed parent; back follows the thumb through
   `SeekableTransitionState` (linear timeline while seeking, spring on commit/cancel). Tabs drift 1/12 width in the
@@ -259,6 +269,15 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   quarter resolution (`CHROME_RES`) with the edge clipped and rimmed at full res (was ~4 ms of 8.5); the canvas is a
   cached quarter-res bitmap (three full-screen gradients were ~1.3 ms). Settings scroll GPU ~4.8 ms/frame. The connection orb
   breathes 3 times on connect, then rests. Idle check: `gfxinfo reset`, wait 3 s, expect ~0 frames. Check `dumpsys gfxinfo` after motion work (target < 1% janky at 120 Hz).
+
+- Measured 2026-10-31 (S24 FE, demo compiled): scrolling is render-thread bound (~3.5 ms issuing, a third of it
+  the chrome glass layers' blur + lens passes, 18% pipeline switches); UI thread ~0.4 ms. Rules found:
+  never write Compose state from `onGloballyPositioned` on things inside a scrolling list (a tile's bounds state
+  woke the main looper every frame for every tile: keep `LayoutCoordinates` in a plain holder via `onPlaced` and
+  read bounds on demand); AGSL `RuntimeShader`s are compiled once and shared (each draw/RenderEffect copies the
+  uniforms); the aurora bitmap is cached app-wide (`AuroraCache`), not painted per page. A pushed page composes in
+  one ~25 ms frame: navigation parks it at progress 0 (`seekTo(0f, target)`), waits two frames, then slides, so the
+  spring doesn't jump. Tried and dropped: drawing InnerGlow as edge-only strips (no GPU gain, more draw calls).
 
 ## Haptics (`Haptic` in Motion.kt; always through `HapticFeedback.perform`)
 Pixel / O-Haptics style: each `Haptic` is a `VibrationEffect.Composition` of primitives (CLICK, TICK, LOW_TICK, THUD,
