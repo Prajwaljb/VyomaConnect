@@ -116,7 +116,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   The bubble belongs to the title: the moment the title leaves, it rides down with it and is gone within 16 dp, then
   POPS (swells 18%, 140 ms). A fixed 220 ms fade at a collapse threshold lagged fast flings (empty bubble behind the
   text). Forming and bursting each play `Haptic.Bubble`; a list flung into either end ticks (`Detent`). The hero fades by 75%.
-  The hero title's centre sits at a fixed 56% of the hero on every page (custom Layout, displayMedium everywhere):
+  Under the status bar: `scrollEdge(backdrop)` (iOS 26 soft edge), only while scrolled: blurs what passes under
+  (10 dp) with a thin canvas tint (0.45, lite 0.9), masked to fade out 12 dp below the icons. The user found raw
+  cards under the clock "not nice"; a dark shade stays rejected.
+  The hero title's centre sits at a fixed 63% of the hero (56% put the PC glyph up against the status bar) on every page (custom Layout, displayMedium everywhere):
   the device glyph (64 dp) hangs 14 dp above it, the subtitle 6 dp below. Centring the whole block moved the title
   by up to 46 dp between pages.
   A trailing "collapse-room" item lets any page that scrolls at all collapse fully (no half-faded stuck title).
