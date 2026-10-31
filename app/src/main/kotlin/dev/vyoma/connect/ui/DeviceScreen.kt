@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.DialogButton
 import dev.vyoma.connect.designsystem.VyomaMotion
 import androidx.compose.animation.animateContentSize
 import androidx.compose.ui.text.font.FontFamily
@@ -27,7 +28,6 @@ import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
@@ -182,13 +182,13 @@ fun DeviceScreen(
             title = { Text("Unpair ${state?.identity?.deviceName}?") },
             text = { Text("You'll need to pair again and compare codes to reconnect.") },
             confirmButton = {
-                TextButton(onClick = {
+                DialogButton(destructive = true, onClick = {
                     confirmUnpair = false
                     vm.unpair(deviceId)
                     onBack()
-                }) { Text("Unpair", color = MaterialTheme.colorScheme.error) }
+                }) { Text("Unpair") }
             },
-            dismissButton = { TextButton(onClick = { confirmUnpair = false }) { Text("Cancel") } },
+            dismissButton = { DialogButton(onClick = { confirmUnpair = false }) { Text("Cancel") } },
         )
     }
 }

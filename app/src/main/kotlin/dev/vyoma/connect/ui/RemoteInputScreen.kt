@@ -1,5 +1,12 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.layout.layout
 import dev.vyoma.connect.designsystem.VyomaMotion
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.LineBreak
@@ -185,7 +192,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             // Same round glass back button as every other page.
             // The whole disc dips as one piece, like the header capsules; no glyph bouncing inside a still ring.
             Box(
-                Modifier.size(48.dp).pressable(pressedScale = 0.88f, glass = true, onClick = onBack).glassRaised(CircleShape),
+                Modifier.size(48.dp).pressable(glass = true, onClick = onBack).glassRaised(CircleShape),
                 contentAlignment = Alignment.Center,
             ) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") }
             Spacer(Modifier.width(12.dp))
@@ -292,7 +299,10 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
         // ---- mouse buttons: the middle one is also a scroll strip ----
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(52.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MouseButton("Left", Modifier.weight(2f)) { act { click() } }
-            ScrollStrip(Modifier.weight(1f), onScroll = { dy -> synchronized(motion) { motion[3] += dy * SCROLL_SCALE } }) { act { middleClick() } }
+            // A true circle in its share, like the keys (an icon-only capsule broke the shape rule).
+            Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                ScrollStrip(Modifier.circle(), onScroll = { dy -> synchronized(motion) { motion[3] += dy * SCROLL_SCALE } }) { act { middleClick() } }
+            }
             MouseButton("Right", Modifier.weight(2f)) { act { rightClick() } }
         }
 
@@ -488,20 +498,32 @@ private fun RowScope.Key(
         accent -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurface
     }
-    Box(
-        Modifier
-            .weight(1f)
-            .fillMaxHeight()
-            .then(
-                if (onRepeat == null) Modifier.pressable(haptic = Haptic.Key, glass = true, onClick = onClick)
-                else Modifier.holdToRepeat(onRepeat, onClick),
-            )
-            .glassRaised(CircleShape, bg.takeIf { selected || accent }),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (icon != null) Icon(icon, desc, Modifier.size(20.dp), tint = fg)
-        else Text(label.orEmpty(), style = MaterialTheme.typography.labelLarge, color = fg, maxLines = 1)
+    // Its share of the row, with the key itself a true circle in the middle (stretched to the
+    // share, they were near-circles a dp or two off, which reads as a mistake).
+    Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .circle()
+                .then(
+                        // Every key ticks on touch-down, like a keyboard (the repeating ones must, to start
+                    // repeating): ticking the others on release put two moments in one cluster.
+                    if (onRepeat == null) Modifier.keyDownTick().pressable(haptic = null, glass = true, onClick = onClick)
+                    else Modifier.holdToRepeat(onRepeat, onClick),
+                )
+                .glassRaised(CircleShape, bg.takeIf { selected }),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (icon != null) Icon(icon, desc, Modifier.size(20.dp), tint = fg)
+            else Text(label.orEmpty(), style = if (label.orEmpty().length > 3) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge, color = fg, maxLines = 1)
+        }
     }
+}
+
+/** The largest circle that fits the space given. */
+private fun Modifier.circle() = layout { measurable, constraints ->
+    val d = minOf(constraints.maxWidth, constraints.maxHeight)
+    val p = measurable.measure(Constraints.fixed(d, d))
+    layout(d, d) { p.place(0, 0) }
 }
 
 /**
@@ -509,6 +531,17 @@ private fun RowScope.Key(
  * an accelerating rate (75 ms down to 30 ms), like a hardware key's auto-repeat. A firmer tick
  * marks the switch to whole words.
  */
+/** [Haptic.Key] the moment a finger lands, without taking the gesture from the press handler. */
+private fun Modifier.keyDownTick(): Modifier = composed {
+    val haptics = LocalHapticFeedback.current
+    pointerInput(Unit) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false)
+            haptics.perform(Haptic.Key)
+        }
+    }
+}
+
 private fun Modifier.holdToRepeat(onRepeat: (Int) -> Unit, onClick: () -> Unit): Modifier = composed {
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
@@ -516,6 +549,8 @@ private fun Modifier.holdToRepeat(onRepeat: (Int) -> Unit, onClick: () -> Unit):
     val click by rememberUpdatedState(onClick)
     this
         .pressScale(1f, glass = true)
+        // A button to TalkBack too (tap gestures alone expose nothing).
+        .semantics { role = Role.Button; onClick { click(); true } }
         .pointerInput(Unit) {
             detectTapGestures(onPress = {
                 haptics.perform(Haptic.Key)
@@ -548,6 +583,7 @@ private fun ScrollStrip(modifier: Modifier, onScroll: (Float) -> Unit, onClick: 
             .fillMaxSize()
             .pressScale(1f, glass = true)
             .glassRaised(CircleShape)
+            .semantics { role = Role.Button; contentDescription = "Middle click; drag to scroll"; onClick { onClick(); true } }
             .pointerInput(Unit) {
                 val slop = viewConfiguration.touchSlop
                 awaitEachGesture {

@@ -1,5 +1,7 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.node.requireDensity
 import android.content.ContentResolver
 import android.content.Context
 import android.os.Build
@@ -142,6 +144,9 @@ object Haptics {
     }
 }
 
+/** [pressable]/[pressScale]'s default: dip by the same distance at any size. */
+const val PressAuto = Float.NaN
+
 fun HapticFeedback.perform(h: Haptic) {
     if (!Haptics.play(h)) performHapticFeedback(h.type)
 }
@@ -152,7 +157,8 @@ fun HapticFeedback.perform(h: Haptic) {
  */
 fun Modifier.pressable(
     enabled: Boolean = true,
-    pressedScale: Float = 0.96f,
+    /** [PressAuto]: dips by the same distance whatever the size (see [pressScale]); 1f: doesn't dip. */
+    pressedScale: Float = PressAuto,
     role: Role? = Role.Button,
     haptic: Haptic? = Haptic.Tap,
     /** Capsules and circles only: glass that lights up softly under the finger as it dips. */
@@ -174,21 +180,31 @@ fun Modifier.pressable(
  * so it wobbles out of step instead of just scaling. Even a quick tap visibly dips first. If a
  * scrolling parent takes the gesture over, it eases back without the bounce.
  *
+ * By default ([PressAuto]) everything dips by the same few dp at its edges, so a 48 dp button and a
+ * full-width row feel like one material (iOS's presses work this way): hand-picked scales per
+ * element (0.84 to 0.985) made the same touch feel different from one control to the next.
+ *
  * A modifier node that only touches its own graphics layer: presses never recompose or relayout.
  */
-fun Modifier.pressScale(pressedScale: Float = 0.96f, enabled: Boolean = true, glass: Boolean = false): Modifier =
-    this then PressScaleElement(pressedScale, enabled, glass && liquidGlassSupported)
+fun Modifier.pressScale(pressedScale: Float = PressAuto, enabled: Boolean = true, glass: Boolean = false): Modifier =
+    this then PressScaleElement(pressedScale, enabled, glass, glow = glass || !(pressedScale >= 1f))
 
-private data class PressScaleElement(val pressedScale: Float, val enabled: Boolean, val glass: Boolean) : ModifierNodeElement<PressScaleNode>() {
-    override fun create() = PressScaleNode(pressedScale, enabled, glass)
+private data class PressScaleElement(val pressedScale: Float, val enabled: Boolean, val glass: Boolean, val glow: Boolean) : ModifierNodeElement<PressScaleNode>() {
+    override fun create() = PressScaleNode(pressedScale, enabled, glass, glow)
     override fun update(node: PressScaleNode) {
         node.pressedScale = pressedScale
         node.enabled = enabled
         node.glass = glass
+        node.glow = glow
     }
 }
 
-private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var glass: Boolean) :
+/**
+ * [glass]: a capsule or circle that dips even when asked not to scale (the chrome handles it).
+ * [glow]: light gathers under the finger: everything that dips does (tiles, rows and cards too,
+ * not only pills), so every surface answers a touch the same way.
+ */
+private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var glass: Boolean, var glow: Boolean) :
     Modifier.Node(), PointerInputModifierNode, LayoutModifierNode, DrawModifierNode, CompositionLocalConsumerModifierNode {
     private val sx = Animatable(1f)
     private val sy = Animatable(1f)
@@ -199,19 +215,32 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
     private var glassJob: Job? = null
     /** Where the finger is, for the glow. */
     private var touch = Offset.Unspecified
+    /** The element's size at the last touch, for [PressAuto]. */
+    private var bounds = IntSize.Zero
+
+    /** The scale a press dips to: the caller's, or the one that moves the edges [PRESS_TRAVEL_DP] in. */
+    private fun pressed(): Float {
+        val s = if (!pressedScale.isNaN()) pressedScale else {
+            val longest = maxOf(bounds.width, bounds.height).toFloat()
+            if (longest <= 0f) 0.94f else (1f - 2f * PRESS_TRAVEL_DP * requireDensity().density / longest).coerceIn(0.86f, 0.985f)
+        }
+        return if (glass && s >= 1f) GLASS_PRESSED else s
+    }
 
     override fun ContentDrawScope.draw() {
         drawContent()
-        val a = if (glass) clear.value.coerceIn(0f, 1f) else 0f
+        val a = if (glow) clear.value.coerceIn(0f, 1f) else 0f
         if (a < 0.01f) return
         val dark = currentValueOf(LocalContentColor).luminance() > 0.5f
         // Light gathers under the finger and follows it, inside the capsule. No refraction: a lens
         // over a button's own label only ever looked like a glitch.
         val at = if (touch.isSpecified) touch else center
-        val r = size.minDimension / 2
+        // Round for capsules and circles; a rounded rectangle (tile-like) for anything larger.
+        val r = minOf(size.minDimension / 2, 20.dp.toPx())
         clipPath(Path().apply { addRoundRect(RoundRect(0f, 0f, size.width, size.height, CornerRadius(r))) }) {
             drawCircle(
-                Brush.radialGradient(listOf(Color.White.copy(alpha = (if (dark) 0.16f else 0.35f) * a), Color.Transparent), at, size.maxDimension * 0.7f),
+                // White light can't show on light glass: there the finger leaves a faint shade instead.
+                Brush.radialGradient(listOf((if (dark) Color.White.copy(alpha = 0.16f * a) else Color(0xFF1A2B4C).copy(alpha = 0.08f * a)), Color.Transparent), at, size.maxDimension * 0.7f),
                 radius = size.maxDimension * 0.7f, center = at,
             )
         }
@@ -219,14 +248,15 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
 
 
     private fun clearTo(target: Float) {
-        if (!glass) return
+        if (!glow) return
         glassJob?.cancel()
         glassJob = coroutineScope.launch { clear.animateTo(target, if (target > 0f) VyomaMotion.spatial() else VyomaMotion.effects()) }
     }
 
     override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, bounds: IntSize) {
         if (!enabled) return
-        if (glass && pass == PointerEventPass.Initial) {
+        this.bounds = bounds
+        if (glow && pass == PointerEventPass.Initial) {
             pointerEvent.changes.firstOrNull { it.pressed }?.let {
                 touch = it.position
                 if (held) invalidateDraw()
@@ -254,7 +284,7 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
         clearTo(1f)
         job?.cancel()
         // Height gives a beat later than width: a squash, not a shrink.
-        val target = if (glass && pressedScale >= 1f) GLASS_PRESSED else pressedScale
+        val target = pressed()
         job = coroutineScope.launch {
             launch { sy.animateTo(target, PRESS_SOFT) }
             sx.animateTo(target, PRESS)
@@ -267,7 +297,7 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
         job?.cancel()
         job = coroutineScope.launch {
             if (bounce) {
-                val pressed = if (glass && pressedScale >= 1f) GLASS_PRESSED else pressedScale
+                val pressed = pressed()
                 val depth = 1f - pressed
                 val dip = pressed + depth * 0.25f
                 if (sx.value > pressed + depth * 0.4f) {
@@ -301,5 +331,7 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
         val DIP = tween<Float>(70, easing = FastOutLinearInEasing)
         /** Glass buttons whose caller asked for no scale (the parent handles the click) still dip. */
         const val GLASS_PRESSED = 0.9f
+        /** How far every edge moves in on a press. */
+        const val PRESS_TRAVEL_DP = 3f
     }
 }

@@ -22,13 +22,13 @@ import kotlin.math.tanh
 
 /**
  * Where the light comes from, as seen on the screen: the angle the specular edges are brightest
- * at, in degrees clockwise from 3 o'clock (270 = straight up). At rest it's up and a little to the
- * left, like Apple's glass; tilting the phone sways it up to 55° either way, so a small turn carries
+ * at, in degrees clockwise from 3 o'clock (270 = straight up). At rest it's straight up, centred
+ * (the user asked for it there, not up-left); tilting the phone sways it up to 55° either way, so a small turn carries
  * it to straight up (a 35° soft limit made the top centre take a deliberate tilt), without circling. Read it only
  * while drawing: a change then redraws the highlights, never recomposes or relayouts.
  */
 object SpecularLight {
-    const val REST = 250f
+    const val REST = 270f
 
     var angle by mutableFloatStateOf(REST)
         private set
@@ -112,7 +112,7 @@ private class TiltListener(private val context: Context) : SensorEventListener {
         // Lying flat there's no "up" on the screen: settle back to the resting light.
         // Phones are held tilted back: full sway from about 15° off flat.
         val upright = ((hypot(sx, sy) / SensorManager.GRAVITY_EARTH - 0.08f) / 0.18f).coerceIn(0f, 1f)
-        // The light stays put, up and a little left, like Apple's: tilting only sways it, and a
+        // The light stays put, straight up: tilting only sways it, and a
         // bigger turn eases into the limit instead of carrying it round the element.
         SpecularLight.publish(SpecularLight.REST + MAX_SWAY * tanh(turn * GAIN / MAX_SWAY) * upright)
     }

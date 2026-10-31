@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.path
@@ -99,6 +101,8 @@ fun HomeScreen(
     val primary = connected.firstOrNull { it.identity.deviceId == selected } ?: connected.firstOrNull()
 
     CollapsingHeaderScaffold(
+        // Shorter than other pages: the first row of actions clears the tab bar on the first view.
+        heroFraction = 0.24f,
         title = primary?.identity?.deviceName ?: "Vyoma",
         subtitle = when {
             primary != null -> transportLabel(primary)
@@ -107,7 +111,7 @@ fun HomeScreen(
         },
         // The PC is what this page is about: its icon and the header button open its details.
         // Refresh only matters while nothing's connected.
-        hero = primary?.let { p -> { Box(Modifier.pressable { onOpenDevice(p.identity.deviceId) }) { DeviceGlyph(p) } } },
+        hero = primary?.let { p -> { Box(Modifier.semantics(mergeDescendants = true) { contentDescription = "PC details" }.pressable { onOpenDevice(p.identity.deviceId) }) { DeviceGlyph(p) } } },
         actions = {
             if (primary != null) {
                 BounceIconButton(onClick = { onOpenDevice(primary.identity.deviceId) }) { Icon(InfoGlyph, "PC details") }
@@ -126,9 +130,10 @@ fun HomeScreen(
                             Text(
                                 d.identity.deviceName,
                                 style = MaterialTheme.typography.labelLarge,
-                                color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.glassRaised(CircleShape, if (on) MaterialTheme.colorScheme.primary else null)
-                                    .pressable { selected = d.identity.deviceId }
+                                color = if (on) Color.White else MaterialTheme.colorScheme.onSurface,
+                                // Press first so the glass itself squishes, like every other chip.
+                                modifier = Modifier.pressable(haptic = Haptic.Select, glass = true) { selected = d.identity.deviceId }
+                                    .glassRaised(CircleShape, if (on) Glass.accent else null)
                                     .padding(horizontal = 14.dp, vertical = 8.dp),
                             )
                         }

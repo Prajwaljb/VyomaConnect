@@ -8,3 +8,8 @@ captures/
 *.keystore
 *.jks
 !debug.keystore
+
+# Apple HIG text fetched for the ui-judge skill (fetch-hig.sh); not ours to commit
+.claude/skills/ui-judge/hig/
+# Third-party design reference images
+references/

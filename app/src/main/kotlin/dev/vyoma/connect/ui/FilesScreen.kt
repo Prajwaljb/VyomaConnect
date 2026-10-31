@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.text.font.FontWeight
 import dev.vyoma.connect.designsystem.fadingHorizontalScroll
 import android.content.Intent
 import android.net.Uri
@@ -222,7 +223,8 @@ private fun Breadcrumbs(path: String, onPick: (String) -> Unit, modifier: Modifi
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Crumb("Home", current = parts.isEmpty()) { onPick("") }
+        // "PC", not "Home": that's the tab's name.
+        Crumb("PC", current = parts.isEmpty()) { onPick("") }
         parts.forEachIndexed { i, name ->
             Icon(
                 Icons.AutoMirrored.Rounded.KeyboardArrowRight, null,
@@ -237,11 +239,12 @@ private fun Breadcrumbs(path: String, onPick: (String) -> Unit, modifier: Modifi
 private fun Crumb(name: String, current: Boolean, onClick: () -> Unit) {
     Text(
         name,
-        style = MaterialTheme.typography.labelLarge,
-        color = if (current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+        // Accent means tappable everywhere: the folders you can jump back to, not the one you're in.
+        style = if (current) MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold) else MaterialTheme.typography.labelLarge,
+        color = if (current) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
         maxLines = 1,
         modifier = Modifier
-            .then(if (current) Modifier else Modifier.pressable(pressedScale = 0.92f, haptic = Haptic.Select, onClick = onClick))
+            .then(if (current) Modifier else Modifier.pressable(haptic = Haptic.Select, glass = true, onClick = onClick))
             .padding(horizontal = 10.dp, vertical = 8.dp),
     )
 }

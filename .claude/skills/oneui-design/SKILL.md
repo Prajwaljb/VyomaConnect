@@ -13,7 +13,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Wide windows (landscape, tablets): `CollapsingHeaderScaffold` centres a column of at most `MaxContentWidth` (560 dp).
 - Dashboard actions: Apple Shortcuts-widget tiles, 4 across in one card, concentric corners (18 dp tile + 10 dp pad), white
   ink (dark on yellow-bright tones; tones of luminance 0.2–0.5 darkened 22% for 4.5:1), labels 12 sp. Toggle tiles keep
-  one glyph and name ("Lock", "Mute"); only the fill says on.
+  fill AND name when on ("Locked", "Muted"): the user wants the state in words (a judge suggested constant labels; rejected).
 - Layers (iOS 26 rule, judge-reviewed 2026-10-31): full liquid glass (lens, band, rolled edge, full tilt sway) only on the
   floating layer (header, title bubble, tab bar, touchpad button) and controls while held. Content cards are a thinner
   pane: band 0.15 dark / 0.35 light, no rolled shade, highlights sway 40% (`SpecularLight.content`). Filled raised
@@ -21,12 +21,23 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Density: Clipboard puts history first (Send in the header, setup row at the end); Settings subtitles are one line;
   Appearance (accent + theme) and Effects (glow, lighter glass) are separate cards; long command lists fold after 4;
   the fingerprint is one line until tapped.
+- PC status card: battery as a 96 dp hero ring (8 dp stroke, the only exception to 6 dp) + CPU/Memory/GPU/Temp as a
+  2×2 of `Meter`s (label, `Reading`, 6 dp capsule bar). Never 5 equal gauges in a row (user: "5 in a row isn't nice").
+- Touch, everywhere: `pressable` defaults to `PressAuto` (every edge moves 3 dp in, whatever the size) and a finger glow
+  (white in dark, navy shade in light) on anything that dips. Order: `pressable` BEFORE the shape/glass modifiers so the
+  glass squishes. Dialog actions are `DialogButton` (never Material TextButton); switch rows toggle on the whole row with
+  the switch's haptic; keys tick on touch-down. Every icon-only tappable has a TalkBack label.
+- Like elements, like sizes: every header bubble (back, title, actions) is `CHROME_SIZE` 48 dp; header padding = the page
+  gutter; the scroll-edge fade reaches 12 dp below the bubbles. Round controls are true circles (`circle()` in the touchpad).
+- Home hero is 24% of the screen (others 30%) so the first action row clears the tab bar. Toggle tiles off = a 0.22 pane
+  of their colour (clear glass read as disabled); 0.2–0.5 luminance tones darken 30%. One filled accent (`Glass.accent`)
+  for switches, slider fill, chips, keys, pills. Media tint is clamped deep (luminance ≤ 0.06) for 4.5:1 text.
 - Data visuals share one system: 6 dp round-capped strokes on a `Glass.raised` track (gauges and the battery rings),
   numbers with a smaller muted unit (`Reading`), colour = load (green < 70% < yellow < 90% < red; temp 65/85 °C),
   never a fixed colour per gauge. The bolt is `Icons.Rounded.Bolt`, never an emoji.
 - Filled accent controls (prominent pill, send circle, chosen chip, toggled key) use `Glass.accent` (a deep shade of
   the accent) with WHITE ink in both themes; dark ink on the accent read muddy. Rejected: round buttons (plastic balls), wide 2-across tiles (abs), app icons.
-- Canvas: `Modifier.aurora()` (theme background + two cached accent glows near the top; dark: dimmer glows (0.16 vs 0.20), the rest true black; `AppCanvas.glow`, from Settings > Background glow, turns them off).
+- Canvas: `Modifier.aurora()` (theme background + two cached accent glows centred at the top (user: centred, not a corner); dark: dimmer glows (0.16 vs 0.20), the rest true black; `AppCanvas.glow`, from Settings > Background glow, turns them off).
   Dark mode IS pure black (AMOLED); there's no separate grey dark theme or toggle. No decorative textures (stars were tried and rejected: too specific).
 - Depth tokens: `glassDepth` (`GlassDepth` Dark (true black) / Light) (light cards are see-through, white 0.42, so the canvas tint shows; never back to near-solid white) drive every surface so the themes stay consistent.
 - Cards: `Modifier.glassCard(shape, fill?)` = a translucent even sheet (white 9.5% dark / 72% light;
@@ -43,7 +54,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a plain
   even fill plus a 0.9 dp specular hairline that follows the phone's tilt (a FIXED painted rim read as fake; the user
   asked for it back once it moved like iOS 26); pass `color` for accent/tinted or for chips over artwork (dark translucent).
-- Light: `SpecularLight.angle` (Light.kt) is where the light is on screen (250° = up, a little left, at rest; tilt sways it up to ±55°, soft limit, gain 2.2: ~10° of turn reaches straight up; the user found ±35° could never bring it to the centre), driven by the
+- Light: `SpecularLight.angle` (Light.kt) is where the light is on screen (270° = straight up, centred, at rest: the user's call; tilt sways it up to ±55°, soft limit, gain 2.2: ~10° of turn reaches straight up; the user found ±35° could never bring it to the centre), driven by the
   gravity sensor only while the UI is started (`TrackSpecularLight` in `VyomaTheme`), smoothed, 1.5° dead band. Every
   specular edge uses it: `specularRim(...)` (chrome stroke, raised controls) and the AGSL `light` uniform (lens rims).
 - Rims follow Apple's iOS 26 glass (user's reference shots): a broad highlight facing the light plus one ~80% as bright

@@ -492,7 +492,8 @@ fun Modifier.cardSegment(first: Boolean, last: Boolean, radius: Dp = 26.dp): Mod
 }
 
 /**
- * The app canvas: the theme background with two soft glows of the accent near the top. In dark mode
+ * The app canvas: the theme background with the accent glowing from the top centre (a broad glow and
+ * a fainter one below it, both centred: the user wanted it centred, not off in a corner). In dark mode
  * they're dimmer and the rest stays true black (AMOLED); bare black left the glass nothing to show
  * through or bend. Painted once per size and colour into a quarter-resolution bitmap and drawn stretched:
  * soft gradients survive the upscale untouched, and one textured quad is far cheaper for the GPU
@@ -510,11 +511,11 @@ fun Modifier.aurora(): Modifier = composed {
         val r = small.maxDimension * 0.75f
         val left = Brush.radialGradient(
             listOf(accent.copy(alpha = strength), accent.copy(alpha = strength * 0.35f), Color.Transparent),
-            center = Offset(small.width * 0.05f, small.height * 0.02f), radius = r,
+            center = Offset(small.width * 0.5f, 0f), radius = r,
         )
         val right = Brush.radialGradient(
-            listOf(accent.copy(alpha = strength * 0.6f), Color.Transparent),
-            center = Offset(small.width * 1.0f, small.height * 0.28f), radius = r * 0.8f,
+            listOf(accent.copy(alpha = strength * 0.4f), Color.Transparent),
+            center = Offset(small.width * 0.5f, small.height * 0.3f), radius = r * 0.7f,
         )
         val bitmap = ImageBitmap(w, h)
         CanvasDrawScope().draw(this, layoutDirection, Canvas(bitmap), small) {

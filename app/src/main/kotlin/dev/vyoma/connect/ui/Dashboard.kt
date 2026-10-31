@@ -1,12 +1,13 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.foundation.layout.widthIn
+import dev.vyoma.connect.designsystem.DialogButton
 import androidx.compose.ui.text.TextStyle
 import dev.vyoma.connect.designsystem.fadingVerticalScroll
 import dev.vyoma.connect.designsystem.fadingHorizontalScroll
 import dev.vyoma.connect.designsystem.ListRow
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.TextButton
 import dev.vyoma.connect.designsystem.GlassDialog
 import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
 import androidx.compose.ui.draw.drawWithContent
@@ -322,19 +323,20 @@ fun PcDashboard(
                 // The touchpad has its own round button by the tab bar; this opens the same screen ready to type.
                 Control(Icons.Rounded.Keyboard, "Keyboard", SystemColor.TEAL, onClick = onTouchpad),
                 // The live screen; its shutter takes full-resolution screenshots.
-                if (shots != null) Control(Icons.Rounded.ScreenShare, "Screen", SystemColor.PINK) { PcScreenActivity.open(context, id) }
+                if (shots != null) Control(Icons.Rounded.ScreenShare, "Screen", SystemColor.ORANGE) { PcScreenActivity.open(context, id) }
                 else Control(Icons.Rounded.Sensors, "Ping", SystemColor.GREEN) { vm.ping(id) },
-                // Toggles keep their glyph and name; the fill alone says on (Control Center style).
+                // Toggles say their state when on ("Locked", "Muted"): the user wants it in words, not
+                // only in the fill.
                 Control(
-                    Icons.Rounded.Lock,
-                    "Lock",
+                    if (pc.locked == true) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
+                    if (pc.locked == true) "Locked" else "Lock",
                     SystemColor.MINT,
                     active = pc.locked == true,
                     toggle = true,
                 ) { vm.setPcLocked(id, pc.locked != true) },
                 Control(
-                    Icons.AutoMirrored.Rounded.VolumeOff,
-                    "Mute",
+                    if (pc.sink?.muted == true) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
+                    if (pc.sink?.muted == true) "Muted" else "Mute",
                     SystemColor.RED,
                     active = pc.sink?.muted == true,
                     toggle = pc.sink != null,
@@ -480,7 +482,7 @@ internal fun VolumeBar(
     val shown by animateFloatAsState(level, if (dragging) snap() else VyomaMotion.spatial(), label = "vol")
     val haptics = LocalHapticFeedback.current
     val fill by animateColorAsState(
-        if (sink.muted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+        if (sink.muted) MaterialTheme.colorScheme.onSurfaceVariant else Glass.accent,
         VyomaMotion.effects(), label = "volFill",
     )
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -497,7 +499,7 @@ internal fun VolumeBar(
         onVolume((n * max).roundToInt())
     }
 
-    Column(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(start = 18.dp, end = 18.dp, top = 14.dp, bottom = if (outputs != null) 14.dp else 8.dp)) {
+    Column(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = if (outputs != null) 14.dp else 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 if (outputs != null) "Volume" else prettySinkName(sink.description),
@@ -529,7 +531,7 @@ internal fun VolumeBar(
             )
             Icon(if (sink.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null, tint = muted, modifier = Modifier.size(20.dp))
         }
-        if (outputs != null) OutputPicker(outputs, onOutput, Modifier.padding(top = 4.dp), bleed = 18.dp)
+        if (outputs != null) OutputPicker(outputs, onOutput, Modifier.padding(top = 4.dp), bleed = 20.dp)
     }
 }
 
@@ -583,18 +585,21 @@ private fun ControlTile(c: Control, modifier: Modifier) {
     // Legible on every colour: the brightest (yellow) keeps its tone and takes dark ink; mid tones
     // (cyan, teal, gray) deepen so white text holds 4.5:1 (darkening yellow only made it mustard).
     val lum = remember(tone) { tone.luminance() }
-    val fill = if (lum in 0.2f..0.5f) lerp(tone, Color.Black, 0.22f) else tone
+    val fill = if (lum in 0.2f..0.5f) lerp(tone, Color.Black, 0.30f) else tone
     val onFill = if (lum > 0.5f) Color(0xFF1C1C1E) else Color.White
     val ink = lerp(MaterialTheme.colorScheme.onSurface, onFill, on)
+    // A toggle that's off is a faint pane of its colour, not clear glass: clear read as disabled
+    // beside six filled tiles. Its glyph deepens in light mode to hold 3:1 on the pale pane.
+    val offGlyph = if (isDarkUi) tone else lerp(tone, Color.Black, 0.35f)
     Column(
         modifier
             .aspectRatio(1f)
-            .pressable(pressedScale = 0.94f, haptic = haptic, onClick = c.onClick)
-            .glassRaised(shape, if (on > 0.01f) fill.copy(alpha = 0.92f * on) else null)
-            .padding(start = 10.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+            .pressable(haptic = haptic, onClick = c.onClick)
+            .glassRaised(shape, fill.copy(alpha = 0.22f + 0.70f * on))
+            .padding(start = 10.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        Icon(c.icon, null, tint = lerp(tone, onFill, on), modifier = Modifier.size(22.dp))
+        Icon(c.icon, null, tint = lerp(offGlyph, onFill, on), modifier = Modifier.size(22.dp))
         // One size for every tile (12 sp fits "Commands"); shrinks only past that, at large font
         // scales, rather than cutting a word.
         BasicText(
@@ -620,21 +625,27 @@ internal fun ago(time: Long): CharSequence {
 /** Where the PC's sound goes: one chip per output, the default one filled. */
 @Composable
 internal fun OutputPicker(sinks: List<AudioSink>, onDefault: (AudioSink) -> Unit, modifier: Modifier = Modifier, bleed: Dp = 16.dp) {
-    // Runs out to the card's edge and fades there, instead of stopping at its padding.
+    val chip: @Composable (AudioSink, Modifier) -> Unit = { sink, m ->
+        val bg by animateColorAsState(
+            if (sink.isDefault) Glass.accent else Glass.raised,
+            VyomaMotion.effects(), label = "outBg",
+        )
+        Text(
+            prettySinkName(sink.description),
+            style = MaterialTheme.typography.labelLarge,
+            color = if (sink.isDefault) Color.White else MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = m.pressable(haptic = Haptic.Select, glass = true) { onDefault(sink) }
+                .glassRaised(CircleShape, bg.takeIf { sink.isDefault })
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+        )
+    }
+    val sorted = sinks.sortedByDescending { it.isDefault }
+    // Full names, scrolling out to the card's edge and fading there (sharing the row truncated three
+    // outputs to "Laptop …", worse than scrolling).
     Row(modifier.fadingHorizontalScroll(rememberScrollState(), bleed = bleed).padding(horizontal = bleed), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        sinks.sortedByDescending { it.isDefault }.forEach { sink ->
-            val bg by animateColorAsState(
-                if (sink.isDefault) Glass.accent else Glass.raised,
-                VyomaMotion.effects(), label = "outBg",
-            )
-            Text(
-                prettySinkName(sink.description),
-                style = MaterialTheme.typography.labelLarge,
-                color = if (sink.isDefault) Color.White else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                modifier = Modifier.glassRaised(CircleShape, bg.takeIf { sink.isDefault }).pressable(haptic = Haptic.Select) { onDefault(sink) }.padding(horizontal = 14.dp, vertical = 9.dp),
-            )
-        }
+        sorted.forEach { chip(it, Modifier) }
     }
 }
 
@@ -653,52 +664,49 @@ private fun loadColor(f: Float) = when {
 private fun Reading(value: String?, unit: String, style: TextStyle) {
     Row(verticalAlignment = Alignment.Bottom) {
         Text(value ?: "–", style = style.copy(fontFeatureSettings = "tnum"), maxLines = 1)
+        // A fixed slot for the unit, so digits line up whether it's %, G or °.
         if (value != null) Text(
             unit,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
-            modifier = Modifier.padding(bottom = 2.dp),
+            modifier = Modifier.padding(bottom = 2.dp).widthIn(min = 11.dp),
         )
     }
 }
 
 /**
- * The PC at a glance, Control Center style: its battery, then (with the companion) CPU, memory, GPU
- * and temperature, one gauge each in one row. Without the companion, the battery alone with its
- * state in words.
+ * The PC at a glance, like an iOS widget: the battery as the hero ring on the left and, with the
+ * companion, CPU, memory, GPU and temperature as a compact 2×2 of meters beside it. (Five equal
+ * gauges in a row read as a strip with nothing leading.) Without the companion, the battery's
+ * state in words takes the right side; without a battery, the meters take the card.
  */
 @Composable
 private fun PcStatus(battery: BatteryState?, stale: Boolean, stats: PcStats?, showLoad: Boolean, modifier: Modifier = Modifier) {
-    val charge = battery?.charge
-    val batteryColor = when {
-        battery == null -> SystemColor.GRAY
-        battery.charge <= 15 && !battery.charging -> SystemColor.RED
-        else -> SystemColor.GREEN
-    }
-    val batteryLabel = if (battery?.charging == true) "Charging" else "Battery"
     Row(
-        modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(vertical = 16.dp, horizontal = if (showLoad) 4.dp else 16.dp),
+        modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(horizontal = 20.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (battery != null) {
+            val color = if (battery.charge <= 15 && !battery.charging) SystemColor.RED else SystemColor.GREEN
             // A cached reading shows dimmed until the PC sends a fresh one.
-            Gauge(
-                batteryLabel, "$charge", "%", (charge ?: 0) / 100f, batteryColor,
-                Modifier.then(if (showLoad) Modifier.weight(1f) else Modifier).graphicsLayer { alpha = if (stale) 0.5f else 1f },
-            )
+            Box(Modifier.graphicsLayer { alpha = if (stale) 0.5f else 1f }) {
+                Gauge(
+                    if (battery.charging) "Charging" else "Battery", "${battery.charge}", "%",
+                    battery.charge / 100f, color, Modifier, size = 96.dp, stroke = 8.dp,
+                    valueStyle = MaterialTheme.typography.headlineSmall,
+                )
+            }
+            Spacer(Modifier.width(20.dp))
         }
         if (!showLoad) {
-            if (battery != null) {
-                Spacer(Modifier.width(16.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(if (battery.charging) "Charging" else if (battery.low) "Battery low" else "On battery", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        if (stale) "Last known level" else "PC battery",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            if (battery != null) Column(Modifier.weight(1f)) {
+                Text(if (battery.charging) "Charging" else if (battery.low) "Battery low" else "On battery", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (stale) "Last known level" else "PC battery",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             return@Row
         }
@@ -712,30 +720,36 @@ private fun PcStatus(battery: BatteryState?, stale: Boolean, stats: PcStats?, sh
         val memFraction = stats?.takeIf { it.memTotal > 0 }?.let { it.memUsed.toFloat() / it.memTotal } ?: 0f
         val cpu = (stats?.cpu ?: 0f) / 100f
         val gpu = (stats?.gpu ?: 0) / 100f
-        Gauge("CPU", stats?.let { "${it.cpu.roundToInt()}" }, "%", cpu, loadColor(cpu), Modifier.weight(1f))
-        Gauge(
-            "Memory", stats?.takeIf { it.memTotal > 0 }?.let { "%.1f".format(it.memUsed / 1e9) }, "G",
-            memFraction, loadColor(memFraction), Modifier.weight(1f),
-        )
-        Gauge("GPU", stats?.gpu?.let { "$it" }, "%", gpu, loadColor(gpu), Modifier.weight(1f))
-        Gauge("Temp", temp?.let { "${it.roundToInt()}" }, "°", (temp ?: 0f) / 100f, tempColor, Modifier.weight(1f))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Meter("CPU", stats?.let { "${it.cpu.roundToInt()}" }, "%", cpu, loadColor(cpu), Modifier.weight(1f))
+                Meter(
+                    "Memory", stats?.takeIf { it.memTotal > 0 }?.let { "%.1f".format(it.memUsed / 1e9) }, "G",
+                    memFraction, loadColor(memFraction), Modifier.weight(1f),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Meter("GPU", stats?.gpu?.let { "$it" }, "%", gpu, loadColor(gpu), Modifier.weight(1f))
+                Meter("Temp", temp?.let { "${it.roundToInt()}" }, "°", (temp ?: 0f) / 100f, tempColor, Modifier.weight(1f))
+            }
+        }
     }
 }
 
+/**
+ * A live fraction for drawing: readings arrive every 2 s and wobble by a point or two, so whole
+ * percent steps, small moves jumping in one frame and only real changes gliding, keep the redraw
+ * (which every glass element over the page repeats) to a fraction of a second.
+ */
 @Composable
-private fun Gauge(label: String, value: String?, unit: String, fraction: Float, color: SystemColor, modifier: Modifier) {
-    val tone = color.color
-    val track = Glass.raised
-    // Readings arrive every 2 s and wobble by a point or two. Whole percent steps and a short glide
-    // keep the redraw (which every glass element over the page repeats) to a fraction of a second.
-    // Small moves (most updates) jump in one frame; only real changes glide.
+private fun rememberGlide(fraction: Float): androidx.compose.runtime.FloatState {
     val step = (fraction.coerceIn(0f, 1f) * 100).roundToInt() / 100f
-    val gauge = remember { mutableFloatStateOf(step) }
+    val value = remember { mutableFloatStateOf(step) }
     LaunchedEffect(step) {
-        val from = gauge.floatValue
+        val from = value.floatValue
         // Lighter glass: every frame of a glide costs too much on this phone, so it jumps too.
         if (abs(step - from) < 0.03f || GlassQuality.lite) {
-            gauge.floatValue = step
+            value.floatValue = step
             return@LaunchedEffect
         }
         // Paced at ~30 fps by hand: a dial needs no more, and at 120 Hz the glide (and every glass
@@ -743,27 +757,59 @@ private fun Gauge(label: String, value: String?, unit: String, fraction: Float, 
         val start = withFrameMillis { it }
         while (true) {
             val f = ((withFrameMillis { it } - start) / 380f).coerceAtMost(1f)
-            gauge.floatValue = from + (step - from) * FastOutSlowInEasing.transform(f)
+            value.floatValue = from + (step - from) * FastOutSlowInEasing.transform(f)
             if (f >= 1f) break
             delay(33)
         }
     }
+    return value
+}
+
+/** A 270° ring open at the bottom, like a speedometer, the reading in its middle and the label under it. */
+@Composable
+private fun Gauge(
+    label: String, value: String?, unit: String, fraction: Float, color: SystemColor, modifier: Modifier,
+    size: Dp = 54.dp, stroke: Dp = 6.dp, valueStyle: TextStyle = MaterialTheme.typography.labelLarge,
+) {
+    val tone = color.color
+    val track = Glass.raised
+    val gauge = rememberGlide(fraction)
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.size(54.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(size), contentAlignment = Alignment.Center) {
             // Read while drawing: the glide never recomposes.
             Canvas(Modifier.fillMaxSize()) {
                 val sweep = gauge.floatValue
-                val w = 6.dp.toPx()
+                val w = stroke.toPx()
                 val inset = Offset(w / 2, w / 2)
-                val arc = Size(size.width - w, size.height - w)
-                // A 270° arc open at the bottom, like a speedometer.
+                val arc = Size(this.size.width - w, this.size.height - w)
                 drawArc(track, 135f, 270f, false, inset, arc, style = Stroke(w, cap = StrokeCap.Round))
                 if (sweep > 0f) drawArc(tone, 135f, 270f * sweep, false, inset, arc, style = Stroke(w, cap = StrokeCap.Round))
             }
-            Reading(value, unit, MaterialTheme.typography.labelLarge)
+            Reading(value, unit, valueStyle)
         }
         Spacer(Modifier.height(4.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** A label and reading over a slim capsule bar: the compact sibling of [Gauge], same colours and track. */
+@Composable
+private fun Meter(label: String, value: String?, unit: String, fraction: Float, color: SystemColor, modifier: Modifier) {
+    val tone = color.color
+    val track = Glass.raised
+    val level = rememberGlide(fraction)
+    Column(modifier) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            Reading(value, unit, MaterialTheme.typography.titleSmall)
+        }
+        Spacer(Modifier.height(6.dp))
+        Canvas(Modifier.fillMaxWidth().height(6.dp)) {
+            val r = CornerRadius(size.height / 2)
+            drawRoundRect(track, cornerRadius = r)
+            val f = level.floatValue
+            if (f > 0f) drawRoundRect(tone, size = Size(maxOf(size.height, size.width * f), size.height), cornerRadius = r)
+        }
     }
 }
 
@@ -799,9 +845,9 @@ private fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) {
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        confirmButton = { DialogButton(onClick = onDismiss) { Text("Close") } },
         dismissButton = {
-            TextButton(onClick = { vm.openCommandSetup(id); onDismiss() }) { Text(if (commands.isEmpty()) "Set up on PC" else "Edit on PC") }
+            DialogButton(onClick = { vm.openCommandSetup(id); onDismiss() }) { Text(if (commands.isEmpty()) "Set up on PC" else "Edit") }
         },
     )
 }
