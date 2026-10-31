@@ -33,7 +33,9 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   Files: Send (three big tiles: Files / Photos / Clipboard), On the PC (Desktop, Documents, Downloads, Pictures, Music,
   Videos: clear 16 dp glass tiles with a BARE coloured glyph, no badge inside, + Browse everything), Captures, Transfers, Clipboard.
 - (Old) Dashboard actions: Apple Shortcuts-widget tiles, 4 across in one card, concentric corners (18 dp tile + 10 dp pad), white
-  ink (dark on yellow-bright tones; tones of luminance 0.2–0.5 darkened 22% for 4.5:1), labels 12 sp. Toggle tiles keep
+  ink (dark on yellow-bright tones; tones of luminance 0.2–0.5 darkened 22% for 4.5:1). Now: 16 dp tiles + 12 dp pad, labels 11 sp SemiBold (as the other small labels), 9 dp even
+  side padding so "Commands" fits at full size (measure label heights: auto-shrink read as uneven). Corner capsules
+  (volume output picker) sit an even 10 dp from top and side. Toggle tiles keep
   fill AND name when on ("Locked", "Muted"): the user wants the state in words (a judge suggested constant labels; rejected).
 - Layers (iOS 26 rule, judge-reviewed 2026-10-31): full liquid glass (lens, band, rolled edge, full tilt sway) only on the
   floating layer (header, title bubble, tab bar, touchpad button) and controls while held. Content cards are a thinner
