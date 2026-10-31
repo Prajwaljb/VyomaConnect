@@ -306,7 +306,7 @@ private fun CommandChips(commands: List<RemoteCommand>, modifier: Modifier = Mod
         commands.forEach { cmd ->
             Row(
                 Modifier
-                    .height(48.dp)
+                    .height(44.dp)
                     .pressable(glass = true) { onRun(cmd) }
                     .glassRaised(CircleShape)
                     .padding(start = 14.dp, end = 18.dp),

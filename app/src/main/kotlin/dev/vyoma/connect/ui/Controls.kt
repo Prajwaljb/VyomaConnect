@@ -202,7 +202,8 @@ fun MediaCard(
                 Row(verticalAlignment = Alignment.Top) {
                     Column(Modifier.weight(1f).padding(top = 2.dp)) {
                         Text(p.title.ifBlank { p.name }, style = MaterialTheme.typography.titleMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        val sub = listOf(p.artist, p.album).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { p.name.takeIf { p.title.isNotBlank() }.orEmpty() }
+                        // Title and artist only, like Apple's music widget: the album cut the line off at the button.
+                        val sub = p.artist.ifBlank { p.name.takeIf { p.title.isNotBlank() }.orEmpty() }
                         if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     // Switching players is rare: a small button and a list, not a row of chips on the card.

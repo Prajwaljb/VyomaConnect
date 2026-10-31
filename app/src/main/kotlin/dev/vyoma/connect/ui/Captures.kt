@@ -138,8 +138,11 @@ fun CapturesStrip(onTake: (() -> Unit)?, onSeeAll: () -> Unit, modifier: Modifie
             modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(horizontal = 20.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Rounded.Screenshot, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(28.dp))
-            Spacer(Modifier.width(14.dp))
+            // The icon slot matches a list row's badge, so the text lines up with row titles elsewhere.
+            Box(Modifier.size(34.dp), contentAlignment = Alignment.Center) {
+                Icon(Icons.Rounded.Screenshot, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(28.dp))
+            }
+            Spacer(Modifier.width(16.dp))
             Text(
                 "Screenshots and photos from the PC land here",
                 style = MaterialTheme.typography.bodyMedium,

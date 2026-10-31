@@ -79,7 +79,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material.icons.rounded.UnfoldMore
 import dev.vyoma.connect.designsystem.LocalMenu
 import dev.vyoma.connect.designsystem.MenuItem
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Screenshot
@@ -181,6 +182,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.vyoma.connect.designsystem.ConnectionOrb
 import dev.vyoma.connect.designsystem.OrbState
@@ -218,7 +220,7 @@ private fun rememberPcState(vm: AppViewModel, state: DeviceState): PcState {
 
 /** Hero glyph: the PC in a deep accent squircle whose edge catches the light, with the live orb pinned to its corner. */
 @Composable
-fun DeviceGlyph(state: DeviceState, size: Dp = 76.dp) {
+fun DeviceGlyph(state: DeviceState, size: Dp = 64.dp) {
     Box(Modifier.size(size)) {
         val accent = MaterialTheme.colorScheme.primary
         Box(
@@ -391,9 +393,9 @@ fun PcDashboard(
                 // Held, the commands themselves: run one straight from Home.
                 Control(
                     Icons.Rounded.Terminal, "Commands", SystemColor.GRAY, opens = true,
-                    menuTitle = "Run on the PC",
+                    menuTitle = "Run on PC",
                     menu = commandList.take(6).map { cmd ->
-                        MenuItem(cmd.name, Icons.Rounded.Terminal) { vm.runCommand(id, cmd.key); status.show("Running ${cmd.name}", icon = Icons.Rounded.Terminal) }
+                        MenuItem(cmd.name) { vm.runCommand(id, cmd.key); status.show("Running ${cmd.name}", icon = Icons.Rounded.Terminal) }
                     }.ifEmpty { null },
                 ) { showCommands = true },
             ),
@@ -696,12 +698,17 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
     val fill = tileFill(tone, lum)
     val ink = if (lum > 0.5f) Color(0xFF1C1C1E) else Color.White
     val menus = LocalMenu.current
-    var bounds by remember { mutableStateOf(Rect.Zero) }
+    // Where the tile is, read only when a long press opens its menu. Not state: written on every
+    // scroll frame, a state write per tile woke the main thread each frame (7% of its time).
+    val placed = remember { arrayOfNulls<LayoutCoordinates>(1) }
     Column(
         modifier
             .graphicsLayer { if (!enabled) { alpha = 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha } }
-            .onGloballyPositioned { bounds = it.boundsInRoot() }
-            .liquidPress(enabled = enabled, onLongClickLabel = "More", onLongClick = c.menu?.let { m -> { menus.show(bounds, m, c.menuTitle) } }, onClick = c.onClick)
+            .onPlaced { placed[0] = it }
+            .liquidPress(
+                enabled = enabled, onLongClickLabel = "More", onClick = c.onClick,
+                onLongClick = c.menu?.let { m -> { placed[0]?.takeIf { it.isAttached }?.let { menus.show(it.boundsInRoot(), m, c.menuTitle) } } },
+            )
             .glassRaised(RoundedCornerShape(TileRadius), fill.copy(alpha = 0.92f))
             .padding(start = 10.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
@@ -771,11 +778,12 @@ private fun tileFill(tone: Color, lum: Float) = if (lum in 0.2f..0.5f) tone.tone
 
 @Composable
 private fun TileLabel(text: String, ink: Color) {
-    // One size for every tile (12 sp); at large font scales it shrinks to 10 sp at most, rather than
-    // cutting a word (9 sp left "Commands" visibly smaller than its neighbours).
+    // One size for every tile (12 sp), set a touch tight so the longest label ("Commands") fits at
+    // full size at the user's font scale too (it auto-shrank a size below its neighbours); at very
+    // large scales it still shrinks to 10 sp rather than cutting a word.
     BasicText(
         text,
-        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, color = ink),
+        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, color = ink, letterSpacing = (-0.02).em),
         maxLines = 1,
         autoSize = TextAutoSize.StepBased(minFontSize = 10.sp, maxFontSize = 12.sp),
     )

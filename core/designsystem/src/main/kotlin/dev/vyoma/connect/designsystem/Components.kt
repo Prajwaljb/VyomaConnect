@@ -84,7 +84,9 @@ import kotlin.math.abs
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onPlaced
@@ -111,6 +113,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -198,7 +201,8 @@ fun CollapsingHeaderScaffold(
 
     // The title is one piece of text that travels: it rests in the hero, and as the page scrolls it
     // rises and shrinks into the bar, where a bubble of glass forms around it like water.
-    val heroStyle = if (hero != null) MaterialTheme.typography.headlineLarge else MaterialTheme.typography.displayMedium
+    // One style everywhere: a device name read smaller on its details page than on Home.
+    val heroStyle = MaterialTheme.typography.displayMedium
     val shrink = MaterialTheme.typography.titleMedium.fontSize.value / heroStyle.fontSize.value
     val statusTop = WindowInsets.statusBars.getTop(density)
     val anchor = remember { CoordinatesHolder() }
@@ -267,8 +271,39 @@ fun CollapsingHeaderScaffold(
             modifier = Modifier.fillMaxSize().then(listModifier),
         ) {
             item(key = "header", contentType = "header") {
-                Column(
-                    Modifier
+                // The title sits at the same height on every page (a fixed anchor, not centred with
+                // whatever is around it: a subtitle lifted it 13 dp and the device glyph pushed it
+                // down 46 dp). The glyph hangs above it and the subtitle below.
+                Layout(
+                    content = {
+                        if (hero != null) Box(Modifier.layoutId(HERO_GLYPH)) { hero() }
+                        // Holds the title's place, and shows it while the page rests at the top: drawn by the
+                        // list, it stretches with everything else when the page is pulled down (the
+                        // travelling copy sits outside the list, so it stayed put while the rest stretched).
+                        Text(
+                            title,
+                            style = heroStyle,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .graphicsLayer { alpha = if (listState.atTop()) 1f else 0f }
+                                .onGloballyPositioned { c ->
+                                    val root = anchor.coordinates ?: return@onGloballyPositioned
+                                    if (listState.firstVisibleItemIndex != 0 || !root.isAttached) return@onGloballyPositioned
+                                    // Back to where it sits unscrolled.
+                                    val y = root.localPositionOf(c, Offset.Zero).y + c.size.height / 2f +
+                                        listState.firstVisibleItemScrollOffset
+                                    if (restY.isNaN() || abs(y - restY) > 0.5f) restY = y
+                                },
+                        )
+                        if (subtitle != null) {
+                            Text(
+                                subtitle, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.layoutId(HERO_SUBTITLE),
+                            )
+                        }
+                    },
+                    modifier = Modifier
                         .fillMaxWidth()
                         .height(headerHeight)
                         .graphicsLayer {
@@ -278,36 +313,16 @@ fun CollapsingHeaderScaffold(
                             compositingStrategy = CompositingStrategy.ModulateAlpha
                         }
                         .padding(horizontal = 12.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Spacer(Modifier.height(32.dp))
-                    if (hero != null) {
-                        hero()
-                        Spacer(Modifier.height(14.dp))
-                    }
-                    // Holds the title's place, and shows it while the page rests at the top: drawn by the
-                    // list, it stretches with everything else when the page is pulled down (the
-                    // travelling copy sits outside the list, so it stayed put while the rest stretched).
-                    Text(
-                        title,
-                        style = heroStyle,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .graphicsLayer { alpha = if (listState.atTop()) 1f else 0f }
-                            .onGloballyPositioned { c ->
-                                val root = anchor.coordinates ?: return@onGloballyPositioned
-                                if (listState.firstVisibleItemIndex != 0 || !root.isAttached) return@onGloballyPositioned
-                                // Back to where it sits unscrolled.
-                                val y = root.localPositionOf(c, Offset.Zero).y + c.size.height / 2f +
-                                    listState.firstVisibleItemScrollOffset
-                                if (restY.isNaN() || abs(y - restY) > 0.5f) restY = y
-                            },
-                    )
-                    if (subtitle != null) {
-                        Spacer(Modifier.height(6.dp))
-                        Text(subtitle, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                ) { measurables, c ->
+                    val loose = c.copy(minWidth = 0, minHeight = 0)
+                    val glyph = measurables.firstOrNull { it.layoutId == HERO_GLYPH }?.measure(loose)
+                    val text = measurables.first { it.layoutId == null }.measure(loose)
+                    val sub = measurables.firstOrNull { it.layoutId == HERO_SUBTITLE }?.measure(loose)
+                    layout(c.maxWidth, c.maxHeight) {
+                        val titleTop = (c.maxHeight * TITLE_ANCHOR - text.height / 2f).roundToInt()
+                        glyph?.place((c.maxWidth - glyph.width) / 2, titleTop - 14.dp.roundToPx() - glyph.height)
+                        text.place((c.maxWidth - text.width) / 2, titleTop)
+                        sub?.place((c.maxWidth - sub.width) / 2, titleTop + text.height + 6.dp.roundToPx())
                     }
                 }
             }
@@ -333,7 +348,7 @@ fun CollapsingHeaderScaffold(
             ) {
                 if (navigation != null) {
                     Box(
-                        Modifier.align(Alignment.CenterStart).size(CHROME_SIZE).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp, interactive = true),
+                        Modifier.align(Alignment.CenterStart).size(CHROME_SIZE).glassChrome(backdrop, CircleShape, blur = 6.dp, bevel = 16.dp, interactive = true),
                         contentAlignment = Alignment.Center,
                     ) { CompositionLocalProvider(LocalOnChrome provides true) { navigation() } }
                 }
@@ -360,10 +375,10 @@ fun CollapsingHeaderScaffold(
                             scaleY = 1f + 0.12f * maxOf(pop, away)
                         }
                         .drawWithContent { if (bubblePop.value < 1f) drawContent() }
-                        .glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp),
+                        .glassChrome(backdrop, CircleShape, blur = 6.dp, bevel = 16.dp),
                 )
                 Row(
-                    Modifier.align(Alignment.CenterEnd).height(CHROME_SIZE).glassChrome(backdrop, CircleShape, blur = 8.dp, bevel = 16.dp, interactive = true),
+                    Modifier.align(Alignment.CenterEnd).height(CHROME_SIZE).glassChrome(backdrop, CircleShape, blur = 6.dp, bevel = 16.dp, interactive = true),
                     verticalAlignment = Alignment.CenterVertically,
                 ) { CompositionLocalProvider(LocalOnChrome provides true) { actions() } }
             }
@@ -419,6 +434,10 @@ fun CollapsingHeaderScaffold(
 private fun LazyListState.atTop() = firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset == 0
 
 private const val ROOM_KEY = "collapse-room"
+private const val HERO_GLYPH = "hero-glyph"
+private const val HERO_SUBTITLE = "hero-subtitle"
+/** Where the hero title's centre sits, as a share of the hero's height, on every page. */
+private const val TITLE_ANCHOR = 0.56f
 private val BAR_HEIGHT = 64.dp
 /** Every bubble in the bar (back, title, actions) is one height: a smaller title bubble looked like a different part. */
 private val CHROME_SIZE = 48.dp
@@ -519,13 +538,15 @@ fun ListRow(
 fun RowChevron(state: String? = null) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         if (state != null) {
-            Text(state, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            // Regular weight: a value at the title's size but bolder outweighed the row's own name.
+            Text(state, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Normal), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             Spacer(Modifier.width(2.dp))
         }
         Icon(
             Icons.AutoMirrored.Rounded.KeyboardArrowRight, null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            modifier = Modifier.size(20.dp),
+            // The glyph's side bearing set chevrons 7 dp inside the edge switches and pills end on.
+            modifier = Modifier.size(20.dp).offset(x = 6.dp),
         )
     }
 }
@@ -730,7 +751,7 @@ fun PillButton(
     Box(
         modifier
             // 40 dp to look at; Compose already widens the touch target to 48 dp.
-            .then(if (large) Modifier.fillMaxWidth().height(54.dp) else Modifier.height(40.dp))
+            .then(if (large) Modifier.fillMaxWidth().height(54.dp) else Modifier.height(44.dp))
             .pressable(enabled = enabled, haptic = haptic, glass = true, onClick = onClick)
             // Prominent pills are lit accent glass; the rest are raised glass with an accent label.
             .glassRaised(CircleShape, bg.takeIf { prominent && enabled })

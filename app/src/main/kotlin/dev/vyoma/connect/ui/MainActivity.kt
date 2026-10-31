@@ -45,6 +45,7 @@ import dev.vyoma.connect.BuildConfig
 import dev.vyoma.connect.demo.DemoDiagnostics
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
@@ -197,6 +198,14 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
     // True while a back swipe drives the transition (and while its release animates).
     var swiping by remember { mutableStateOf(false) }
     LaunchedEffect(current) {
+        if (!swiping && nav.currentState == nav.targetState && nav.currentState != current) {
+            // Composing a whole new page takes ~25 ms (one long frame). Do it parked just off
+            // screen at progress 0 and start the slide after: started together, the spring had
+            // already run 25 ms by its first visible frame and the page jumped in by a tenth.
+            nav.seekTo(0f, current)
+            withFrameNanos {}
+            withFrameNanos {}
+        }
         nav.animateTo(current, if (swiping) VyomaMotion.page() else null)
         swiping = false
     }

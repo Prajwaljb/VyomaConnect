@@ -388,7 +388,7 @@ private fun GlassButton(backdrop: Backdrop, label: String, icon: ImageVector, si
     Box(
         Modifier
             .size(size)
-            .glassChrome(backdrop, CircleShape, blur = 8.dp, tint = FROST, bevel = 16.dp, interactive = true)
+            .glassChrome(backdrop, CircleShape, blur = 6.dp, tint = FROST, bevel = 16.dp, interactive = true)
             .pressable(enabled = enabled, pressedScale = 1f, onClick = onClick)
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
@@ -429,7 +429,7 @@ private fun RateReadout(backdrop: Backdrop, stats: () -> ScreenDecoder?) {
             fontWeight = FontWeight.Medium,
             // Tabular digits: the pill doesn't twitch as the numbers change.
             style = TextStyle(fontFeatureSettings = "tnum", shadow = GLYPH_SHADOW),
-            modifier = Modifier.glassChrome(backdrop, RoundedCornerShape(50), blur = 8.dp, tint = FROST, bevel = 12.dp).padding(horizontal = 14.dp, vertical = 9.dp),
+            modifier = Modifier.glassChrome(backdrop, RoundedCornerShape(50), blur = 6.dp, tint = FROST, bevel = 12.dp).padding(horizontal = 14.dp, vertical = 9.dp),
         )
     }
 }
