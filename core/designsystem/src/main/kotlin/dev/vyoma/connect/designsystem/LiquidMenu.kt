@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.platform.LocalDensity
@@ -94,12 +95,22 @@ internal class MenuRequest(
 )
 
 /**
- * The pressed element turns INTO the menu: the drop starts as an exact copy of it ([color] and
- * [face], its own content at its own size) that clears into glass as it grows, and closing turns
- * back into it before handing over, so nothing swaps. The element hides itself while
- * [MenuController.covers] says so.
+ * The pressed element turns INTO the menu, in place: the drop starts as an exact copy of it
+ * ([color] and [face], its content minus the icon, at its own size) and grows from the element's
+ * own corner (never flying off beside it) while the copy shrinks down to its [icon], which glides
+ * into the menu's header beside [label]. Closing runs it backwards and hands over to the element,
+ * identical by then. The element hides itself while [MenuController.covers] says so.
+ * [iconAt] is the icon's top-left inside the element, [ink] its colour there.
  */
-class MenuMorph(val owner: Any, val color: Color, val face: @Composable () -> Unit)
+class MenuMorph(
+    val owner: Any,
+    val color: Color,
+    val icon: ImageVector? = null,
+    val iconAt: DpOffset = DpOffset.Zero,
+    val ink: Color = Color.White,
+    val label: String? = null,
+    val face: @Composable () -> Unit,
+)
 
 /** Opens long-press menus; get it from [LocalMenu]. */
 class MenuController {
@@ -160,6 +171,15 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
     val bars = WindowInsets.systemBars
     // Where the drop is this frame (set while laying it out), so the element's face can hold still.
     val origin = remember { FloatArray(2) }
+    // Where the finished menu sits (set while laying it out), for the icon's glide into its header.
+    val target = remember { FloatArray(2) }
+    val title = r.title ?: r.morph?.label
+    val withIcon = r.morph?.icon != null
+    val headerHeight = when {
+        withIcon -> ICON_HEADER_HEIGHT
+        title != null -> TITLE_HEIGHT
+        else -> 0.dp
+    }
     fun formed() = minOf(wide.value, tall.value).coerceIn(0f, 1f)
     // Its corners round from the element's into the menu's as it forms (read while drawing).
     val shape = remember(r.id) {
@@ -223,7 +243,7 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                 .layout { m, c ->
                     val from = r.from
                     val menuW = MENU_WIDTH.toPx()
-                    val menuH = (if (r.title != null) TITLE_HEIGHT.toPx() else 0f) + ROW_HEIGHT.toPx() * r.items.size +
+                    val menuH = headerHeight.toPx() + ROW_HEIGHT.toPx() * r.items.size +
                         GROUP_GAP.toPx() * r.items.dropLast(1).count { it.groupEnd } + PAD.toPx() * 2
                     val margin = 16.dp.toPx()
                     val gap = 10.dp.toPx()
@@ -235,12 +255,21 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                     val maxBottom = c.maxHeight - bars.getBottom(this) - margin
                     val above = from.top - gap - menuH
                     val below = from.bottom + gap
-                    val top = when {
+                    val top = if (r.morph != null) {
+                        // Grows in place from the element's own corner: down from its top edge, or up
+                        // from its bottom edge when there's no room below.
+                        when {
+                            from.top + menuH <= maxBottom -> from.top
+                            from.bottom - menuH >= minTop -> from.bottom - menuH
+                            else -> maxBottom - menuH
+                        }
+                    } else when {
                         above >= minTop -> above
                         below + menuH <= maxBottom -> below
                         from.top - minTop > maxBottom - from.bottom -> minTop
                         else -> maxBottom - menuH
                     }.coerceAtMost(maxBottom - menuH).coerceAtLeast(minTop)
+                    target[0] = left; target[1] = top
                     val w = wide.value
                     val h = tall.value
                     val l = lerp(from.left, left, w)
@@ -299,10 +328,16 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                     }
                     .padding(vertical = PAD),
             ) {
-                if (r.title != null) {
+                if (withIcon) {
+                    // The element's icon lands in the slot at the start (drawn by the glide below).
+                    Row(Modifier.fillMaxWidth().height(ICON_HEADER_HEIGHT).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Spacer(Modifier.width(ICON_SIZE + 10.dp))
+                        if (title != null) Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                } else if (title != null) {
                     Text(
                         // Footnote-sized, like an iOS menu title: at item size it read as a disabled item.
-                        r.title, style = MaterialTheme.typography.labelMedium,
+                        title, style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.height(TITLE_HEIGHT).padding(start = 20.dp, end = 20.dp, top = 10.dp),
@@ -330,6 +365,23 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                 }
             }
         }
+        // What's left of the element once it has shrunk to its icon: the icon glides from its place
+        // on the element into the menu's header, turning from the element's ink to the menu's.
+        r.morph?.icon?.let { icon ->
+            val morph = r.morph
+            val glide = Modifier
+                .offset {
+                    val f = formed()
+                    val sx = r.from.left + morph.iconAt.x.toPx()
+                    val sy = r.from.top + morph.iconAt.y.toPx()
+                    val ex = target[0] + 20.dp.toPx()
+                    val ey = target[1] + PAD.toPx() + (ICON_HEADER_HEIGHT - ICON_SIZE).toPx() / 2
+                    IntOffset(lerp(sx, ex, f).roundToInt(), lerp(sy, ey, f).roundToInt())
+                }
+                .size(ICON_SIZE)
+            Icon(icon, null, tint = morph.ink, modifier = glide.graphicsLayer { alpha = 1f - smooth(formed() / 0.6f) })
+            Icon(icon, null, tint = MaterialTheme.colorScheme.onSurface, modifier = glide.graphicsLayer { alpha = smooth(formed() / 0.6f) })
+        }
     }
 }
 
@@ -339,6 +391,8 @@ private fun smooth(x: Float): Float { val t = x.coerceIn(0f, 1f); return t * t *
 private val MENU_WIDTH = 240.dp
 private val ROW_HEIGHT = 48.dp
 private val TITLE_HEIGHT = 32.dp
+private val ICON_HEADER_HEIGHT = 44.dp
+private val ICON_SIZE = 22.dp
 private val GROUP_GAP = 9.dp
 private val PAD = 8.dp
 private const val SCRIM = 0.35f
