@@ -34,8 +34,9 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   opposite (`specularRim(opposite = 0.8f)`), and `InnerGlow` (one per element), a soft band of light a few dp deep just inside the
   edge (cards 8 dp at `GlassDepth.band`, chrome ≤4 dp at 52% white in dark, raised ≤4 dp; t³ falloff, k^1.6 towards
   the lit sides; the user tuned these for contrast, not spread). Hairline-only rims read as dull grey slabs on true
-  black; the band is what makes it glass. Cards, raised controls and chrome also pass `shade`/`depth` (cards 22 dp, raised
-  ≤12 dp, chrome ≤14 dp; kept subtle: the user found 0.6 shade "too 3dish"): the edge is shaded as a thick drop rolling over (brighter sloping towards the light, `GlassDepth.shade`
+  black; the band is what makes it glass. Cards and chrome also pass `shade`/`depth` (cards 16 dp, chrome ≤10 dp; kept
+  subtle: the user found 0.6 shade "too 3dish"). Raised controls don't: small grey circles with it read as plastic
+  balls. The user wants the glass clear: dark fills ~0.05 white, light cards 0.32 white, chrome tint 0.42/0.38: the edge is shaded as a thick drop rolling over (brighter sloping towards the light, `GlassDepth.shade`
   sloping away, a shallow counter-curve past the roll), so flat sides read as 3D like the WWDC25 glass reference. Lite glass keeps the band. It must fade with
   no visible steps (stacked strokes showed rings): an AGSL distance-to-rounded-rect pass, many faint strokes below API 33.
   Read it only in draw lambdas, never in composition. A still phone renders ~0 frames; measured no jank cost.

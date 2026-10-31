@@ -132,17 +132,17 @@ enum class SystemColor(private val light: Long, private val dark: Long) {
 object Glass {
     val fill: Color
         @Composable @ReadOnlyComposable
-        get() = if (isDarkUi) Color.White.copy(alpha = 0.075f) else Color.White.copy(alpha = 0.42f)
+        get() = if (isDarkUi) Color.White.copy(alpha = 0.055f) else Color.White.copy(alpha = 0.32f)
 
     /** A step up from [fill], for buttons sitting on a glass card. */
     val raised: Color
         @Composable @ReadOnlyComposable
-        get() = if (isDarkUi) Color.White.copy(alpha = 0.11f) else Color.Black.copy(alpha = 0.05f)
+        get() = if (isDarkUi) Color.White.copy(alpha = 0.07f) else Color.Black.copy(alpha = 0.04f)
 
     /** Tint laid over real backdrop blur. */
     val chrome: Color
         @Composable @ReadOnlyComposable
-        get() = if (isDarkUi) Color(0xFF1C1D21).copy(alpha = 0.56f) else Color.White.copy(alpha = 0.5f)
+        get() = if (isDarkUi) Color(0xFF1C1D21).copy(alpha = 0.42f) else Color.White.copy(alpha = 0.38f)
 
     val edge: Brush
         @Composable @ReadOnlyComposable
@@ -182,7 +182,7 @@ class GlassDepth internal constructor(
 // Dark is true black (AMOLED): glass glows instead of casting shadows.
 private val DarkDepth = GlassDepth(
     // Dark glass, so the lit edge has something to stand out from (lighter read as milky).
-    fill = Color.White.copy(alpha = 0.06f),
+    fill = Color.White.copy(alpha = 0.045f),
     // Bright, like Apple's: on true black the lit edge is what makes it glass.
     rimLit = Color.White.copy(alpha = 0.42f), rimBase = Color.White.copy(alpha = 0.06f),
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
@@ -192,7 +192,7 @@ private val DarkDepth = GlassDepth(
 )
 private val LightDepth = GlassDepth(
     // See-through, so the canvas's tint shows in the card (0.72 read as solid white blocks).
-    fill = Color.White.copy(alpha = 0.42f),
+    fill = Color.White.copy(alpha = 0.32f),
     // White on white can't show; a navy hairline gives the edge and the light lifts out of it.
     rimLit = Color.White, rimBase = Color(0xFF1A2B4C).copy(alpha = 0.06f),
     shadow = Color(0xFF1A2B4C).copy(alpha = 0.05f), shadowBlur = 14f, shadowDrop = 3f,
@@ -416,7 +416,7 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
     this
         .drawWithCache {
             val outline = shape.createOutline(size, layoutDirection, this)
-            val fill = base ?: if (dark) Color.White.copy(alpha = 0.12f) else Color(0xFF1A2B4C).copy(alpha = 0.06f)
+            val fill = base ?: if (dark) Color.White.copy(alpha = 0.07f) else Color(0xFF1A2B4C).copy(alpha = 0.045f)
             val lit = Color.White.copy(alpha = if (base != null) 0.5f else if (dark) 0.4f else 0.95f)
             val rimBase = when {
                 base != null -> Color.White.copy(alpha = 0.1f)
@@ -428,13 +428,12 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
             val glow = InnerGlow()
             val band = Color.White.copy(alpha = if (base != null) 0.42f else if (dark) 0.34f else 0.6f)
             val bandWidth = (size.minDimension * 0.12f).coerceAtMost(4.dp.toPx())
-            val shade = if (dark || base != null) Color.Black.copy(alpha = 0.3f) else Color(0xFF1A2B4C).copy(alpha = 0.08f)
-            val roll = (size.minDimension * 0.3f).coerceAtMost(12.dp.toPx())
             onDrawBehind {
                 drawOutline(outline, fill)
                 // The light's angle is read here only, so tilting redraws the edge and nothing else.
                 val light = SpecularLight.angle
-                with(glow) { draw(outline, band, bandWidth, light, shade = shade, depth = roll) }
+                // No rolled shading here: on small round controls it turned them into plastic balls.
+                with(glow) { draw(outline, band, bandWidth, light) }
                 drawOutline(outline, specularRim(lit, rimBase, center, light), style = stroke)
             }
         }
