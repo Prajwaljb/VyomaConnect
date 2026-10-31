@@ -182,6 +182,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -577,10 +578,21 @@ internal fun VolumeBar(
             val name = prettySinkName(sink.description)
             if (outputs != null) {
                 // Pressed, the glass capsule dips; it bleeds left by its padding so its text lines up.
-                Row(
+                val raised = if (isDarkUi) Color.White.copy(alpha = 0.07f) else Color(0xFF1A2B4C).copy(alpha = 0.045f)
+                val face: @Composable () -> Unit = {
+                    Row(Modifier.padding(start = 10.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        Icon(Icons.Rounded.UnfoldMore, null, tint = muted, modifier = Modifier.padding(start = 4.dp).size(18.dp))
+                    }
+                }
+                Box(
                     Modifier
                         .weight(1f, fill = false)
                         .offset(x = (-10).dp)
+                        // The capsule grows into the menu in place; hidden while the menu stands in for it.
+                        .graphicsLayer {
+                            if (menus.covers(capsule)) { alpha = 0f; compositingStrategy = CompositingStrategy.ModulateAlpha }
+                        }
                         .semantics { contentDescription = "Output: $name. Choose output" }
                         .onPlaced { capsule[0] = it }
                         // The outputs pour out of the capsule as a liquid glass menu (was a dialog).
@@ -593,16 +605,12 @@ internal fun VolumeBar(
                                     },
                                     title = "Play PC sound on",
                                     fromRadius = 18.dp,
+                                    morph = MenuMorph(capsule, raised, face = face),
                                 )
                             }
                         }
-                        .glassRaised(CircleShape)
-                        .padding(start = 10.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                    Icon(Icons.Rounded.UnfoldMore, null, tint = muted, modifier = Modifier.padding(start = 4.dp).size(18.dp))
-                }
+                        .glassRaised(CircleShape),
+                ) { face() }
             } else {
                 Text(name, style = MaterialTheme.typography.labelLarge, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             }
@@ -705,7 +713,14 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
                 onLongClick = c.menu?.let { m ->
                     {
                         placed[0]?.takeIf { it.isAttached }?.let {
-                            menus.show(it.boundsInRoot(), m, c.menuTitle, fromRadius = TileRadius, morph = MenuMorph(placed, fill) { TileFace(c, ink) })
+                            menus.show(
+                                it.boundsInRoot(), m, c.menuTitle, fromRadius = TileRadius,
+                                // The tile grows into the menu in place, shrinking to its icon, which
+                                // lands in the menu's header.
+                                morph = MenuMorph(placed, fill, icon = c.icon.takeIf { c.progress == null }, iconAt = DpOffset(11.dp, 12.dp), ink = ink, label = c.label) {
+                                    TileFace(c, ink, icon = c.progress != null)
+                                },
+                            )
                         }
                     }
                 },
@@ -714,9 +729,9 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
     ) { TileFace(c, ink) }
 }
 
-/** A tile's glyph, corner mark and label; also what its menu grows out of. */
+/** A tile's glyph, corner mark and label; also what its menu grows out of (there without the glyph, which glides on its own). */
 @Composable
-private fun TileFace(c: Control, ink: Color) {
+private fun TileFace(c: Control, ink: Color, icon: Boolean = true) {
     Column(
         // Even on both sides (6 dp at the end ran "Commands" to the edge), and 9 dp so it fits at full size.
         Modifier.fillMaxSize().padding(horizontal = 9.dp, vertical = 10.dp),
@@ -735,7 +750,7 @@ private fun TileFace(c: Control, ink: Color) {
                         drawArc(ink, -90f, 360f * sweep.floatValue, false, inset, arc, style = Stroke(w, cap = StrokeCap.Round))
                     }
                     Icon(c.icon, null, tint = ink, modifier = Modifier.size(14.dp))
-                } else {
+                } else if (icon) {
                     Icon(c.icon, null, tint = ink, modifier = Modifier.size(22.dp))
                 }
             }
