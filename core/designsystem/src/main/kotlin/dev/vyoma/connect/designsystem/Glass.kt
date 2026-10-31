@@ -668,6 +668,18 @@ internal class LensPainter(private val graphics: GraphicsContext) {
             }
         }
         translate(r.left - m, r.top - m) { drawLayer(drop) }
+        // The edge catches the light like the bars' glass does: a drop over a plain track has
+        // nothing around it to refract, and without this its rim vanished.
+        val half = 0.5.dp.toPx()
+        val edge = r.deflate(half)
+        drawRoundRect(
+            specularRim(
+                Color.White.copy(alpha = if (dark) 0.6f else 1f),
+                if (dark) Color.White.copy(alpha = 0.1f) else Color(0xFF1A2B4C).copy(alpha = 0.14f),
+                edge.center,
+            ),
+            edge.topLeft, edge.size, CornerRadius(edge.height / 2), alpha = a, style = Stroke(1.dp.toPx()),
+        )
     }
 
     fun release() {

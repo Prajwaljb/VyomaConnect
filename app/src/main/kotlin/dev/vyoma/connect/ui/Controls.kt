@@ -16,10 +16,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.LiquidSlider
-import dev.vyoma.connect.designsystem.backdropSource
-import dev.vyoma.connect.designsystem.glassChrome
-import dev.vyoma.connect.designsystem.pressScale
-import dev.vyoma.connect.designsystem.rememberBackdrop
 import dev.vyoma.connect.designsystem.SystemColor
 import dev.vyoma.connect.designsystem.specularEdge
 import dev.vyoma.connect.designsystem.toned
@@ -31,7 +27,6 @@ import androidx.compose.material.icons.rounded.Movie
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -45,7 +40,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -55,7 +49,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
@@ -65,8 +58,6 @@ import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -130,10 +121,10 @@ fun ActionGrid(actions: List<Triple<ImageVector, String, () -> Unit>>, columns: 
 }
 
 /**
- * Now-playing card: full-bleed artwork, a scrim tinted from the art itself, a live scrubber
- * and big controls. The artwork crossfades between tracks. Without artwork (mpv, local files, art
- * that didn't load) it's a compact card instead, like Apple Music's: a deep accent tile with the
- * player's glyph beside the title, on a deep shade of the accent, rather than a big empty frame.
+ * Now-playing card, compact like iOS's: the artwork as a thumbnail beside the title and artist, a
+ * thin scrubber, and plain glyph controls, on a deep colour sampled from the artwork (a deep shade
+ * of the accent without art). Continue on phone is a round button at the end of the title row,
+ * where Apple Music keeps AirPlay. (A full-bleed artwork card was felt to be too big.)
  */
 @Composable
 fun MediaCard(
@@ -146,7 +137,7 @@ fun MediaCard(
     onPickPlayer: (String) -> Unit,
     modifier: Modifier = Modifier,
     showVolume: Boolean = true,
-    /** Shown as "Continue on phone" over the artwork when the PC can hand this off (companion). */
+    /** Shown as a Continue on phone button when the PC can hand this off (companion). */
     onContinueHere: (() -> Unit)? = null,
 ) {
     val p = np.player
@@ -162,60 +153,51 @@ fun MediaCard(
         }
     }
     val art = prepared?.first
-    val tint = prepared?.second ?: accent.toned(0.8f, 0.2f)
-    val tintAnimated by animateColorAsState(tint, VyomaMotion.effects(), label = "tint")
-    Surface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.extraLarge, color = tintAnimated) {
-        Column(Modifier.animateContentSize(VyomaMotion.spatial())) {
-            // A thumbnail too small to fill the card (YouTube Music's mini player hands over ~120 px
-            // art) sits in the tile instead of being stretched into a blur.
-            if (art == null || art.width < FULL_BLEED_MIN_PX) {
-                PlainHeader(p, accent, art, onContinueHere)
-            } else Box(Modifier.fillMaxWidth().aspectRatio(16f / 10f)) {
-                val behind = rememberBackdrop()
-                Crossfade(art, Modifier.fillMaxSize().backdropSource(behind), label = "art") { art ->
-                    Image(art.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+    val tint by animateColorAsState(prepared?.second ?: accent.toned(0.8f, 0.2f), VyomaMotion.effects(), label = "tint")
+    Surface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large, color = tint) {
+        Column(Modifier.animateContentSize(VyomaMotion.spatial()).padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ArtTile(art, p, accent)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(p.title.ifBlank { p.name }, style = MaterialTheme.typography.titleMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val sub = listOf(p.artist, p.album).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { p.name.takeIf { p.title.isNotBlank() }.orEmpty() }
+                    if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to tint)))
                 if (onContinueHere != null) {
-                    // Liquid glass over the artwork, smoked so white text reads on any thumbnail.
-                    Row(
+                    Spacer(Modifier.width(8.dp))
+                    Box(
                         Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(12.dp)
-                            .pressScale(0.92f)
-                            .glassChrome(behind, CircleShape, blur = 8.dp, tint = Color.Black.copy(alpha = 0.95f), bevel = 16.dp)
+                            .size(40.dp)
                             .clip(CircleShape)
-                            .pressable(pressedScale = 1f, onClick = onContinueHere)
-                            .padding(start = 10.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                            .background(Color.White.copy(alpha = 0.14f))
+                            .pressable(onClick = onContinueHere)
+                            .semantics { contentDescription = "Continue on phone" },
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Icon(Icons.Rounded.PhoneAndroid, null, tint = Color.White, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Continue on phone", style = MaterialTheme.typography.labelLarge, color = Color.White)
+                        Icon(Icons.AutoMirrored.Rounded.SendToMobile, null, tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                 }
-                Column(Modifier.align(Alignment.BottomStart).padding(horizontal = 20.dp, vertical = 12.dp)) {
-                    Text(p.title.ifBlank { p.name }, style = MaterialTheme.typography.titleLarge, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    val sub = listOf(p.artist, p.album).filter { it.isNotBlank() }.joinToString(" · ")
-                    if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.75f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
             }
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+            Column(Modifier.padding(end = 4.dp)) {
                 // Browsers blank the length for a moment now and then (ads, hover previews): keep the track's last one.
                 val length = remember(p.name, p.title) { mutableLongStateOf(0L) }
                 if (p.lengthMs > 0 && length.longValue != p.lengthMs) length.longValue = p.lengthMs
-                if (length.longValue > 0) Scrubber(np, length.longValue, tint, onSeek)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                if (length.longValue > 0) {
+                    Spacer(Modifier.height(6.dp))
+                    Scrubber(np, length.longValue, tint, onSeek)
+                } else {
+                    Spacer(Modifier.height(4.dp))
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                     MediaButton(Icons.Rounded.SkipPrevious, "Previous", enabled = p.canPrevious, onClick = onPrevious)
-                    val scale by animateFloatAsState(if (p.isPlaying) 1f else 1.06f, VyomaMotion.spatial(), label = "pp")
-                    Box(
-                        Modifier.size(68.dp).pressable(pressedScale = 0.9f, glass = true, onClick = onPlayPause).clip(CircleShape).background(Color.White),
-                        contentAlignment = Alignment.Center,
-                    ) {
+                    Spacer(Modifier.width(28.dp))
+                    BounceIconButton(onClick = onPlayPause, size = 56.dp) {
                         AnimatedContent(p.isPlaying, transitionSpec = { (scaleIn() + fadeIn()).togetherWith(scaleOut() + fadeOut()) }, label = "ppicon") { playing ->
-                            Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playing) "Pause" else "Play", tint = tint, modifier = Modifier.size(36.dp * scale))
+                            Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playing) "Pause" else "Play", tint = Color.White, modifier = Modifier.size(42.dp))
                         }
                     }
+                    Spacer(Modifier.width(28.dp))
                     MediaButton(Icons.Rounded.SkipNext, "Next", enabled = p.canNext, onClick = onNext)
                 }
                 if (showVolume && p.volume >= 0) {
@@ -234,7 +216,7 @@ fun MediaCard(
                     }
                 }
                 if (np.players.size > 1) {
-                    Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 2.dp, bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         np.players.forEach { name ->
                             val selected = name == p.name
                             Text(
@@ -248,74 +230,44 @@ fun MediaCard(
                             )
                         }
                     }
-                } else {
-                    Spacer(Modifier.height(8.dp))
                 }
             }
         }
     }
 }
 
-/**
- * The compact top of [MediaCard], for no artwork or a small thumbnail: the art (or a glyph) in a
- * tile, title, artist and which player it is, and Continue on phone as a round button at the end
- * of the row (where Apple Music keeps AirPlay).
- */
+/** The artwork thumbnail, or without art a deep accent tile with the player's glyph. */
 @Composable
-private fun PlainHeader(p: RemotePlayer, accent: Color, art: Bitmap?, onContinueHere: (() -> Unit)?) {
-    val video = VIDEO_PLAYERS.any { p.name.contains(it, ignoreCase = true) }
-    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 16.dp, bottom = 6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            val tile = RoundedCornerShape(18.dp)
-            Box(
-                Modifier
-                    .size(72.dp)
-                    .specularEdge(tile, 1.dp)
-                    .clip(tile)
-                    .background(Brush.linearGradient(listOf(accent.toned(1.2f, 0.62f), accent.toned(1.2f, 0.46f)))),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (art != null) {
-                    Image(art.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                } else {
-                    Icon(if (video) Icons.Rounded.Movie else Icons.Rounded.MusicNote, null, tint = Color.White, modifier = Modifier.size(36.dp))
-                }
-            }
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(p.title.ifBlank { p.name }, style = MaterialTheme.typography.titleMedium, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                val sub = listOf(p.artist, p.album).filter { it.isNotBlank() }.joinToString(" · ")
-                if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.75f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (p.title.isNotBlank()) Text(p.name, style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.55f), maxLines = 1)
-            }
-            if (onContinueHere != null) {
-                Spacer(Modifier.width(8.dp))
-                Box(
-                    Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.14f))
-                        .pressable(onClick = onContinueHere)
-                        .semantics { contentDescription = "Continue on phone" },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.AutoMirrored.Rounded.SendToMobile, null, tint = Color.White, modifier = Modifier.size(22.dp))
+private fun ArtTile(art: Bitmap?, p: RemotePlayer, accent: Color) {
+    val tile = RoundedCornerShape(12.dp)
+    Box(
+        Modifier
+            .size(56.dp)
+            .specularEdge(tile, 0.8.dp)
+            .clip(tile)
+            .background(Brush.linearGradient(listOf(accent.toned(1.2f, 0.62f), accent.toned(1.2f, 0.46f)))),
+        contentAlignment = Alignment.Center,
+    ) {
+        Crossfade(art, label = "art") { a ->
+            if (a != null) {
+                Image(a.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    val video = VIDEO_PLAYERS.any { p.name.contains(it, ignoreCase = true) }
+                    Icon(if (video) Icons.Rounded.Movie else Icons.Rounded.MusicNote, null, tint = Color.White, modifier = Modifier.size(28.dp))
                 }
             }
         }
     }
 }
 
-/** Narrower artwork than this is a thumbnail: shown in the compact card's tile, not full-bleed. */
-private const val FULL_BLEED_MIN_PX = 400
-
-/** Players that are mostly for video, so their card shows a film glyph rather than a note. */
+/** Players that are mostly for video, so their tile shows a film glyph rather than a note. */
 private val VIDEO_PLAYERS = listOf("mpv", "vlc", "celluloid", "totem", "haruna", "smplayer", "mplayer", "kodi", "showtime", "dragon")
 
 @Composable
 private fun MediaButton(icon: ImageVector, label: String, enabled: Boolean, onClick: () -> Unit) {
-    BounceIconButton(onClick = onClick, enabled = enabled, size = 56.dp) {
-        Icon(icon, label, tint = Color.White.copy(alpha = if (enabled) 1f else 0.35f), modifier = Modifier.size(34.dp))
+    BounceIconButton(onClick = onClick, enabled = enabled, size = 48.dp) {
+        Icon(icon, label, tint = Color.White.copy(alpha = if (enabled) 1f else 0.35f), modifier = Modifier.size(32.dp))
     }
 }
 
