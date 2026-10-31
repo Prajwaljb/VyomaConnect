@@ -4,6 +4,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
 import dev.vyoma.connect.designsystem.glassCard
+import dev.vyoma.connect.designsystem.glassLightOver
 import androidx.compose.material.icons.automirrored.rounded.SendToMobile
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -157,25 +158,27 @@ fun MediaCard(
     val art = prepared?.first
     val tint by animateColorAsState(prepared?.second ?: accent.toned(0.8f, 0.2f), VyomaMotion.effects(), label = "tint")
     val shape = MaterialTheme.shapes.large
-    Column(
+    Box(
         modifier
             .fillMaxWidth()
-            // The cards' glass: lit-side glow in the fill, and the tilt-lit rim drawn over everything
-            // (the artwork included) so the edge reads as one pane.
+            // The cards' glass, its light and tilt-lit rim drawn over everything (the artwork
+            // included) so the edge reads as one pane; drawn under, it stopped dead at the art.
             .specularEdge(shape, 1.dp, Color.White.copy(alpha = 0.4f), Color.White.copy(alpha = 0.07f))
-            .glassCard(shape, fill = tint)
+            .glassLightOver(shape)
+            .glassCard(shape, fill = tint, lit = false)
             .animateContentSize(VyomaMotion.spatial()),
     ) {
-        Box(Modifier.fillMaxWidth()) {
-            // The artwork fills the card's left side, edge to edge, melting into the card's colour.
-            Box(Modifier.matchParentSize()) {
-                ArtPanel(art, p, accent, tint, Modifier.width(ART_WIDTH).fillMaxHeight())
-            }
+        // The artwork fills the card's left side, top to bottom, melting into the card's colour;
+        // everything else (volume, player chips too) sits in the column beside it.
+        Box(Modifier.matchParentSize()) {
+            ArtPanel(art, p, accent, tint, Modifier.width(ART_WIDTH).fillMaxHeight())
+        }
+        Column(Modifier.fillMaxWidth().padding(start = ART_WIDTH)) {
             Column(
                 Modifier
                     .fillMaxWidth()
                     .heightIn(min = ART_WIDTH)
-                    .padding(start = ART_WIDTH + 12.dp, end = 10.dp, top = 12.dp, bottom = 4.dp),
+                    .padding(start = 12.dp, end = 10.dp, top = 12.dp, bottom = 4.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
             ) {
                 Row(verticalAlignment = Alignment.Top) {
@@ -213,38 +216,38 @@ fun MediaCard(
                     MediaButton(Icons.Rounded.SkipNext, "Next", enabled = p.canNext, onClick = onNext)
                 }
             }
-        }
-        if (showVolume && p.volume >= 0) {
-            var vol by remember(p.name) { mutableFloatStateOf(p.volume.toFloat()) }
-            var dragging by remember { mutableStateOf(false) }
-            LaunchedEffect(p.volume) { if (!dragging) vol = p.volume.toFloat() }
-            Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.AutoMirrored.Rounded.VolumeUp, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
-                LiquidSlider(
-                    value = { vol / 100f },
-                    onChange = { dragging = true; vol = it * 100f; onVolume(vol.toInt()) },
-                    onDone = { dragging = false },
-                    modifier = Modifier.padding(start = 10.dp).weight(1f),
-                    underlay = tint,
-                )
-            }
-        }
-        if (np.players.size > 1) {
-            Row(
-                Modifier.horizontalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                np.players.forEach { name ->
-                    val selected = name == p.name
-                    Text(
-                        name,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (selected) tint else Color.White,
-                        modifier = Modifier.clip(CircleShape)
-                            .background(if (selected) Color.White else Color.White.copy(alpha = 0.14f))
-                            .pressable { onPickPlayer(name) }
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
+            if (showVolume && p.volume >= 0) {
+                var vol by remember(p.name) { mutableFloatStateOf(p.volume.toFloat()) }
+                var dragging by remember { mutableStateOf(false) }
+                LaunchedEffect(p.volume) { if (!dragging) vol = p.volume.toFloat() }
+                Row(Modifier.padding(start = 12.dp, end = 16.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.AutoMirrored.Rounded.VolumeUp, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+                    LiquidSlider(
+                        value = { vol / 100f },
+                        onChange = { dragging = true; vol = it * 100f; onVolume(vol.toInt()) },
+                        onDone = { dragging = false },
+                        modifier = Modifier.padding(start = 10.dp).weight(1f),
+                        underlay = tint,
                     )
+                }
+            }
+            if (np.players.size > 1) {
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 16.dp, top = 6.dp, bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    np.players.forEach { name ->
+                        val selected = name == p.name
+                        Text(
+                            name,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (selected) tint else Color.White,
+                            modifier = Modifier.clip(CircleShape)
+                                .background(if (selected) Color.White else Color.White.copy(alpha = 0.14f))
+                                .pressable { onPickPlayer(name) }
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
                 }
             }
         }
@@ -262,13 +265,15 @@ private fun ArtPanel(art: Bitmap?, p: RemotePlayer, accent: Color, tint: Color, 
             if (a != null) {
                 Image(a.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             } else {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                // Centred in the clear part, ahead of the melt.
+                Box(Modifier.fillMaxSize().padding(end = 28.dp), contentAlignment = Alignment.Center) {
                     val video = VIDEO_PLAYERS.any { p.name.contains(it, ignoreCase = true) }
                     Icon(if (video) Icons.Rounded.Movie else Icons.Rounded.MusicNote, null, tint = Color.White, modifier = Modifier.size(40.dp))
                 }
             }
         }
-        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0.72f to Color.Transparent, 1f to tint)))
+        // A long, eased melt: a short one read as a seam.
+        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0.35f to Color.Transparent, 0.7f to tint.copy(alpha = 0.55f), 1f to tint)))
     }
 }
 
