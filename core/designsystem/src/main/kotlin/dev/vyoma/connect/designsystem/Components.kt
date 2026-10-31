@@ -336,11 +336,12 @@ fun CollapsingHeaderScaffold(
         // actions are liquid-glass buttons, and the title's bubble forms in the middle. No strip and
         // no shade: content slides under clear glass.
         // Under the status bar, content blurs and fades away (iOS 26's soft edge) so the clock never
-        // sits on raw cards; it stops 12 dp below the icons, above the glass buttons' refraction.
+        // sits on raw cards; it reaches through the bar row and fades out below it (the user asked
+        // for it longer and stronger than the first 12 dp).
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(with(density) { statusTop.toDp() } + 12.dp)
+                .height(with(density) { statusTop.toDp() } + 40.dp)
                 .scrollEdge(backdrop) { !listState.atTop() },
         )
         Box(Modifier.fillMaxWidth()) {
