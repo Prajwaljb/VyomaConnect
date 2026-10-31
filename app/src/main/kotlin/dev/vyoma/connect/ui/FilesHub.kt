@@ -202,5 +202,5 @@ private fun DoneRow(f: FileRecord, divider: Boolean, modifier: Modifier, context
     )
 }
 
-private const val RECENT_SHOWN = 8
-private const val CLIPS_SHOWN = 3
+private const val RECENT_SHOWN = 12
+private const val CLIPS_SHOWN = 5

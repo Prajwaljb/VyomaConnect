@@ -74,6 +74,14 @@ import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.perform
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.platform.LocalConfiguration
+import dev.vyoma.connect.designsystem.MaxContentWidth
+import dev.vyoma.connect.designsystem.liquidPress
+import androidx.compose.material.icons.rounded.ContentPasteGo
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import dev.vyoma.connect.protocol.plugin.builtin.Transfer
+import dev.vyoma.connect.protocol.plugin.builtin.Transfers
 import androidx.compose.foundation.gestures.awaitVerticalTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.verticalDrag
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -275,6 +283,7 @@ fun PcDashboard(
     onClipboard: () -> Unit,
     modifier: Modifier = Modifier,
     onBrowseFiles: () -> Unit = {},
+    onFiles: () -> Unit = {},
 ) {
     val id = state.identity.deviceId
     val pc = rememberPcState(vm, state)
@@ -323,26 +332,41 @@ fun PcDashboard(
           }
           val shot by (shots?.screenshot?.state ?: remember { MutableStateFlow(CaptureState.Idle) }).collectAsStateWithLifecycle()
           val photo by (shots?.photo?.state ?: remember { MutableStateFlow(CaptureState.Idle) }).collectAsStateWithLifecycle()
+          val commandList by (vm.device(id)?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands ?: remember { MutableStateFlow(emptyList()) }).collectAsStateWithLifecycle()
           CaptureOutcome(shot, "Screenshot")
           CaptureOutcome(photo, "Photo")
+          // Live: the Send tile rings with the progress of whatever's moving.
+          val transfers by Transfers.all.collectAsStateWithLifecycle()
+          val moving = transfers.filter { it.state == Transfer.State.RUNNING }
+          val sending = moving.takeIf { it.isNotEmpty() }?.let { m -> m.sumOf { it.doneBytes }.toFloat() / m.sumOf { it.totalBytes }.coerceAtLeast(1) }
           ControlGrid(
-            listOf(
-                // One job per button. Send drops phone files in the PC's Downloads (works with plain KDE
-                // Connect); PC files browses and uploads into a chosen folder, which needs the companion.
-                // Slots never move: the companion swaps Clipboard (also a tile and a tab) for PC files,
-                // Ping for Screen and Find PC for Camera (both stay in the PC's details).
-                // Files are blue (both file tiles), so Home carries fewer hues. Screen is pink: deepened
-                // orange read brown beside the yellow camera.
-                Control(Icons.Rounded.UploadFile, "Send files", SystemColor.BLUE) { vm.pickFiles(context) },
+            actions = listOf(
+                // One job per tap, a second on a long press (held like water, see liquidPress). Slots
+                // never move: without the companion, PC files becomes Files (the tab), Screen becomes
+                // Ping and Camera becomes Send clipboard. Hues stay off the meters' green/yellow/red.
+                Control(Icons.Rounded.UploadFile, "Send files", SystemColor.BLUE, progress = sending, longLabel = "Send photos", onLong = { vm.pickPhotos(context) }) { vm.pickFiles(context) },
                 if (shots != null) Control(Icons.Rounded.Folder, "PC files", SystemColor.BLUE, onClick = onBrowseFiles)
-                else Control(Icons.Rounded.ContentPaste, "Clipboard", SystemColor.ORANGE, onClick = onClipboard),
-                // The touchpad has its own round button by the tab bar; this opens the same screen ready to type.
-                Control(Icons.Rounded.Keyboard, "Keyboard", SystemColor.TEAL, onClick = onTouchpad),
-                // The live screen; its shutter takes full-resolution screenshots.
-                if (shots != null) Control(Icons.Rounded.ScreenShare, "Screen", SystemColor.PINK) { PcScreenActivity.open(context, id) }
-                else Control(Icons.Rounded.Sensors, "Ping", SystemColor.GREEN) { vm.ping(id) },
-                // Toggles say their state when on ("Locked", "Muted"): the user wants it in words, not
-                // only in the fill.
+                else Control(Icons.Rounded.Folder, "Files", SystemColor.BLUE, onClick = onFiles),
+                if (shots != null) Control(Icons.Rounded.ScreenShare, "Screen", SystemColor.PINK, longLabel = "Take a screenshot", onLong = { vm.capture(shots.screenshot) }) { PcScreenActivity.open(context, id) }
+                else Control(Icons.Rounded.Sensors, "Ping", SystemColor.CYAN) { vm.ping(id); status.show("Pinged: look for it on the PC") },
+                if (shots != null) Control(Icons.Rounded.PhotoCamera, "Camera", SystemColor.ORANGE) { vm.capture(shots.photo) }
+                else Control(Icons.Rounded.ContentPasteGo, "Send clip", SystemColor.ORANGE, longLabel = "Clipboard history", onLong = onClipboard) {
+                    if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied to send", failure = true)
+                },
+                Control(Icons.Rounded.NotificationsActive, "Find PC", SystemColor.TEAL) { vm.ringPc(id); status.show("Ringing the PC", icon = Icons.Rounded.NotificationsActive, haptic = false) },
+                Control(
+                    Icons.Rounded.Terminal, "Commands", SystemColor.GRAY, opens = true,
+                    longLabel = "Run the last command",
+                    onLong = {
+                        val last = vm.lastCommand(id)?.let { key -> commandList.firstOrNull { it.key == key } }
+                        if (last != null) { vm.runCommand(id, last.key); status.show("Running ${last.name}", icon = Icons.Rounded.Terminal, haptic = false) }
+                        else showCommands = true
+                    },
+                ) { showCommands = true },
+            ),
+            // Toggles say their state when on ("Locked", "Muted"): the user wants it in words, not
+            // only in the fill.
+            toggles = listOf(
                 Control(
                     if (pc.locked == true) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
                     if (pc.locked == true) "Locked" else "Lock",
@@ -357,18 +381,8 @@ fun PcDashboard(
                     active = pc.sink?.muted == true,
                     toggle = pc.sink != null,
                 ) { pc.sink?.let { vm.setSinkMuted(id, it.name, !it.muted) } ?: status.show("Volume control isn't on for this PC", failure = true) },
-                // The companion's camera takes Find PC's slot; Find PC is then in the PC's details.
-                if (shots != null) Control(
-                    Icons.Rounded.PhotoCamera,
-                    if (photo == CaptureState.Capturing) "Taking" else "Camera",
-                    SystemColor.YELLOW,
-                    active = photo == CaptureState.Capturing,
-                ) { vm.capture(shots.photo) }
-                else Control(Icons.Rounded.NotificationsActive, "Find PC", SystemColor.YELLOW) { vm.ringPc(id) },
-                // The PC's details have their own button in the header now; this slot runs commands.
-                Control(Icons.Rounded.Terminal, "Commands", SystemColor.GRAY) { showCommands = true },
             ),
-            modifier,
+            modifier = modifier,
             // Away, the tiles keep their places but rest, quiet and untappable.
             enabled = state.isReachable,
           )
@@ -600,7 +614,6 @@ private fun OutputDialog(sinks: List<AudioSink>, onDismiss: () -> Unit, onPick: 
 
 /** The media card and the volume capsule share a row at least this tall. */
 internal val DeckMinHeight = 148.dp
-internal val DeckVolumeWidth = 80.dp
 
 private const val ECHO_QUIET_MS = 700L
 
@@ -614,76 +627,145 @@ private class Control(
     val active: Boolean = false,
     /** Flips [active]: ticks on/off instead of a plain tap. */
     val toggle: Boolean = false,
+    /** Live progress (0..1) ringed round the glyph, e.g. files sending. */
+    val progress: Float? = null,
+    /** Opens a sheet rather than acting at once: a small chevron says so. */
+    val opens: Boolean = false,
+    val longLabel: String? = null,
+    val onLong: (() -> Unit)? = null,
     val onClick: () -> Unit,
 )
 
 /**
- * Apple's Shortcuts widget: four across in one glass card, each action a square tile tinted in its
- * colour, glyph top left and label bottom left, in white. A toggle that's off is clear glass with
- * a coloured glyph and fills with its colour when on. Corners are concentric (card radius = tile
- * radius + padding) and the gaps tight and even, as Apple's are. Tried before and rejected: round
- * buttons (plastic balls), wide tiles two across (a stack of pills), app icons with labels under.
+ * Apple's Shortcuts widget for the actions, Control Center for the switches. Six one-shot actions
+ * are filled square tiles (glyph top left, label bottom left, white ink); the two toggles share
+ * one 2-wide glass module in the thumb's corner, each half clear with a coloured glyph when off and
+ * filled with its colour when on, so an ON switch never looks like an action (they did as tiles).
+ * Corners are concentric (card radius = tile radius + padding); the tile size is shared with the
+ * volume capsule above so their edges line up ([deckVolumeWidth]). Rejected before: round buttons
+ * (plastic balls), wide tiles two across (a stack of pills), app icons with labels under.
  */
 @Composable
-private fun ControlGrid(controls: List<Control>, modifier: Modifier = Modifier, enabled: Boolean = true) {
-    Column(
-        modifier.fillMaxWidth().glassCard(RoundedCornerShape(TileRadius + TilePad)).padding(TilePad),
-        verticalArrangement = Arrangement.spacedBy(TileGap),
-    ) {
-        controls.chunked(4).forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(TileGap)) {
-                row.forEach { c -> ControlTile(c, Modifier.weight(1f), enabled) }
-                repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+private fun ControlGrid(actions: List<Control>, toggles: List<Control>, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    BoxWithConstraints(modifier.fillMaxWidth().glassCard(RoundedCornerShape(TileRadius + TilePad)).padding(TilePad)) {
+        val tile = (maxWidth - TileGap * 3) / 4
+        Column(verticalArrangement = Arrangement.spacedBy(TileGap)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(TileGap)) {
+                actions.take(4).forEach { ControlTile(it, Modifier.size(tile), enabled) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(TileGap)) {
+                actions.drop(4).forEach { ControlTile(it, Modifier.size(tile), enabled) }
+                ToggleModule(toggles, Modifier.size(tile * 2 + TileGap, tile), enabled)
             }
         }
     }
 }
 
+/** The capsule beside the media card is one tile column plus the card's padding wide, so it lines up with the grid. */
+@Composable
+internal fun deckVolumeWidth(): Dp {
+    val config = LocalConfiguration.current
+    val card = minOf(config.screenWidthDp.dp, MaxContentWidth) - 32.dp
+    return (card - TilePad * 2 - TileGap * 3) / 4 + TilePad
+}
+
 @Composable
 private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true) {
     val tone = c.color.color
-    val on by animateFloatAsState(if (!c.toggle || c.active) 1f else 0f, VyomaMotion.effects(), label = "ctlOn")
-    val haptic = when {
-        !c.toggle -> Haptic.Tap
-        c.active -> Haptic.ToggleOff
-        else -> Haptic.ToggleOn
-    }
-    val shape = RoundedCornerShape(TileRadius)
-    // Legible on every colour: the brightest (yellow) keeps its tone and takes dark ink; mid tones
-    // (cyan, teal, gray) deepen so white text holds 4.5:1 (darkening yellow only made it mustard).
     val lum = remember(tone) { tone.luminance() }
-    val fill = if (lum in 0.2f..0.5f) lerp(tone, Color.Black, 0.30f) else tone
-    val onFill = if (lum > 0.5f) Color(0xFF1C1C1E) else Color.White
-    val ink = lerp(MaterialTheme.colorScheme.onSurface, onFill, on)
-    // A toggle that's off is a faint pane of its colour, not clear glass: clear read as disabled
-    // beside six filled tiles. Light mode needs more of it (0.22 read pastel there), and its glyph
-    // deepens to hold 3:1 on the pane.
-    val offGlyph = if (isDarkUi) tone else lerp(tone, Color.Black, 0.35f)
-    val offPane = if (isDarkUi) 0.22f else 0.32f
+    val fill = tileFill(tone, lum)
+    val ink = if (lum > 0.5f) Color(0xFF1C1C1E) else Color.White
     Column(
         modifier
-            .aspectRatio(1f)
             .graphicsLayer { if (!enabled) { alpha = 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha } }
-            .pressable(enabled = enabled, haptic = haptic, onClick = c.onClick)
-            .glassRaised(shape, fill.copy(alpha = offPane + (0.92f - offPane) * on))
+            .liquidPress(enabled = enabled, onLongClickLabel = c.longLabel, onLongClick = c.onLong, onClick = c.onClick)
+            .glassRaised(RoundedCornerShape(TileRadius), fill.copy(alpha = 0.92f))
             .padding(start = 10.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        Icon(c.icon, null, tint = lerp(offGlyph, onFill, on), modifier = Modifier.size(22.dp))
-        // One size for every tile (12 sp fits "Commands"); shrinks only past that, at large font
-        // scales, rather than cutting a word.
-        BasicText(
-            c.label,
-            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, color = ink),
-            maxLines = 1,
-            autoSize = TextAutoSize.StepBased(minFontSize = 9.sp, maxFontSize = 12.sp),
-        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            Box(Modifier.size(26.dp), contentAlignment = Alignment.Center) {
+                val progress = c.progress
+                if (progress != null) {
+                    val sweep = rememberGlide(progress)
+                    Canvas(Modifier.fillMaxSize()) {
+                        val w = 2.5.dp.toPx()
+                        val inset = Offset(w / 2, w / 2)
+                        val arc = Size(size.width - w, size.height - w)
+                        drawArc(ink.copy(alpha = 0.3f), 0f, 360f, false, inset, arc, style = Stroke(w))
+                        drawArc(ink, -90f, 360f * sweep.floatValue, false, inset, arc, style = Stroke(w, cap = StrokeCap.Round))
+                    }
+                    Icon(c.icon, null, tint = ink, modifier = Modifier.size(14.dp))
+                } else {
+                    Icon(c.icon, null, tint = ink, modifier = Modifier.size(22.dp))
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            if (c.opens) Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = ink.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+        }
+        TileLabel(c.label, ink)
     }
 }
 
-private val TileRadius = 18.dp
-private val TilePad = 10.dp
+/** Lock and Mute in one glass module: clear halves with coloured glyphs when off, filled when on. */
+@Composable
+private fun ToggleModule(toggles: List<Control>, modifier: Modifier, enabled: Boolean) {
+    Row(
+        modifier
+            .graphicsLayer { if (!enabled) { alpha = 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha } }
+            .glassRaised(RoundedCornerShape(TileRadius))
+            .padding(ModulePad),
+        horizontalArrangement = Arrangement.spacedBy(ModulePad),
+    ) {
+        toggles.forEach { c ->
+            val tone = c.color.color
+            val on by animateFloatAsState(if (c.active) 1f else 0f, VyomaMotion.effects(), label = "toggleOn")
+            val lum = remember(tone) { tone.luminance() }
+            val fill = tileFill(tone, lum)
+            val onInk = if (lum > 0.5f) Color(0xFF1C1C1E) else Color.White
+            // Off, the glyph carries the colour (deepened in light mode to hold 3:1 on clear glass).
+            val offGlyph = if (isDarkUi) tone else lerp(tone, Color.Black, 0.35f)
+            val ink = lerp(MaterialTheme.colorScheme.onSurface, onInk, on)
+            Column(
+                Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .pressable(enabled = enabled && c.toggle, haptic = if (c.active) Haptic.ToggleOff else Haptic.ToggleOn, onClick = c.onClick)
+                    .clip(RoundedCornerShape(TileRadius - ModulePad))
+                    .background(fill.copy(alpha = 0.92f * on))
+                    .padding(start = 8.dp, end = 4.dp, top = 8.dp, bottom = 6.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Icon(c.icon, null, tint = lerp(offGlyph, onInk, on), modifier = Modifier.size(22.dp))
+                TileLabel(c.label, ink)
+            }
+        }
+    }
+}
+
+/**
+ * Legible on every colour: the brightest (yellow) keeps its tone and takes dark ink; mid tones
+ * (orange, cyan, teal, gray) drop to 38% lightness at the same hue and saturation so white text
+ * holds ~3.5:1 and up. Mixing in black instead turned orange brown.
+ */
+private fun tileFill(tone: Color, lum: Float) = if (lum in 0.2f..0.5f) tone.toned(lightness = 0.38f) else tone
+
+@Composable
+private fun TileLabel(text: String, ink: Color) {
+    // One size for every tile (12 sp); at large font scales it shrinks to 10 sp at most, rather than
+    // cutting a word (9 sp left "Commands" visibly smaller than its neighbours).
+    BasicText(
+        text,
+        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, color = ink),
+        maxLines = 1,
+        autoSize = TextAutoSize.StepBased(minFontSize = 10.sp, maxFontSize = 12.sp),
+    )
+}
+
+private val TileRadius = 16.dp
+private val TilePad = 12.dp
 private val TileGap = 8.dp
+private val ModulePad = 4.dp
 
 /** "Just now" for the first minute, then "5 min. ago" and so on. */
 internal fun ago(time: Long): CharSequence {

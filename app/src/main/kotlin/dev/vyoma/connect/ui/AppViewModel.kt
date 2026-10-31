@@ -134,12 +134,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun ringPc(id: String) = act(id) { it.plugin<FindMyPhonePlugin>(FindMyPhonePlugin.ID)?.ringPeer() }
     fun lockPc(id: String) = act(id) { it.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(true) }
     fun setPcLocked(id: String, locked: Boolean) = act(id) { it.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(locked) }
-    fun runCommand(id: String, key: String) = act(id) { it.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.run(key) }
+    fun runCommand(id: String, key: String) {
+        uiPrefs.edit { putString("last_command_$id", key) }
+        act(id) { it.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.run(key) }
+    }
+
+    /** The command last run on [id] (Commands' long-press runs it again), if it still exists. */
+    fun lastCommand(id: String) = uiPrefs.getString("last_command_$id", null)
     fun openCommandSetup(id: String) = act(id) { it.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.openSetup() }
     fun forget(id: String) { container.hub.value?.forget(id) }
 
     fun pickFiles(context: Context) =
         context.startActivity(Intent(context, ShareActivity::class.java).setAction(ShareActivity.ACTION_PICK))
+
+    fun pickPhotos(context: Context) =
+        context.startActivity(Intent(context, ShareActivity::class.java).setAction(ShareActivity.ACTION_PICK_PHOTOS))
 
     // ---- media --------------------------------------------------------------------------------
 

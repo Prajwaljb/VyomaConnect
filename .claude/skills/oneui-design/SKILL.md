@@ -11,7 +11,18 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 
 ## Glass (core/designsystem/Glass.kt)
 - Wide windows (landscape, tablets): `CollapsingHeaderScaffold` centres a column of at most `MaxContentWidth` (560 dp).
-- Dashboard actions: Apple Shortcuts-widget tiles, 4 across in one card, concentric corners (18 dp tile + 10 dp pad), white
+- Dashboard actions (judge option A, user-approved 2026-10-31): SIX one-shot actions as filled Shortcuts tiles
+  (16 dp radius, 12 dp card pad, 8 gap; tile size from `BoxWithConstraints`) + Lock/Mute in ONE 2-wide glass toggle
+  module (bottom right): halves clear with a coloured glyph when off, filled when on. An ON toggle must never look
+  like an action. Slots: Send files (live progress ring; long-press = photo picker) · PC files|Files tab · Screen
+  (long-press = screenshot)|Ping · Camera|Send clipboard (long-press = history) / Find PC · Commands (chevron; long-press
+  = last-run command) · [Lock|Mute]. No Keyboard tile (the touchpad button opens it). Hues stay off the meters'
+  green/yellow/red: Ping CYAN, Camera ORANGE, Find PC TEAL. Mid-luminance tiles use `toned(lightness = 0.38)` (mixing
+  black turned orange brown). Volume capsule width = one tile column + card pad (`deckVolumeWidth()`), edges line up.
+- Long presses are watery (`Modifier.liquidPress`, designsystem/Hold.kt): after 120 ms the element swells 7% and
+  becomes a `liquidLens` of itself, filling to the long-press timeout; fires with `Haptic.Hold` + overshoot, wobbles
+  back on `release()`. Lens only while HELD (plain taps keep no lens, as the user decided before).
+- (Old) Dashboard actions: Apple Shortcuts-widget tiles, 4 across in one card, concentric corners (18 dp tile + 10 dp pad), white
   ink (dark on yellow-bright tones; tones of luminance 0.2–0.5 darkened 22% for 4.5:1), labels 12 sp. Toggle tiles keep
   fill AND name when on ("Locked", "Muted"): the user wants the state in words (a judge suggested constant labels; rejected).
 - Layers (iOS 26 rule, judge-reviewed 2026-10-31): full liquid glass (lens, band, rolled edge, full tilt sway) only on the
@@ -28,7 +39,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   glass squishes. Dialog actions are `DialogButton` (never Material TextButton); switch rows toggle on the whole row with
   the switch's haptic; keys tick on touch-down. Every icon-only tappable has a TalkBack label.
 - Like elements, like sizes: every header bubble (back, title, actions) is `CHROME_SIZE` 48 dp; header padding = the page
-  gutter; the scroll-edge fade reaches 12 dp below the bubbles. Round controls are true circles (`circle()` in the touchpad).
+  gutter. NO scroll-edge fade or status-bar shade (user, 2026-10-31: "I really want that black header shade to go away": it hid the glass). Round controls are true circles (`circle()` in the touchpad).
 - Portrait only (manifest), except the PC screen viewer (sensorLandscape): the user doesn't want landscape anywhere else.
 - The hero title at rest is the LIST's copy (stretches on overscroll with the page); the travelling copy takes over the
   moment the page moves. Meter labels are one line ("RAM", not "Memory", which wrapped beside 14.6G).
@@ -88,7 +99,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   full-page blur was slower (replays the whole page). Every
   chrome element uses the tab bar's values: `blur = 8.dp, bevel = 16.dp`. The bar must not be inside
   the source. Compose/draw chrome only while visible.
-- Header (`CollapsingHeaderScaffold`): no slab. A soft status-bar fade; back in a 48 dp liquid circle; actions share
+- Header (`CollapsingHeaderScaffold`): no slab, no fade (content slides under clear glass). Back in a 48 dp liquid circle; actions share
   one capsule. The title is ONE travelling Text (the hero copy is an invisible placeholder): it scrolls 1:1 with the
   page (no hero parallax, else it slid over the hero glyph), pins in the bar and shrinks to titleMedium; at collapse
   docks (within 6 dp of its bar position) a glass bubble forms around it (height leads, width wobbles out with `jelly()`).
@@ -96,6 +107,9 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   POPS (swells 18%, 140 ms). A fixed 220 ms fade at a collapse threshold lagged fast flings (empty bubble behind the
   text). Forming and bursting each play `Haptic.Bubble`; a list flung into either end ticks (`Detent`). The hero fades by 75%.
   A trailing "collapse-room" item lets any page that scrolls at all collapse fully (no half-faded stuck title).
+  A page whose content all shows above the tab bar doesn't scroll at all (`userScrollEnabled = false`): scrolling
+  only to collapse the title read as broken. The hero is the same height on EVERY page (`heroFraction` 0.30, One UI);
+  Home once took less and the user called it inconsistent.
   A scroll that stops mid-collapse snaps open/closed; the snap runs in its own child job (run inline, a finger
   interrupting it threw a cancellation that killed the watcher, and nothing snapped again).
 - Dialogs: `GlassDialog` (same API as AlertDialog): opaque `surfaceContainerHigh` slab with the card rim. Never
@@ -165,12 +179,12 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - One job per button, named for what it does ("Send", "PC files", "Upload here"), never one button whose meaning
   changes with state. No two buttons on the same screen open the same thing. When a feature appears only
   sometimes (companion online), swap it into a fixed slot so the other buttons never move.
-- Where things live (IA, user-approved Control Center layout 2026-10-31): Home is the PC's control surface and fits
-  one screen: the PC's NAME is the hero (no glyph; subtitle = transport, or "Away · seen 12 min. ago"), ONE status
+- Where things live (IA, user-approved Control Center layout 2026-10-31): Home is the PC's control surface (same hero
+  height as every page, so its tiles run under the tab bar's glass): the PC's NAME is the hero (no glyph; subtitle = transport, or "Away · seen 12 min. ago"), ONE status
   card (battery ring + CPU/RAM/GPU/Temp meters with the companion), then the deck: media card (art 92 dp; "Not
   playing" card holds its place) beside the PC volume as a tall `VolumeCapsule` (80 dp wide, fills from the bottom,
-  relative vertical drag, tap = output list dialog; no chip rows), a Transfers strip only while files move or for
-  10 min after, then the 4x2 tiles (8th = Commands sheet). A paired PC that's AWAY keeps Home: an AwayCard (Try
+  relative vertical drag, tap = output list dialog; no chip rows), then the tile card (Send files rings while files move; the
+  Transfers list lives in the Files tab) (8th = Commands sheet). A paired PC that's AWAY keeps Home: an AwayCard (Try
   again + Use USB), dimmed cached status, no deck, tiles at 40% and untappable. Files tab: Send / Browse PC files,
   Transfers (running with capsule progress, then the `TransferLog` of finished ones; incoming open on tap), the 3
   latest clips + "All clipboard history". PC details (header "i") leads with Connection (Link + Ping, Find this
