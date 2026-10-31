@@ -197,19 +197,27 @@ val glassDepth: GlassDepth
     }
 
 /**
- * The specular edge: a sweep around the shape's centre, brightest facing the light (top left at
+ * The specular edge: a sweep around the shape's centre, brightest facing the light (up and a little left at
  * rest, following [SpecularLight] as the phone tilts), a softer catch opposite, the base tone
  * between. Angles run clockwise from 3 o'clock.
  */
+/** Where [specularRim]'s sweep puts the light before turning it (0.625 of a turn from 3 o'clock). */
+private const val RIM_LAYOUT_DEG = 225f
+
 internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float = SpecularLight.angle): Brush {
     val b = base.toArgb()
     val shader = android.graphics.SweepGradient(
         center.x, center.y,
-        intArrayOf(b, lerp(base, lit, 0.45f).toArgb(), b, b, lit.toArgb(), b, b),
-        // Laid out for the resting light (top left = 0.625), then turned to where it is now.
-        floatArrayOf(0f, 0.125f, 0.3f, 0.5f, 0.625f, 0.8f, 1f),
+        // A broad, soft highlight that fades over about a third of the edge each side (Apple's
+        // spreads; a narrow one read as a hard glint), with a smaller catch opposite.
+        intArrayOf(
+            lerp(base, lit, 0.15f).toArgb(), lerp(base, lit, 0.45f).toArgb(), lerp(base, lit, 0.15f).toArgb(), b,
+            lerp(base, lit, 0.55f).toArgb(), lit.toArgb(), lerp(base, lit, 0.55f).toArgb(), b, lerp(base, lit, 0.15f).toArgb(),
+        ),
+        // Laid out with the light at 0.625 of the sweep (225°), then turned to where it is now.
+        floatArrayOf(0f, 0.125f, 0.25f, 0.4f, 0.53f, 0.625f, 0.72f, 0.86f, 1f),
     )
-    shader.setLocalMatrix(android.graphics.Matrix().apply { setRotate(light - SpecularLight.REST, center.x, center.y) })
+    shader.setLocalMatrix(android.graphics.Matrix().apply { setRotate(light - RIM_LAYOUT_DEG, center.x, center.y) })
     return ShaderBrush(shader)
 }
 
@@ -239,7 +247,8 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
             // brightest at the edge point facing the light, spreading in from there.
             val a = Math.toRadians(light.toDouble())
             val at = Offset(width / 2 + cos(a).toFloat() * width / 2, height / 2 + sin(a).toFloat() * height / 2)
-            drawOutline(outline, Brush.radialGradient(listOf(d.glow.compositeOver(fill), fill), at, minOf(width, height) * 1.1f))
+            // Spread wide, so it washes softly into the card rather than sitting as a spot.
+            drawOutline(outline, Brush.radialGradient(listOf(d.glow.compositeOver(fill), fill), at, minOf(width, height) * 1.6f))
         } else {
             drawOutline(outline, fill)
         }
@@ -403,7 +412,7 @@ private const val CHROME_RES = 0.25f
  *
  * With a [bevel] (pills and circles only) and Android 13+, it's liquid glass instead: clearer, and
  * the rim bends in what lies just outside the element like the edge of a lens, splits colour a
- * little, and catches light from the top left. One AGSL pass over a lightly blurred layer that
+ * little, and catches light from above, a little left. One AGSL pass over a lightly blurred layer that
  * covers a margin around the element, rebuilt only when the size changes.
  */
 fun Modifier.glassChrome(
@@ -800,7 +809,8 @@ half4 main(float2 p) {
     // A thin specular rim, brightest where it faces the light and its opposite.
     float rim = 1.0 - smoothstep(0.0, 1.8, -d);
     float facing = abs(dot(n, light));
-    float light = rim * (0.25 + 0.75 * facing * facing) + t * t * t * 0.12;
+    // Linear in how squarely the edge faces it: a broad highlight, not a glint.
+    float light = rim * (0.25 + 0.75 * facing) + t * t * t * 0.12;
     col.rgb += half3(light * spec) * col.a;
     // On light backgrounds a highlight alone vanishes: a faint shaded underside gives the edge.
     col.rgb -= half3(rim * shade * (0.4 + 0.6 * max(n.y, 0.0))) * col.a;
