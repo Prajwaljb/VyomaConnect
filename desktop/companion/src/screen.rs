@@ -11,7 +11,7 @@ use std::process::Stdio;
 use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
 use serde_json::json;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{info, warn};
 use zbus::zvariant::{self, OwnedObjectPath, OwnedValue, Value};
 use zbus::{Connection, MatchRule, MessageStream};
@@ -26,28 +26,48 @@ const SCREENCAST: &str = "org.freedesktop.portal.ScreenCast";
 /// The phone's screen is about 1080 px tall in landscape: more than 1920 wide is wasted bits.
 const MAX_WIDTH: i32 = 1920;
 const BITRATE_KBPS: u32 = 8000;
-/// Matches the phone's 120 Hz screen; a 200 Hz monitor would otherwise send frames it can't show.
-const MAX_FPS: u32 = 120;
+/// Half the phone's 120 Hz: its screen always keeps up, so frames never queue on the way.
+const MAX_FPS: u32 = 60;
+const RELAY_BYTES: usize = 16 * 1024;
+/// The encoder's output pipe (64 KiB by default, most of a second when the picture is still).
+const PIPE_BYTES: libc::c_int = 16 * 1024;
+const STAMP_MAGIC: &[u8; 4] = b"VYTS";
 
 /// Casts until the phone hangs up (or the stream fails). Failures before streaming starts reach the
 /// phone as an error packet, so it never waits on a spinner.
 pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str) -> Result<()> {
-    let cast = match Cast::start().await {
+    // VYOMA_SCREEN_TEST=1 casts a moving test pattern instead, with no portal: for checking the
+    // phone's viewer (and screenshotting it) without anything private on the screen.
+    let test = std::env::var_os("VYOMA_SCREEN_TEST").is_some();
+    let cast = match if test { Ok(None) } else { Cast::start().await.map(Some) } {
         Ok(c) => c,
         Err(e) => {
             sender.send(&link::packet("vyoma.screen", json!({ "error": format!("{e:#}") }))).await?;
             return Err(e);
         }
     };
-    let Cast { conn, node, fd, size } = cast;
-    let (w, h) = size.map(fit).unwrap_or((MAX_WIDTH, MAX_WIDTH * 9 / 16));
-    let mut gst = encoder(node, fd, w, h)?;
-    let video = gst.stdout.take().context("encoder has no output")?;
+    let (w, h) = cast.as_ref().and_then(|c| c.size).map(fit).unwrap_or((MAX_WIDTH, MAX_WIDTH * 9 / 16));
+    let (conn, mut gst) = match cast {
+        Some(Cast { conn, node, fd, .. }) => (Some(conn), encoder(&format!("pipewiresrc fd=0 path={node} do-timestamp=true keepalive-time=1000"), Some(fd), w, h)?),
+        None => (None, encoder(&format!("videotestsrc is-live=true pattern=smpte horizontal-speed=4 ! capsfilter caps=video/x-raw,width={w},height={h},framerate={MAX_FPS}/1"), None, w, h)?),
+    };
+    let encoded = gst.stdout.take().context("encoder has no output")?;
+    {
+        use std::os::fd::AsRawFd;
+        // SAFETY: resizing a pipe we own; failure just leaves the default size.
+        unsafe { libc::fcntl(encoded.as_raw_fd(), libc::F_SETPIPE_SZ, PIPE_BYTES) };
+    }
+    // Small windows all the way from the encoder to the socket (pipe, relay, unsent bytes): if the
+    // link falls behind, the encoder blocks and the leaky queue before it drops raw frames, instead
+    // of video piling up on the way.
+    let (video, relay) = tokio::io::duplex(RELAY_BYTES);
+    let stamping = tokio::spawn(stamp(encoded, relay));
     let mut errors = gst.stderr.take().context("encoder has no error output")?;
     info!("{name}: casting the screen at {w}x{h}");
     let announce = link::packet("vyoma.screen", json!({ "codec": "h264", "framing": "avc4", "width": w, "height": h }));
     let result = payload::offer_stream(sender, me, pinned, announce, video).await;
     let _ = gst.kill().await;
+    stamping.abort();
     if let Err(e) = &result {
         let mut log = String::new();
         let _ = errors.read_to_string(&mut log).await;
@@ -61,21 +81,48 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str) -
     Ok(())
 }
 
+/// Passes the encoder's length-prefixed NAL units through, putting a timestamp unit before each
+/// picture: an SEI-typed NAL with our marker and the send time (µs since the epoch), which the phone
+/// reads for its latency figures and removes before decoding.
+async fn stamp(mut encoded: impl AsyncRead + Unpin, mut out: impl AsyncWrite + Unpin) -> Result<()> {
+    let mut nal = Vec::with_capacity(256 * 1024);
+    loop {
+        let size = encoded.read_u32().await? as usize;
+        if size == 0 || size > 16 << 20 {
+            bail!("bad NAL size {size}");
+        }
+        nal.resize(size, 0);
+        encoded.read_exact(&mut nal).await?;
+        if matches!(nal[0] & 0x1f, 1 | 5) {
+            let us = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_micros() as u64).unwrap_or(0);
+            let mut ts = Vec::with_capacity(17);
+            ts.extend_from_slice(&13u32.to_be_bytes());
+            ts.push(0x06);
+            ts.extend_from_slice(STAMP_MAGIC);
+            ts.extend_from_slice(&us.to_be_bytes());
+            out.write_all(&ts).await?;
+        }
+        out.write_all(&(size as u32).to_be_bytes()).await?;
+        out.write_all(&nal).await?;
+    }
+}
+
 /// Scales to fit [MAX_WIDTH] keeping the shape; even sizes, as H.264 wants.
 fn fit((w, h): (i32, i32)) -> (i32, i32) {
     let (w, h) = if w > MAX_WIDTH { (MAX_WIDTH, (h as i64 * MAX_WIDTH as i64 / w as i64) as i32) } else { (w, h) };
     (w & !1, h & !1)
 }
 
-fn encoder(node: u32, fd: zvariant::OwnedFd, w: i32, h: i32) -> Result<tokio::process::Child> {
-    // Latency first: drop (never queue) frames over MAX_FPS (KWin can deliver 200 on a 200 Hz
-    // monitor), keep at most one frame waiting, no B-frames, the encoder's fastest preset, and a
-    // keyframe only every 5 s at full rate (TCP never loses one; big keyframes cause stutters). Output is
-    // length-prefixed ("avc"), one picture per write, so the phone shows each frame the moment it
-    // lands instead of waiting for the next one to find where it ended.
+fn encoder(source: &str, fd: Option<zvariant::OwnedFd>, w: i32, h: i32) -> Result<tokio::process::Child> {
+    // Latency first. The capture has a variable frame rate (KWin sends one per change, up to the
+    // monitor's 200 Hz); `max-framerate` asks KWin itself to send no more than [MAX_FPS] (videorate
+    // can't cap it: the capture's timestamps let it through at ~100). At most one frame waits
+    // before the encoder, no B-frames, the fastest preset, a keyframe every 5 s (TCP never loses
+    // one; big keyframes stutter), and length-prefixed output ("avc"), one picture per write, so
+    // the phone can show each frame the moment it lands.
     let pipeline = format!(
-        "pipewiresrc fd=0 path={node} do-timestamp=true keepalive-time=1000 \
-         ! videorate drop-only=true max-rate={MAX_FPS} \
+        "{source} \
+         ! video/x-raw(ANY),max-framerate={MAX_FPS}/1 \
          ! queue max-size-buffers=1 leaky=downstream \
          ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h} \
          ! vah264enc rate-control=vbr bitrate={BITRATE_KBPS} key-int-max={keyframes} b-frames=0 num-slices=1 target-usage=7 \
@@ -87,7 +134,7 @@ fn encoder(node: u32, fd: zvariant::OwnedFd, w: i32, h: i32) -> Result<tokio::pr
         .arg("-q")
         .args(pipeline.split_whitespace())
         // The portal's PipeWire connection, handed over as the encoder's stdin (pipewiresrc fd=0).
-        .stdin(Stdio::from(std::os::fd::OwnedFd::from(fd)))
+        .stdin(fd.map_or_else(Stdio::null, |fd| Stdio::from(std::os::fd::OwnedFd::from(fd))))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)

@@ -39,6 +39,22 @@ class ScreenDecoder(
     val bytes = AtomicLong()
     /** Sum of arrival-to-display times (µs) over [frames]: how long the phone holds a frame. */
     val heldUs = AtomicLong()
+    /** Decoded pictures not shown because a newer one was already ready. */
+    val skipped = AtomicLong()
+    /** PC send time per queued frame (keyed by its presentation time), for the end-to-end figure. */
+    private val sentAt = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+    /** PC-sent to shown, per frame, µs: the sum and count over the current window, and the session's best. */
+    private val e2eSum = AtomicLong()
+    private val e2eCount = AtomicLong()
+    @Volatile var e2eBestUs = Long.MAX_VALUE
+        private set
+    /** Average PC-sent-to-shown delay above the session's best, ms: what's queueing up on the way. */
+    @Volatile var queuedMs = 0L
+        private set
+    /** PC-sent to read off the socket, µs (sum, count, best): the part of [queuedMs] spent on the way. */
+    private val inSum = AtomicLong()
+    private val inCount = AtomicLong()
+    @Volatile private var inBest = Long.MAX_VALUE
 
     fun start() {
         Thread({ readLoop() }, "screen-in").start()
@@ -65,7 +81,14 @@ class ScreenDecoder(
                     if (sps == null || pps == null || au.nals.none { it.type == 5 }) continue
                     codec = configure(sps!!, pps!!)
                 }
-                queue(codec!!, au.data)
+                val pts = System.nanoTime() / 1000
+                au.sentUs?.let {
+                    sentAt[pts] = it
+                    val age = System.currentTimeMillis() * 1000 - it
+                    if (age < inBest) inBest = age
+                    inSum.addAndGet(age); inCount.incrementAndGet()
+                }
+                queue(codec!!, au.data, pts)
             }
         } catch (e: Throwable) {
             if (running.get()) error = e
@@ -100,7 +123,7 @@ class ScreenDecoder(
         return codec
     }
 
-    private fun queue(codec: MediaCodec, data: ByteArray) {
+    private fun queue(codec: MediaCodec, data: ByteArray, pts: Long) {
         while (running.get()) {
             val index = codec.dequeueInputBuffer(10_000)
             if (index < 0) continue
@@ -112,7 +135,7 @@ class ScreenDecoder(
                 return
             }
             buffer.put(data)
-            codec.queueInputBuffer(index, 0, data.size, System.nanoTime() / 1000, 0)
+            codec.queueInputBuffer(index, 0, data.size, pts, 0)
             return
         }
     }
@@ -129,15 +152,40 @@ class ScreenDecoder(
                 if (now - mark >= LOG_EVERY_NS) {
                     // For the log (and the demo's research log): what the cast actually delivers.
                     val n = frames.get() - markFrames
-                    VLog.i(TAG, "%.0f fps, %.1f Mb/s, decode %d ms".format(
-                        n * 1e9 / (now - mark), (bytes.get() - markBytes) * 8e3 / (now - mark), if (n > 0) (heldUs.get() - markHeld) / n / 1000 else 0,
+                    val count = e2eCount.getAndSet(0)
+                    val sum = e2eSum.getAndSet(0)
+                    if (count > 0) queuedMs = (sum / count - e2eBestUs) / 1000
+                    val ic = inCount.getAndSet(0)
+                    val onTheWay = if (ic > 0) (inSum.getAndSet(0) / ic - inBest) / 1000 else -1
+                    VLog.i(TAG, "%.0f fps (%d skipped), %.1f Mb/s, decode %d ms, PC-to-screen %d ms raw (best %d), queued %d ms (%d on the way)".format(
+                        n * 1e9 / (now - mark), skipped.getAndSet(0), (bytes.get() - markBytes) * 8e3 / (now - mark), if (n > 0) (heldUs.get() - markHeld) / n / 1000 else 0,
+                        if (count > 0) sum / count / 1000 else -1, if (e2eBestUs == Long.MAX_VALUE) -1 else e2eBestUs / 1000, queuedMs, onTheWay,
                     ))
                     mark = now; markFrames = frames.get(); markBytes = bytes.get(); markHeld = heldUs.get()
                 }
-                val index = codec.dequeueOutputBuffer(info, 10_000)
+                var index = codec.dequeueOutputBuffer(info, 10_000)
+                var pts = info.presentationTimeUs
+                // A burst decoded at once: show only the newest picture. Rendering every one would
+                // queue them up for the screen, and a live view must never fall behind.
+                while (index >= 0) {
+                    val newer = codec.dequeueOutputBuffer(info, 0)
+                    if (newer < 0) break
+                    codec.releaseOutputBuffer(index, false)
+                    sentAt.remove(pts)
+                    skipped.incrementAndGet()
+                    index = newer
+                    pts = info.presentationTimeUs
+                }
                 if (index >= 0) {
                     codec.releaseOutputBuffer(index, true)
-                    heldUs.addAndGet(System.nanoTime() / 1000 - info.presentationTimeUs)
+                    heldUs.addAndGet(System.nanoTime() / 1000 - pts)
+                    sentAt.remove(pts)?.let { sent ->
+                        // Phone and PC clocks differ by an unknown offset, so the best frame of the session
+                        // is the baseline and the excess is the queueing: honest without a clock sync.
+                        val e2e = System.currentTimeMillis() * 1000 - sent
+                        if (e2e < e2eBestUs) e2eBestUs = e2e
+                        e2eSum.addAndGet(e2e); e2eCount.incrementAndGet()
+                    }
                     if (frames.incrementAndGet() == 1L) onFirstFrame()
                 }
             }
@@ -158,7 +206,8 @@ private class Nal(val bytes: ByteArray) {
     val isSlice: Boolean get() = type == 1 || type == 5
 }
 
-private class AccessUnit(val nals: List<Nal>) {
+/** [sentUs]: when the PC sent it (µs since the epoch, the companion's stamp), if stamped. */
+private class AccessUnit(val nals: List<Nal>, val sentUs: Long?) {
     val data: ByteArray by lazy {
         ByteArrayOutputStream(nals.sumOf { it.bytes.size }).also { out -> nals.forEach { out.write(it.bytes) } }.toByteArray()
     }
@@ -176,6 +225,7 @@ private class AccessUnits(input: InputStream, private val counted: (Int) -> Unit
 
     fun next(): AccessUnit? {
         val unit = ArrayList<Nal>(3)
+        var sent: Long? = null
         while (true) {
             val size = try { data.readInt() } catch (_: EOFException) { return null }
             if (size <= 0 || size > MAX_NAL) throw IOException("Bad NAL size $size")
@@ -183,14 +233,22 @@ private class AccessUnits(input: InputStream, private val counted: (Int) -> Unit
             data.readFully(bytes, 4, size)
             bytes[3] = 1 // 00 00 00 01
             counted(size + 4)
+            // The companion's send-time stamp: read it, keep it away from the decoder.
+            if (size == STAMP_SIZE && bytes[4].toInt() == 6 && bytes[5] == 'V'.code.toByte() && bytes[6] == 'Y'.code.toByte() &&
+                bytes[7] == 'T'.code.toByte() && bytes[8] == 'S'.code.toByte()
+            ) {
+                sent = java.nio.ByteBuffer.wrap(bytes, 9, 8).long
+                continue
+            }
             val nal = Nal(bytes)
             unit += nal
-            if (nal.isSlice) return AccessUnit(unit)
+            if (nal.isSlice) return AccessUnit(unit, sent)
         }
     }
 
     private companion object {
         const val MAX_NAL = 16 * 1024 * 1024
+        const val STAMP_SIZE = 13
     }
 }
 

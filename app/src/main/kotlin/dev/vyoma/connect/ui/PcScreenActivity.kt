@@ -11,15 +11,19 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.material.icons.rounded.Screenshot
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.Dp
+import dev.vyoma.connect.designsystem.Backdrop
+import dev.vyoma.connect.designsystem.backdropSource
+import dev.vyoma.connect.designsystem.glassChrome
+import dev.vyoma.connect.designsystem.rememberBackdrop
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.VisibilityThreshold
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -28,11 +32,9 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.border
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -43,7 +45,6 @@ import androidx.compose.ui.unit.sp
 import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.perform
 import dev.vyoma.connect.designsystem.pressable
-import dev.vyoma.connect.designsystem.specularEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -85,7 +86,6 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import dev.vyoma.connect.container
-import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.DarkMode
 import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.ThemeSettings
@@ -108,6 +108,12 @@ class PcScreenActivity : ComponentActivity() {
     private var plugin: CompanionPlugin? = null
     private var surface: Surface? = null
     private var pending: CompanionPlugin.ScreenStream? = null
+    /** Keeps the phone's Wi-Fi out of power save while watching: dozing radios hold packets for 100+ ms. */
+    private val wifiLock by lazy {
+        (getSystemService(WIFI_SERVICE) as android.net.wifi.WifiManager)
+            .createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "vyoma:screen")
+            .apply { setReferenceCounted(false) }
+    }
 
     sealed interface Phase {
         data object Connecting : Phase
@@ -149,12 +155,14 @@ class PcScreenActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        runCatching { wifiLock.acquire() }
         start()
     }
 
     override fun onStop() {
         super.onStop()
         stop()
+        runCatching { wifiLock.release() }
     }
 
     private fun start() {
@@ -242,6 +250,8 @@ private fun ScreenView(
         if (chrome && live?.showing == true) { delay(3_000); chrome = false }
     }
     val videoAlpha by animateFloatAsState(if (live?.showing == true) 1f else 0f, tween(260), label = "video")
+    // The video is recorded as the backdrop the controls' liquid glass bends and blurs.
+    val backdrop = rememberBackdrop()
     Box(
         Modifier
             .fillMaxSize()
@@ -270,8 +280,9 @@ private fun ScreenView(
         contentAlignment = Alignment.Center,
     ) {
         val ratio = live?.takeIf { it.width > 0 && it.height > 0 }?.let { it.width.toFloat() / it.height } ?: (16f / 9f)
-        // TextureView, not SurfaceView: it scales and pans with the zoom like any other view.
-        AndroidView(
+        // TextureView, not SurfaceView: it scales and pans with the zoom like any other view, and it can
+        // be recorded for the glass (a SurfaceView bypasses the app's drawing and would leave it bending black).
+        Box(Modifier.fillMaxSize().backdropSource(backdrop), contentAlignment = Alignment.Center) { AndroidView(
             factory = { context ->
                 TextureView(context).apply {
                     surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -297,9 +308,9 @@ private fun ScreenView(
                     translationX = pan.value.x; translationY = pan.value.y
                     alpha = videoAlpha
                 },
-        )
+        ) }
 
-        // Shutter flash: a white veil that fades out, like the system screenshot.
+        // Screenshot flash: a white veil that fades out, like the system screenshot.
         val veil = remember { Animatable(0f) }
         LaunchedEffect(flash) {
             if (flash == 0) return@LaunchedEffect
@@ -335,10 +346,8 @@ private fun ScreenView(
                 modifier = Modifier.align(Alignment.TopStart),
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    BounceIconButton(onClick = onClose, size = 44.dp, modifier = Modifier.overVideo(CircleShape)) {
-                        Icon(Icons.Rounded.Close, "Close", tint = Color.White, modifier = Modifier.size(22.dp))
-                    }
-                    if (live?.showing == true) RateReadout(stats)
+                    GlassButton(backdrop, "Close", Icons.Rounded.Close, onClick = onClose)
+                    if (live?.showing == true) RateReadout(backdrop, stats)
                 }
             }
             if (plugin != null && live?.showing == true) {
@@ -348,12 +357,21 @@ private fun ScreenView(
                     exit = fadeOut(tween(160)) + slideOutHorizontally(tween(200)) { it / 2 },
                     modifier = Modifier.align(Alignment.CenterEnd),
                 ) {
-                    Shutter(plugin, onFlash = { flash++ })
+                    ScreenshotButton(backdrop, plugin, onFlash = { flash++ })
                 }
             }
         }
     }
 }
+
+/**
+ * The controls' glass: a mid-grey frost rather than the app's dark chrome. It lifts the black bands
+ * beside a picture that doesn't fill the screen (nothing there to bend) and tones down a white one,
+ * so the glass and its white glyphs read over anything the PC shows.
+ */
+private val FROST = Color(0xFF7A7A7A).copy(alpha = 0.32f)
+/** Keeps white glyphs legible over the brightest pictures. */
+private val GLYPH_SHADOW = androidx.compose.ui.graphics.Shadow(Color.Black.copy(alpha = 0.45f), Offset(0f, 1f), 6f)
 
 private val CHROME_SPRING = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntOffset.VisibilityThreshold)
 private val ZOOM_SPRING = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = 0.001f)
@@ -365,18 +383,24 @@ private fun bounded(o: Offset, scale: Float, width: Int, height: Int): Offset {
     return Offset(o.x.coerceIn(-maxX, maxX), o.y.coerceIn(-maxY, maxY))
 }
 
-/**
- * Dark smoked glass for controls over video: legible on a white document and on a black terminal
- * alike (the app's light glass vanishes over bright desktops), with the usual tilt-lit hairline.
- */
-private fun Modifier.overVideo(shape: Shape): Modifier = this
-    .clip(shape)
-    .background(Color.Black.copy(alpha = 0.42f))
-    .specularEdge(shape, 1.dp, lit = Color.White.copy(alpha = 0.45f), base = Color.White.copy(alpha = 0.12f))
+/** A round liquid-glass button over the video, like the tab bar's touchpad button. */
+@Composable
+private fun GlassButton(backdrop: Backdrop, label: String, icon: ImageVector, size: Dp = 48.dp, enabled: Boolean = true, onClick: () -> Unit, content: (@Composable () -> Unit)? = null) {
+    Box(
+        Modifier
+            .size(size)
+            .glassChrome(backdrop, CircleShape, blur = 8.dp, tint = FROST, bevel = 16.dp, interactive = true)
+            .pressable(enabled = enabled, pressedScale = 0.82f, onClick = onClick)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        content?.invoke() ?: Icon(icon, null, tint = Color.White, modifier = Modifier.size(22.dp))
+    }
+}
 
 /** Frames per second, bitrate, and the phone's decode time per frame: what the cast is really doing. */
 @Composable
-private fun RateReadout(stats: () -> ScreenDecoder?) {
+private fun RateReadout(backdrop: Backdrop, stats: () -> ScreenDecoder?) {
     var text by remember { mutableStateOf("") }
     LaunchedEffect(Unit) {
         var lastFrames = -1L
@@ -405,18 +429,15 @@ private fun RateReadout(stats: () -> ScreenDecoder?) {
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
             // Tabular digits: the pill doesn't twitch as the numbers change.
-            style = TextStyle(fontFeatureSettings = "tnum"),
-            modifier = Modifier.overVideo(RoundedCornerShape(50)).padding(horizontal = 12.dp, vertical = 7.dp),
+            style = TextStyle(fontFeatureSettings = "tnum", shadow = GLYPH_SHADOW),
+            modifier = Modifier.glassChrome(backdrop, RoundedCornerShape(50), blur = 8.dp, tint = FROST, bevel = 12.dp).padding(horizontal = 14.dp, vertical = 9.dp),
         )
     }
 }
 
-/**
- * A camera-style shutter: white disc in a ring. Takes a full-resolution screenshot (saved to
- * Pictures); the screen flashes when it lands, and the disc breathes while the PC captures.
- */
+/** A full-resolution screenshot, saved to Pictures; the view flashes when it lands. */
 @Composable
-private fun Shutter(plugin: CompanionPlugin, onFlash: () -> Unit) {
+private fun ScreenshotButton(backdrop: Backdrop, plugin: CompanionPlugin, onFlash: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val haptics = LocalHapticFeedback.current
     val shot by plugin.screenshot.state.collectAsStateWithLifecycle()
@@ -439,19 +460,11 @@ private fun Shutter(plugin: CompanionPlugin, onFlash: () -> Unit) {
         }
     }
     val busy = shot == CaptureState.Capturing
-    val breathe by rememberInfiniteTransition(label = "shutter").animateFloat(
-        initialValue = 1f, targetValue = if (busy) 0.72f else 1f,
-        animationSpec = infiniteRepeatable(tween(520), RepeatMode.Reverse), label = "breathe",
-    )
     val scope = rememberCoroutineScope()
-    Box(
-        Modifier
-            .size(68.dp)
-            .pressable(enabled = !busy, pressedScale = 0.88f) { asked = true; scope.launch { plugin.screenshot.request() } }
-            .semantics { contentDescription = "Take a screenshot" },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(Modifier.fillMaxSize().clip(CircleShape).background(Color.Black.copy(alpha = 0.3f)).border(3.dp, Color.White, CircleShape))
-        Box(Modifier.size(52.dp).graphicsLayer { scaleX = breathe; scaleY = breathe; alpha = if (busy) 0.75f else 1f }.clip(CircleShape).background(Color.White))
+    GlassButton(backdrop, "Take a screenshot", Icons.Rounded.Screenshot, size = 56.dp, enabled = !busy, onClick = { asked = true; scope.launch { plugin.screenshot.request() } }) {
+        Crossfade(busy, label = "shot") { b ->
+            if (b) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+            else Icon(Icons.Rounded.Screenshot, null, tint = Color.White, modifier = Modifier.size(24.dp))
+        }
     }
 }

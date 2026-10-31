@@ -198,6 +198,9 @@ class DeviceHub(
         _events.tryEmit(HubEvent.PairRequested(device))
     }
 
+    override fun usbTunnelUp(deviceId: String): Boolean =
+        _devices.value[deviceId]?.state?.value?.transports?.contains(TransportKind.USB) == true
+
     private suspend fun onLink(link: DeviceLink) {
         val id = link.identity.deviceId
         val pinned = trustStore.get(id)
