@@ -32,6 +32,7 @@ import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import dev.vyoma.connect.designsystem.IconBadge
 import dev.vyoma.connect.designsystem.LiquidSlider
 import dev.vyoma.connect.designsystem.isDarkUi
@@ -669,22 +670,28 @@ private fun ControlTile(c: Control, modifier: Modifier) {
         else -> Haptic.ToggleOn
     }
     val shape = RoundedCornerShape(TileRadius)
-    val ink = lerp(MaterialTheme.colorScheme.onSurface, Color.White, on)
+    // Legible on every colour: the brightest (yellow) keeps its tone and takes dark ink; mid tones
+    // (cyan, teal) deepen a little so white text holds (darkening yellow only made it mustard).
+    val lum = remember(tone) { tone.luminance() }
+    val fill = if (lum in 0.3f..0.5f) lerp(tone, Color.Black, 0.15f) else tone
+    val onFill = if (lum > 0.5f) Color(0xFF1C1C1E) else Color.White
+    val ink = lerp(MaterialTheme.colorScheme.onSurface, onFill, on)
     Column(
         modifier
             .aspectRatio(1f)
             .pressable(pressedScale = 0.94f, haptic = haptic, onClick = c.onClick)
-            .glassRaised(shape, if (on > 0.01f) tone.copy(alpha = 0.9f * on) else null)
-            .padding(10.dp),
+            .glassRaised(shape, if (on > 0.01f) fill.copy(alpha = 0.92f * on) else null)
+            .padding(start = 10.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        Icon(c.icon, null, tint = lerp(tone, Color.White, on), modifier = Modifier.size(22.dp))
-        // Shrinks to fit rather than cutting a word ("Keyboard" in a narrow tile, larger fonts).
+        Icon(c.icon, null, tint = lerp(tone, onFill, on), modifier = Modifier.size(22.dp))
+        // One size for every tile (12 sp fits "Commands"); shrinks only past that, at large font
+        // scales, rather than cutting a word.
         BasicText(
             c.label,
             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, color = ink),
             maxLines = 1,
-            autoSize = TextAutoSize.StepBased(minFontSize = 9.sp, maxFontSize = MaterialTheme.typography.labelMedium.fontSize),
+            autoSize = TextAutoSize.StepBased(minFontSize = 9.sp, maxFontSize = 12.sp),
         )
     }
 }
