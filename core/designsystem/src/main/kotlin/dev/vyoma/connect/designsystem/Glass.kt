@@ -172,20 +172,25 @@ class GlassDepth internal constructor(
     val shadowDrop: Float,
     /** Light caught inside the card near its lit edge; transparent for none. */
     val glow: Color = Color.Transparent,
+    /** The soft band of light just inside the edge (see [innerGlow]); transparent for none. */
+    val band: Color = Color.Transparent,
 )
 
 // Dark is true black (AMOLED): glass glows instead of casting shadows.
 private val DarkDepth = GlassDepth(
     fill = Color.White.copy(alpha = 0.095f),
-    rimLit = Color.White.copy(alpha = 0.26f), rimBase = Color.White.copy(alpha = 0.05f),
+    // Bright, like Apple's: on true black the lit edge is what makes it glass.
+    rimLit = Color.White.copy(alpha = 0.42f), rimBase = Color.White.copy(alpha = 0.06f),
     shadow = Color.Transparent, shadowBlur = 0f, shadowDrop = 0f,
     glow = Color.White.copy(alpha = 0.05f),
+    band = Color.White.copy(alpha = 0.2f),
 )
 private val LightDepth = GlassDepth(
     fill = Color.White.copy(alpha = 0.72f),
     // White on white can't show; a navy hairline gives the edge and the light lifts out of it.
     rimLit = Color.White, rimBase = Color(0xFF1A2B4C).copy(alpha = 0.06f),
     shadow = Color(0xFF1A2B4C).copy(alpha = 0.05f), shadowBlur = 14f, shadowDrop = 3f,
+    band = Color.White.copy(alpha = 0.7f),
 )
 
 /** The current theme's [GlassDepth]. */
@@ -201,21 +206,37 @@ val glassDepth: GlassDepth
  * rest, following [SpecularLight] as the phone tilts), a softer catch opposite, the base tone
  * between. Angles run clockwise from 3 o'clock.
  */
+/**
+ * Apple's rim: a soft band of light just inside [path]'s edge, [width] deep, brightest where the
+ * edge faces the light (and opposite, see [specularRim]), fading inward. Three nested strokes
+ * clipped to the inside: cheap, and it needs nothing behind it, so it works on true black and in
+ * lighter glass alike.
+ */
+internal fun DrawScope.innerGlow(path: Path, center: Offset, color: Color, width: Float, light: Float = SpecularLight.angle) {
+    if (color.alpha <= 0f || width <= 0f) return
+    val brush = specularRim(color, Color.Transparent, center, light)
+    clipPath(path) {
+        drawPath(path, brush, alpha = 0.3f, style = Stroke(width * 2f))
+        drawPath(path, brush, alpha = 0.5f, style = Stroke(width * 1.3f))
+        drawPath(path, brush, alpha = 1f, style = Stroke(width * 0.6f))
+    }
+}
+
 /** Where [specularRim]'s sweep puts the light before turning it (0.625 of a turn from 3 o'clock). */
 private const val RIM_LAYOUT_DEG = 225f
 
-internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float = SpecularLight.angle): Brush {
+internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float = SpecularLight.angle, opposite: Float = 0.8f): Brush {
     val b = base.toArgb()
+    fun at(k: Float) = lerp(base, lit, k).toArgb()
+    val o = opposite
     val shader = android.graphics.SweepGradient(
         center.x, center.y,
-        // A broad, soft highlight that fades over about a third of the edge each side (Apple's
-        // spreads; a narrow one read as a hard glint), with a smaller catch opposite.
-        intArrayOf(
-            lerp(base, lit, 0.15f).toArgb(), lerp(base, lit, 0.45f).toArgb(), lerp(base, lit, 0.15f).toArgb(), b,
-            lerp(base, lit, 0.55f).toArgb(), lit.toArgb(), lerp(base, lit, 0.55f).toArgb(), b, lerp(base, lit, 0.15f).toArgb(),
-        ),
+        // Like Apple's glass: a broad, soft highlight facing the light and a nearly as bright one
+        // opposite (the light passing through and catching the far edge), each fading over about
+        // a quarter of the way round, dark between.
+        intArrayOf(at(0.4f * o), at(o), at(0.4f * o), b, at(0.4f), lit.toArgb(), at(0.4f), b, at(0.4f * o)),
         // Laid out with the light at 0.625 of the sweep (225°), then turned to where it is now.
-        floatArrayOf(0f, 0.125f, 0.25f, 0.4f, 0.53f, 0.625f, 0.72f, 0.86f, 1f),
+        floatArrayOf(0f, 0.125f, 0.25f, 0.375f, 0.5f, 0.625f, 0.75f, 0.875f, 1f),
     )
     shader.setLocalMatrix(android.graphics.Matrix().apply { setRotate(light - RIM_LAYOUT_DEG, center.x, center.y) })
     return ShaderBrush(shader)
@@ -228,13 +249,14 @@ internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float =
 private class GlassPainter(private val d: GlassDepth, private val flat: Color?, private val lit: Boolean, density: Float) {
     private val drop = d.shadowDrop * density
     private val stroke = 1f * density
+    private val band = 7f * density
     private val shadowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         color = d.shadow.toArgb()
         if (d.shadow.alpha > 0f) maskFilter = android.graphics.BlurMaskFilter(d.shadowBlur * density, android.graphics.BlurMaskFilter.Blur.NORMAL)
     }
 
     /** [outline] fills, [edge] (the same shape inset by half the hairline, at [inset]) is stroked. */
-    fun DrawScope.paint(outline: Outline, edge: Outline, inset: Float, height: Float, width: Float) {
+    fun DrawScope.paint(outline: Outline, path: Path, edge: Outline, inset: Float, height: Float, width: Float) {
         if (d.shadow.alpha > 0f) {
             val path = Path().apply { addOutline(outline) }
             val shadow = path.asAndroidPath().let { android.graphics.Path(it).apply { offset(0f, drop) } }
@@ -253,6 +275,7 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
             drawOutline(outline, fill)
         }
         if (!lit || d.rimLit.alpha <= 0f) return
+        innerGlow(path, Offset(width / 2, height / 2), d.band, band, light)
         translate(inset, inset) {
             val c = Offset(width / 2 - inset, height / 2 - inset)
             drawOutline(edge, specularRim(d.rimLit, d.rimBase, c, light), style = Stroke(stroke))
@@ -274,7 +297,8 @@ fun Modifier.glassCard(shape: Shape, fill: Color? = null, lit: Boolean = true): 
             val half = 0.5f * density
             val edge = shape.createOutline(Size(size.width - 2 * half, size.height - 2 * half), layoutDirection, this)
             val painter = GlassPainter(d, fill, lit, density)
-            onDrawBehind { with(painter) { paint(outline, edge, half, size.height, size.width) } }
+            val path = Path().apply { addOutline(outline) }
+            onDrawBehind { with(painter) { paint(outline, path, edge, half, size.height, size.width) } }
         }
         .clip(shape)
 }
@@ -300,10 +324,15 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
             }
             val stroke = Stroke(0.9.dp.toPx())
             val center = Offset(size.width / 2, size.height / 2)
+            val path = Path().apply { addOutline(outline) }
+            val band = Color.White.copy(alpha = if (base != null) 0.26f else if (dark) 0.18f else 0.6f)
+            val bandWidth = (size.minDimension * 0.12f).coerceAtMost(4.dp.toPx())
             onDrawBehind {
                 drawOutline(outline, fill)
                 // The light's angle is read here only, so tilting redraws the edge and nothing else.
-                drawOutline(outline, specularRim(lit, rimBase, center), style = stroke)
+                val light = SpecularLight.angle
+                innerGlow(path, center, band, bandWidth, light)
+                drawOutline(outline, specularRim(lit, rimBase, center, light), style = stroke)
             }
         }
         .clip(shape)
@@ -436,6 +465,8 @@ fun Modifier.glassChrome(
     val fill = tint ?: Glass.chrome
     // Lighter glass: opaque enough that the missing blur isn't missed (content passing under stays a shadow).
     val liteFill = fill.copy(alpha = maxOf(fill.alpha, if (tint == null) 0.92f else 0.6f))
+    // The rim's inner band of light (see innerGlow).
+    val band = Color.White.copy(alpha = if (isDarkUi) 0.3f else 0.6f)
     val edgeBrush = Glass.edge
     val dark = isDarkUi
     val lens = remember(bevel) { if (bevel > 0.dp && liquidGlassSupported) LiquidGlass() else null }
@@ -461,9 +492,11 @@ fun Modifier.glassChrome(
             // An empty slot (an actions row with nothing in it) draws nothing.
             if (size.width < 1f || size.height < 1f) return@drawBehind
             // Read while drawing, so switching it redraws every element in place.
+            val bandWidth = (size.minDimension * 0.1f).coerceAtMost(4.dp.toPx())
             if (GlassQuality.lite) {
                 val outline = shape.createOutline(size, layoutDirection, this)
                 drawOutline(outline, liteFill)
+                innerGlow(Path().apply { addOutline(outline) }, center, band, bandWidth)
                 // Without the lens the border modifier below draws the edge already.
                 if (edge && lens != null) drawOutline(outline, edgeBrush, style = Stroke(0.75.dp.toPx()))
                 return@drawBehind
@@ -475,6 +508,7 @@ fun Modifier.glassChrome(
                 blurred.record { translate(shift.x, shift.y) { drawLayer(backdrop.layer) } }
                 drawLayer(blurred)
                 drawRect(fill)
+                innerGlow(Path().apply { addOutline(shape.createOutline(size, layoutDirection, this@drawBehind)) }, center, band, bandWidth)
                 return@drawBehind
             }
             // The rim stays a fifth of the element at most, so small buttons are still mostly clear.
@@ -512,6 +546,7 @@ fun Modifier.glassChrome(
             clipPath(edgePath) {
                 translate(-o, -o) { scale(1f / q, 1f / q, pivot = Offset.Zero) { drawLayer(blurred) } }
             }
+            innerGlow(edgePath, center, band, bandWidth * (1f + 0.3f * p.coerceIn(0f, 1f)))
             // The highlight: brightest where it faces the light and its opposite; it follows the tilt.
             val pr = p.coerceIn(0f, 1f)
             drawPath(
