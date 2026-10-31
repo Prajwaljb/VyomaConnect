@@ -96,5 +96,9 @@ class LockPcTile : VyomaTile() {
         tile.state = if (connected()) Tile.STATE_INACTIVE else Tile.STATE_UNAVAILABLE
     }
 
-    override fun onClick() = command(Commands.LOCK_PC)
+    override fun onClick() {
+        command(Commands.LOCK_PC)
+        // It happens on the PC, out of sight: the tile says it's done until the panel closes.
+        qsTile?.let { it.state = Tile.STATE_ACTIVE; it.subtitle = "Locked"; it.updateTile() }
+    }
 }

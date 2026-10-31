@@ -434,7 +434,7 @@ private fun RateReadout(backdrop: Backdrop, stats: () -> ScreenDecoder?) {
     }
 }
 
-/** A full-resolution screenshot, saved to Pictures; the view flashes when it lands. */
+/** A full-resolution screenshot, saved to Pictures/Vyoma; the view flashes when it lands. */
 @Composable
 private fun ScreenshotButton(backdrop: Backdrop, plugin: CompanionPlugin, onFlash: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -448,7 +448,7 @@ private fun ScreenshotButton(backdrop: Backdrop, plugin: CompanionPlugin, onFlas
                 asked = false
                 onFlash()
                 haptics.perform(Haptic.Success)
-                Toast.makeText(context, "Screenshot saved to Pictures", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Screenshot saved to Pictures/Vyoma", Toast.LENGTH_SHORT).show()
             }
             is CaptureState.Failed -> {
                 asked = false
