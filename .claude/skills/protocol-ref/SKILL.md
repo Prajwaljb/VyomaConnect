@@ -22,7 +22,9 @@ Peers mix up number and string types, so always use the lenient `NetworkPacket.s
 - Names: strip `"',;:.!?()[]<>`, max 32 chars.
 - USB = adb reverse tunnel (phone dials 127.0.0.1:1765 → PC 1716) or a tether interface. Payloads over the tunnel:
   the companion mirrors PC 1739..1764 at phone 1839..1864 (`LanPayloads.USB_PAYLOAD_SHIFT`), clear of the phone's own
-  payload ports; `Device.openPayload` falls back to another link if one can't reach the sender. kdeconnectd keeps only its
+  payload ports; the other way it `adb forward`s PC 1939..1964 → phone 1739..1764 and, on a loopback link, the phone
+  announces its payload port + 200 (`USB_FORWARD_SHIFT`), so kdeconnectd's connect-back reaches the phone (before,
+  nothing sent from the phone over the cable ever arrived); `Device.openPayload` falls back to another link if one can't reach the sender. kdeconnectd keeps only its
   **newest** connection per device and ignores broadcasts from devices it's linked to, so while on USB we never dial
   Wi-Fi, and refuse its incoming Wi-Fi *before TLS* if our cable link is < 10 s old (a race). An incoming Wi-Fi call
   on an older cable link means the tunnel died on its side: accept it and drop the USB link (`LanBackend.Config.refuses`,

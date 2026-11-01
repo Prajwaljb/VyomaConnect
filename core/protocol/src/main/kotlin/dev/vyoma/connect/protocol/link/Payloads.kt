@@ -60,7 +60,9 @@ internal class LanPayloads(
         var ssl: SSLSocket? = null
         closeOnCancel(server, { ssl }) {
             server.soTimeout = timeoutMs
-            val announced = packet.withPayload(source.size, buildJsonObject { put("port", server.localPort) })
+            // Over the adb tunnel the PC reaches our port through its forward of it, shifted.
+            val port = if (link.remoteAddress.isLoopbackAddress) server.localPort + USB_FORWARD_SHIFT else server.localPort
+            val announced = packet.withPayload(source.size, buildJsonObject { put("port", port) })
             if (!link.send(announced)) return@closeOnCancel false
             val plain = server.accept()
             tuneSocket(plain)
@@ -130,6 +132,11 @@ internal class LanPayloads(
          * phone's own [PAYLOAD_PORTS]. Must match PAYLOAD_SHIFT in desktop/companion/src/usb.rs.
          */
         const val USB_PAYLOAD_SHIFT = 100
+        /**
+         * The other way: the companion's `adb forward tcp:(P + shift) tcp:P`, so the PC reaches
+         * the payloads we offer over the cable. Must match FORWARD_SHIFT in desktop/companion/src/usb.rs.
+         */
+        const val USB_FORWARD_SHIFT = 200
         const val CONNECT_TIMEOUT_MS = 5_000
         const val IO_TIMEOUT_MS = 30_000
     }

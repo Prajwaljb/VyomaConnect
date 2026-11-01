@@ -265,6 +265,16 @@ class LinkService : LifecycleService() {
         }
 
         fun deliver(context: Context, intent: Intent, visible: Boolean) {
+            try {
+                start(context, intent, visible)
+            } catch (_: SecurityException) {
+                // A read grant we may not pass on (some senders, `am start` from a shell): this app
+                // still holds it for now, so hand the URIs over without granting them again.
+                start(context, Intent(intent).setFlags(intent.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION.inv()), visible)
+            }
+        }
+
+        private fun start(context: Context, intent: Intent, visible: Boolean) {
             if (visible) {
                 try {
                     context.startService(intent)

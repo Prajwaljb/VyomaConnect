@@ -16,6 +16,11 @@ const REVERSE: [&str; 2] = ["tcp:1765", "tcp:1716"];
 /// LanPayloads.USB_PAYLOAD_SHIFT. Without them album art never arrived over the cable.
 const PAYLOAD_PORTS: std::ops::RangeInclusive<u16> = 1739..=1764;
 const PAYLOAD_SHIFT: u16 = 100;
+/// The other way: the phone's own payload ports (it offers files on 1739..1764 too) are reached
+/// from here at port + FORWARD_SHIFT; over the cable the phone announces the shifted port, so
+/// kdeconnectd's "connect to the phone's address" lands on this PC's mirror. Without them
+/// nothing sent from the phone ever arrived over the cable. Must match LanPayloads.USB_FORWARD_SHIFT.
+const FORWARD_SHIFT: u16 = 200;
 const POLL: Duration = Duration::from_secs(3);
 /// How long to keep retrying a phone that shows "unauthorized" (the RSA prompt is on its screen).
 const AUTH_WAIT: Duration = Duration::from_secs(90);
@@ -90,7 +95,9 @@ async fn recheck_tunnels(adb: &PathBuf) {
         }
         let Some(list) = run(adb, &serial, &["reverse", "--list"]).await else { continue };
         let mirror = format!("tcp:{}", PAYLOAD_PORTS.start() + PAYLOAD_SHIFT);
-        if !list.contains(REVERSE[0]) || !list.contains(&mirror) {
+        let forwards = run(adb, &serial, &["forward", "--list"]).await.unwrap_or_default();
+        let forward = format!("tcp:{} tcp:{}", PAYLOAD_PORTS.start() + FORWARD_SHIFT, PAYLOAD_PORTS.start());
+        if !list.contains(REVERSE[0]) || !list.contains(&mirror) || !forwards.contains(&forward) {
             info!("{serial}: USB tunnel was gone (adb server restarted?); setting it up again");
             setup(adb, &serial).await;
         }
@@ -126,7 +133,14 @@ async fn setup(adb: &PathBuf, serial: &str) {
             mirrored += 1;
         }
     }
-    info!("{serial}: {mirrored} payload ports mirrored over USB");
+    let mut forwarded = 0;
+    for port in PAYLOAD_PORTS {
+        let (pc, phone) = (format!("tcp:{}", port + FORWARD_SHIFT), format!("tcp:{port}"));
+        if run(adb, serial, &["forward", &pc, &phone]).await.is_some() {
+            forwarded += 1;
+        }
+    }
+    info!("{serial}: payload ports mirrored over USB ({mirrored} to the phone, {forwarded} from it)");
     for pkg in installed {
         // Both are idempotent; they only ever touch Vyoma's own permissions.
         let logs = run(adb, serial, &["shell", "pm", "grant", pkg, "android.permission.READ_LOGS"]).await;
