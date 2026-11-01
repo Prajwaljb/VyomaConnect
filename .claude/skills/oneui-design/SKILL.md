@@ -223,6 +223,8 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Group related rows in `SectionCard` with `ListRow`s (`iconTint = SystemColor.X.color` → colored squircle `IconBadge`,
   dividers inset past the icon).
 - Section titles use `SectionLabel` (small, muted, drawn low so it belongs to the card below, not the gap above).
+  It counts on the list's item spacing: label and card are separate `item`s. Stacked in one Column with no gap,
+  the 5 dp drop puts the label on the card's rim (PC controls did this).
 - Order by frequency: glanceable state first, then what you adjust (media, volume), then one-shot actions.
 - One job per button, named for what it does ("Send", "PC files", "Upload here"), never one button whose meaning
   changes with state. No two buttons on the same screen open the same thing. When a feature appears only
