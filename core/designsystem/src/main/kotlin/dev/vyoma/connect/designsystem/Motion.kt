@@ -88,14 +88,14 @@ object VyomaMotion {
  * [Haptics] honours the system's touch feedback setting either way.
  */
 enum class Haptic(internal val type: HapticFeedbackType, internal val predefined: Int, internal val notes: List<Note>) {
-    /** A button or card did something. */
-    Tap(HapticFeedbackType.ContextClick, VibrationEffect.EFFECT_CLICK, listOf(Note(PRIMITIVE_CLICK, 0.62f))),
+    /** A button or card did something. 0.78: at 0.62 the user found taps a little faint (2026-11-01). */
+    Tap(HapticFeedbackType.ContextClick, VibrationEffect.EFFECT_CLICK, listOf(Note(PRIMITIVE_CLICK, 0.78f))),
     /** A key on a keyboard-like surface: lighter, for rapid repeats. */
     Key(HapticFeedbackType.KeyboardTap, VibrationEffect.EFFECT_TICK, listOf(Note(PRIMITIVE_TICK, 0.9f))),
     /** Snaps in: a small rise and a firm click. */
     ToggleOn(HapticFeedbackType.ToggleOn, VibrationEffect.EFFECT_CLICK, listOf(Note(PRIMITIVE_TICK, 0.45f), Note(PRIMITIVE_CLICK, 0.85f, 34))),
     /** Lets go: a click falling away into a low tick. */
-    ToggleOff(HapticFeedbackType.ToggleOff, VibrationEffect.EFFECT_TICK, listOf(Note(PRIMITIVE_CLICK, 0.6f), Note(PRIMITIVE_LOW_TICK, 0.5f, 38))),
+    ToggleOff(HapticFeedbackType.ToggleOff, VibrationEffect.EFFECT_TICK, listOf(Note(PRIMITIVE_CLICK, 0.72f), Note(PRIMITIVE_LOW_TICK, 0.5f, 38))),
     /** Moving onto a new option: tabs, segmented choices. */
     Select(HapticFeedbackType.SegmentTick, VibrationEffect.EFFECT_TICK, listOf(Note(PRIMITIVE_TICK, 0.7f))),
     /** A detent while dragging a value: volume steps, scroll notches. */
@@ -107,7 +107,7 @@ enum class Haptic(internal val type: HapticFeedbackType, internal val predefined
     /** Glass forming or bursting (the header's title bubble): barely there. */
     Bubble(HapticFeedbackType.SegmentFrequentTick, VibrationEffect.EFFECT_TICK, listOf(Note(PRIMITIVE_LOW_TICK, 0.38f))),
     /** Two rising clicks. */
-    Success(HapticFeedbackType.Confirm, VibrationEffect.EFFECT_DOUBLE_CLICK, listOf(Note(PRIMITIVE_CLICK, 0.55f), Note(PRIMITIVE_CLICK, 1f, 70))),
+    Success(HapticFeedbackType.Confirm, VibrationEffect.EFFECT_DOUBLE_CLICK, listOf(Note(PRIMITIVE_CLICK, 0.66f), Note(PRIMITIVE_CLICK, 1f, 70))),
     /** A heavy thud (this motor's lasts 300 ms, so one is plenty) and a dull tick after it. */
     Failure(HapticFeedbackType.Reject, VibrationEffect.EFFECT_HEAVY_CLICK, listOf(Note(PRIMITIVE_THUD, 0.8f), Note(PRIMITIVE_LOW_TICK, 0.7f, 60))),
 }
