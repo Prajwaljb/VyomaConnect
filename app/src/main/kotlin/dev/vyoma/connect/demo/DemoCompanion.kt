@@ -68,6 +68,17 @@ internal class DemoCompanion(credentials: LocalCredentials, private val pc: Demo
                 }
                 sendControls()
             }
+            // Sends from the phone: nothing kept from before, so every file starts at 0.
+            CompanionPlugin.XFER_BEGIN -> send(packet(CompanionPlugin.XFER_READY) { put("key", packet.string("key").orEmpty()); put("offset", 0) })
+            CompanionPlugin.XFER_DATA -> session.launch(Dispatchers.IO) {
+                val ok = receivePayload(packet) >= 0
+                synchronized(this@DemoCompanion) {
+                    send(packet(CompanionPlugin.XFER_DONE) {
+                        put("key", packet.string("key").orEmpty())
+                        if (ok) put("name", "file") else put("error", "The upload didn't arrive")
+                    })
+                }
+            }
             // Nothing to put to sleep: the demo PC just says it did.
             CompanionPlugin.PC_POWER -> send(packet(CompanionPlugin.PC_POWERED) { put("action", packet.string("action").orEmpty()) })
         }

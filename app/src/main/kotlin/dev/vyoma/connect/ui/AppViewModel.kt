@@ -147,6 +147,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun pickFiles(context: Context) =
         context.startActivity(Intent(context, ShareActivity::class.java).setAction(ShareActivity.ACTION_PICK))
 
+    fun pickFolder(context: Context) =
+        context.startActivity(Intent(context, ShareActivity::class.java).setAction(ShareActivity.ACTION_PICK_FOLDER))
+
     fun pickPhotos(context: Context) =
         context.startActivity(Intent(context, ShareActivity::class.java).setAction(ShareActivity.ACTION_PICK_PHOTOS))
 

@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -88,6 +89,12 @@ data class PcControls(val displays: List<PcDisplay> = emptyList(), val apps: Lis
 /** What the PC can be asked to do with itself. All go through Plasma, as from its own menu. */
 enum class PcPower(val wire: String) { SLEEP("sleep"), RESTART("restart"), SHUTDOWN("shutdown"), LOGOUT("logout") }
 
+/** How one attempt at a resumable send ended; [Failed.retry] says whether trying again can help. */
+sealed interface XferResult {
+    data class Saved(val name: String) : XferResult
+    data class Failed(val reason: String, val retry: Boolean) : XferResult
+}
+
 sealed interface PcFileEvent {
     data class Saved(val name: String, val location: String) : PcFileEvent
     data class Failed(val name: String, val reason: String) : PcFileEvent
@@ -144,6 +151,81 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                 }
             }
         }
+    }
+
+    /** Answers to resumable sends, by "ready:key" / "done:key". */
+    private val xferReplies = java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<NetworkPacket>>()
+
+    /**
+     * One attempt at sending [file] into the PC's downloads (inside [folder], "Photos/2024", when
+     * it's part of a sent folder). The PC says how much it already has under [key] from an attempt
+     * that broke off, and only the rest is sent. [onProgress] gets the bytes the PC has in total.
+     */
+    suspend fun sendResumable(file: OutgoingFile, key: String, folder: String?, batch: String?, onProgress: (Long) -> Unit): XferResult {
+        val ready = CompletableDeferred<NetworkPacket>().also { xferReplies["ready:$key"] = it }
+        val begun = ctx.send(packet(XFER_BEGIN) {
+            put("key", key); put("name", file.name); put("size", file.size)
+            folder?.let { put("folder", it) }
+            batch?.let { put("batch", it) }
+        })
+        val answer = if (begun) withTimeoutOrNull(XFER_REPLY_MS) { ready.await() } else null
+        xferReplies.remove("ready:$key")
+        answer ?: return XferResult.Failed("The PC didn't answer", retry = true)
+        if (answer.bool(LOST) == true) return XferResult.Failed("The PC went away", retry = true)
+        answer.string("error")?.let { return XferResult.Failed(it, retry = false) }
+        val offset = (answer.long("offset") ?: 0).coerceIn(0, file.size)
+        onProgress(offset)
+
+        val done = CompletableDeferred<NetworkPacket>().also { xferReplies["done:$key"] = it }
+        val result = coroutineScope {
+            val sending = async {
+                runCatching {
+                    ctx.device.sendWithPayload(
+                        packet(XFER_DATA) { put("key", key); put("offset", offset) },
+                        PayloadSource(file.size - offset) { file.open().also { it.skipFully(offset) } },
+                        timeoutMs = 60_000,
+                    ) { n -> onProgress(offset + n) }
+                }.onFailure { VLog.w(TAG, "send of ${file.name} broke off: ${it.message}") }.getOrDefault(false)
+            }
+            // Whichever comes first: the PC's answer (or the companion going away, see onStop)
+            // ends a send still stuck on a dead socket; a finished send waits for the answer.
+            val first = select<NetworkPacket?> {
+                done.onAwait { it }
+                sending.onAwait { null }
+            }
+            if (first != null) {
+                sending.cancel()
+                first
+            } else {
+                withTimeoutOrNull(if (sending.await()) XFER_SAVE_MS else XFER_REPLY_MS) { done.await() }
+            }
+        }
+        xferReplies.remove("done:$key")
+        result ?: return XferResult.Failed("The transfer was interrupted", retry = true)
+        if (result.bool(LOST) == true) return XferResult.Failed("The PC went away", retry = true)
+        result.string("error")?.let { return XferResult.Failed(it, retry = true) }
+        return XferResult.Saved(result.string("name") ?: file.name)
+    }
+
+    /** A sent folder is complete: the PC shows one notification for it. */
+    suspend fun endBatch(batch: String, count: Int) = ctx.send(packet(XFER_END) { put("batch", batch); put("count", count) })
+
+    /** The companion went: sends waiting on it give up now and resume once it's back. */
+    override fun onStop() = abandonReplies()
+
+    /**
+     * A companion has one link, so a new one means it restarted (or Wi-Fi changed under it) and the
+     * old session's answers will never come; the device can stay reachable throughout, so no onStop.
+     */
+    override suspend fun onLinkAdded() = abandonReplies()
+
+    private fun abandonReplies() {
+        for (key in xferReplies.keys.toList()) xferReplies.remove(key)?.complete(packet(XFER_DONE) { put(LOST, true) })
+    }
+
+    private fun receiveXfer(prefix: String, packet: NetworkPacket) {
+        val key = packet.string("key") ?: return
+        xferReplies.remove("$prefix:$key")?.complete(packet)
     }
 
     private var pendingPower: CompletableDeferred<String?>? = null
@@ -417,6 +499,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         if (packet.type == FILES_FILE) receiveFile(packet)
         if (packet.type == FILES_SAVED) receiveSaved(packet)
         if (packet.type == PC) receiveControls(packet)
+        if (packet.type == XFER_READY) receiveXfer("ready", packet)
+        if (packet.type == XFER_DONE) receiveXfer("done", packet)
         if (packet.type == PC_POWERED) pendingPower?.also { pendingPower = null }?.complete(packet.string("error"))
         if (packet.type == STATS) {
             _stats.value = PcStats(
@@ -459,14 +543,33 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val PC_POWER = "vyoma.pc.power"
         const val PC_POWERED = "vyoma.pc.powered"
         private const val SET_INTERVAL_MS = 60L
+        const val XFER_BEGIN = "vyoma.xfer.begin"
+        const val XFER_READY = "vyoma.xfer.ready"
+        const val XFER_DATA = "vyoma.xfer.data"
+        const val XFER_DONE = "vyoma.xfer.done"
+        const val XFER_END = "vyoma.xfer.end"
+        private const val XFER_REPLY_MS = 10_000L
+        /** Marks the stand-in answer [onStop] gives sends that were waiting. */
+        private const val LOST = "vyomaLost"
+        /** After the last byte: the PC syncs it to disk and renames it before answering. */
+        private const val XFER_SAVE_MS = 60_000L
         private const val POWER_TIMEOUT_MS = 5_000L
         private const val CAPTURE_TIMEOUT_MS = 30_000L
         private const val TAG = "Companion"
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER),
+            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE),
+            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, XFER_BEGIN, XFER_DATA, XFER_END),
         ) { CompanionPlugin(it, sink) }
+    }
+}
+
+/** Skips exactly [n] bytes (a plain skip may stop short), or fails if the stream ends first. */
+internal fun java.io.InputStream.skipFully(n: Long) {
+    var left = n
+    while (left > 0) {
+        val skipped = skip(left)
+        if (skipped > 0) left -= skipped else if (read() >= 0) left-- else throw java.io.EOFException("ended $left bytes early")
     }
 }

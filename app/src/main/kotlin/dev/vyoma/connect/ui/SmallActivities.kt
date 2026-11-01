@@ -111,11 +111,22 @@ class ShareActivity : ComponentActivity() {
         finish()
     }
 
+    // A whole folder, with its subfolders (only through the companion: stock KDE Connect has no folders).
+    private val folder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+        if (tree != null) {
+            // Held until the service has read it all; it lets go once the folder is sent.
+            runCatching { contentResolver.takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            forward(listOf(tree), null, isFolder = true)
+        }
+        finish()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (savedInstanceState != null) return
         when (intent.action) {
             ACTION_PICK -> picker.launch(arrayOf("*/*"))
+            ACTION_PICK_FOLDER -> folder.launch(null)
             ACTION_PICK_PHOTOS -> photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
             Intent.ACTION_SEND -> {
                 @Suppress("DEPRECATION")
@@ -134,7 +145,7 @@ class ShareActivity : ComponentActivity() {
         }
     }
 
-    private fun forward(uris: List<Uri>, text: String?) {
+    private fun forward(uris: List<Uri>, text: String?, isFolder: Boolean = false) {
         val c = application.container
         val target = Commands.primary(c)
         if (target == null) {
@@ -145,6 +156,7 @@ class ShareActivity : ComponentActivity() {
         val service = Intent(this, LinkService::class.java).setAction(LinkService.ACTION_SEND)
             .putExtra(LinkService.EXTRA_DEVICE, target.id)
         if (text != null) service.putExtra(Intent.EXTRA_TEXT, text)
+        if (isFolder) service.putExtra(LinkService.EXTRA_FOLDER, true)
         if (uris.isNotEmpty()) {
             val clip = ClipData.newRawUri(null, uris.first())
             uris.drop(1).forEach { clip.addItem(ClipData.Item(it)) }
@@ -153,6 +165,7 @@ class ShareActivity : ComponentActivity() {
         }
         LinkService.deliver(this, service, visible = true)
         val what = when {
+            isFolder -> "folder"
             uris.size == 1 -> "file"
             uris.size > 1 -> "${uris.size} files"
             text != null && LinkService.looksLikeUrl(text) -> "link"
@@ -164,6 +177,7 @@ class ShareActivity : ComponentActivity() {
     companion object {
         const val ACTION_PICK = "dev.vyoma.connect.PICK_FILES"
         const val ACTION_PICK_PHOTOS = "dev.vyoma.connect.PICK_PHOTOS"
+        const val ACTION_PICK_FOLDER = "dev.vyoma.connect.PICK_FOLDER"
 
         fun pickFilesIntent(context: Context): PendingIntent = PendingIntent.getActivity(
             context, 42,

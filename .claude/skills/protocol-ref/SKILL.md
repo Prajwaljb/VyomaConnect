@@ -91,6 +91,18 @@ body fields before implementing one.
   Solid's `suspendToRam`; the others are `org.kde.Shutdown` (`logoutAndReboot`/`logoutAndShutdown`/`logout`), i.e.
   graceful, apps asked to close. The phone confirms every action first and treats no reply in 5 s as done.
   **Never send these to the real PC in tests.**
+- Resumable sends, phone → PC (`xfer.rs`, `CompanionUploads`): used for shares and picks whenever the companion is up
+  (else stock `kdeconnect.share`). `vyoma.xfer.begin {key, name, size, folder?, batch?}` → `vyoma.xfer.ready {key,
+  offset | error}`; `vyoma.xfer.data {key, offset}` + payload of the rest → `vyoma.xfer.done {key, name | error}`;
+  `vyoma.xfer.end {batch, count}` after a folder (one PC notification). Lands in kdeconnectd's `incoming_path`, else
+  XDG Downloads, as `.name.vyoma-part` + `.name.vyoma-key`, renamed when complete, never overwriting; parts untouched
+  for a day are cleared. A folder's top gets a free name once per `batch` (resumes write into the same one); hidden
+  names are allowed inside a folder only. The phone retries with the same key after any break and gives up after 5 min
+  without progress; a new companion link (it restarted) or onStop fails waiting sends at once. Files whose size the
+  provider won't give go the stock way. Payloads to a companion name `usbPort` (= port + 200) in
+  `payloadTransferInfo` when the PC's cable tunnel is up; the companion tries 127.0.0.1:usbPort first (cert-pinned,
+  so another plugged-in phone is refused) — ~70 MB/s vs this home's 2.4 GHz Wi-Fi at <1 MB/s.
+  Measured here: parallel streams didn't help on lossy Wi-Fi (4 streams 0.53 MB/s vs 1 stream 0.88), so none.
 - `vyoma.screen.request` → `vyoma.screen {codec:"h264", framing:"avc4", width, height}` + an open-ended payload
   (`payloadSize` -1), or `{error}`. The companion casts one monitor via the ScreenCast portal (persist_mode 2; restore
   token in `~/.config/vyoma-companion/screencast-token`, so Plasma asks once), asks KWin for ≤60 fps (`max-framerate`

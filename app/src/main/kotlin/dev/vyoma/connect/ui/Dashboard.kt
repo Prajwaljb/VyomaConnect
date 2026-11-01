@@ -159,6 +159,7 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.UploadFile
+import androidx.compose.material.icons.rounded.DriveFolderUpload
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -368,10 +369,12 @@ fun PcDashboard(
                     menu = listOf(
                         MenuItem("Choose files", Icons.Rounded.UploadFile) { vm.pickFiles(context) },
                         MenuItem("Photos and videos", Icons.Rounded.PhotoLibrary) { vm.pickPhotos(context) },
+                        // Folders travel through the companion (stock KDE Connect sends files only).
+                        if (shots != null) MenuItem("A folder", Icons.Rounded.DriveFolderUpload) { vm.pickFolder(context) } else null,
                         MenuItem("What's copied", Icons.Rounded.ContentPasteGo) {
                             if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied to send", failure = true)
                         },
-                    ),
+                    ).filterNotNull(),
                 ) { vm.pickFiles(context) },
                 if (shots != null) Control(Icons.Rounded.Folder, "PC files", SystemColor.BLUE, onClick = onBrowseFiles)
                 else Control(Icons.Rounded.Folder, "Files", SystemColor.BLUE, onClick = onFiles),

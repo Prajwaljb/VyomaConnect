@@ -33,8 +33,12 @@ class PayloadSource(val size: Long, val open: () -> InputStream)
  * Either way the peer must present the same certificate as the link it belongs to.
  */
 interface PayloadTransport {
-    /** Announces [packet] with [source] attached and streams it. Returns true once fully sent. */
-    suspend fun send(link: DeviceLink, packet: NetworkPacket, source: PayloadSource, timeoutMs: Int, onProgress: (Long) -> Unit): Boolean
+    /**
+     * Announces [packet] with [source] attached and streams it. Returns true once fully sent.
+     * [usbMirror]: the peer (a companion, linked over Wi-Fi) can also reach us through its PC's adb
+     * forward, so the announcement names that port too and it fetches over the cable.
+     */
+    suspend fun send(link: DeviceLink, packet: NetworkPacket, source: PayloadSource, timeoutMs: Int, onProgress: (Long) -> Unit, usbMirror: Boolean = false): Boolean
 
     /**
      * Connects to the payload announced in [packet]. The stream ends after `payloadSize` bytes.
@@ -55,6 +59,7 @@ internal class LanPayloads(
         source: PayloadSource,
         timeoutMs: Int,
         onProgress: (Long) -> Unit,
+        usbMirror: Boolean,
     ): Boolean = withContext(Dispatchers.IO) {
         val server = bindPayloadPort()
         var ssl: SSLSocket? = null
@@ -62,7 +67,10 @@ internal class LanPayloads(
             server.soTimeout = timeoutMs
             // Over the adb tunnel the PC reaches our port through its forward of it, shifted.
             val port = if (link.remoteAddress.isLoopbackAddress) server.localPort + USB_FORWARD_SHIFT else server.localPort
-            val announced = packet.withPayload(source.size, buildJsonObject { put("port", port) })
+            val announced = packet.withPayload(source.size, buildJsonObject {
+                put("port", port)
+                if (usbMirror && !link.remoteAddress.isLoopbackAddress) put("usbPort", server.localPort + USB_FORWARD_SHIFT)
+            })
             if (!link.send(announced)) return@closeOnCancel false
             val plain = server.accept()
             tuneSocket(plain)

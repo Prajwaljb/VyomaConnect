@@ -17,6 +17,7 @@ mod screen;
 mod screenshot;
 mod stats;
 mod usb;
+mod xfer;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
@@ -133,8 +134,8 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power"],
-            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered"],
+            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end"],
+            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
         }),
@@ -259,6 +260,24 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
                     }
                 });
             }
+            "vyoma.xfer.begin" => {
+                let (sender, phone_id) = (link.sender.clone(), phone_id.to_string());
+                file_tasks.spawn(async move {
+                    if let Err(e) = xfer::begin(&sender, &phone_id, &p["body"]).await {
+                        warn!("couldn't answer a transfer: {e:#}");
+                    }
+                });
+            }
+            "vyoma.xfer.data" => {
+                let (sender, shared, pinned, name, phone) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone(), addr.ip());
+                file_tasks.spawn(async move {
+                    match xfer::data(&sender, &shared.me, &pinned, phone, &name, &p).await {
+                        Ok(()) => info!("{name}: received a file"),
+                        Err(e) => warn!("{name}: transfer stopped: {e:#}"),
+                    }
+                });
+            }
+            "vyoma.xfer.end" => xfer::end(&name, &p["body"]),
             "vyoma.pc.request" | "vyoma.pc.set" | "vyoma.pc.power" => {
                 let _ = pc.send(p);
             }
