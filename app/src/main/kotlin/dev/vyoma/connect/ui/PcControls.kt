@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.automirrored.rounded.VolumeOff
@@ -32,7 +33,6 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,6 +61,7 @@ import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.isDarkUi
 import dev.vyoma.connect.designsystem.perform
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.PcControls
 import dev.vyoma.connect.protocol.plugin.builtin.PcPower
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -68,11 +69,36 @@ import kotlin.math.roundToInt
 
 /**
  * The PC's own controls through the companion: each screen's brightness, the volume of each app
- * playing sound, and sleep / restart / shut down / log out. Kept fresh every few seconds while
- * on screen; sliders own their value while touched and briefly after (the PC's echoes lag).
+ * playing sound, and sleep / restart / shut down / log out, as list items (a label and its card
+ * are separate items like every other section, so the list's spacing sets them apart; one Column
+ * put the labels on the cards' rims). Sliders own their value while touched and briefly after
+ * (the PC's echoes lag). [controls] comes from [rememberPcControls].
  */
+fun LazyListScope.pcControls(plugin: CompanionPlugin, controls: PcControls?, onPower: (PcPower) -> Unit) {
+    if (controls != null) {
+        item(key = "pc-levels-label") { SectionLabel("Brightness and sound", Modifier.animateItem()) }
+        item(key = "pc-levels") { LevelsCard(plugin, controls, Modifier.animateItem()) }
+    }
+    item(key = "pc-power-label") { SectionLabel("Power", Modifier.animateItem()) }
+    item(key = "pc-power") {
+        SectionCard(Modifier.animateItem()) {
+            val actions = PcPower.entries
+            actions.forEachIndexed { i, p ->
+                ListRow(
+                    title = p.label,
+                    icon = p.icon,
+                    iconTint = p.tint.color,
+                    showDivider = i < actions.lastIndex,
+                    onClick = { onPower(p) },
+                )
+            }
+        }
+    }
+}
+
+/** The PC's levels, kept fresh every few seconds while the page is visible; null until the first answer. */
 @Composable
-fun PcControls(plugin: CompanionPlugin, pcName: String, modifier: Modifier = Modifier) {
+fun rememberPcControls(plugin: CompanionPlugin): PcControls? {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(plugin) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -82,83 +108,68 @@ fun PcControls(plugin: CompanionPlugin, pcName: String, modifier: Modifier = Mod
             }
         }
     }
-    val controls by plugin.controls.collectAsStateWithLifecycle()
-    var confirm by rememberSaveable { mutableStateOf<PcPower?>(null) }
+    return plugin.controls.collectAsStateWithLifecycle().value
+}
+
+/** Asks before [action]: every one of them interrupts whoever is at the PC. */
+@Composable
+fun PcPowerDialog(plugin: CompanionPlugin, pcName: String, action: PcPower, onDismiss: () -> Unit) {
     val status = LocalStatus.current
     val scope = rememberCoroutineScope()
+    GlassDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${action.label} $pcName?") },
+        text = { Text(action.warning) },
+        confirmButton = {
+            DialogButton(destructive = action != PcPower.SLEEP, onClick = {
+                onDismiss()
+                scope.launch {
+                    plugin.power(action)
+                        .onSuccess { status.show(action.done, icon = action.icon) }
+                        .onFailure { status.show(it.message ?: "The PC refused", failure = true) }
+                }
+            }) { Text(action.label) }
+        },
+        dismissButton = { DialogButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
 
-    Column(modifier) {
-        controls?.let { c ->
-            SectionLabel("Brightness and sound")
-            SectionCard(Modifier.animateContentSize(VyomaMotion.spatial())) {
-                c.displays.forEach { d ->
-                    LevelRow(
-                        key = "d:${d.id}",
-                        title = d.label.ifEmpty { if (d.internal) "Built-in screen" else "Monitor" },
-                        icon = Icons.Rounded.BrightnessMedium,
-                        tint = SystemColor.YELLOW,
-                        reported = d.level,
-                        onSet = { plugin.setBrightness(d.id, it) },
-                        // Sound always follows: an app, or the row saying none is playing.
-                        divider = true,
-                    )
-                }
-                if (c.apps.isEmpty()) {
-                    ListRow(
-                        title = "No app is playing sound",
-                        subtitle = "Apps show here while they play on the PC",
-                        icon = Icons.Rounded.GraphicEq,
-                        iconTint = SystemColor.GRAY.color,
-                    )
-                }
-                c.apps.forEachIndexed { i, a ->
-                    LevelRow(
-                        key = "a:${a.id}",
-                        title = a.name,
-                        icon = Icons.Rounded.GraphicEq,
-                        tint = SystemColor.PINK,
-                        reported = a.volume,
-                        muted = a.muted,
-                        onSet = { plugin.setAppVolume(a.id, it) },
-                        onMute = { plugin.setAppMuted(a.id, !a.muted) },
-                        divider = i < c.apps.lastIndex,
-                    )
-                }
-            }
+@Composable
+private fun LevelsCard(plugin: CompanionPlugin, c: PcControls, modifier: Modifier) {
+    SectionCard(modifier.animateContentSize(VyomaMotion.spatial())) {
+        c.displays.forEach { d ->
+            LevelRow(
+                key = "d:${d.id}",
+                title = d.label.ifEmpty { if (d.internal) "Built-in screen" else "Monitor" },
+                icon = Icons.Rounded.BrightnessMedium,
+                tint = SystemColor.YELLOW,
+                reported = d.level,
+                onSet = { plugin.setBrightness(d.id, it) },
+                // Sound always follows: an app, or the row saying none is playing.
+                divider = true,
+            )
         }
-
-        SectionLabel("Power")
-        SectionCard {
-            val actions = PcPower.entries
-            actions.forEachIndexed { i, p ->
-                ListRow(
-                    title = p.label,
-                    icon = p.icon,
-                    iconTint = p.tint.color,
-                    showDivider = i < actions.lastIndex,
-                    onClick = { confirm = p },
-                )
-            }
+        if (c.apps.isEmpty()) {
+            ListRow(
+                title = "No app is playing sound",
+                subtitle = "Apps show here while they play on the PC",
+                icon = Icons.Rounded.GraphicEq,
+                iconTint = SystemColor.GRAY.color,
+            )
         }
-    }
-
-    confirm?.let { p ->
-        GlassDialog(
-            onDismissRequest = { confirm = null },
-            title = { Text("${p.label} $pcName?") },
-            text = { Text(p.warning) },
-            confirmButton = {
-                DialogButton(destructive = p != PcPower.SLEEP, onClick = {
-                    confirm = null
-                    scope.launch {
-                        plugin.power(p)
-                            .onSuccess { status.show(p.done, icon = p.icon) }
-                            .onFailure { status.show(it.message ?: "The PC refused", failure = true) }
-                    }
-                }) { Text(p.label) }
-            },
-            dismissButton = { DialogButton(onClick = { confirm = null }) { Text("Cancel") } },
-        )
+        c.apps.forEachIndexed { i, a ->
+            LevelRow(
+                key = "a:${a.id}",
+                title = a.name,
+                icon = Icons.Rounded.GraphicEq,
+                tint = SystemColor.PINK,
+                reported = a.volume,
+                muted = a.muted,
+                onSet = { plugin.setAppVolume(a.id, it) },
+                onMute = { plugin.setAppMuted(a.id, !a.muted) },
+                divider = i < c.apps.lastIndex,
+            )
+        }
     }
 }
 

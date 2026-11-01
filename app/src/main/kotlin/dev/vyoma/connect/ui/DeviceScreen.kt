@@ -45,6 +45,7 @@ import dev.vyoma.connect.designsystem.SectionCard
 import dev.vyoma.connect.designsystem.SectionLabel
 import dev.vyoma.connect.protocol.plugin.builtin.BatteryPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.PcPower
 import dev.vyoma.connect.protocol.plugin.builtin.LockPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -66,6 +67,8 @@ fun DeviceScreen(
     val companionPlugin = remember(companion?.identity?.deviceId, companion?.plugins) {
         companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
     }
+    val pcLevels = companionPlugin?.let { rememberPcControls(it) }
+    var confirmPower by rememberSaveable { mutableStateOf<PcPower?>(null) }
     val fingerprint = remember(state?.isReachable, state?.isPaired) { vm.fingerprint(deviceId) }
 
     // Plugin instances change when the link reconnects; key on the loaded set.
@@ -133,9 +136,7 @@ fun DeviceScreen(
             }
         }
 
-        companionPlugin?.let { plugin ->
-            item(key = "pc-controls") { PcControls(plugin, state.identity.deviceName, Modifier.animateItem()) }
-        }
+        companionPlugin?.let { pcControls(it, pcLevels) { action -> confirmPower = action } }
 
         // Commands are run from Home; here they're one row (a wall of shell lines led the page before).
         if (live) {
@@ -186,6 +187,9 @@ fun DeviceScreen(
         }
     }
 
+    confirmPower?.let { action ->
+        companionPlugin?.let { PcPowerDialog(it, state?.identity?.deviceName ?: "the PC", action) { confirmPower = null } }
+    }
     if (showCommands) CommandsSheet(vm, deviceId) { showCommands = false }
     if (confirmUnpair) {
         GlassDialog(
