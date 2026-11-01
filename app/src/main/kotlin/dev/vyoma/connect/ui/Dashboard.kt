@@ -1,5 +1,9 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.rememberTextMeasurer
 import dev.vyoma.connect.designsystem.MenuMorph
 import dev.vyoma.connect.designsystem.LocalStatus
 
@@ -12,6 +16,7 @@ import dev.vyoma.connect.designsystem.ListRow
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.verticalScroll
 import dev.vyoma.connect.designsystem.GlassDialog
+import dev.vyoma.connect.designsystem.fitTogether
 import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -41,7 +46,6 @@ import dev.vyoma.connect.designsystem.toned
 import dev.vyoma.connect.designsystem.glassRaised
 import dev.vyoma.connect.designsystem.glassCard
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.lerp
@@ -677,18 +681,33 @@ private class Control(
 @Composable
 private fun ControlGrid(actions: List<Control>, toggles: List<Control>, modifier: Modifier = Modifier, enabled: Boolean = true) {
     BoxWithConstraints(modifier.fillMaxWidth()) {
-        val tile = (maxWidth - TileGap * 3) / 4
-        Column(verticalArrangement = Arrangement.spacedBy(TileGap)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(TileGap)) {
+        // Narrow grids (small screens, the largest display sizes) close the gaps a little so the
+        // labels keep a readable size.
+        val gap = if (maxWidth < 320.dp) TileGap * 0.75f else TileGap
+        val tile = (maxWidth - gap * 3) / 4
+        // Tiny tiles (the largest display sizes) give their text a little more of their width.
+        val pad = if (tile < 64.dp) 7.dp else TilePadX
+        // One label size for the whole grid: the largest at which every label fits its tile.
+        val label = fitTogether(
+            (actions + toggles).map { it.label },
+            MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
+            tile - pad * 2,
+        )
+        CompositionLocalProvider(LocalTileLabel provides label, LocalTilePad provides pad) { Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
                 actions.take(4).forEach { ControlTile(it, Modifier.size(tile), enabled) }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(TileGap)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
                 actions.drop(4).forEach { ControlTile(it, Modifier.size(tile), enabled) }
                 toggles.forEach { ToggleTile(it, Modifier.size(tile), enabled) }
             }
-        }
+        } }
     }
 }
+
+/** The grid's shared tile label style and side padding (see [ControlGrid]). */
+private val LocalTileLabel = staticCompositionLocalOf { TextStyle.Default }
+private val LocalTilePad = staticCompositionLocalOf { TilePadX }
 
 @Composable
 private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true) {
@@ -700,6 +719,8 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
     // Where the tile is, read only when a long press opens its menu. Not state: written on every
     // scroll frame, a state write per tile woke the main thread each frame (7% of its time).
     val placed = remember { arrayOfNulls<LayoutCoordinates>(1) }
+    // Where the glyph sits (its 22 dp centred in a 26 dp box), for the morph's icon glide.
+    val pad = LocalTilePad.current
     Box(
         modifier
             .graphicsLayer {
@@ -717,7 +738,7 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
                                 it.boundsInRoot(), m, c.menuTitle, fromRadius = TileRadius,
                                 // The tile grows into the menu in place, shrinking to its icon, which
                                 // lands in the menu's header.
-                                morph = MenuMorph(placed, fill, icon = c.icon.takeIf { c.progress == null }, iconAt = DpOffset(11.dp, 12.dp), ink = ink, label = c.label) {
+                                morph = MenuMorph(placed, fill, icon = c.icon.takeIf { c.progress == null }, iconAt = DpOffset(pad + 2.dp, 12.dp), ink = ink, label = c.label) {
                                     TileFace(c, ink, icon = c.progress != null)
                                 },
                             )
@@ -734,7 +755,7 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
 private fun TileFace(c: Control, ink: Color, icon: Boolean = true) {
     Column(
         // Even on both sides (6 dp at the end ran "Commands" to the edge), and 9 dp so it fits at full size.
-        Modifier.fillMaxSize().padding(horizontal = 9.dp, vertical = 10.dp),
+        Modifier.fillMaxSize().padding(horizontal = LocalTilePad.current, vertical = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
@@ -792,7 +813,7 @@ private fun ToggleTile(c: Control, modifier: Modifier, enabled: Boolean) {
             .glassRaised(shape, lerp(toggleOff, Color.White.copy(alpha = 0.96f), on))
             // On a light card, white alone barely lifts: a hairline of the tone outlines it.
             .then(if (!dark && on > 0.01f) Modifier.border(1.dp, tone.copy(alpha = 0.55f * on), shape) else Modifier)
-            .padding(horizontal = 9.dp, vertical = 10.dp),
+            .padding(horizontal = LocalTilePad.current, vertical = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
         Icon(c.icon, null, tint = lerp(offGlyph, onGlyph, on), modifier = Modifier.size(22.dp))
@@ -809,19 +830,16 @@ private fun tileFill(tone: Color, lum: Float) = if (lum in 0.2f..0.5f) tone.tone
 
 @Composable
 private fun TileLabel(text: String, ink: Color) {
-    // One size for every tile, 11 sp like the app's other small labels (tabs, swatches, gauges):
-    // at 12 sp "Commands" either ran to the tile's edge or auto-shrank below its neighbours. At very
-    // large font scales it still shrinks to 10 sp rather than cutting a word.
-    BasicText(
-        text,
-        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, color = ink, fontSize = 11.sp),
-        maxLines = 1,
-        autoSize = TextAutoSize.StepBased(minFontSize = 10.sp, maxFontSize = 11.sp),
-    )
+    // One size for every tile, 11 sp like the app's other small labels (tabs, swatches, gauges), or
+    // the grid's shared smaller size where they wouldn't all fit (larger text and display sizes: a
+    // OnePlus cut "Commands"); each shrinking on its own made the long ones look like other controls.
+    BasicText(text, style = LocalTileLabel.current.copy(color = ink), maxLines = 1, softWrap = false)
 }
 
 private val TileRadius = 16.dp
 private val TileGap = 16.dp
+/** Even on both sides (6 dp at the end ran "Commands" to the edge). */
+private val TilePadX = 9.dp
 
 /** "Just now" for the first minute, then "5 min. ago" and so on. */
 internal fun ago(time: Long): CharSequence {
@@ -901,19 +919,32 @@ private fun PcStatus(battery: BatteryState?, stale: Boolean, stats: PcStats?, sh
         val memFraction = stats?.takeIf { it.memTotal > 0 }?.let { it.memUsed.toFloat() / it.memTotal } ?: 0f
         val cpu = (stats?.cpu ?: 0f) / 100f
         val gpu = (stats?.gpu ?: 0) / 100f
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        BoxWithConstraints(Modifier.weight(1f)) {
+        // A name and its reading share a line while the widest pair fits; past that (large text
+        // or narrow screens cut the names to "…") all four stack, so their bars stay level.
+        val measurer = rememberTextMeasurer()
+        val labelStyle = MaterialTheme.typography.labelMedium
+        val readStyle = MaterialTheme.typography.titleSmall
+        val density = LocalDensity.current
+        val stacked = remember(maxWidth, labelStyle, readStyle, density) {
+            val need = measurer.measure("Temp", labelStyle, density = density).size.width +
+                measurer.measure("99.9G", readStyle, density = density).size.width + with(density) { 6.dp.roundToPx() }
+            need > with(density) { ((maxWidth - 16.dp) / 2).roundToPx() }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Meter("CPU", stats?.let { "${it.cpu.roundToInt()}" }, "%", cpu, loadColor(cpu), Modifier.weight(1f))
+                Meter("CPU", stats?.let { "${it.cpu.roundToInt()}" }, "%", cpu, loadColor(cpu), Modifier.weight(1f), stacked)
                 // "RAM", short enough beside a wide reading like 14.6G ("Memory" wrapped there).
                 Meter(
                     "RAM", stats?.takeIf { it.memTotal > 0 }?.let { "%.1f".format(it.memUsed / 1e9) }, "G",
-                    memFraction, loadColor(memFraction), Modifier.weight(1f),
+                    memFraction, loadColor(memFraction), Modifier.weight(1f), stacked,
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Meter("GPU", stats?.gpu?.let { "$it" }, "%", gpu, loadColor(gpu), Modifier.weight(1f))
-                Meter("Temp", temp?.let { "${it.roundToInt()}" }, "°", (temp ?: 0f) / 100f, tempColor, Modifier.weight(1f))
+                Meter("GPU", stats?.gpu?.let { "$it" }, "%", gpu, loadColor(gpu), Modifier.weight(1f), stacked)
+                Meter("Temp", temp?.let { "${it.roundToInt()}" }, "°", (temp ?: 0f) / 100f, tempColor, Modifier.weight(1f), stacked)
             }
+        }
         }
     }
 }
@@ -978,12 +1009,15 @@ private fun Gauge(
 
 /** A label and reading over a slim capsule bar: the compact sibling of [Gauge], same colours and track. */
 @Composable
-private fun Meter(label: String, value: String?, unit: String, fraction: Float, color: SystemColor, modifier: Modifier) {
+private fun Meter(label: String, value: String?, unit: String, fraction: Float, color: SystemColor, modifier: Modifier, stacked: Boolean = false) {
     val tone = color.color
     val track = Glass.raised
     val level = rememberGlide(fraction)
     Column(modifier) {
-        Row(verticalAlignment = Alignment.Bottom) {
+        if (stacked) {
+            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Reading(value, unit, MaterialTheme.typography.titleSmall)
+        } else Row(verticalAlignment = Alignment.Bottom) {
             Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             Reading(value, unit, MaterialTheme.typography.titleSmall)
         }

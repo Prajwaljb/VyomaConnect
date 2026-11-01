@@ -1,8 +1,13 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.SolidColor
 import dev.vyoma.connect.designsystem.Haptic
+import dev.vyoma.connect.designsystem.fitTogether
 import dev.vyoma.connect.designsystem.toned
 import dev.vyoma.connect.designsystem.DialogButton
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -138,13 +143,19 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                 Text("Accent", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(horizontal = 20.dp))
                 Spacer(Modifier.height(12.dp))
                 // All six in view, evenly spread: a sixth sliver at the edge hid one choice.
+                BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+                // One size for all six names (see fitTogether), each allowed a little past its share.
+                val label = fitTogether(
+                    Palette.entries.map { it.label }, MaterialTheme.typography.labelSmall, maxWidth / Palette.entries.size + SWATCH_BLEED,
+                )
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                    Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Palette.entries.forEach { p ->
-                        PaletteSwatch(p, selected = theme.palette == p, Modifier.weight(1f)) { vm.setPalette(p) }
+                        PaletteSwatch(p, selected = theme.palette == p, label, Modifier.weight(1f)) { vm.setPalette(p) }
                     }
+                }
                 }
                 Spacer(Modifier.height(20.dp))
                 SegmentedControl(
@@ -179,7 +190,6 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                         glass.detected && !glass.chosen -> "Turned on: this phone was too slow"
                         else -> "Frosted bars for slower phones"
                     },
-                    subtitleMaxLines = 1,
                     icon = Icons.Rounded.Speed,
                     iconTint = SystemColor.GRAY.color,
                     haptic = if (glass.on) Haptic.ToggleOff else Haptic.ToggleOn,
@@ -358,7 +368,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
 }
 
 @Composable
-private fun PaletteSwatch(palette: Palette, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun PaletteSwatch(palette: Palette, selected: Boolean, label: TextStyle, modifier: Modifier, onClick: () -> Unit) {
     val dark = MaterialTheme.colorScheme.background.red < 0.5f
     val ring by animateColorAsState(if (selected) MaterialTheme.colorScheme.onSurface else Color.Transparent, label = "ring")
     val inset by animateDpAsState(if (selected) 5.dp else 0.dp, VyomaMotion.spatial(), label = "inset")
@@ -381,10 +391,24 @@ private fun PaletteSwatch(palette: Palette, selected: Boolean, modifier: Modifie
             }
         }
         Spacer(Modifier.height(6.dp))
-        // One line, allowed past its share ("Wallpaper" is a hair wider than a sixth of the card).
-        Text(palette.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false, overflow = TextOverflow.Visible)
+        // One line, allowed a little past its share ("Wallpaper" is a hair wider than a sixth of the
+        // card), at the row's shared size: at larger text sizes they ran into each other on a OnePlus.
+        BasicText(
+            palette.label,
+            style = label.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.layout { m, c ->
+                val share = c.maxWidth
+                val p = m.measure(c.copy(minWidth = 0, maxWidth = share + SWATCH_BLEED.roundToPx()))
+                layout(share, p.height) { p.place((share - p.width) / 2, 0) }
+            },
+        )
     }
 }
+
+/** How far a swatch's label may reach past its share, half into each gap. */
+private val SWATCH_BLEED = 6.dp
 
 @SuppressLint("BatteryLife") // Core function: the app must stay connected in the background.
 internal fun requestUnrestricted(context: android.content.Context) {

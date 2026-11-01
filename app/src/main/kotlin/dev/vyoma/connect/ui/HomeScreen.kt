@@ -448,12 +448,12 @@ internal fun SearchingCard(vm: AppViewModel, modifier: Modifier = Modifier) {
         text = {
             Column {
                 ListRow(
-                    title = "Enter its address", subtitle = "For Tailscale, or when Wi-Fi hides it", subtitleMaxLines = 1,
+                    title = "Enter its address", subtitle = "For Tailscale, or when Wi-Fi hides it",
                     icon = Icons.Rounded.Lan, iconTint = SystemColor.BLUE.color, horizontalPadding = 0.dp, showDivider = true,
                     onClick = { others = false; adding = true },
                 )
                 ListRow(
-                    title = "Use a USB cable", subtitle = "No network needed", subtitleMaxLines = 1,
+                    title = "Use a USB cable", subtitle = "No network needed",
                     icon = Icons.Rounded.Usb, iconTint = SystemColor.GRAY.color, horizontalPadding = 0.dp,
                     onClick = { others = false; usb = true },
                 )

@@ -81,32 +81,54 @@ object VyomaMotion {
 /**
  * What a haptic means, so the same kind of action feels the same everywhere. Each one is composed
  * from the vibrator's own primitives, like Pixel and OnePlus O-Haptics do (crisp clicks, low ticks,
- * thuds, rises, shaped and paired), where the phone's motor supports them; elsewhere it falls back
- * to the view's stock haptic. [Haptics] honours the system's touch feedback setting either way.
+ * thuds, rises, shaped and paired). A primitive the motor lacks is swapped for its nearest one it has;
+ * with none left, the phone's [predefined] effect plays (Android substitutes a plain buzz where the motor
+ * has no tuned one, so it always vibrates). The view's stock haptic was the old fallback and stayed
+ * silent on phones whose maker maps those constants to nothing (a OnePlus Nord, 2026-11).
+ * [Haptics] honours the system's touch feedback setting either way.
  */
-enum class Haptic(internal val type: HapticFeedbackType, internal val notes: List<Note>) {
+enum class Haptic(internal val type: HapticFeedbackType, internal val predefined: Int, internal val notes: List<Note>) {
     /** A button or card did something. */
-    Tap(HapticFeedbackType.ContextClick, listOf(Note(PRIMITIVE_CLICK, 0.62f))),
+    Tap(HapticFeedbackType.ContextClick, VibrationEffect.EFFECT_CLICK, listOf(Note(PRIMITIVE_CLICK, 0.62f))),
     /** A key on a keyboard-like surface: lighter, for rapid repeats. */
-    Key(HapticFeedbackType.KeyboardTap, listOf(Note(PRIMITIVE_TICK, 0.9f))),
+    Key(HapticFeedbackType.KeyboardTap, VibrationEffect.EFFECT_TICK, listOf(Note(PRIMITIVE_TICK, 0.9f))),
     /** Snaps in: a small rise and a firm click. */
-    ToggleOn(HapticFeedbackType.ToggleOn, listOf(Note(PRIMITIVE_TICK, 0.45f), Note(PRIMITIVE_CLICK, 0.85f, 34))),
+    ToggleOn(HapticFeedbackType.ToggleOn, VibrationEffect.EFFECT_CLICK, listOf(Note(PRIMITIVE_TICK, 0.45f), Note(PRIMITIVE_CLICK, 0.85f, 34))),
     /** Lets go: a click falling away into a low tick. */
-    ToggleOff(HapticFeedbackType.ToggleOff, listOf(Note(PRIMITIVE_CLICK, 0.6f), Note(PRIMITIVE_LOW_TICK, 0.5f, 38))),
+    ToggleOff(HapticFeedbackType.ToggleOff, VibrationEffect.EFFECT_TICK, listOf(Note(PRIMITIVE_CLICK, 0.6f), Note(PRIMITIVE_LOW_TICK, 0.5f, 38))),
     /** Moving onto a new option: tabs, segmented choices. */
-    Select(HapticFeedbackType.SegmentTick, listOf(Note(PRIMITIVE_TICK, 0.7f))),
+    Select(HapticFeedbackType.SegmentTick, VibrationEffect.EFFECT_TICK, listOf(Note(PRIMITIVE_TICK, 0.7f))),
     /** A detent while dragging a value: volume steps, scroll notches. */
-    Detent(HapticFeedbackType.SegmentFrequentTick, listOf(Note(PRIMITIVE_LOW_TICK, 0.75f))),
+    Detent(HapticFeedbackType.SegmentFrequentTick, VibrationEffect.EFFECT_TICK, listOf(Note(PRIMITIVE_LOW_TICK, 0.75f))),
     /** Hitting an end stop or crossing a commit threshold: one firm click. */
-    Edge(HapticFeedbackType.GestureThresholdActivate, listOf(Note(PRIMITIVE_CLICK, 1f))),
+    Edge(HapticFeedbackType.GestureThresholdActivate, VibrationEffect.EFFECT_HEAVY_CLICK, listOf(Note(PRIMITIVE_CLICK, 1f))),
     /** A hold turned into a grab: a swell that lands. */
-    Hold(HapticFeedbackType.LongPress, listOf(Note(PRIMITIVE_QUICK_RISE, 0.5f), Note(PRIMITIVE_CLICK, 0.9f, 10))),
+    Hold(HapticFeedbackType.LongPress, VibrationEffect.EFFECT_HEAVY_CLICK, listOf(Note(PRIMITIVE_QUICK_RISE, 0.5f), Note(PRIMITIVE_CLICK, 0.9f, 10))),
     /** Glass forming or bursting (the header's title bubble): barely there. */
-    Bubble(HapticFeedbackType.SegmentFrequentTick, listOf(Note(PRIMITIVE_LOW_TICK, 0.38f))),
+    Bubble(HapticFeedbackType.SegmentFrequentTick, VibrationEffect.EFFECT_TICK, listOf(Note(PRIMITIVE_LOW_TICK, 0.38f))),
     /** Two rising clicks. */
-    Success(HapticFeedbackType.Confirm, listOf(Note(PRIMITIVE_CLICK, 0.55f), Note(PRIMITIVE_CLICK, 1f, 70))),
+    Success(HapticFeedbackType.Confirm, VibrationEffect.EFFECT_DOUBLE_CLICK, listOf(Note(PRIMITIVE_CLICK, 0.55f), Note(PRIMITIVE_CLICK, 1f, 70))),
     /** A heavy thud (this motor's lasts 300 ms, so one is plenty) and a dull tick after it. */
-    Failure(HapticFeedbackType.Reject, listOf(Note(PRIMITIVE_THUD, 0.8f), Note(PRIMITIVE_LOW_TICK, 0.7f, 60))),
+    Failure(HapticFeedbackType.Reject, VibrationEffect.EFFECT_HEAVY_CLICK, listOf(Note(PRIMITIVE_THUD, 0.8f), Note(PRIMITIVE_LOW_TICK, 0.7f, 60))),
+}
+
+/** Primitives that can stand in for [primitive], closest first. */
+internal fun nearest(primitive: Int): List<Int> = when (primitive) {
+    // Closest first. A rise is only a lead-in, so it's dropped rather than replaced.
+    PRIMITIVE_LOW_TICK -> listOf(PRIMITIVE_LOW_TICK, PRIMITIVE_TICK, PRIMITIVE_CLICK)
+    PRIMITIVE_TICK -> listOf(PRIMITIVE_TICK, PRIMITIVE_LOW_TICK, PRIMITIVE_CLICK)
+    PRIMITIVE_THUD -> listOf(PRIMITIVE_THUD, PRIMITIVE_CLICK)
+    else -> listOf(primitive)
+}
+
+/** [h] from the primitives this motor has (see [Haptic]); its predefined effect if none are left. */
+internal fun compose(v: Vibrator, h: Haptic): VibrationEffect {
+    val notes = h.notes.mapNotNull { n ->
+        nearest(n.primitive).firstOrNull { v.areAllPrimitivesSupported(it) }?.let { Note(it, n.scale, n.delayMs) }
+    }
+    // Only clicks and ticks carry an action; a composition of nothing but a rise would feel like nothing.
+    if (notes.none { it.primitive != PRIMITIVE_QUICK_RISE }) return VibrationEffect.createPredefined(h.predefined)
+    return VibrationEffect.startComposition().apply { notes.forEach { addPrimitive(it.primitive, it.scale, it.delayMs) } }.compose()
 }
 
 /** One primitive in a [Haptic], [delayMs] after the previous one ends. */
@@ -130,12 +152,7 @@ object Haptics {
     /** True when it played (or the user turned touch feedback off); false: use the fallback. */
     internal fun play(h: Haptic): Boolean {
         val v = vibrator ?: return false
-        val effect = playable.getOrPut(h) {
-            if (!v.areAllPrimitivesSupported(*h.notes.map { it.primitive }.toIntArray())) null
-            else VibrationEffect.startComposition().apply {
-                h.notes.forEach { addPrimitive(it.primitive, it.scale, it.delayMs) }
-            }.compose()
-        } ?: return false
+        val effect = playable.getOrPut(h) { compose(v, h) } ?: return false
         // Android 13+ applies the touch feedback setting to USAGE_TOUCH itself; before that, read it.
         val attrs = touch
         if (attrs != null) v.vibrate(effect, attrs)

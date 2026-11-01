@@ -1,8 +1,10 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.platform.LocalDensity
 import dev.vyoma.connect.designsystem.MenuItem
 import dev.vyoma.connect.designsystem.LocalMenu
 import androidx.compose.ui.graphics.luminance
@@ -181,7 +183,7 @@ fun MediaCard(
     val art = prepared?.first
     val tint by animateColorAsState(prepared?.second ?: accent.toned(0.8f, 0.2f), VyomaMotion.effects(), label = "tint")
     val shape = MaterialTheme.shapes.large
-    Box(
+    BoxWithConstraints(
         modifier
             .fillMaxWidth()
             // The cards' glass, its light and tilt-lit rim drawn over everything (the artwork
@@ -191,22 +193,27 @@ fun MediaCard(
             .glassCard(shape, fill = tint, lit = false)
             .animateContentSize(VyomaMotion.spatial()),
     ) {
+        // At most 38% of the card (132 dp on a typical phone): on narrow screens or at large text
+        // sizes the fixed width left the title a word and an ellipsis.
+        val artW = minOf(artWidth, maxWidth * 0.38f)
+        // Large text may take two lines for the title rather than cutting it.
+        val titleLines = if (LocalDensity.current.fontScale > 1.1f) 2 else 1
         // The artwork fills the card's left side, top to bottom, melting into the card's colour;
         // everything else (volume, player chips too) sits in the column beside it.
         Box(Modifier.matchParentSize()) {
-            ArtPanel(art, p, accent, tint, Modifier.width(artWidth).fillMaxHeight())
+            ArtPanel(art, p, accent, tint, Modifier.width(artW).fillMaxHeight())
         }
-        Column(Modifier.fillMaxWidth().padding(start = artWidth)) {
+        Column(Modifier.fillMaxWidth().padding(start = artW)) {
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .heightIn(min = artWidth)
+                    .heightIn(min = artW)
                     .padding(start = 12.dp, end = 10.dp, top = 12.dp, bottom = 4.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
             ) {
                 Row(verticalAlignment = Alignment.Top) {
                     Column(Modifier.weight(1f).padding(top = 2.dp)) {
-                        Text(p.title.ifBlank { p.name }, style = MaterialTheme.typography.titleMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(p.title.ifBlank { p.name }, style = MaterialTheme.typography.titleMedium, color = Color.White, maxLines = titleLines, overflow = TextOverflow.Ellipsis)
                         // Title and artist only, like Apple's music widget: the album cut the line off at the button.
                         val sub = p.artist.ifBlank { p.name.takeIf { p.title.isNotBlank() }.orEmpty() }
                         if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis)

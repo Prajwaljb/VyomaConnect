@@ -127,7 +127,6 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     ListRow(
                         title = "Sync when closed",
                         subtitle = "One-time setup from your PC",
-                        subtitleMaxLines = 1,
                         icon = Icons.Rounded.Sync,
                         iconTint = SystemColor.ORANGE.color,
                         trailing = { RowChevron("Set up") },

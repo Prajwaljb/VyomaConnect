@@ -135,7 +135,6 @@ fun DeviceScreen(
                     ListRow(
                         title = "Commands",
                         subtitle = if (commands.isEmpty()) "Shutdown, sleep, scripts: set up on the PC" else "Run or edit what the PC offers",
-                        subtitleMaxLines = 1,
                         icon = Icons.Rounded.Terminal,
                         iconTint = SystemColor.GRAY.color,
                         trailing = { RowChevron(commands.size.takeIf { it > 0 }?.toString()) },
