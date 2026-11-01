@@ -8,6 +8,8 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Size
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,13 +41,13 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -59,6 +61,7 @@ import dev.vyoma.connect.designsystem.StatusController
 import dev.vyoma.connect.designsystem.fadingHorizontalScroll
 import dev.vyoma.connect.designsystem.glassCard
 import dev.vyoma.connect.designsystem.glassRaised
+import dev.vyoma.connect.designsystem.isDarkUi
 import dev.vyoma.connect.designsystem.pressable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -205,7 +208,9 @@ fun CapturesRow(onTake: (() -> Unit)?, onOpen: () -> Unit, modifier: Modifier = 
     ) {
         val thumb = r?.items?.firstOrNull()?.thumb
         Box(
-            Modifier.size(56.dp, 40.dp).clip(RoundedCornerShape(10.dp)).glassRaised(RoundedCornerShape(10.dp)),
+            // Plain like the Captures page's thumbnails: a photo needs no glass.
+            Modifier.size(56.dp, 40.dp).clip(RoundedCornerShape(10.dp))
+                .background(if (isDarkUi) Color.White.copy(alpha = 0.06f) else Color(0xFF1A2B4C).copy(alpha = 0.06f)),
             contentAlignment = Alignment.Center,
         ) {
             if (thumb != null) Image(thumb, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -223,8 +228,6 @@ fun CapturesRow(onTake: (() -> Unit)?, onOpen: () -> Unit, modifier: Modifier = 
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
         }
         when {
@@ -264,15 +267,22 @@ fun CapturesScreen(onBack: () -> Unit) {
     }
 }
 
+/**
+ * A photo, not a control: a plain rounded image with a still hairline so dark shots keep an edge on
+ * black. It was framed in raised glass, whose tilt-lit rim redrew every thumbnail as the phone moved.
+ */
 @Composable
 private fun Thumb(thumb: ImageBitmap?, modifier: Modifier, onClick: () -> Unit) {
+    val dark = isDarkUi
+    val shape = RoundedCornerShape(16.dp)
     Box(
         modifier
             .semantics { contentDescription = "Open capture" }
             .pressable(onClick = onClick)
-            .glassRaised(RoundedCornerShape(18.dp))
-            .padding(3.dp)
-            .clip(RoundedCornerShape(15.dp)),
+            .clip(shape)
+            // Shown until the thumbnail loads.
+            .background(if (dark) Color.White.copy(alpha = 0.06f) else Color(0xFF1A2B4C).copy(alpha = 0.06f))
+            .border(0.75.dp, if (dark) Color.White.copy(alpha = 0.1f) else Color.Black.copy(alpha = 0.08f), shape),
     ) {
         thumb?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
     }

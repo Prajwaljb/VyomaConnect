@@ -118,7 +118,6 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
                     ListRow(
                         title = "Browse everything",
                         subtitle = "Its home folder, to open or upload into",
-                        subtitleMaxLines = 1,
                         icon = Icons.Rounded.Folder,
                         iconTint = SystemColor.BLUE.color,
                         horizontalPadding = 10.dp,
@@ -131,7 +130,6 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
                     ListRow(
                         title = "Browse PC files",
                         subtitle = if (pc == null) "Connect to your PC first" else "Needs the Vyoma companion on the PC",
-                        subtitleMaxLines = 1,
                         icon = Icons.Rounded.FolderOff,
                         iconTint = SystemColor.GRAY.color,
                     )
@@ -171,7 +169,6 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
                 ListRow(
                     title = if (clips.isEmpty()) "Nothing copied yet" else "All clipboard history",
                     subtitle = if (clips.isEmpty()) "What you copy here or on the PC shows up here" else null,
-                    subtitleMaxLines = 1,
                     icon = if (clips.isEmpty()) Icons.Rounded.ContentPaste else null,
                     iconTint = SystemColor.ORANGE.color,
                     trailing = { RowChevron() },

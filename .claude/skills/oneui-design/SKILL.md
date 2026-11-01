@@ -75,6 +75,8 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   linear-gradient rim misaligned) plus, in the dark, a soft glow on the lit side baked INTO the fill as one radial
   gradient (a separate glow pass over the card cost 0.4 ms GPU/frame; in-fill is ~free). Measured ≈ +0.1–0.2 ms.
   Card slices (`cardSegment`) pass `lit = false`. Refraction belongs only to things that float.
+- Photos (Captures thumbnails) are plain rounded images with a still hairline, never glass (a tilt-lit rim per
+  thumbnail redrew them all as the phone moved).
 - Media card (`MediaCard`): iOS-widget compact (full-bleed art was "too big", a thumbnail in a plain card "too
   plain"): artwork fills the left 132 dp edge to edge, fading into the art's dark-muted colour; title/artist with
   Continue on phone as a 36 dp round button, thin scrubber, plain glyph controls on the right. Card = `glassCard`
@@ -202,6 +204,12 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Shapes: cards `large` (26 dp), hero cards `extraLarge` (32 dp), chips/icons `medium` (20 dp).
 
 ## Layout
+- Every screen must hold up at large text and display sizes (OnePlus defaults are larger than Samsung's). Test with
+  the emulators (`vy37` API 37, `vy31` API 31 = minSdk, AOSP images) at 420/1.0, 480/1.15, 560/1.3 and 720x1600@320/1.3
+  (`wm density`, `settings put system font_scale`). Rules: fixed copy wraps (no `maxLines = 1` on descriptions; only
+  dynamic names/history ellipsize); sets of labels share one size via `fitTogether` (tiles, swatches) instead of each
+  auto-shrinking alone; side-by-side name + reading pairs stack together when the widest doesn't fit (PC meters);
+  fixed-width art yields (media art <= 38% of the card); tiny tile grids tighten gaps/padding before shrinking text.
 - Every top-level screen uses `CollapsingHeaderScaffold`: a tall hero title (~30% of screen height) that keeps content in
   thumb reach, collapsing into a compact bar. 16 dp side gutters, 12 dp between cards.
 - Long or unbounded groups (folder listings) are one lazy item per row, each painting its slice with
@@ -302,6 +310,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   spring doesn't jump. Tried and dropped: drawing InnerGlow as edge-only strips (no GPU gain, more draw calls).
 
 ## Haptics (`Haptic` in Motion.kt; always through `HapticFeedback.perform`)
+Compositions of vibrator primitives where the motor has them; a missing primitive is swapped for its nearest
+(low tick -> tick -> click, thud -> click; a rise is dropped); with nothing left, the phone's predefined effect
+(`Haptic.predefined`: click/tick/heavy click/double click), which always vibrates and is the maker's own tuned
+haptic (O-Haptics etc). Never fall back to view constants: OEMs map some to nothing (silent on a OnePlus).
 Pixel / O-Haptics style: each `Haptic` is a `VibrationEffect.Composition` of primitives (CLICK, TICK, LOW_TICK, THUD,
 QUICK_RISE; scaled, some paired: ToggleOn rises tick→click, ToggleOff falls click→low tick, Success two rising clicks),
 played by `Haptics` (attached in `VyomaTheme`) with USAGE_TOUCH so the system touch setting applies; phones without
