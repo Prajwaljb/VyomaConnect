@@ -1,5 +1,5 @@
 //! Vyoma companion: runs next to the stock KDE Connect daemon and gives Vyoma on the phone the
-//! extras kdeconnectd can't: PC stats, screenshots, camera photos, handoff, file browsing, and live screen view, and zero-setup USB.
+//! extras kdeconnectd can't: PC stats, screenshots, camera photos, handoff, file browsing, live screen view, PC controls (brightness, app volume, power), and zero-setup USB.
 //!
 //! It never listens for strangers: it only dials phones that kdeconnectd already trusts, found
 //! via their mDNS announcements, and proves to them that it belongs to this PC by signing with
@@ -12,6 +12,7 @@ mod kde;
 mod link;
 mod media;
 mod payload;
+mod pc;
 mod screen;
 mod screenshot;
 mod stats;
@@ -132,8 +133,8 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop"],
-            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen"],
+            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power"],
+            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
         }),
@@ -157,6 +158,7 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
     let mut shot_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut photo_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut screen_task: Option<tokio::task::JoinHandle<()>> = None;
+    let pc = pc::worker(link.sender.clone(), name.clone());
     // Listings and downloads; dropping the set when the link closes cancels whatever is left.
     let mut file_tasks = tokio::task::JoinSet::new();
     let result = loop {
@@ -256,6 +258,9 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
                         Err(e) => warn!("{name}: upload failed: {e:#}"),
                     }
                 });
+            }
+            "vyoma.pc.request" | "vyoma.pc.set" | "vyoma.pc.power" => {
+                let _ = pc.send(p);
             }
             _ => {}
         }
