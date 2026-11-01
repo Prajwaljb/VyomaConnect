@@ -53,6 +53,34 @@ async fn offer_sized(sender: &Sender, me: &Identity, pinned: &[u8], mut packet: 
 pub async fn fetch(me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value) -> Result<impl AsyncRead + Unpin + use<>> {
     let port = packet["payloadTransferInfo"]["port"].as_u64().context("payload without a port")? as u16;
     let size = packet["payloadSize"].as_u64().context("payload without a size")?;
+    // With the cable in, the phone also names its port's adb forward here: far quicker than Wi-Fi.
+    // Another plugged-in phone could sit behind it; the certificate check below sends that one away.
+    if let Some(usb) = packet["payloadTransferInfo"]["usbPort"].as_u64() {
+        match connect(me, pinned, IpAddr::from([127, 0, 0, 1]), usb as u16).await {
+            Ok(tls) => return Ok(Either::Usb(tls).take(size)),
+            Err(e) => tracing::debug!("payload over USB failed, using Wi-Fi: {e:#}"),
+        }
+    }
+    Ok(Either::Lan(connect(me, pinned, phone, port).await?).take(size))
+}
+
+type Tls = tokio_rustls::client::TlsStream<TcpStream>;
+
+/// The same stream type whichever way it came (`impl` can't name two).
+enum Either {
+    Usb(Tls),
+    Lan(Tls),
+}
+
+impl AsyncRead for Either {
+    fn poll_read(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &mut tokio::io::ReadBuf<'_>) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Either::Usb(s) | Either::Lan(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+async fn connect(me: &Identity, pinned: &[u8], phone: IpAddr, port: u16) -> Result<Tls> {
     let tcp = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect((phone, port))).await.context("couldn't reach the phone")??;
     tcp.set_nodelay(true)?;
     let connector = TlsConnector::from(Arc::new(crate::link::client_config(me)?));
@@ -62,7 +90,7 @@ pub async fn fetch(me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value) 
     if peer.as_ref() != pinned {
         bail!("payload peer isn't the paired phone");
     }
-    Ok(tls.take(size))
+    Ok(tls)
 }
 
 /// A live stream must not queue: the kernel would otherwise take megabytes of unsent video when

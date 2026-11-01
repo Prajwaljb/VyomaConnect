@@ -171,7 +171,9 @@ class Device internal constructor(
         onProgress: (Long) -> Unit = {},
     ): Boolean {
         val link = links.filterNot { it.isClosed }.sortedBy { it.transport.ordinal }.firstOrNull { it.payloads != null } ?: return false
-        return link.payloads!!.send(link, packet, source, timeoutMs, onProgress)
+        // A companion links over Wi-Fi only; with its PC's cable tunnel up it can fetch over USB.
+        val usb = identity.companionOf?.let(env::usbTunnelUp) == true
+        return link.payloads!!.send(link, packet, source, timeoutMs, onProgress, usbMirror = usb)
     }
 
     /**

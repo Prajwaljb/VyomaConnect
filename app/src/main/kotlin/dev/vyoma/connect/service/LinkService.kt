@@ -6,6 +6,12 @@ import android.content.pm.ServiceInfo
 import android.net.Uri
 import dev.vyoma.connect.platform.Handoff
 import dev.vyoma.connect.platform.outgoingFile
+import dev.vyoma.connect.platform.folderItems
+import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.CompanionUploads
+import dev.vyoma.connect.protocol.plugin.builtin.SendItem
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
@@ -213,16 +219,36 @@ class LinkService : LifecycleService() {
             intent.clipData?.let { clip -> for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let(::add) }
         }
         val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+        val isFolder = intent.getBooleanExtra(EXTRA_FOLDER, false)
         lifecycleScope.launch {
-            val device = container.obtainHub().device(deviceId) ?: return@launch
-            val share = device.plugin<SharePlugin>(SharePlugin.ID) ?: return@launch
-            if (uris.isNotEmpty()) {
-                share.sendFiles(uris.map(contentResolver::outgoingFile))
-            } else if (text != null) {
+            val hub = container.obtainHub()
+            val device = hub.device(deviceId) ?: return@launch
+            val share = device.plugin<SharePlugin>(SharePlugin.ID)
+            // Through the companion when it's there: resumes after drops, takes the cable, carries folders.
+            val uploads = CompanionUploads(device) { companionOf(hub, deviceId) }.takeIf { companionOf(hub, deviceId) != null }
+            if (isFolder) {
+                val tree = uris.firstOrNull() ?: return@launch
+                val (name, items) = withContext(Dispatchers.IO) { contentResolver.folderItems(tree) }
+                when {
+                    uploads != null -> uploads.send(items, folderName = name)
+                    // Without the companion its files still go, side by side in Downloads.
+                    else -> share?.sendFiles(items.map { it.file })
+                }
+                runCatching { contentResolver.releasePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            } else if (uris.isNotEmpty()) {
+                val files = withContext(Dispatchers.IO) { uris.map(contentResolver::outgoingFile) }
+                // The PC needs a file's size to resume it; a provider that won't say goes the stock way.
+                if (uploads != null && files.all { it.size >= 0 }) uploads.send(files.map { SendItem(it) }) else share?.sendFiles(files)
+            } else if (share != null && text != null) {
                 if (looksLikeUrl(text)) share.sendUrl(Handoff.continueOnPc(this@LinkService, text.trim())) else share.sendText(text)
             }
         }
     }
+
+    /** The companion beside PC [pcId], while it's linked. */
+    private fun companionOf(hub: DeviceHub, pcId: String): CompanionPlugin? =
+        hub.devices.value.values.firstOrNull { it.state.value.identity.companionOf == pcId && it.state.value.isPaired && it.state.value.isReachable }
+            ?.plugin(CompanionPlugin.ID)
 
     /**
      * At most one value per [ms], always ending on the latest. Unlike `sample`, which runs a
@@ -250,6 +276,8 @@ class LinkService : LifecycleService() {
     companion object {
         const val ACTION_REFRESH = "dev.vyoma.connect.REFRESH"
         const val ACTION_SEND = "dev.vyoma.connect.SEND"
+        /** With ACTION_SEND: the one URI is a folder tree to send whole. */
+        const val EXTRA_FOLDER = "folder"
         const val EXTRA_DEVICE = "device"
 
         /**
