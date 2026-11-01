@@ -28,6 +28,8 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -75,6 +77,17 @@ data class PcFolder(
  */
 data class PcHandoff(val url: String, val title: String, val positionMs: Long?, val exact: Boolean)
 
+/** A screen whose brightness the PC can set (laptop panel, or a monitor over DDC). [level] is 0..1. */
+data class PcDisplay(val id: String, val label: String, val internal: Boolean, val level: Float)
+
+/** Something playing sound on the PC. [volume] is 0..1, past 1 if it was boosted on the PC. */
+data class PcApp(val id: Long, val name: String, val binary: String?, val title: String?, val volume: Float, val muted: Boolean)
+
+data class PcControls(val displays: List<PcDisplay> = emptyList(), val apps: List<PcApp> = emptyList())
+
+/** What the PC can be asked to do with itself. All go through Plasma, as from its own menu. */
+enum class PcPower(val wire: String) { SLEEP("sleep"), RESTART("restart"), SHUTDOWN("shutdown"), LOGOUT("logout") }
+
 sealed interface PcFileEvent {
     data class Saved(val name: String, val location: String) : PcFileEvent
     data class Failed(val name: String, val reason: String) : PcFileEvent
@@ -102,6 +115,77 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     val fileEvents: SharedFlow<PcFileEvent> = _fileEvents.asSharedFlow()
 
     suspend fun requestStats() = ctx.send(packet(STATS_REQUEST))
+
+    private val _controls = MutableStateFlow<PcControls?>(null)
+    /** Brightness and app volumes as last reported; null until the first [requestControls]. */
+    val controls: StateFlow<PcControls?> = _controls.asStateFlow()
+
+    suspend fun requestControls() = ctx.send(packet(PC_REQUEST))
+
+    /** Changes waiting to go, by what they change: a drag sends its newest value ~16 times a second. */
+    private val pendingSets = LinkedHashMap<String, JsonObject>()
+    private var setSender: Job? = null
+
+    fun setBrightness(display: String, level: Float) = queueSet("d:$display", buildJsonObject { put("display", display); put("brightness", level.toDouble()) })
+    fun setAppVolume(app: Long, volume: Float) = queueSet("v:$app", buildJsonObject { put("app", app); put("volume", volume.toDouble()) })
+    fun setAppMuted(app: Long, muted: Boolean) = queueSet("m:$app", buildJsonObject { put("app", app); put("muted", muted) })
+
+    private fun queueSet(key: String, body: JsonObject) {
+        synchronized(pendingSets) {
+            pendingSets.remove(key)
+            pendingSets[key] = body
+            if (setSender?.isActive == true) return
+            setSender = ctx.scope.launch {
+                while (true) {
+                    val next = synchronized(pendingSets) { pendingSets.values.toList().also { pendingSets.clear() } }
+                    if (next.isEmpty()) break
+                    for (b in next) ctx.send(NetworkPacket(PC_SET, b))
+                    delay(SET_INTERVAL_MS)
+                }
+            }
+        }
+    }
+
+    private var pendingPower: CompletableDeferred<String?>? = null
+
+    /**
+     * Asks the PC to sleep, restart, shut down or log out. Plasma does it as from its own menu
+     * (apps are asked to close). Fails with a message for the user if the PC refused.
+     */
+    suspend fun power(action: PcPower): Result<Unit> {
+        val reply = CompletableDeferred<String?>()
+        pendingPower = reply
+        if (!ctx.send(packet(PC_POWER) { put("action", action.wire) })) return Result.failure(IllegalStateException("The PC isn't reachable"))
+        // No answer usually means it already went (sleep can beat the reply out of the door).
+        val error = withTimeoutOrNull(POWER_TIMEOUT_MS) { reply.await() }
+        return if (error == null) Result.success(Unit) else Result.failure(IllegalStateException(error))
+    }
+
+    private fun receiveControls(packet: NetworkPacket) {
+        fun JsonObject.str(k: String) = this[k]?.jsonPrimitive?.contentOrNull
+        fun JsonObject.num(k: String) = this[k]?.jsonPrimitive?.doubleOrNull
+        val displays = (packet.body["displays"] as? JsonArray).orEmpty().mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            PcDisplay(
+                id = o.str("id") ?: return@mapNotNull null,
+                label = o.str("label").orEmpty(),
+                internal = o["internal"]?.jsonPrimitive?.booleanOrNull ?: false,
+                level = o.num("value")?.toFloat() ?: return@mapNotNull null,
+            )
+        }
+        val apps = (packet.body["apps"] as? JsonArray).orEmpty().mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            PcApp(
+                id = o["id"]?.jsonPrimitive?.longOrNull ?: return@mapNotNull null,
+                name = o.str("name") ?: "App",
+                binary = o.str("binary"),
+                title = o.str("title"),
+                volume = o.num("volume")?.toFloat() ?: 1f,
+                muted = o["muted"]?.jsonPrimitive?.booleanOrNull ?: false,
+            )
+        }
+        _controls.value = PcControls(displays, apps)
+    }
 
     /** Lists a home-relative PC folder; [folder] shows it loading, then the result. */
     suspend fun listFiles(path: String) {
@@ -332,6 +416,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         if (packet.type == FILES_LISTING) receiveListing(packet)
         if (packet.type == FILES_FILE) receiveFile(packet)
         if (packet.type == FILES_SAVED) receiveSaved(packet)
+        if (packet.type == PC) receiveControls(packet)
+        if (packet.type == PC_POWERED) pendingPower?.also { pendingPower = null }?.complete(packet.string("error"))
         if (packet.type == STATS) {
             _stats.value = PcStats(
                 cpu = packet.double("cpu")?.toFloat() ?: 0f,
@@ -367,13 +453,20 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val SCREEN_REQUEST = "vyoma.screen.request"
         const val SCREEN_STOP = "vyoma.screen.stop"
         private const val SCREEN_TIMEOUT_MS = 60_000L
+        const val PC = "vyoma.pc"
+        const val PC_REQUEST = "vyoma.pc.request"
+        const val PC_SET = "vyoma.pc.set"
+        const val PC_POWER = "vyoma.pc.power"
+        const val PC_POWERED = "vyoma.pc.powered"
+        private const val SET_INTERVAL_MS = 60L
+        private const val POWER_TIMEOUT_MS = 5_000L
         private const val CAPTURE_TIMEOUT_MS = 30_000L
         private const val TAG = "Companion"
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP),
+            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED),
+            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER),
         ) { CompanionPlugin(it, sink) }
     }
 }

@@ -77,6 +77,18 @@ body fields before implementing one.
 - `vyoma.files.put {path(folder), name}` + payload (phone serves it; the companion connects as TLS client with its
   cert and pins the phone's) → `vyoma.files.saved {path, name, error?}`. Written as `.name.vyoma-part`, renamed when
   complete, never overwrites (`name (2).ext`). A refusal before connecting makes the phone stop waiting.
+- `vyoma.pc.request` → `vyoma.pc {displays:[{id, label, internal, value 0..1}], apps:[{id, name, binary?, title?, volume, muted}]}`
+  (`pc.rs`). Displays come from Plasma's `org.kde.ScreenBrightness` (panels and DDC monitors; ids are its D-Bus names,
+  checked as `[A-Za-z0-9_]` since they become a path); apps are `pactl -f json list sink-inputs` minus event sounds,
+  `volume` = loudest channel / 100% (can pass 1 if boosted). Either part is empty if the PC can't report it.
+  `vyoma.pc.set {display, brightness}` | `{app, volume?, muted?}` → a fresh `vyoma.pc`. Brightness is floored at 1%
+  (never black from the phone); app volume clamps to 150%. The companion handles these in order on one worker per
+  link and collapses a burst of sets for the same slider to the newest; the phone also sends at most one per target
+  every 60 ms (`CompanionPlugin.queueSet`) and re-requests every 3 s while the controls are on screen.
+- `vyoma.pc.power {action: sleep|restart|shutdown|logout}` → `vyoma.pc.powered {action, error?}`. Sleep is
+  Solid's `suspendToRam`; the others are `org.kde.Shutdown` (`logoutAndReboot`/`logoutAndShutdown`/`logout`), i.e.
+  graceful, apps asked to close. The phone confirms every action first and treats no reply in 5 s as done.
+  **Never send these to the real PC in tests.**
 - `vyoma.screen.request` → `vyoma.screen {codec:"h264", framing:"avc4", width, height}` + an open-ended payload
   (`payloadSize` -1), or `{error}`. The companion casts one monitor via the ScreenCast portal (persist_mode 2; restore
   token in `~/.config/vyoma-companion/screencast-token`, so Plasma asks once), asks KWin for ≤60 fps (`max-framerate`

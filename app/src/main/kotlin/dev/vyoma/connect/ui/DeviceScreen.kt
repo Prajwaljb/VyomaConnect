@@ -44,6 +44,7 @@ import dev.vyoma.connect.designsystem.ListRow
 import dev.vyoma.connect.designsystem.SectionCard
 import dev.vyoma.connect.designsystem.SectionLabel
 import dev.vyoma.connect.protocol.plugin.builtin.BatteryPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.LockPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -60,7 +61,11 @@ fun DeviceScreen(
     var confirmUnpair by rememberSaveable { mutableStateOf(false) }
     var showCommands by rememberSaveable { mutableStateOf(false) }
     val status = LocalStatus.current
-    val companionOnline = devices.any { it.identity.companionOf == deviceId && it.isPaired && it.isReachable }
+    val companion = devices.firstOrNull { it.identity.companionOf == deviceId && it.isPaired && it.isReachable }
+    val companionOnline = companion != null
+    val companionPlugin = remember(companion?.identity?.deviceId, companion?.plugins) {
+        companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
+    }
     val fingerprint = remember(state?.isReachable, state?.isPaired) { vm.fingerprint(deviceId) }
 
     // Plugin instances change when the link reconnects; key on the loaded set.
@@ -128,13 +133,17 @@ fun DeviceScreen(
             }
         }
 
+        companionPlugin?.let { plugin ->
+            item(key = "pc-controls") { PcControls(plugin, state.identity.deviceName, Modifier.animateItem()) }
+        }
+
         // Commands are run from Home; here they're one row (a wall of shell lines led the page before).
         if (live) {
             item(key = "commands") {
                 SectionCard(Modifier.animateItem()) {
                     ListRow(
                         title = "Commands",
-                        subtitle = if (commands.isEmpty()) "Shutdown, sleep, scripts: set up on the PC" else "Run or edit what the PC offers",
+                        subtitle = if (commands.isEmpty()) (if (companionOnline) "Scripts: set up on the PC" else "Shutdown, sleep, scripts: set up on the PC") else "Run or edit what the PC offers",
                         icon = Icons.Rounded.Terminal,
                         iconTint = SystemColor.GRAY.color,
                         trailing = { RowChevron(commands.size.takeIf { it > 0 }?.toString()) },

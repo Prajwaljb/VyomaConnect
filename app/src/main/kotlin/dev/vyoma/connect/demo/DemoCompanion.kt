@@ -18,7 +18,8 @@ import kotlin.random.Random
 
 /**
  * The simulated Vyoma companion beside [pc]: live stats, screenshots, webcam photos, handoff of
- * the browser video, and a small home folder to browse, download from and upload into.
+ * the browser video, a small home folder to browse, download from and upload into, and PC
+ * controls (a monitor's brightness, two apps' volumes, power actions that do nothing).
  */
 internal class DemoCompanion(credentials: LocalCredentials, private val pc: DemoPc) :
     SimulatedPeer(credentials, identity(credentials.deviceId, pc.id)) {
@@ -55,8 +56,40 @@ internal class DemoCompanion(credentials: LocalCredentials, private val pc: Demo
             CompanionPlugin.FILES_LIST -> list(packet.string("path").orEmpty())
             CompanionPlugin.FILES_GET -> get(packet.string("path").orEmpty(), session)
             CompanionPlugin.FILES_PUT -> session.launch(Dispatchers.IO) { put(packet) }
+            CompanionPlugin.PC_REQUEST -> sendControls()
+            CompanionPlugin.PC_SET -> {
+                packet.string("display")?.let { d -> packet.double("brightness")?.let { if (d == "display0") brightness = it.coerceIn(0.01, 1.0) } }
+                packet.long("app")?.let { id ->
+                    val i = apps.indexOfFirst { it.id == id }
+                    if (i >= 0) apps[i] = apps[i].copy(
+                        volume = packet.double("volume")?.coerceIn(0.0, 1.5) ?: apps[i].volume,
+                        muted = packet.bool("muted") ?: apps[i].muted,
+                    )
+                }
+                sendControls()
+            }
+            // Nothing to put to sleep: the demo PC just says it did.
+            CompanionPlugin.PC_POWER -> send(packet(CompanionPlugin.PC_POWERED) { put("action", packet.string("action").orEmpty()) })
         }
     }
+
+    // ---- PC controls: one monitor, two apps playing --------------------------------------------
+
+    private data class App(val id: Long, val name: String, val binary: String, val volume: Double, val muted: Boolean = false)
+
+    private var brightness = 0.7
+    private val apps = mutableListOf(App(41, "Firefox", "firefox", 0.85), App(57, "Music", "elisa", 0.6))
+
+    private fun sendControls() = send(packet(CompanionPlugin.PC) {
+        putJsonArray("displays") {
+            addJsonObject { put("id", "display0"); put("label", "Studio Display"); put("internal", false); put("value", brightness) }
+        }
+        putJsonArray("apps") {
+            for (a in apps) addJsonObject {
+                put("id", a.id); put("name", a.name); put("binary", a.binary); put("volume", a.volume); put("muted", a.muted)
+            }
+        }
+    })
 
     // ---- stats: streamed every 2 s for 12 s after each request, like the real companion ----------
 

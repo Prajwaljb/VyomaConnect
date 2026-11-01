@@ -158,6 +158,11 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   and clears; an inward rim mirrored the track into stripes. Volume (`Dashboard.VolumeBar`) is an iOS card: name +
   % over the knobbed slider between quiet/loud speakers. The media `Scrubber` drives one `Animatable` progress (small
   drifts snap, jumps glide) and holds our seek target until MPRIS agrees (browsers report stale/zero after a seek).
+  Level rows in a card (`PcControls.LevelRow`: PC brightness, per-app volume): badge + name + % on one line, the
+  slider under them inset 50 dp so it lines up with the name; a mute toggle is its own speaker button after the %
+  (never the badge). Any slider driving a remote value owns it while touched and for 700 ms after (`ECHO_QUIET_MS`),
+  then settles on what the remote reports. Power actions are plain rows; each opens a GlassDialog (destructive
+  red except Sleep).
 - Switches (`VyomaSwitch`): accent track (NOT iOS green: the user disliked it on pure black), round white thumb with a
   squash at the ends; tap or DRAG the thumb (lands on the nearer side); touched, it lifts into the `Lift` lens.
   In drag callbacks read `positionChange()` BEFORE `consume()` (a consumed change reports zero movement). `SegmentedControl`: grey thumb that lifts into a lens on touch
