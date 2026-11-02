@@ -6,7 +6,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.mutableStateListOf
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
+import kotlin.coroutines.cancellation.CancellationException
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.spring
@@ -231,7 +232,17 @@ private fun DialogOverlay(d: HostedDialog, backdrop: Backdrop, onGone: () -> Uni
             onGone()
         }
     }
-    if (!d.leaving) BackHandler { d.onDismiss() }
+    // The back gesture sinks it under the finger (the predictive preview); letting go finishes, or it rises back.
+    val backScope = rememberCoroutineScope()
+    PredictiveBackHandler(enabled = !d.leaving) { events ->
+        try {
+            events.collect { e -> shown.snapTo(1f - BACK_PEEK * e.progress) }
+        } catch (e: CancellationException) {
+            backScope.launch { shown.animateTo(1f, DIALOG_IN) }
+            throw e
+        }
+        d.onDismiss()
+    }
     Box(
         Modifier
             .fillMaxSize()
@@ -353,7 +364,24 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
         // Act at once; the drop flows home while it happens.
         then()
     }
-    BackHandler { close() }
+    // The back gesture starts draining it home under the finger; letting go finishes the drain, or it pours back.
+    PredictiveBackHandler(enabled = !closing) { events ->
+        try {
+            events.collect { e ->
+                val k = 1f - MENU_BACK_PEEK * e.progress
+                wide.snapTo(k); tall.snapTo(k); scrim.snapTo(k)
+            }
+        } catch (e: CancellationException) {
+            scope.launch {
+                launch { scrim.animateTo(1f, VyomaMotion.effects()) }
+                launch { ink.animateTo(1f, VyomaMotion.effects()) }
+                launch { wide.animateTo(1f, POUR_WIDE) }
+                tall.animateTo(1f, POUR_TALL)
+            }
+            throw e
+        }
+        close()
+    }
 
     Box(
         Modifier
@@ -582,6 +610,9 @@ private val GROUP_GAP = 9.dp
 private val PAD = 8.dp
 private const val SCRIM = 0.35f
 private val DIALOG_SHAPE = RoundedCornerShape(28.dp)
+/** How far the back gesture's preview takes a dialog, or a menu draining home, towards gone before you let go. */
+private const val BACK_PEEK = 0.3f
+private const val MENU_BACK_PEEK = 0.55f
 private val DIALOG_IN = spring<Float>(dampingRatio = 0.72f, stiffness = 420f)
 private val DIALOG_OUT = tween<Float>(140, easing = LinearEasing)
 /** Opening: the width runs out quickly, the height pours after it with a soft wobble. */

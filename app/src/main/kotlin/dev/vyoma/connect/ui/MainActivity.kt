@@ -9,7 +9,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.MutableState
-import androidx.activity.compose.BackHandler
 import android.Manifest
 import android.content.Intent
 import android.os.Build
@@ -68,18 +67,6 @@ sealed interface Screen {
     data object Automation : Screen
     /** [ruleId] null: a new rule; "suggestion:key": a suggestion as a new rule. */
     data class RuleEditor(val ruleId: String?) : Screen
-}
-
-/** How deep a screen sits; deeper means the transition is a push. */
-private val Screen.depth get() = when (this) {
-    Screen.Home -> 0
-    is Screen.DeviceDetail -> 1
-    is Screen.Touchpad -> 2
-    is Screen.Files -> 2
-    Screen.Clipboard -> 1
-    Screen.Captures -> 1
-    Screen.Automation -> 1
-    is Screen.RuleEditor -> 2
 }
 
 class MainActivity : ComponentActivity() {
@@ -185,9 +172,6 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
     var tab by tabState
     val toTab: (Tab) -> Unit = { t -> backStack.retainAll { it == Screen.Home }; tab = t }
 
-    // At the root, back on another tab goes Home first, like One UI apps.
-    BackHandler(enabled = backStack.size == 1 && tab != Tab.HOME) { tab = Tab.HOME }
-
     val current = backStack.last()
     if (BuildConfig.DEMO) LaunchedEffect(current, tab) {
         DemoDiagnostics.screen = when (current) {
@@ -202,6 +186,10 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
         }
     }
     val nav = remember { SeekableTransitionState<Screen>(current) }
+    // Where a screen sits in the stack decides push or pop (a fixed depth per kind of screen slid
+    // pages opened from a notification, or Clipboard over a PC page, the wrong way). One already
+    // popped counts as the deepest.
+    fun order(s: Screen) = backStack.lastIndexOf(s).let { if (it < 0) Int.MAX_VALUE else it }
     // True while a back swipe drives the transition (and while its release animates).
     var swiping by remember { mutableStateOf(false) }
     LaunchedEffect(current) {
@@ -242,7 +230,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
         transitionSpec = {
             // A swipe seeks through the animation, so it needs a linear timeline; buttons get springs.
             val slide: FiniteAnimationSpec<IntOffset> = if (swiping) tween(PAGE_SWIPE_MS, easing = LinearEasing) else VyomaMotion.page()
-            if (targetState.depth > initialState.depth) {
+            if (order(targetState) > order(initialState)) {
                 slideInHorizontally(slide) { it } togetherWith slideOutHorizontally(slide) { -it / 4 }
             } else {
                 (slideInHorizontally(slide) { -it / 4 } togetherWith slideOutHorizontally(slide) { it }).apply { targetContentZIndex = -1f }
@@ -252,7 +240,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
         // The page underneath dims while another slides over it. A drawn shade, not a layer fade:
         // fading would push the whole page (and every glass element replaying it) through an
         // offscreen buffer each frame.
-        val below = screen.depth < maxOf(navTransition.currentState.depth, navTransition.targetState.depth)
+        val below = order(screen) < maxOf(order(navTransition.currentState), order(navTransition.targetState))
         val dim by transition.animateFloat(
             transitionSpec = { if (swiping) tween(PAGE_SWIPE_MS, easing = LinearEasing) else VyomaMotion.effects() },
             label = "dim",
@@ -270,6 +258,8 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                 Screen.Home -> TabsRoot(
                     tab = tab,
                     onTab = toTab,
+                    // At the root, back on another tab goes Home first, like One UI apps.
+                    backToHome = backStack.size == 1,
                     onTouchpad = { backStack.add(Screen.Touchpad(null, keyboard = false)) },
                 ) { t ->
                     when (t) {
@@ -293,7 +283,18 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                 }
                 is Screen.DeviceDetail -> DeviceScreen(vm, screen.id, onBack = pop)
                 is Screen.Touchpad -> RemoteInputScreen(vm, screen.deviceId, screen.keyboard, onBack = pop)
-                is Screen.Files -> FilesScreen(vm, screen.pcId, onBack = pop, initialPath = screen.path)
+                is Screen.Files -> FilesScreen(
+                    vm, screen.pcId, screen.path, onBack = pop,
+                    onOpen = { backStack.add(Screen.Files(screen.pcId, it)) },
+                    onCrumb = { crumb ->
+                        // Back through the folders opened on the way down; a crumb above where you came in
+                        // replaces them with that folder.
+                        fun inside(s: Screen) = s is Screen.Files && s.pcId == screen.pcId && s.path != crumb &&
+                            (crumb.isEmpty() || s.path.startsWith("$crumb/"))
+                        while (backStack.size > 1 && inside(backStack.last())) saved.removeState(backStack.removeAt(backStack.lastIndex).toString())
+                        if (backStack.last() != Screen.Files(screen.pcId, crumb)) backStack.add(Screen.Files(screen.pcId, crumb))
+                    },
+                )
                 Screen.Clipboard -> ClipboardScreen(vm, onBack = pop)
                 Screen.Captures -> CapturesScreen(onBack = pop)
                 Screen.Automation -> AutomationScreen(vm, onBack = pop, onEdit = { backStack.add(Screen.RuleEditor(it)) })

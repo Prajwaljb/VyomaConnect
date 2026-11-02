@@ -141,6 +141,12 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   Home once took less and the user called it inconsistent.
   A scroll that stops mid-collapse snaps open/closed; the snap runs in its own child job (run inline, a finger
   interrupting it threw a cancellation that killed the watcher, and nothing snapped again).
+- Back is ONE gesture everywhere (user: "predictive back acting weird in many places, differently"): every back
+  target follows the finger and finishes or snaps back from where you let go. Pushed pages slide over a parallaxed,
+  dimmed parent; push vs pop comes from the back-stack position, never a fixed depth per screen. Files/Settings tab →
+  Home slides the tab off over Home the same way (TabsRoot). PC folders are pages (`Screen.Files(path)`), so the header
+  back and the gesture agree; crumbs pop back down; folders are cached so the page under the swipe isn't a spinner.
+  Menus drain towards their element (`MENU_BACK_PEEK`), dialogs sink (`BACK_PEEK`). No plain `BackHandler` for UI.
 - Long-press menus: `MenuHost` (wraps the app in MainActivity) + `LocalMenu.current.show(boundsInRoot, items, title)`,
   triggered from `liquidPress(onLongClick)`. Drawn IN the app's window (a Popup is a separate window: it can't see the
   page, so it was an opaque slab the user called broken): while open the app records into a backdrop and the menu is

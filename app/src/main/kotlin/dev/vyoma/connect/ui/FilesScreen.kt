@@ -12,7 +12,6 @@ import android.net.Uri
 import android.text.format.DateUtils
 import android.text.format.Formatter
 import android.widget.Toast
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -82,7 +81,15 @@ import dev.vyoma.connect.protocol.plugin.builtin.PcFileEvent
  * the folder on screen.
  */
 @Composable
-fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit, initialPath: String = "") {
+fun FilesScreen(
+    vm: AppViewModel,
+    pcId: String,
+    path: String,
+    onBack: () -> Unit,
+    /** Each folder is its own page, so back (button or gesture) always means the same thing. */
+    onOpen: (String) -> Unit,
+    onCrumb: (String) -> Unit,
+) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     val status = LocalStatus.current
@@ -93,8 +100,6 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit, initialPath:
         companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
     }
 
-    var path by rememberSaveable { mutableStateOf(initialPath) }
-    BackHandler(enabled = path.isNotEmpty()) { path = path.substringBeforeLast('/', "") }
     LaunchedEffect(plugin, path) { plugin?.listFiles(path) }
 
     val folder by (plugin?.folder ?: remember { kotlinx.coroutines.flow.MutableStateFlow(null) }).collectAsStateWithLifecycle()
@@ -128,7 +133,7 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit, initialPath:
         if (plugin != null && uris.isNotEmpty()) vm.uploadPcFiles(plugin, path, uris.map(context.contentResolver::outgoingFile))
     }
 
-    val shown = folder?.takeIf { it.path == path }
+    val shown = folder?.takeIf { it.path == path } ?: plugin?.cached(path)
     val listState = rememberLazyListState()
     CollapsingHeaderScaffold(
         listState = listState,
@@ -162,7 +167,7 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit, initialPath:
         item(key = "crumbs") {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // Inset so the first crumb's text lines up with the card text below.
-                Breadcrumbs(path, onPick = { path = it }, modifier = Modifier.weight(1f).padding(start = 10.dp))
+                Breadcrumbs(path, onPick = onCrumb, modifier = Modifier.weight(1f).padding(start = 10.dp))
                 // Into the folder on screen; the dashboard's Send drops files in the PC's Downloads instead.
                 PillButton("Upload here", prominent = false, onClick = { upload.launch(arrayOf("*/*")) })
             }
@@ -204,7 +209,7 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit, initialPath:
                             busy = child in fetching,
                             showDivider = i != last,
                             modifier = (if (i != last) Modifier.joinNext() else Modifier).cardSegment(first = i == 0, last = i == last),
-                            onClick = { if (f.isDir) path = child else vm.downloadPcFile(plugin, child, keep = false) },
+                            onClick = { if (f.isDir) onOpen(child) else vm.downloadPcFile(plugin, child, keep = false) },
                             onSave = { vm.downloadPcFile(plugin, child) },
                         )
                     }
