@@ -294,6 +294,9 @@ object Haptics {
     }
 }
 
+/** How far every edge moves in on a press (a held tile's menu starts from there too). */
+internal const val PRESS_TRAVEL_DP = 3f
+
 /** [pressable]/[pressScale]'s default: dip by the same distance at any size. */
 const val PressAuto = Float.NaN
 
@@ -504,8 +507,6 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
         val DIP = tween<Float>(70, easing = FastOutLinearInEasing)
         /** Glass buttons whose caller asked for no scale (the parent handles the click) still dip. */
         const val GLASS_PRESSED = 0.9f
-        /** How far every edge moves in on a press. */
-        const val PRESS_TRAVEL_DP = 3f
         /** How far past its edge a finger can stray before the press lets go. */
         const val SLIDE_MARGIN_DP = 12f
     }

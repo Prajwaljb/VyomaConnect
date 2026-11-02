@@ -764,6 +764,9 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
     val placed = remember { arrayOfNulls<LayoutCoordinates>(1) }
     // Where the glyph sits (its 22 dp centred in a 26 dp box), for the morph's icon glide.
     val pad = LocalTilePad.current
+    // The menu draws its copy of the face outside the grid, so it carries the grid's label size:
+    // without it the label came back bigger and snapped smaller when the tile took over again.
+    val labelStyle = LocalTileLabel.current
     Box(
         modifier
             .graphicsLayer {
@@ -782,7 +785,9 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
                                 // The tile grows into the menu in place, shrinking to its icon, which
                                 // lands in the menu's header.
                                 morph = MenuMorph(placed, fill, icon = c.icon.takeIf { c.progress == null }, iconAt = DpOffset(pad + 2.dp, 12.dp), ink = ink, label = c.label) {
-                                    TileFace(c, ink, icon = c.progress != null)
+                                    CompositionLocalProvider(LocalTileLabel provides labelStyle, LocalTilePad provides pad) {
+                                        TileFace(c, ink, icon = c.progress != null)
+                                    }
                                 },
                             )
                         }

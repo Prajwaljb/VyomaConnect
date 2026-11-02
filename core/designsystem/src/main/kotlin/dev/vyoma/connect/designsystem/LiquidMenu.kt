@@ -280,6 +280,11 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
     val ink = remember { Animatable(0f) }
     var closing by remember { mutableStateOf(false) }
     val menus = LocalMenu.current
+    val density = LocalDensity.current
+    val dip = remember {
+        val longest = maxOf(r.from.width, r.from.height)
+        Animatable(if (r.morph == null || longest <= 0f) 1f else (1f - 2f * PRESS_TRAVEL_DP * density.density / longest).coerceIn(0.86f, 1f))
+    }
     val bars = WindowInsets.systemBars
     // Where the drop is this frame (set while laying it out), so the element's face can hold still.
     val origin = remember { FloatArray(2) }
@@ -297,7 +302,15 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
     }
     fun formed() = minOf(wide.value, tall.value).coerceIn(0f, 1f)
     // Where the element is: as it opened, or, draining home, where it is now (see MenuMorph.bounds).
-    fun from(): Rect = (if (closing) r.morph?.bounds?.invoke()?.takeIf { !it.isEmpty } else null) ?: r.from
+    fun home(): Rect = (if (closing) r.morph?.bounds?.invoke()?.takeIf { !it.isEmpty } else null) ?: r.from
+    // A held tile is dipped under the finger (pressScale) when its menu takes over: the drop and the
+    // tile's face start at that size and spring back up as it pours. Starting full size, the label
+    // jumped bigger in one frame. [dip] scales about the element's centre; the face is laid out at
+    // full size and scaled, so its text shrinks with it rather than reflowing.
+    fun from(): Rect = home().let { h ->
+        val d = dip.value
+        if (d >= 1f) h else Rect(h.center.x - h.width * d / 2, h.center.y - h.height * d / 2, h.center.x + h.width * d / 2, h.center.y + h.height * d / 2)
+    }
     // Its corners round from the element's into the menu's as it forms (read while drawing).
     val shape = remember(r.id) {
         object : Shape {
@@ -310,6 +323,7 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
     LaunchedEffect(Unit) {
         haptics.perform(Haptic.Hold)
         launch { scrim.animateTo(1f, VyomaMotion.effects()) }
+        launch { dip.animateTo(1f, VyomaMotion.spatial()) }
         launch { wide.animateTo(1f, POUR_WIDE) }
         launch { tall.animateTo(1f, POUR_TALL) }
         // The items appear once the drop has mostly formed, so they never ride its wobble.
@@ -451,14 +465,16 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                 Box(
                     Modifier
                         .wrapContentSize(Alignment.TopStart, unbounded = true)
-                        .offset { IntOffset((from().left - origin[0]).roundToInt(), (from().top - origin[1]).roundToInt()) }
+                        .offset { IntOffset((home().left - origin[0]).roundToInt(), (home().top - origin[1]).roundToInt()) }
                         .layout { m, _ ->
                             // Re-measured every frame of the drain, so a face whose element changed width follows it.
-                            val f = from()
+                            val f = home()
                             val p = m.measure(Constraints.fixed(f.width.roundToInt().coerceAtLeast(1), f.height.roundToInt().coerceAtLeast(1)))
                             layout(p.width, p.height) { p.place(0, 0) }
                         }
                         .graphicsLayer {
+                            scaleX = dip.value
+                            scaleY = dip.value
                             alpha = 1f - smooth(formed() / if (closing) 0.5f else 0.25f)
                             compositingStrategy = CompositingStrategy.ModulateAlpha
                         },
@@ -525,8 +541,9 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
             val glide = Modifier
                 .offset {
                     val f = formed()
-                    val sx = from().left + morph.iconAt.x.toPx()
-                    val sy = from().top + morph.iconAt.y.toPx()
+                    val h = home()
+                    val sx = h.center.x + (h.left + morph.iconAt.x.toPx() - h.center.x) * dip.value
+                    val sy = h.center.y + (h.top + morph.iconAt.y.toPx() - h.center.y) * dip.value
                     val (ex, ey) = if (landing >= 0) {
                         val gaps = r.items.take(landing).count { it.groupEnd }
                         Pair(
