@@ -65,6 +65,9 @@ sealed interface Screen {
     data class DeviceDetail(val id: String) : Screen
     data class Touchpad(val deviceId: String?, val keyboard: Boolean) : Screen
     data class Files(val pcId: String, val path: String = "") : Screen
+    data object Automation : Screen
+    /** [ruleId] null: a new rule; "suggestion:key": a suggestion as a new rule. */
+    data class RuleEditor(val ruleId: String?) : Screen
 }
 
 /** How deep a screen sits; deeper means the transition is a push. */
@@ -75,6 +78,8 @@ private val Screen.depth get() = when (this) {
     is Screen.Files -> 2
     Screen.Clipboard -> 1
     Screen.Captures -> 1
+    Screen.Automation -> 1
+    is Screen.RuleEditor -> 2
 }
 
 class MainActivity : ComponentActivity() {
@@ -192,6 +197,8 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
             is Screen.Files -> "PC files"
             Screen.Clipboard -> "Clipboard"
             Screen.Captures -> "Captures"
+            Screen.Automation -> "Automation"
+            is Screen.RuleEditor -> "Rule"
         }
     }
     val nav = remember { SeekableTransitionState<Screen>(current) }
@@ -281,7 +288,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                             onClipboard = { backStack.add(Screen.Clipboard) },
                             onCaptures = { backStack.add(Screen.Captures) },
                         )
-                        Tab.SETTINGS -> SettingsScreen(vm)
+                        Tab.SETTINGS -> SettingsScreen(vm, onAutomation = { backStack.add(Screen.Automation) })
                     }
                 }
                 is Screen.DeviceDetail -> DeviceScreen(vm, screen.id, onBack = pop)
@@ -289,6 +296,8 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                 is Screen.Files -> FilesScreen(vm, screen.pcId, onBack = pop, initialPath = screen.path)
                 Screen.Clipboard -> ClipboardScreen(vm, onBack = pop)
                 Screen.Captures -> CapturesScreen(onBack = pop)
+                Screen.Automation -> AutomationScreen(vm, onBack = pop, onEdit = { backStack.add(Screen.RuleEditor(it)) })
+                is Screen.RuleEditor -> RuleEditorScreen(vm, screen.ruleId, onBack = pop)
             }
         } }
     }

@@ -118,8 +118,11 @@ desktop/companion/     Rust daemon (Phase 2)
 - **Handoff / continuity:** links, tabs, media position. **YouTube resume at timestamp.**
   PC→phone: the browser's MPRIS `xesam:url` plus position opens the YouTube app at `t=`. Phone→PC:
   the shared URL plus the position from the YouTube MediaSession, with `&t=` appended.
-- **Automation rules:** triggers (Wi-Fi, proximity/connection, call, charging, time,
-  app opened) → actions (lock PC, mute, run command, send clipboard…).
+- **Automation rules (done 2026-11-03):** When / Only if / Do rules with "undo when it ends" (app/automation/):
+  PC connected or away, call, charging, battery, PC locked/playing/plugged in, headphones, home Wi-Fi (learned from
+  the PC's network, no location permission), times and periods → PC lock/mute/volume/media/brightness/command/
+  clipboard/message/screenshot/wake/sleep and phone notify/vibrate/pause. Walk-away actions run on the companion
+  (`vyoma.away`). Not done: "app opened" (needs usage access).
 - **USB mode:** the companion runs `adb reverse`, and also automates the clipboard grant.
 
 ### Phase 3: Real-time features

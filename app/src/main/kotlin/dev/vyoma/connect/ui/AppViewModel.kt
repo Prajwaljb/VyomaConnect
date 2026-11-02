@@ -1,6 +1,8 @@
 package dev.vyoma.connect.ui
 
 import dev.vyoma.connect.data.LiteGlass
+import dev.vyoma.connect.automation.Rule
+import dev.vyoma.connect.automation.RunEntry
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.OutgoingFile
 import androidx.core.content.edit
@@ -225,6 +227,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // App scope: an upload keeps going if you leave the browser.
     fun uploadPcFiles(plugin: CompanionPlugin, folder: String, files: List<OutgoingFile>) =
         container.appScope.launch { plugin.upload(folder, files) }
+
+    // Automation rules
+    val rules: StateFlow<List<Rule>> get() = container.automation.store.rules
+    val ruleLog: StateFlow<List<RunEntry>> get() = container.automation.store.log
+    fun rule(id: String): Rule? = container.automation.store.rule(id)
+    fun saveRule(rule: Rule) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.automation.store.save(rule) }
+    fun deleteRule(id: String) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.automation.store.delete(id) }
+    fun setRuleEnabled(id: String, enabled: Boolean) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.automation.store.setEnabled(id, enabled) }
+    fun testRule(rule: Rule) = viewModelScope.launch { container.automation.test(rule) }
+    /** The connected PC's commands, for a "Run command" action. */
+    fun pcCommands(): List<dev.vyoma.connect.protocol.plugin.builtin.RemoteCommand> =
+        dev.vyoma.connect.service.Commands.primary(container)?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands?.value.orEmpty()
+    /** Whether a companion has ever paired (walk-away rules and some actions need it). */
+    fun hasCompanion(): Boolean = container.hub.value?.devices?.value?.values?.any { it.state.value.isCompanion && it.state.value.isPaired } == true
 
     fun setPalette(p: Palette) = viewModelScope.launch { settings.setPalette(p) }
     fun setDarkMode(m: DarkMode) = viewModelScope.launch { settings.setDarkMode(m) }

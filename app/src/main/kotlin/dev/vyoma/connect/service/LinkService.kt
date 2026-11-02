@@ -193,6 +193,7 @@ class LinkService : LifecycleService() {
         mediaSession = PcMediaSession(this, container.media).also { it.start(lifecycleScope) }
         container.clipboard.startBackgroundSync()
         startPhoneMonitors()
+        container.automation.start()
 
         // Widgets and tiles read a snapshot; refresh it whenever something they show changes.
         // The PC's battery arrives after the link is up (once its plugin loads), then on every change.

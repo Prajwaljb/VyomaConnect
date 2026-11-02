@@ -77,6 +77,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.AutoMode
 import androidx.compose.material.icons.rounded.Gradient
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Info
@@ -105,7 +106,7 @@ import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.pressable
 
 @Composable
-fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
+fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation: () -> Unit = {}) {
     val theme by vm.theme.collectAsStateWithLifecycle()
     val name by vm.deviceName.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -201,6 +202,22 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     onClick = { vm.setLiteGlass(!glass.on) },
                     trailing = { VyomaSwitch(checked = glass.on, onCheckedChange = { vm.setLiteGlass(it) }, contentDescription = "Lighter glass") },
                     showDivider = false,
+                )
+            }
+        }
+
+        item(key = "auto-label") { SectionLabel("Automation") }
+        item(key = "auto") {
+            val rules by vm.rules.collectAsStateWithLifecycle()
+            val on = rules.count { it.enabled }
+            SectionCard {
+                ListRow(
+                    title = "Rules",
+                    subtitle = "When this happens, do that: calls, leaving, bedtime…",
+                    icon = Icons.Rounded.AutoMode,
+                    iconTint = SystemColor.ORANGE.color,
+                    trailing = { RowChevron(if (rules.isEmpty()) null else "$on on") },
+                    onClick = onAutomation,
                 )
             }
         }

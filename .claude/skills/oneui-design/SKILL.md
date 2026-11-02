@@ -391,3 +391,13 @@ A choice that changes its element (a new output's name) must not drain into the 
 `MenuMorph(bounds = { coords.boundsInRoot() })` and a face that reads current state (`rememberUpdatedState`), and
 show the choice at once (VolumeBar `picked`, held up to 3 s for the PC to confirm). Don't also animate the element's
 width: the drain already does it, and the face showed ellipsized mid-growth.
+
+## Automation (Settings › Automation › Rules)
+`AutomationScreen`: your rules (trigger badge, name, two-line "When …: …" summary, switch on the row), a "Run timed
+rules on the minute" row only while a timed rule exists without exact-alarm access, Suggestions (row opens the
+filled-in editor without adding it; the "Add" pill adds it on), Recent (last 6 runs, undo/failed icons).
+`RuleEditorScreen`: When / Only if / Do cards, then Undo when it ends · Name · Test now, then Delete. Pickers are a
+GlassDialog list grouped PC / Phone / Time and place (too many choices for a LiquidMenu, which can't scroll); a choice
+with a setting opens its own dialog (percent slider snapping to 5, segmented wait, TimeInput + day circles, text,
+command list). Saves when you leave the page (or the tick); a new rule never runs half-built. Labels read as states
+("PC is connected") so they work after both "When" and "Only if"; mid-sentence lower-casing keeps acronyms (`inSentence`).

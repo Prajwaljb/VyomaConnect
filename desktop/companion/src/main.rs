@@ -5,6 +5,7 @@
 //! via their mDNS announcements, and proves to them that it belongs to this PC by signing with
 //! kdeconnectd's key. So there's nothing to pair by hand and nothing new to trust.
 
+mod away;
 mod camera;
 mod files;
 mod identity;
@@ -46,6 +47,8 @@ struct Shared {
     seen: Mutex<HashMap<String, SocketAddr>>,
     /// Tracks what's playing for handoff; None without a session bus.
     media: Option<Arc<media::Media>>,
+    /// Walk-away rules each phone asked for.
+    away: Arc<away::Away>,
 }
 
 #[tokio::main]
@@ -64,7 +67,7 @@ async fn main() -> Result<()> {
             None
         }
     };
-    let shared = Arc::new(Shared { host, me, connected: Mutex::default(), seen: Mutex::default(), media });
+    let shared = Arc::new(Shared { host, me, connected: Mutex::default(), seen: Mutex::default(), media, away: Arc::default() });
 
     tokio::spawn(usb::watch());
     tokio::spawn(watch_tether(shared.clone()));
@@ -204,6 +207,14 @@ async fn run(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u
         .send(&packet("kdeconnect.pair", json!({ "pair": true, "timestamp": ts, "vyomaHost": shared.host.device_id, "vyomaHostProof": proof })))
         .await?;
 
+    shared.away.linked(phone_id, shared.media.as_ref()).await;
+    let result = serve(shared, phone_id, addr, pinned, &mut link, &name).await;
+    shared.away.unlinked(phone_id, shared.media.clone());
+    result
+}
+
+async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u8], link: &mut link::Link, name: &str) -> Result<()> {
+    let name = name.to_string();
     let lease = Arc::new(Mutex::new(Instant::now()));
     let mut stats_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut shot_task: Option<tokio::task::JoinHandle<()>> = None;
@@ -328,6 +339,7 @@ async fn run(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u
                 });
             }
             "vyoma.xfer.end" => xfer::end(&name, &p["body"]),
+            "vyoma.away" => shared.away.configure(phone_id, &p["body"]),
             "vyoma.pc.request" | "vyoma.pc.set" | "vyoma.pc.power" | "vyoma.pc.wake" => {
                 let _ = pc.send(p);
             }

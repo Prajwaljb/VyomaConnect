@@ -30,6 +30,7 @@ object Notifications {
     private const val CH_SERVICE = "service"
     private const val CH_PAIRING = "pairing"
     private const val CH_EVENTS = "events"
+    private const val CH_RULES = "rules"
     const val CH_MEDIA = "media"
     private const val CH_TRANSFERS = "transfers"
     private const val CH_RECEIVED = "received"
@@ -45,6 +46,7 @@ object Notifications {
                 },
                 NotificationChannel(CH_PAIRING, "Pairing requests", NotificationManager.IMPORTANCE_HIGH),
                 NotificationChannel(CH_EVENTS, "Pings & alerts", NotificationManager.IMPORTANCE_DEFAULT),
+                NotificationChannel(CH_RULES, "Your automation rules", NotificationManager.IMPORTANCE_DEFAULT),
                 NotificationChannel(CH_MEDIA, "PC media", NotificationManager.IMPORTANCE_LOW).apply {
                     description = "Control what's playing on your PC"
                     setShowBadge(false)
@@ -254,6 +256,19 @@ object Notifications {
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Ping from $deviceName")
             .setContentText(message ?: "👋")
+            .setAutoCancel(true)
+            .build(),
+    )
+
+    /** A rule's "Notify me". */
+    fun automation(context: Context, ruleId: String, title: String, text: String) = notify(
+        context, ("rule" + ruleId).hashCode(),
+        NotificationCompat.Builder(context, CH_RULES)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle())
+            .setContentIntent(openApp(context))
             .setAutoCancel(true)
             .build(),
     )

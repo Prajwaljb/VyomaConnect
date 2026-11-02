@@ -109,6 +109,20 @@ impl Media {
         let _ = self.conn.call_method(Some(handoff.bus.as_str()), PATH, Some(PLAYER), "Pause", &()).await;
     }
 
+    /// Pauses every player that's playing (any player, not only web ones); returns their bus names to resume.
+    pub async fn pause_all(&self) -> Vec<String> {
+        let playing: Vec<String> = self.tracks.lock().unwrap().values().filter(|t| t.playing).map(|t| t.bus.clone()).collect();
+        for bus in &playing {
+            let _ = self.conn.call_method(Some(bus.as_str()), PATH, Some(PLAYER), "Pause", &()).await;
+        }
+        playing
+    }
+
+    /// Resumes a player [pause_all] paused, if it's still there.
+    pub async fn play_bus(&self, bus: &str) {
+        let _ = self.conn.call_method(Some(bus), PATH, Some(PLAYER), "Play", &()).await;
+    }
+
     async fn add(&self, name: &str) {
         let Ok(owner) = self.owner(name).await else { return };
         let Ok(props) = self.props(name).await else { return };
