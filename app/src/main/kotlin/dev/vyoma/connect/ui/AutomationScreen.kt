@@ -4,7 +4,18 @@ import android.app.AlarmManager
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import dev.vyoma.connect.designsystem.VyomaMotion
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +49,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -96,6 +108,12 @@ fun AutomationScreen(vm: AppViewModel, onBack: () -> Unit, onEdit: (String?) -> 
     val exact = remember(resumeTick) { context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms() }
     val timed = rules.any { r -> r.enabled && (listOf(r.trigger) + r.conditions).any { it is Trigger.Time } }
     val on = rules.count { it.enabled }
+    // What the editor sent back (a new rule, a removed rule's suggestion) bubbles in once this page has slid
+    // back into place; during the slide it would play out of sight.
+    val arrival = remember { vm.ruleArrival.also { vm.ruleArrival = null } }
+    var landed by remember { mutableStateOf(arrival == null) }
+    LaunchedEffect(Unit) { if (!landed) { kotlinx.coroutines.delay(PAGE_SETTLE_MS); landed = true } }
+    val initial = remember { rules.map { it.id }.toSet() - arrival }
 
     CollapsingHeaderScaffold(
         title = "Automation",
@@ -107,28 +125,34 @@ fun AutomationScreen(vm: AppViewModel, onBack: () -> Unit, onEdit: (String?) -> 
         navigation = { BounceIconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
         actions = { BounceIconButton(onClick = { onEdit(null) }) { Icon(Icons.Rounded.Add, "New rule") } },
     ) {
+        // Rules already here when the page opened just show; ones added since bubble in.
         if (rules.isNotEmpty()) {
-            item(key = "mine-label") { SectionLabel("Your rules") }
+            item(key = "mine-label") { SectionLabel("Your rules", Modifier.animateItem(placementSpec = null)) }
             item(key = "mine") {
-                SectionCard {
+                SectionCard(Modifier.animateItem(placementSpec = null).animateContentSize(VyomaMotion.jelly())) {
                     rules.forEachIndexed { i, rule ->
                         val look = rule.trigger.look()
-                        ListRow(
-                            title = rule.name,
-                            subtitle = rule.summary(),
-                            subtitleMaxLines = 2,
-                            icon = look.icon,
-                            iconTint = look.color.color,
-                            showDivider = i < rules.lastIndex,
-                            onClick = { onEdit(rule.id) },
-                            trailing = {
-                                VyomaSwitch(
-                                    checked = rule.enabled,
-                                    onCheckedChange = { vm.setRuleEnabled(rule.id, it) },
-                                    contentDescription = rule.name,
-                                )
-                            },
-                        )
+                        key(rule.id) { Bubble(appear = rule.id !in initial, ready = landed) {
+                            ListRow(
+                                title = rule.name,
+                                subtitle = rule.summary(),
+                                subtitleMaxLines = 2,
+                                icon = look.icon,
+                                iconTint = look.color.color,
+                                showDivider = i < rules.lastIndex,
+                                // Off is a pause, not a removal: it stays put (the switch stays under the
+                                // finger) and rests; Remove in the editor gives a suggestion back.
+                                resting = !rule.enabled,
+                                onClick = { onEdit(rule.id) },
+                                trailing = {
+                                    VyomaSwitch(
+                                        checked = rule.enabled,
+                                        onCheckedChange = { vm.setRuleEnabled(rule.id, it) },
+                                        contentDescription = rule.name,
+                                    )
+                                },
+                            )
+                        } }
                     }
                 }
             }
@@ -152,34 +176,38 @@ fun AutomationScreen(vm: AppViewModel, onBack: () -> Unit, onEdit: (String?) -> 
         val added = rules.mapNotNull { it.suggestion }.toSet()
         val offers = Suggestions.all.filter { it.key !in added }
         if (offers.isNotEmpty()) {
-            item(key = "ideas-label") { SectionLabel(if (rules.isEmpty()) "Start with one of these" else "Suggestions") }
+            item(key = "ideas-label") { SectionLabel(if (rules.isEmpty()) "Start with one of these" else "Suggestions", Modifier.animateItem(placementSpec = null)) }
             item(key = "ideas") {
-                SectionCard {
-                    offers.forEachIndexed { i, s ->
+                SectionCard(Modifier.animateItem(placementSpec = null).animateContentSize(VyomaMotion.jelly())) {
+                    // Every suggestion stays composed: an added one shrinks out, a removed rule's bubbles back.
+                    val last = Suggestions.all.indexOfLast { it.key !in added }
+                    Suggestions.all.forEachIndexed { i, s ->
                         val look = s.rule.trigger.look()
-                        ListRow(
-                            title = s.rule.name,
-                            subtitle = s.description,
-                            icon = look.icon,
-                            iconTint = look.color.color,
-                            showDivider = i < offers.lastIndex,
-                            // The row opens it to look at or change first; the pill adds it as it is.
-                            onClick = { onEdit(SUGGESTION + s.key) },
-                            trailing = {
-                                PillButton("Add", prominent = false, haptic = Haptic.ToggleOn, onClick = {
-                                    vm.saveRule(s.rule.copy(id = java.util.UUID.randomUUID().toString()))
-                                    status.show("${s.rule.name} is on", haptic = false)
-                                })
-                            },
-                        )
+                        BubbleVisibility(visible = s.key !in added && (landed || arrival != SUGGESTION + s.key)) {
+                            ListRow(
+                                title = s.rule.name,
+                                subtitle = s.description,
+                                icon = look.icon,
+                                iconTint = look.color.color,
+                                showDivider = i < last,
+                                // The row opens it to look at or change first; the pill adds it as it is.
+                                onClick = { onEdit(SUGGESTION + s.key) },
+                                trailing = {
+                                    PillButton("Add", prominent = false, haptic = Haptic.ToggleOn, onClick = {
+                                        vm.saveRule(s.rule.copy(id = java.util.UUID.randomUUID().toString()))
+                                        status.show("${s.rule.name} is on", haptic = false)
+                                    })
+                                },
+                            )
+                        }
                     }
                 }
             }
         }
         if (log.isNotEmpty()) {
-            item(key = "log-label") { SectionLabel("Recent") }
+            item(key = "log-label") { SectionLabel("Recent", Modifier.animateItem(placementSpec = null)) }
             item(key = "log") {
-                SectionCard {
+                SectionCard(Modifier.animateItem(placementSpec = null).animateContentSize(VyomaMotion.effects())) {
                     val recent = log.take(6)
                     recent.forEachIndexed { i, e ->
                         ListRow(
@@ -197,6 +225,30 @@ fun AutomationScreen(vm: AppViewModel, onBack: () -> Unit, onEdit: (String?) -> 
         }
     }
 }
+
+// Lists here pass placementSpec = null: the cards grow and shrink on their own springs and push what's
+// below them along; a second (placement) spring on the next item lagged and slid it over the growing card.
+
+/** A row that bubbles in when it arrives: it swells past its size on a jelly spring as the card makes room. */
+@Composable
+private fun Bubble(appear: Boolean, ready: Boolean, content: @Composable () -> Unit) {
+    val state = remember { MutableTransitionState(!appear) }
+    LaunchedEffect(ready) { if (ready) state.targetState = true }
+    AnimatedVisibility(state, enter = bubbleIn, exit = bubbleOut) { content() }
+}
+
+@Composable
+private fun BubbleVisibility(visible: Boolean, content: @Composable () -> Unit) {
+    AnimatedVisibility(visible, enter = bubbleIn, exit = bubbleOut) { content() }
+}
+
+private val bubbleIn = expandVertically(spring(dampingRatio = 0.8f, stiffness = 420f), expandFrom = Alignment.Top) +
+    scaleIn(spring(dampingRatio = 0.45f, stiffness = 320f), initialScale = 0.6f) + fadeIn(spring(stiffness = 500f))
+private val bubbleOut = shrinkVertically(spring(dampingRatio = 1f, stiffness = 500f), shrinkTowards = Alignment.Top) +
+    scaleOut(spring(stiffness = 600f), targetScale = 0.7f) + fadeOut(spring(stiffness = 900f))
+
+/** Roughly how long a page takes to slide back into place. */
+private const val PAGE_SETTLE_MS = 320L
 
 /** An editor "id" that opens a suggestion as a new rule. */
 const val SUGGESTION = "suggestion:"
@@ -258,7 +310,7 @@ fun RuleEditorScreen(vm: AppViewModel, ruleId: String?, onBack: () -> Unit) {
             if (deleted || saved) return@onDispose
             val rule = latest() ?: return@onDispose
             // A suggestion only looked at and left as it was isn't added.
-            if (rule != base) vm.saveRule(rule)
+            if (rule != base) { if (original == null) vm.ruleArrival = rule.id; vm.saveRule(rule) }
         }
     }
     val away = (trigger as? Trigger.PcLink)?.connected == false
@@ -270,7 +322,7 @@ fun RuleEditorScreen(vm: AppViewModel, ruleId: String?, onBack: () -> Unit) {
         navigation = { BounceIconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
         actions = {
             if (valid) BounceIconButton(onClick = {
-                draft()?.let(vm::saveRule)
+                draft()?.let { if (original == null) vm.ruleArrival = it.id; vm.saveRule(it) }
                 saved = true
                 status.show("Saved", haptic = false)
                 onBack()
@@ -377,7 +429,11 @@ fun RuleEditorScreen(vm: AppViewModel, ruleId: String?, onBack: () -> Unit) {
         if (original != null) {
             item(key = "delete") {
                 SectionCard(Modifier.padding(top = 8.dp)) {
-                    ListRow(title = "Delete rule", icon = Icons.Rounded.Delete, iconTint = SystemColor.RED.color, onClick = { deleting = true })
+                    ListRow(
+                        title = if (original.suggestion != null) "Remove" else "Delete rule",
+                        subtitle = if (original.suggestion != null) "It goes back to Suggestions" else null,
+                        icon = Icons.Rounded.Delete, iconTint = SystemColor.RED.color, onClick = { deleting = true },
+                    )
                 }
             }
         }
@@ -420,15 +476,16 @@ fun RuleEditorScreen(vm: AppViewModel, ruleId: String?, onBack: () -> Unit) {
     if (deleting && original != null) {
         GlassDialog(
             onDismissRequest = { deleting = false },
-            title = { Text("Delete ${original.name}?") },
+            title = { Text(if (original.suggestion != null) "Remove ${original.name}?" else "Delete ${original.name}?") },
             text = { Text("If it's running, what it changed is put back first.") },
             confirmButton = {
                 DialogButton(destructive = true, onClick = {
                     deleted = true
                     deleting = false
+                    original.suggestion?.let { vm.ruleArrival = SUGGESTION + it }
                     vm.deleteRule(original.id)
                     onBack()
-                }) { Text("Delete") }
+                }) { Text(if (original.suggestion != null) "Remove" else "Delete") }
             },
             dismissButton = { DialogButton(onClick = { deleting = false }) { Text("Cancel") } },
         )
