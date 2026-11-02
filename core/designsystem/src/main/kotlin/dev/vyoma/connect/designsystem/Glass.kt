@@ -1040,9 +1040,15 @@ half4 main(float2 p) {
         // The flat middle (most pixels): straight through, one sample.
         col = content.eval(at);
     } else {
-        float3 normal = normalize(float3(n * t, sqrt(max(1.0 - t * t, 0.0))));
+        // A big pane (a dialog, a menu) has a polished edge: its slope eases in from the flat face.
+        // Starting at an angle, the bent image met the straight one in a crease, a thin dark line
+        // inside the rim. Bars, buttons and knobs (no wider than 3 rims) keep the plain rim exactly.
+        float big = smoothstep(3.0 * bevel, 4.5 * bevel, min(c.x, c.y));
+        float eased = (t < 0.35 ? t * t / 0.7 : t - 0.175) / 0.825;
+        float tilt = mix(t, eased, big);
+        float3 normal = normalize(float3(n * tilt, sqrt(max(1.0 - tilt * tilt, 0.0))));
         float3 ray = refract(float3(0.0, 0.0, -1.0), normal, 1.0 / 1.5);
-        float h = bevel * sqrt(max(1.0 - t * t, 0.0));
+        float h = bevel * sqrt(max(1.0 - tilt * tilt, 0.0));
         float2 shift = ray.xy * (h + bendBy) / -ray.z;
         at = clamp(at + shift, lo, hi);
         col = content.eval(at);
