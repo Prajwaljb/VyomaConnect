@@ -499,8 +499,23 @@ fun ListRow(
     haptic: Haptic? = Haptic.Tap,
     /** False: shown quiet (40%) and untappable, e.g. an action that needs the PC while it's away. */
     enabled: Boolean = true,
+    /**
+     * At rest (a rule switched off): badge and words fade back while the row stays tappable and its
+     * trailing control stays bright; the badge gives a small bounce as it changes.
+     */
+    resting: Boolean = false,
     onClick: (() -> Unit)? = null,
 ) {
+    val rest by animateFloatAsState(if (resting) 1f else 0f, VyomaMotion.effects(), label = "rest")
+    val bounce = remember { Animatable(1f) }
+    var seen by remember { mutableStateOf(resting) }
+    LaunchedEffect(resting) {
+        if (seen == resting) return@LaunchedEffect
+        seen = resting
+        bounce.animateTo(0.8f, VyomaMotion.leading())
+        bounce.animateTo(1f, VyomaMotion.jelly())
+    }
+    val quiet = Modifier.graphicsLayer { alpha = 1f - 0.5f * rest; compositingStrategy = CompositingStrategy.ModulateAlpha }
     Column(modifier) {
         Row(
             Modifier
@@ -511,10 +526,10 @@ fun ListRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (icon != null) {
-                IconBadge(icon, iconTint)
+                Box(quiet.graphicsLayer { scaleX = bounce.value; scaleY = bounce.value }) { IconBadge(icon, iconTint) }
                 Spacer(Modifier.width(16.dp))
             }
-            Column(Modifier.weight(1f)) {
+            Column(Modifier.weight(1f).then(quiet)) {
                 Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
                 if (subtitle != null) {
                     Text(

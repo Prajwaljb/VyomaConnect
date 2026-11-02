@@ -401,3 +401,9 @@ GlassDialog list grouped PC / Phone / Time and place (too many choices for a Liq
 with a setting opens its own dialog (percent slider snapping to 5, segmented wait, TimeInput + day circles, text,
 command list). Saves when you leave the page (or the tick); a new rule never runs half-built. Labels read as states
 ("PC is connected") so they work after both "When" and "Only if"; mid-sentence lower-casing keeps acronyms (`inSentence`).
+Motion (user asked for "bubble in", decided as UX): rows that arrive bubble in (expand + scale 0.6 on a 0.45-damped
+spring + fade) and leaving rows shrink out; cards grow on `animateContentSize(jelly())` and every item passes
+`animateItem(placementSpec = null)` (a placement spring slid the next label over the growing card). Switching a rule
+OFF keeps it in place, resting (badge + text at 50%, switch untouched, badge bounces 0.8 → 1); only Remove (editor,
+for a rule from a suggestion) gives the suggestion back. Anything the editor sends back (`vm.ruleArrival`) waits
+until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played out of sight.

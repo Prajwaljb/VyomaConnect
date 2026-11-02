@@ -233,6 +233,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val ruleLog: StateFlow<List<RunEntry>> get() = container.automation.store.log
     fun rule(id: String): Rule? = container.automation.store.rule(id)
     fun saveRule(rule: Rule) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.automation.store.save(rule) }
+    /** Set by the rule editor on its way out: a new rule's id, or SUGGESTION + key for a suggestion given back. */
+    var ruleArrival: String? = null
     fun deleteRule(id: String) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.automation.store.delete(id) }
     fun setRuleEnabled(id: String, enabled: Boolean) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.automation.store.setEnabled(id, enabled) }
     fun testRule(rule: Rule) = viewModelScope.launch { container.automation.test(rule) }
