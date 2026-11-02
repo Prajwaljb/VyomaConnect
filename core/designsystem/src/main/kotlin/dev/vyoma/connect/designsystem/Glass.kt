@@ -1040,21 +1040,17 @@ half4 main(float2 p) {
         // The flat middle (most pixels): straight through, one sample.
         col = content.eval(at);
     } else {
-        float3 normal = normalize(float3(n * t, sqrt(max(1.0 - t * t, 0.0))));
+        // The slope eases in from the flat middle (no kink where the rim starts): starting at an
+        // angle, the bent image met the straight one in a crease, a thin dark line inside the rim.
+        // The outer rim, and how far it bends, are as before.
+        const float easeIn = 0.35;
+        float tilt = (t < easeIn ? t * t / (2.0 * easeIn) : t - easeIn * 0.5) / (1.0 - easeIn * 0.5);
+        float3 normal = normalize(float3(n * tilt, sqrt(max(1.0 - tilt * tilt, 0.0))));
         float3 ray = refract(float3(0.0, 0.0, -1.0), normal, 1.0 / 1.5);
         float h = bevel * sqrt(max(1.0 - t * t, 0.0));
         float2 shift = ray.xy * (h + bendBy) / -ray.z;
-        float2 behind = clamp(at, lo, hi);
         at = clamp(at + shift, lo, hi);
-        // The bent image is squeezed into the rim, so a gap between two bright things (the dark beyond
-        // the element, say) became a hard dark line under the highlight. Smear it along the bend, more
-        // towards the edge where it's squeezed most: the rim shades in as a gradient instead.
-        float2 smear = shift * (0.35 * t * t);
-        col = (content.eval(at) * 0.4
-            + content.eval(clamp(at - smear, lo, hi)) * 0.2 + content.eval(clamp(at + smear, lo, hi)) * 0.2
-            + content.eval(clamp(at - 2.0 * smear, lo, hi)) * 0.1 + content.eval(clamp(at + 2.0 * smear, lo, hi)) * 0.1);
-        // And it carries some of what's right behind it, so the far side's dark doesn't land as a band.
-        col = mix(col, content.eval(behind), half(0.5 * smoothstep(0.35, 0.95, t)));
+        col = content.eval(at);
         if (disperse > 0.0) {
             float2 k = shift * disperse * 0.3;
             col.r = content.eval(clamp(at + k, lo, hi)).r;
