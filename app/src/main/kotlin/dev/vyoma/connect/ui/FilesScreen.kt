@@ -303,4 +303,3 @@ internal fun Modifier.joinNext() = layout { measurable, constraints ->
 
 private fun itemCount(n: Int) = if (n == 1) "1 item" else "$n items"
 
-private fun toast(context: android.content.Context, text: String) = Toast.makeText(context, text, Toast.LENGTH_SHORT).show()

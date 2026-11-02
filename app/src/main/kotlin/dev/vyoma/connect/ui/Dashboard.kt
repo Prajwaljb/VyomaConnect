@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalDensity
@@ -157,6 +158,7 @@ import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.PhotoCamera
+import androidx.compose.material.icons.rounded.NoPhotography
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material.icons.rounded.DriveFolderUpload
@@ -351,6 +353,8 @@ fun PcDashboard(
           }
           val shot by (shots?.screenshot?.state ?: remember { MutableStateFlow(CaptureState.Idle) }).collectAsStateWithLifecycle()
           val photo by (shots?.photo?.state ?: remember { MutableStateFlow(CaptureState.Idle) }).collectAsStateWithLifecycle()
+          // The companion says when a photo can't be taken (lid shut, no other camera); unknown counts as fine.
+          val cameraOk = (shots?.stats ?: remember { MutableStateFlow(null) }).collectAsStateWithLifecycle().value?.camera != false
           val commandList by (vm.device(id)?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands ?: remember { MutableStateFlow(emptyList()) }).collectAsStateWithLifecycle()
           CaptureOutcome(shot, "Screenshot")
           CaptureOutcome(photo, "Photo")
@@ -386,7 +390,12 @@ fun PcDashboard(
                     ),
                 ) { PcScreenActivity.open(context, id) }
                 else Control(Icons.Rounded.Sensors, "Ping", SystemColor.CYAN) { vm.ping(id); status.show("Pinged: look for it on the PC") },
-                if (shots != null) Control(Icons.Rounded.PhotoCamera, "Camera", SystemColor.ORANGE) { vm.capture(shots.photo) }
+                if (shots != null) {
+                    if (cameraOk) Control(Icons.Rounded.PhotoCamera, "Camera", SystemColor.ORANGE) { vm.capture(shots.photo) }
+                    else Control(Icons.Rounded.NoPhotography, "Camera", SystemColor.ORANGE, unavailable = true) {
+                        status.show("Camera unavailable: the laptop's lid is closed", icon = Icons.Rounded.NoPhotography, failure = true)
+                    }
+                }
                 else Control(
                     Icons.Rounded.ContentPasteGo, "Send clip", SystemColor.ORANGE,
                     menu = listOf(
@@ -526,8 +535,6 @@ private fun CapturePreview(uri: Uri, mime: String, what: String, onDismiss: () -
 
 enum class DashboardSection { STATUS, VOLUME, CONTROLS }
 
-private fun toast(context: Context, text: String) =
-    Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
 
 /**
  * The PC's volume, iOS style: where it's playing and the level over a slim slider with a liquid
@@ -582,7 +589,14 @@ internal fun VolumeBar(
     // (concentric with the card's curve); it was 15 dp down but 10 dp in, which read as crooked.
     Column(modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 10.dp)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 36.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            val name = prettySinkName(sink.description)
+            // The chosen output's name shows at once, while the menu drains into the capsule (the PC
+            // confirms a moment later): the drop used to land on the old name's width, then jump.
+            var picked by remember { mutableStateOf<String?>(null) }
+            LaunchedEffect(sink.name, picked) {
+                if (picked == null) return@LaunchedEffect
+                if (prettySinkName(sink.description) == picked) picked = null else { delay(PICK_HOLD_MS); picked = null }
+            }
+            val name = picked ?: prettySinkName(sink.description)
             if (outputs != null) {
                 // Pressed, the glass capsule dips; it bleeds left by its padding so its text lines up.
                 val raised = if (isDarkUi) Color.White.copy(alpha = 0.07f) else Color(0xFF1A2B4C).copy(alpha = 0.045f)
@@ -592,6 +606,8 @@ internal fun VolumeBar(
                         Icon(Icons.Rounded.UnfoldMore, null, tint = muted, modifier = Modifier.padding(start = 4.dp).size(18.dp))
                     }
                 }
+                // The menu shows the face as it is now (the new name), not as it was when it opened.
+                val currentFace by rememberUpdatedState(face)
                 Box(
                     Modifier
                         .weight(1f, fill = false)
@@ -608,11 +624,18 @@ internal fun VolumeBar(
                                 menus.show(
                                     at.boundsInRoot(),
                                     outputs.map { o ->
-                                        MenuItem(prettySinkName(o.description), if (o.isDefault) Icons.Rounded.Check else null) { onOutput(o) }
+                                        MenuItem(prettySinkName(o.description), if (o.isDefault) Icons.Rounded.Check else null) {
+                                            picked = prettySinkName(o.description)
+                                            onOutput(o)
+                                        }
                                     },
                                     title = "Play PC sound on",
                                     fromRadius = 18.dp,
-                                    morph = MenuMorph(capsule, raised, face = face),
+                                    morph = MenuMorph(
+                                        capsule, raised,
+                                        bounds = { capsule[0]?.takeIf { it.isAttached }?.boundsInRoot() },
+                                        face = { currentFace() },
+                                    ),
                                 )
                             }
                         }
@@ -651,6 +674,8 @@ internal fun VolumeBar(
 
 /** Where the PC's sound plays, the current output ticked. */
 private const val ECHO_QUIET_MS = 700L
+/** How long a picked output's name stands in for the PC's answer before the PC's word wins. */
+private const val PICK_HOLD_MS = 3_000L
 
 
 private const val STATS_RENEW_MS = 5_000L
@@ -669,6 +694,8 @@ private class Control(
     /** What a long press offers, poured out of the tile as a menu ([LocalMenu]). */
     val menu: List<MenuItem>? = null,
     val menuTitle: String? = null,
+    /** Can't do its job right now (the camera behind a closed lid): shown quiet, a tap says why. */
+    val unavailable: Boolean = false,
     val onClick: () -> Unit,
 )
 
@@ -729,7 +756,7 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
             .graphicsLayer {
                 // Its menu is this tile, grown: hidden while the menu stands in for it.
                 val covered = menus.covers(placed)
-                if (!enabled || covered) { alpha = if (covered) 0f else 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha }
+                if (!enabled || covered || c.unavailable) { alpha = if (covered) 0f else 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha }
             }
             .onPlaced { placed[0] = it }
             .liquidPress(

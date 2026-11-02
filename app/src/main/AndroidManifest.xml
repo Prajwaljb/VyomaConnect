@@ -181,6 +181,10 @@
             android:exported="false" />
 
         <receiver
+            android:name=".service.OutdoorReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".service.BootReceiver"
             android:exported="true">
             <intent-filter>

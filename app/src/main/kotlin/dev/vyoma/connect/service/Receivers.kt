@@ -49,3 +49,17 @@ class BootReceiver : BroadcastReceiver() {
         }
     }
 }
+
+/**
+ * Outdoor mode's way back: while Vyoma is paused off Wi-Fi, the system calls this (by a
+ * PendingIntent registered with ConnectivityManager, so no process has to stay up for it) when a
+ * Wi-Fi or Ethernet network comes up, and the link service starts again. Android may refuse a
+ * background start unless Vyoma is allowed background activity; then it starts the next time the
+ * app opens or the phone is plugged in to a PC.
+ */
+class OutdoorReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        runCatching { LinkService.start(context) }
+            .onFailure { dev.vyoma.connect.protocol.VLog.w("Outdoor", "can't start again on Wi-Fi: ${it.message}") }
+    }
+}

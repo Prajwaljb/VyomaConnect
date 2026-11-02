@@ -359,3 +359,20 @@ Short, friendly, specific ("Connected via Wi-Fi", "Make sure this code matches o
 - Idle must be idle: periodic data (stats every 2 s) snaps small changes and glides big ones at ~30 fps by hand
   (`withFrameMillis` + `delay(33)`; `preferredFrameRate` is not honoured here); clocks tick on the second.
   Measure: `dumpsys gfxinfo` frames over 6 s at rest, and `framestats` (ui vs issue vs gpu) for transitions.
+
+## Haptics engine ladder (2026-11-02)
+`Haptics.engine`: PRIMITIVES (click+tick primitives) → TUNED (maker's predefined click/tick/heavy/double only when
+`areAllEffectsSupported` says YES; UNKNOWN means Android's long stand-in buzz) → PULSES (amplitude control: pulses of
+1.5–3 resonance cycles, ~8–17 ms) → PLAIN_PULSES. Never createPredefined on an UNKNOWN phone (the OnePlus Nord CE3
+"only buzzes"). Demo diagnostics log `Haptics.describe()`. Tab/segment ticks (Select) are TICK 1.0.
+
+## Dialogs are liquid glass
+`GlassDialog` under a `MenuHost` registers a `HostedDialog`; the host draws it over the page recording with
+`glassChrome` (blur 18, bevel 16, 28 dp corners), dimmed like menus, rising on a soft spring and fading out after
+dismissal. Outside a MenuHost (small activities) it falls back to the opaque slab in a Dialog window.
+
+## Morphing menus follow a changed element
+A choice that changes its element (a new output's name) must not drain into the old shape: pass
+`MenuMorph(bounds = { coords.boundsInRoot() })` and a face that reads current state (`rememberUpdatedState`), and
+show the choice at once (VolumeBar `picked`, held up to 3 s for the PC to confirm). Don't also animate the element's
+width: the drain already does it, and the face showed ellipsized mid-growth.

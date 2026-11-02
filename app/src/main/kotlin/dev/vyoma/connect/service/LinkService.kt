@@ -42,6 +42,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * The one long-lived component. Runs the hub while the app is in use or devices are
@@ -57,6 +59,8 @@ class LinkService : LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
+        // Running again: whatever woke us, the outdoor wake-up isn't needed any more.
+        network.cancelWakeOnLan(this)
         Notifications.ensureChannels(this)
         // Refused right after the user stops the app from One UI's Active apps panel. Started from the
         // UI we still run (as a plain service while the app is open), so carry on rather than crash.
@@ -124,6 +128,8 @@ class LinkService : LifecycleService() {
                 if (devices.isEmpty()) flowOf(emptyList())
                 else combine(devices.values.map { it.state }) { states -> states.filter { it.isReachable && it.isPaired && !it.isCompanion } }
             }
+
+        if (!BuildConfig.DEMO) watchOutdoors(connectedFlow.map { it.isNotEmpty() }.distinctUntilChanged())
 
         // Remember when each PC drops, so Home can say how long it's been away.
         lifecycleScope.launch {
@@ -207,6 +213,30 @@ class LinkService : LifecycleService() {
         }
     }
 
+    /**
+     * Outdoor mode: away from Wi-Fi, with no cable, no PC connected for a minute (a Tailscale link
+     * keeps it running) and the app not on screen, the service stops: no notification, no sockets,
+     * nothing waking the phone. ConnectivityManager holds a PendingIntent that starts it again
+     * ([OutdoorReceiver]) when Wi-Fi or Ethernet comes up; opening the app starts it too.
+     */
+    private fun watchOutdoors(anyConnected: Flow<Boolean>) {
+        val onLan = MutableStateFlow(network.onLan())
+        network.watchLan { onLan.value = it }
+        lifecycleScope.launch {
+            combine(container.settings.outdoorMode, onLan, anyConnected, container.uiVisible) { enabled, lan, connected, visible ->
+                enabled && !lan && !connected && !visible && usb?.cableIn() != true
+            }
+                .distinctUntilChanged()
+                .collectLatest { outdoors ->
+                    if (!outdoors) return@collectLatest
+                    delay(OUTDOOR_GRACE_MS)
+                    VLog.i("LinkService", "outdoor mode: off Wi-Fi with nothing connected; pausing until Wi-Fi is back")
+                    network.wakeOnLan(this@LinkService)
+                    stopSelf()
+                }
+        }
+    }
+
     /** Each is a no-op without its permission, and idempotent. */
     private fun startPhoneMonitors() {
         container.calls.start()
@@ -262,6 +292,7 @@ class LinkService : LifecycleService() {
     private fun summary(s: DeviceState) = Triple(s.identity.deviceId, s.identity.deviceName, s.transports.contains(TransportKind.USB))
 
     override fun onDestroy() {
+        network.unwatchLan()
         mediaSession?.stop()
         mdns?.stop()
         usb?.stop()
@@ -276,6 +307,8 @@ class LinkService : LifecycleService() {
     companion object {
         const val ACTION_REFRESH = "dev.vyoma.connect.REFRESH"
         const val ACTION_SEND = "dev.vyoma.connect.SEND"
+        /** Off Wi-Fi this long, with nothing connected, before outdoor mode pauses (a lift, a tunnel). */
+        private const val OUTDOOR_GRACE_MS = 60_000L
         /** With ACTION_SEND: the one URI is a folder tree to send whole. */
         const val EXTRA_FOLDER = "folder"
         const val EXTRA_DEVICE = "device"

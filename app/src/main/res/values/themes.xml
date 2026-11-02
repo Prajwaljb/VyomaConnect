@@ -1,13 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Vyoma" parent="android:Theme.Material.Light.NoActionBar">
+    <!-- DeviceDefault DayNight: the phone's own look for what the system draws from our context
+         (toasts were Material Light's grey box with black text, even in dark mode). -->
+    <style name="Theme.Vyoma" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
         <item name="android:windowBackground">@color/canvas</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowSplashScreenBackground">@color/canvas</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
     </style>
-    <style name="Theme.Vyoma.Invisible" parent="android:Theme.Material.Light.NoActionBar">
+    <style name="Theme.Vyoma.Invisible" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowNoTitle">true</item>

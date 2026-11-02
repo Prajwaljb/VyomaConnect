@@ -1,5 +1,11 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.mutableStateListOf
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -103,7 +109,9 @@ internal class MenuRequest(
  * own corner (never flying off beside it) while the copy shrinks down to its [icon], which glides
  * into the menu's header beside [label]. Closing runs it backwards and hands over to the element,
  * identical by then. The element hides itself while [MenuController.covers] says so.
- * [iconAt] is the icon's top-left inside the element, [ink] its colour there.
+ * [iconAt] is the icon's top-left inside the element, [ink] its colour there. [bounds], when
+ * given, is where the element is now: a choice that changes it (a new output's longer name)
+ * drains the menu into its new shape rather than the one it opened from.
  */
 class MenuMorph(
     val owner: Any,
@@ -112,13 +120,25 @@ class MenuMorph(
     val iconAt: DpOffset = DpOffset.Zero,
     val ink: Color = Color.White,
     val label: String? = null,
+    val bounds: (() -> Rect?)? = null,
     val face: @Composable () -> Unit,
 )
+
+/** A [GlassDialog] drawn by the [MenuHost] (so it's real glass over the page), not in a window of its own. */
+internal class HostedDialog {
+    var onDismiss by mutableStateOf({})
+    var card by mutableStateOf<@Composable () -> Unit>({})
+    /** Its GlassDialog left composition: it fades out, then the host drops it. */
+    var leaving by mutableStateOf(false)
+}
 
 /** Opens long-press menus; get it from [LocalMenu]. */
 class MenuController {
     internal var request by mutableStateOf<MenuRequest?>(null)
     private var seq = 0L
+    /** True under a [MenuHost]; the default controller has nowhere to draw dialogs. */
+    internal var hosted = false
+    internal val dialogs = mutableStateListOf<HostedDialog>()
 
     /**
      * [from] is the pressed element's bounds in root coordinates (`boundsInRoot()`), [fromRadius]
@@ -145,12 +165,12 @@ val LocalMenu = staticCompositionLocalOf { MenuController() }
  */
 @Composable
 fun MenuHost(content: @Composable () -> Unit) {
-    val controller = remember { MenuController() }
+    val controller = remember { MenuController().apply { hosted = true } }
     val backdrop = rememberBackdrop()
     // The page holds still under a menu, so it's rendered once into a cached texture: each frame of
     // the pour then draws that texture twice (on screen, and into the glass) instead of replaying
     // the whole page, cards, glows and chrome glass included, twice. Only kept while a menu is up.
-    val open = controller.request != null
+    val open = controller.request != null || controller.dialogs.isNotEmpty()
     SideEffect { backdrop.layer.compositingStrategy = if (open) LayerCompositing.Offscreen else LayerCompositing.Auto }
     CompositionLocalProvider(LocalMenu provides controller) {
         Box(Modifier.fillMaxSize()) {
@@ -163,7 +183,55 @@ fun MenuHost(content: @Composable () -> Unit) {
             controller.request?.let { r ->
                 key(r.id) { MenuOverlay(r, backdrop) { if (controller.request?.id == r.id) controller.request = null } }
             }
+            for (d in controller.dialogs) key(d) { DialogOverlay(d, backdrop) { controller.dialogs.remove(d) } }
         }
+    }
+}
+
+/**
+ * A dialog as liquid glass over the page, like the menus (a dialog in its own window has no page
+ * behind it to blur, so it was an opaque grey slab): the page dims, the card rises in on a soft
+ * spring, refracting what's under it, and sinks back out when dismissed.
+ */
+@Composable
+private fun DialogOverlay(d: HostedDialog, backdrop: Backdrop, onGone: () -> Unit) {
+    val shown = remember { Animatable(0f) }
+    LaunchedEffect(d.leaving) {
+        if (!d.leaving) shown.animateTo(1f, DIALOG_IN)
+        else {
+            shown.animateTo(0f, DIALOG_OUT)
+            onGone()
+        }
+    }
+    if (!d.leaving) BackHandler { d.onDismiss() }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .drawBehind { drawRect(Color.Black, alpha = SCRIM * shown.value.coerceIn(0f, 1f)) }
+            .then(
+                if (d.leaving) Modifier.pointerInput(Unit) {
+                    awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
+                } else Modifier.pointerInput(Unit) { detectTapGestures { d.onDismiss() } },
+            )
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.ime))
+            .padding(24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .widthIn(max = 420.dp)
+                .fillMaxWidth()
+                .graphicsLayer {
+                    val v = shown.value
+                    alpha = v.coerceIn(0f, 1f)
+                    val sc = 0.92f + 0.08f * v
+                    scaleX = sc; scaleY = sc
+                    compositingStrategy = CompositingStrategy.ModulateAlpha
+                }
+                .pointerInput(Unit) { detectTapGestures { } }
+                .glassChrome(backdrop, DIALOG_SHAPE, blur = 18.dp, bevel = 16.dp)
+                .clip(DIALOG_SHAPE),
+        ) { d.card() }
     }
 }
 
@@ -199,6 +267,8 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
         else -> 0.dp
     }
     fun formed() = minOf(wide.value, tall.value).coerceIn(0f, 1f)
+    // Where the element is: as it opened, or, draining home, where it is now (see MenuMorph.bounds).
+    fun from(): Rect = (if (closing) r.morph?.bounds?.invoke()?.takeIf { !it.isEmpty } else null) ?: r.from
     // Its corners round from the element's into the menu's as it forms (read while drawing).
     val shape = remember(r.id) {
         object : Shape {
@@ -265,7 +335,7 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
         Box(
             Modifier
                 .layout { m, c ->
-                    val from = r.from
+                    val from = from()
                     val menuW = MENU_WIDTH.toPx()
                     val menuH = headerHeight.toPx() + ROW_HEIGHT.toPx() * r.items.size +
                         GROUP_GAP.toPx() * r.items.dropLast(1).count { it.groupEnd } + PAD.toPx() * 2
@@ -333,8 +403,13 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                 Box(
                     Modifier
                         .wrapContentSize(Alignment.TopStart, unbounded = true)
-                        .offset { IntOffset((r.from.left - origin[0]).roundToInt(), (r.from.top - origin[1]).roundToInt()) }
-                        .requiredSize(with(LocalDensity.current) { DpSize(r.from.width.toDp(), r.from.height.toDp()) })
+                        .offset { IntOffset((from().left - origin[0]).roundToInt(), (from().top - origin[1]).roundToInt()) }
+                        .layout { m, _ ->
+                            // Re-measured every frame of the drain, so a face whose element changed width follows it.
+                            val f = from()
+                            val p = m.measure(Constraints.fixed(f.width.roundToInt().coerceAtLeast(1), f.height.roundToInt().coerceAtLeast(1)))
+                            layout(p.width, p.height) { p.place(0, 0) }
+                        }
                         .graphicsLayer {
                             alpha = 1f - smooth(formed() / 0.25f)
                             compositingStrategy = CompositingStrategy.ModulateAlpha
@@ -401,8 +476,8 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
             val glide = Modifier
                 .offset {
                     val f = formed()
-                    val sx = r.from.left + morph.iconAt.x.toPx()
-                    val sy = r.from.top + morph.iconAt.y.toPx()
+                    val sx = from().left + morph.iconAt.x.toPx()
+                    val sy = from().top + morph.iconAt.y.toPx()
                     val (ex, ey) = if (landing >= 0) {
                         val gaps = r.items.take(landing).count { it.groupEnd }
                         Pair(
@@ -432,6 +507,9 @@ private val ICON_SIZE = 22.dp
 private val GROUP_GAP = 9.dp
 private val PAD = 8.dp
 private const val SCRIM = 0.35f
+private val DIALOG_SHAPE = RoundedCornerShape(28.dp)
+private val DIALOG_IN = spring<Float>(dampingRatio = 0.72f, stiffness = 420f)
+private val DIALOG_OUT = tween<Float>(140, easing = LinearEasing)
 /** Opening: the width runs out quickly, the height pours after it with a soft wobble. */
 private val POUR_WIDE = spring<Float>(dampingRatio = 0.8f, stiffness = 700f)
 private val POUR_TALL = spring<Float>(dampingRatio = 0.6f, stiffness = 340f)

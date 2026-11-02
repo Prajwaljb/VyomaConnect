@@ -154,6 +154,7 @@ object DemoDiagnostics {
         line("Chip", "${Build.SOC_MANUFACTURER} ${Build.SOC_MODEL}")
         line("Android", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), patch ${Build.VERSION.SECURITY_PATCH}")
         line("Build", Build.DISPLAY)
+        line("Haptics", dev.vyoma.connect.designsystem.Haptics.describe())
         line("CPU cores", "${Runtime.getRuntime().availableProcessors()} · ${Build.SUPPORTED_ABIS.joinToString()}")
         val mem = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
         line("RAM", "%.1f GB total, %.1f GB free%s".format(mem.totalMem / 1e9, mem.availMem / 1e9, if (mem.lowMemory) " (low)" else ""))

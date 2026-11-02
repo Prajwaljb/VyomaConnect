@@ -43,6 +43,10 @@ pub fn worker(sender: Sender, name: String) -> mpsc::UnboundedSender<Value> {
                             warn!("{name}: PC control failed: {e:#}");
                         }
                     }
+                    "vyoma.pc.wake" => match wake().await {
+                        Ok(()) => info!("{name}: woke and unlocked the PC"),
+                        Err(e) => warn!("{name}: {e:#}"),
+                    },
                     "vyoma.pc.power" => {
                         let action = body["action"].as_str().unwrap_or_default();
                         info!("{name}: asked the PC to {action}");
@@ -105,6 +109,27 @@ pub async fn power(action: &str) -> Result<()> {
         other => bail!("unknown action {other}"),
     };
     conn.call_method(Some(service), path, Some(iface), method, &()).await.with_context(|| format!("Plasma refused to {action}"))?;
+    Ok(())
+}
+
+/**
+ * `vyoma.pc.wake`, sent with the phone's unlock: kdeconnectd unlocks through logind but leaves a
+ * screen that went dark (idle DPMS) dark, so "unlock" looked like it did nothing. Turns the
+ * displays on, counts as activity (so they don't go straight back off), and unlocks this session
+ * too (the same logind call, in case the stock unlock arrived first while the screen was off).
+ */
+pub async fn wake() -> Result<()> {
+    let dpms = tokio::time::timeout(Duration::from_secs(4), tokio::process::Command::new("kscreen-doctor").args(["--dpms", "on"]).kill_on_drop(true).output()).await;
+    if !matches!(dpms, Ok(Ok(ref o)) if o.status.success()) {
+        warn!("couldn't turn the displays on (kscreen-doctor)");
+    }
+    let session = Connection::session().await.context("no session bus")?;
+    let _ = session.call_method(Some("org.freedesktop.ScreenSaver"), "/org/freedesktop/ScreenSaver", Some("org.freedesktop.ScreenSaver"), "SimulateUserActivity", &()).await;
+    let system = Connection::system().await.context("no system bus")?;
+    system
+        .call_method(Some("org.freedesktop.login1"), "/org/freedesktop/login1/session/auto", Some("org.freedesktop.login1.Session"), "Unlock", &())
+        .await
+        .context("logind refused to unlock")?;
     Ok(())
 }
 
