@@ -159,6 +159,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   outline (it used to assume a capsule, which drew a second square outline around a rounded-rect menu).
 - Dialogs: `GlassDialog` (same API as AlertDialog): opaque `surfaceContainerHigh` slab with the card rim. Never
   Material `AlertDialog`.
+  Dialogs FORM like water (user: the fade+scale read as "a simple fade in"): a pill (40% × 12%) swells out of the
+  middle, width on `POUR_WIDE`, height on the wobbling `POUR_TALL`, corners capsule → 28 dp, words in once 70% formed;
+  the glass is laid out at the drop's size around the card at full size (words never reflow). Closing, words fade
+  while it drains to the pill on quicker critically damped springs, gone when faded (a slow drain left a pill lingering).
 - Value bars (Apple's, `LiquidSlider`): with `knob` (default 24 dp) the iOS 26 slider: slim track, wide white
   capsule knob; `knob = null` is the Apple Music scrubber: bare track that thickens under the finger. Relative drag
   after horizontal slop. ONE knob throughout (continuity): at rest a drawn `frostedKnob` (no layers: a resting lens
