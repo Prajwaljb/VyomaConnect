@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import kotlinx.coroutines.coroutineScope
+import androidx.compose.animation.core.Animatable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.animation.core.animateFloat
@@ -215,7 +217,18 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
             saved.removeState(backStack.removeAt(backStack.lastIndex).toString())
         } catch (e: CancellationException) {
             scope.launch {
-                nav.animateTo(nav.currentState, VyomaMotion.page())
+                // Rewind the swipe by seeking back to 0, then settle. animateTo(currentState) turned the
+                // half-done pop around into a push, and for a frame or two the page underneath was
+                // drawn over this one (the preview "glitching in" after a cancelled back).
+                val back = Animatable(nav.fraction)
+                coroutineScope {
+                    val run = launch { back.animateTo(0f, VyomaMotion.page()) }
+                    while (run.isActive) {
+                        nav.seekTo(back.value.coerceIn(0f, 1f), previous)
+                        withFrameNanos {}
+                    }
+                }
+                nav.snapTo(nav.currentState)
                 swiping = false
             }
             throw e
