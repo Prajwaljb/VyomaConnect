@@ -134,7 +134,7 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end"],
+            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end"],
             "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
@@ -278,7 +278,7 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
                 });
             }
             "vyoma.xfer.end" => xfer::end(&name, &p["body"]),
-            "vyoma.pc.request" | "vyoma.pc.set" | "vyoma.pc.power" => {
+            "vyoma.pc.request" | "vyoma.pc.set" | "vyoma.pc.power" | "vyoma.pc.wake" => {
                 let _ = pc.send(p);
             }
             _ => {}
@@ -295,7 +295,8 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
 }
 
 /// Stats, plus `handoff`: the title of a web video the phone could continue (absent otherwise),
-/// so the phone only offers "Continue on phone" when it would work.
+/// so the phone only offers "Continue on phone" when it would work; and `camera`: whether a photo
+/// can be taken (false behind a closed lid with no other camera).
 async fn stream_stats(sender: Sender, lease: Arc<Mutex<Instant>>, media: Option<Arc<media::Media>>) {
     let mut stats = match stats::Stats::new() {
         Ok(s) => s,
@@ -308,6 +309,8 @@ async fn stream_stats(sender: Sender, lease: Arc<Mutex<Instant>>, media: Option<
         if let Some(title) = media.as_ref().and_then(|m| m.offer()) {
             body["handoff"] = json!(title);
         }
+        // So the phone can say "Camera unavailable" up front instead of after a failed tap.
+        body["camera"] = json!(camera::available());
         if sender.send(&packet("vyoma.stats", body)).await.is_err() {
             return;
         }

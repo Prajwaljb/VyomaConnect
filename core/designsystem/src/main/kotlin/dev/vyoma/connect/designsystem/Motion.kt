@@ -1,5 +1,6 @@
 package dev.vyoma.connect.designsystem
 
+import kotlin.math.roundToInt
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.node.requireDensity
 import android.content.ContentResolver
@@ -79,12 +80,13 @@ object VyomaMotion {
 }
 
 /**
- * What a haptic means, so the same kind of action feels the same everywhere. Each one is composed
- * from the vibrator's own primitives, like Pixel and OnePlus O-Haptics do (crisp clicks, low ticks,
- * thuds, rises, shaped and paired). A primitive the motor lacks is swapped for its nearest one it has;
- * with none left, the phone's [predefined] effect plays (Android substitutes a plain buzz where the motor
- * has no tuned one, so it always vibrates). The view's stock haptic was the old fallback and stayed
- * silent on phones whose maker maps those constants to nothing (a OnePlus Nord, 2026-11).
+ * What a haptic means, so the same kind of action feels the same everywhere. Played the crispest way
+ * the phone can (see [Haptics.engine]): composed from the motor's own primitives (crisp clicks, low
+ * ticks, thuds, shaped and paired, like Pixel and One UI); else the maker's tuned click and tick,
+ * but only where the phone says they're really tuned; else short pulses sized to the motor's
+ * resonance, a cycle or two each, which an LRA plays as a click. The old last resorts buzzed:
+ * Android's stand-in for an untuned predefined effect is a long plain vibration (a OnePlus Nord
+ * CE3, 2026-11: "no ticks and clicks, only buzzes"), and the view's stock haptics stayed silent.
  * [Haptics] honours the system's touch feedback setting either way.
  */
 enum class Haptic(internal val type: HapticFeedbackType, internal val predefined: Int, internal val notes: List<Note>) {
@@ -96,8 +98,8 @@ enum class Haptic(internal val type: HapticFeedbackType, internal val predefined
     ToggleOn(HapticFeedbackType.ToggleOn, VibrationEffect.EFFECT_CLICK, listOf(Note(PRIMITIVE_TICK, 0.45f), Note(PRIMITIVE_CLICK, 0.85f, 34))),
     /** Lets go: a click falling away into a low tick. */
     ToggleOff(HapticFeedbackType.ToggleOff, VibrationEffect.EFFECT_TICK, listOf(Note(PRIMITIVE_CLICK, 0.72f), Note(PRIMITIVE_LOW_TICK, 0.5f, 38))),
-    /** Moving onto a new option: tabs, segmented choices. */
-    Select(HapticFeedbackType.SegmentTick, VibrationEffect.EFFECT_TICK, listOf(Note(PRIMITIVE_TICK, 0.7f))),
+    /** Moving onto a new option: tabs, segmented choices. 1.0: at 0.7 the tab bar's ticks were too faint (2026-11-02). */
+    Select(HapticFeedbackType.SegmentTick, VibrationEffect.EFFECT_TICK, listOf(Note(PRIMITIVE_TICK, 1f))),
     /** A detent while dragging a value: volume steps, scroll notches. */
     Detent(HapticFeedbackType.SegmentFrequentTick, VibrationEffect.EFFECT_TICK, listOf(Note(PRIMITIVE_LOW_TICK, 0.75f))),
     /** Hitting an end stop or crossing a commit threshold: one firm click. */
@@ -121,14 +123,60 @@ internal fun nearest(primitive: Int): List<Int> = when (primitive) {
     else -> listOf(primitive)
 }
 
-/** [h] from the primitives this motor has (see [Haptic]); its predefined effect if none are left. */
-internal fun compose(v: Vibrator, h: Haptic): VibrationEffect {
-    val notes = h.notes.mapNotNull { n ->
-        nearest(n.primitive).firstOrNull { v.areAllPrimitivesSupported(it) }?.let { Note(it, n.scale, n.delayMs) }
+/** How this phone plays haptics, best first; see [Haptic]. */
+enum class HapticEngine { PRIMITIVES, TUNED, PULSES, PLAIN_PULSES }
+
+internal fun engineFor(v: Vibrator): HapticEngine = when {
+    // Clicks and ticks are what everything is made of; a motor with only some primitives (or
+    // only rises) can't play the set the same way.
+    v.areAllPrimitivesSupported(PRIMITIVE_CLICK, PRIMITIVE_TICK) -> HapticEngine.PRIMITIVES
+    // UNKNOWN is what most phones say: then the effect may be Android's long stand-in buzz.
+    v.areAllEffectsSupported(VibrationEffect.EFFECT_CLICK, VibrationEffect.EFFECT_TICK, VibrationEffect.EFFECT_HEAVY_CLICK, VibrationEffect.EFFECT_DOUBLE_CLICK) ==
+        Vibrator.VIBRATION_EFFECT_SUPPORT_YES -> HapticEngine.TUNED
+    v.hasAmplitudeControl() -> HapticEngine.PULSES
+    else -> HapticEngine.PLAIN_PULSES
+}
+
+/** [h] the way [engine] plays it. */
+internal fun compose(v: Vibrator, h: Haptic, engine: HapticEngine): VibrationEffect = when (engine) {
+    HapticEngine.PRIMITIVES -> {
+        val notes = h.notes.mapNotNull { n ->
+            nearest(n.primitive).firstOrNull { v.areAllPrimitivesSupported(it) }?.let { Note(it, n.scale, n.delayMs) }
+        }
+        VibrationEffect.startComposition().apply { notes.forEach { addPrimitive(it.primitive, it.scale, it.delayMs) } }.compose()
     }
-    // Only clicks and ticks carry an action; a composition of nothing but a rise would feel like nothing.
-    if (notes.none { it.primitive != PRIMITIVE_QUICK_RISE }) return VibrationEffect.createPredefined(h.predefined)
-    return VibrationEffect.startComposition().apply { notes.forEach { addPrimitive(it.primitive, it.scale, it.delayMs) } }.compose()
+    HapticEngine.TUNED -> VibrationEffect.createPredefined(h.predefined)
+    HapticEngine.PULSES, HapticEngine.PLAIN_PULSES -> pulses(v, h, amplitude = engine == HapticEngine.PULSES)
+}
+
+/**
+ * [h] as a waveform of short pulses: a click is about two cycles of the motor's resonance (~10 ms
+ * at 170-235 Hz), a tick about one and a half; anything longer stops being a click and becomes a
+ * buzz. Without amplitude control a lighter note is a shorter pulse instead of a softer one.
+ */
+internal fun pulses(v: Vibrator, h: Haptic, amplitude: Boolean): VibrationEffect {
+    val hz = v.resonantFrequency.takeIf { it.isFinite() && it in 80f..400f } ?: 175f
+    val cycle = 1000f / hz
+    val timings = mutableListOf<Long>()
+    val amps = mutableListOf<Int>()
+    for (n in h.notes) {
+        val cycles = when (n.primitive) {
+            PRIMITIVE_QUICK_RISE -> continue // a lead-in; a pulse can't swell
+            PRIMITIVE_THUD -> 3f
+            PRIMITIVE_CLICK -> 2f
+            PRIMITIVE_LOW_TICK -> 1.5f
+            else -> 1.5f // TICK
+        }
+        val strength = (n.scale * if (n.primitive == PRIMITIVE_LOW_TICK) 0.8f else 1f).coerceIn(0.2f, 1f)
+        val on = if (amplitude) cycles * cycle else cycles * cycle * (0.6f + 0.4f * strength)
+        timings += n.delayMs.toLong().coerceAtLeast(if (timings.isEmpty()) 0 else 12)
+        amps += 0
+        timings += on.roundToInt().coerceIn(4, 18).toLong()
+        amps += if (amplitude) (90 + 165 * strength).roundToInt().coerceIn(1, 255) else 255
+    }
+    if (timings.isEmpty()) return VibrationEffect.createOneShot(8, VibrationEffect.DEFAULT_AMPLITUDE)
+    return if (amplitude) VibrationEffect.createWaveform(timings.toLongArray(), amps.toIntArray(), -1)
+    else VibrationEffect.createWaveform(timings.toLongArray(), -1)
 }
 
 /** One primitive in a [Haptic], [delayMs] after the previous one ends. */
@@ -143,16 +191,32 @@ object Haptics {
         if (Build.VERSION.SDK_INT >= 33) VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH) else null
     }
 
+    /** How this phone plays them (diagnostics show it); null without a vibrator. */
+    var engine: HapticEngine? = null
+        private set
+
     fun attach(context: Context) {
         if (vibrator != null) return
         vibrator = context.getSystemService(VibratorManager::class.java)?.defaultVibrator?.takeIf { it.hasVibrator() }
         resolver = context.applicationContext.contentResolver
+        engine = vibrator?.let(::engineFor)
+    }
+
+    /** What the motor reports, for a diagnostics log from a phone we can't hold. */
+    fun describe(): String {
+        val v = vibrator ?: return "no vibrator"
+        fun yes(r: Int) = when (r) { Vibrator.VIBRATION_EFFECT_SUPPORT_YES -> "yes"; Vibrator.VIBRATION_EFFECT_SUPPORT_NO -> "no"; else -> "unknown" }
+        val prims = listOf("click" to PRIMITIVE_CLICK, "tick" to PRIMITIVE_TICK, "lowTick" to PRIMITIVE_LOW_TICK, "thud" to PRIMITIVE_THUD, "rise" to PRIMITIVE_QUICK_RISE)
+            .joinToString { (n, p) -> "$n=${v.areAllPrimitivesSupported(p)}" }
+        val effects = listOf("click" to VibrationEffect.EFFECT_CLICK, "tick" to VibrationEffect.EFFECT_TICK, "heavy" to VibrationEffect.EFFECT_HEAVY_CLICK)
+            .joinToString { (n, e) -> "$n=${yes(v.areEffectsSupported(e)[0])}" }
+        return "engine=$engine; primitives: $prims; tuned effects: $effects; amplitude control=${v.hasAmplitudeControl()}; resonance=${v.resonantFrequency} Hz"
     }
 
     /** True when it played (or the user turned touch feedback off); false: use the fallback. */
     internal fun play(h: Haptic): Boolean {
         val v = vibrator ?: return false
-        val effect = playable.getOrPut(h) { compose(v, h) } ?: return false
+        val effect = playable.getOrPut(h) { compose(v, h, engine ?: return false) } ?: return false
         // Android 13+ applies the touch feedback setting to USAGE_TOUCH itself; before that, read it.
         val attrs = touch
         if (attrs != null) v.vibrate(effect, attrs)

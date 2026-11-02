@@ -1,5 +1,7 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -997,8 +999,9 @@ fun DrawScope.frostedKnob(r: Rect, alpha: Float) {
 }
 
 /**
- * A dialog in the app's material: an opaque glass slab (dialogs have no backdrop to blur) with
- * the same lit rim and depth as the cards. Same shape of API as Material's AlertDialog.
+ * A dialog in the app's material. Under a [MenuHost] it's liquid glass over the page, like the
+ * menus ([DialogOverlay]); elsewhere (small activities with no page to blur) an opaque glass slab
+ * in a window of its own. Same shape of API as Material's AlertDialog.
  */
 @Composable
 fun GlassDialog(
@@ -1009,13 +1012,9 @@ fun GlassDialog(
     title: (@Composable () -> Unit)? = null,
     text: (@Composable () -> Unit)? = null,
 ) {
-    Dialog(onDismissRequest) {
-        Column(
-            modifier
-                .fillMaxWidth()
-                .glassCard(MaterialTheme.shapes.extraLarge, fill = MaterialTheme.colorScheme.surfaceContainerHigh)
-                .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 12.dp),
-        ) {
+    val host = LocalMenu.current
+    val body: @Composable () -> Unit = {
+        Column(modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 12.dp)) {
             CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
                 if (title != null) {
                     ProvideTextStyle(MaterialTheme.typography.headlineSmall) { title() }
@@ -1034,6 +1033,22 @@ fun GlassDialog(
                 }
             }
         }
+    }
+    if (host.hosted) {
+        val entry = remember { HostedDialog() }
+        // The latest content and dismiss, every composition (the dialog's state lives here).
+        SideEffect {
+            entry.card = body
+            entry.onDismiss = onDismissRequest
+        }
+        DisposableEffect(entry) {
+            host.dialogs += entry
+            onDispose { entry.leaving = true }
+        }
+        return
+    }
+    Dialog(onDismissRequest) {
+        Box(Modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.extraLarge, fill = MaterialTheme.colorScheme.surfaceContainerHigh)) { body() }
     }
 }
 

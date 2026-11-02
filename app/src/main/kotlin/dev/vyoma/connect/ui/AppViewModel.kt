@@ -133,7 +133,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun ping(id: String) = act(id) { it.plugin<PingPlugin>(PingPlugin.ID)?.ping("Ping from Vyoma") }
     fun ringPc(id: String) = act(id) { it.plugin<FindMyPhonePlugin>(FindMyPhonePlugin.ID)?.ringPeer() }
     fun lockPc(id: String) = act(id) { it.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(true) }
-    fun setPcLocked(id: String, locked: Boolean) = act(id) { it.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(locked) }
+    fun setPcLocked(id: String, locked: Boolean) = act(id) {
+        // Unlocking wakes the screen too: kdeconnectd unlocks but a screen that idled off stays dark.
+        if (!locked) companionOf(id)?.wake()
+        it.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(locked)
+    }
     fun runCommand(id: String, key: String) {
         uiPrefs.edit { putString("last_command_$id", key) }
         act(id) { it.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.run(key) }
@@ -228,6 +232,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setDarkMode(m: DarkMode) = viewModelScope.launch { settings.setDarkMode(m) }
     fun setLiteGlass(enabled: Boolean) = viewModelScope.launch { settings.setLiteGlass(enabled) }
     fun setCanvasGlow(enabled: Boolean) = viewModelScope.launch { settings.setCanvasGlow(enabled) }
+    val outdoorMode: StateFlow<Boolean> = settings.outdoorMode.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    fun setOutdoorMode(enabled: Boolean) = viewModelScope.launch { settings.setOutdoorMode(enabled) }
 
     fun setDeviceName(name: String) = viewModelScope.launch {
         settings.setDeviceName(name)

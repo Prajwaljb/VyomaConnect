@@ -87,6 +87,12 @@ body fields before implementing one.
   (never black from the phone); app volume clamps to 150%. The companion handles these in order on one worker per
   link and collapses a burst of sets for the same slider to the newest; the phone also sends at most one per target
   every 60 ms (`CompanionPlugin.queueSet`) and re-requests every 3 s while the controls are on screen.
+- `vyoma.pc.wake` (no reply), sent with every unlock from the phone: kdeconnectd unlocks via logind but a screen that
+  idled off stayed dark. The companion runs `kscreen-doctor --dpms on`, ScreenSaver `SimulateUserActivity`, then logind
+  `Session.Unlock` on `session/auto`.
+- `vyoma.stats` also carries `camera: bool`: false when the only cameras are built in (`removable=fixed` /
+  `connect_type=hardwired`) and the lid is closed (`/proc/acpi/button/lid/*/state`). The phone dims its Camera tile
+  (NoPhotography icon) and a tap says why; the companion also refuses such a capture.
 - `vyoma.pc.power {action: sleep|restart|shutdown|logout}` → `vyoma.pc.powered {action, error?}`. Sleep is
   Solid's `suspendToRam`; the others are `org.kde.Shutdown` (`logoutAndReboot`/`logoutAndShutdown`/`logout`), i.e.
   graceful, apps asked to close. The phone confirms every action first and treats no reply in 5 s as done.

@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.material.icons.rounded.Park
+import dev.vyoma.connect.designsystem.LocalStatus
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.ui.layout.layout
@@ -105,6 +107,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
     val theme by vm.theme.collectAsStateWithLifecycle()
     val name by vm.deviceName.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val status = LocalStatus.current
     var editingName by rememberSaveable { mutableStateOf(false) }
     var showAdbHelp by rememberSaveable { mutableStateOf(false) }
     var showUsbHelp by rememberSaveable { mutableStateOf(false) }
@@ -292,7 +295,18 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     icon = Icons.Rounded.BatteryChargingFull,
                     iconTint = SystemColor.GREEN.color,
                     trailing = { RowChevron(if (unrestricted) "On" else "Off") },
+                    showDivider = true,
                     onClick = { if (!unrestricted) requestUnrestricted(context) },
+                )
+                val outdoor by vm.outdoorMode.collectAsStateWithLifecycle()
+                ListRow(
+                    title = "Outdoor mode",
+                    subtitle = "Off Wi-Fi with no PC connected, Vyoma stops in the background and starts again on Wi-Fi",
+                    icon = Icons.Rounded.Park,
+                    iconTint = SystemColor.GREEN.color,
+                    haptic = if (outdoor) Haptic.ToggleOff else Haptic.ToggleOn,
+                    onClick = { vm.setOutdoorMode(!outdoor) },
+                    trailing = { VyomaSwitch(checked = outdoor, onCheckedChange = { vm.setOutdoorMode(it) }, contentDescription = "Outdoor mode") },
                 )
             }
         }
@@ -321,8 +335,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                                 saving = true
                                 scope.launch {
                                     DemoDiagnostics.writeLog(context).fold(
-                                        onSuccess = { toast(context, "Saved to Downloads: $it") },
-                                        onFailure = { toast(context, "Couldn't save the log: ${it.message}") },
+                                        onSuccess = { status.show("Saved to Downloads: $it") },
+                                        onFailure = { status.show("Couldn't save the log: ${it.message}", failure = true) },
                                     )
                                     saving = false
                                 }
@@ -527,5 +541,3 @@ internal fun UsbHelpDialog(onDismiss: () -> Unit) {
     )
 }
 
-private fun toast(context: android.content.Context, text: String) =
-    android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_LONG).show()

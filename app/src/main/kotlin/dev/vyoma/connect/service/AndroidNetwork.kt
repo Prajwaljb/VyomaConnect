@@ -145,8 +145,7 @@ class AndroidNetwork(private val context: Context) {
             .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
             .addTransportType(NetworkCapabilities.TRANSPORT_VPN)
             .addTransportType(NetworkCapabilities.TRANSPORT_USB)
-            .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-            .build()
+                .build()
         connectivity.registerNetworkCallback(request, cb)
         callback = cb
     }
@@ -155,6 +154,59 @@ class AndroidNetwork(private val context: Context) {
         callback?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }
         callback = null
     }
+
+    private var lanCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** True while the phone is on Wi-Fi or Ethernet (VPNs and mobile data don't count). */
+    fun onLan(): Boolean {
+        @Suppress("DEPRECATION")
+        return connectivity.allNetworks.any { n -> connectivity.getNetworkCapabilities(n)?.let(::isLan) == true }
+    }
+
+    private fun isLan(c: NetworkCapabilities) = !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+        (c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || c.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
+
+    /**
+     * Calls [onChange] whenever being on Wi-Fi/Ethernet changes. Kept from the callbacks' own
+     * networks: in onLost the system can still list the network going away, so asking [onLan]
+     * there said "still on Wi-Fi" after Wi-Fi was turned off.
+     */
+    fun watchLan(onChange: (Boolean) -> Unit) {
+        unwatchLan()
+        val up = java.util.Collections.synchronizedSet(mutableSetOf<Network>())
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { up += network; onChange(true) }
+            override fun onLost(network: Network) { up -= network; onChange(up.isNotEmpty()) }
+        }
+        runCatching { connectivity.registerNetworkCallback(lanRequest(), cb) }.onSuccess { lanCallback = cb }
+    }
+
+    fun unwatchLan() {
+        lanCallback?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }
+        lanCallback = null
+    }
+
+    /** Has the system start [OutdoorReceiver] when Wi-Fi or Ethernet comes up, with no process of ours running. */
+    fun wakeOnLan(context: Context) {
+        cancelWakeOnLan(context)
+        runCatching { connectivity.registerNetworkCallback(lanRequest(), outdoorIntent(context)) }
+            .onFailure { VLog.w(TAG, "can't watch for Wi-Fi: ${it.message}") }
+    }
+
+    fun cancelWakeOnLan(context: Context) {
+        runCatching { connectivity.unregisterNetworkCallback(outdoorIntent(context)) }
+    }
+
+    private fun outdoorIntent(context: Context) = android.app.PendingIntent.getBroadcast(
+        context, 7, android.content.Intent(context, OutdoorReceiver::class.java),
+        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_MUTABLE,
+    )
+
+    private fun lanRequest() = android.net.NetworkRequest.Builder()
+        .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+        .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+        .build()
 
     private companion object {
         const val TAG = "AndroidNetwork"

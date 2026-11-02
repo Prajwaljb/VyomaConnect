@@ -50,6 +50,8 @@ data class PcStats(
     val uptimeSeconds: Long?,
     /** Title of a web video the PC could hand off right now; null when nothing qualifies (mpv, local files). */
     val handoff: String? = null,
+    /** False when no camera can see (the laptop's only one is behind its closed lid); null: not said. */
+    val camera: Boolean? = null,
 )
 
 /** Where a screenshot or camera photo request is. [Done.location] is something the UI can open. */
@@ -227,6 +229,9 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         val key = packet.string("key") ?: return
         xferReplies.remove("$prefix:$key")?.complete(packet)
     }
+
+    /** Turns the PC's screens back on and unlocks it (the stock unlock left a dark screen dark). */
+    suspend fun wake() = ctx.send(packet(PC_WAKE))
 
     private var pendingPower: CompletableDeferred<String?>? = null
 
@@ -511,6 +516,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                 gpu = packet.int("gpu"),
                 uptimeSeconds = packet.long("uptime"),
                 handoff = packet.string("handoff"),
+                camera = packet.bool("camera"),
             )
         }
         return true
@@ -542,6 +548,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val PC_SET = "vyoma.pc.set"
         const val PC_POWER = "vyoma.pc.power"
         const val PC_POWERED = "vyoma.pc.powered"
+        const val PC_WAKE = "vyoma.pc.wake"
         private const val SET_INTERVAL_MS = 60L
         const val XFER_BEGIN = "vyoma.xfer.begin"
         const val XFER_READY = "vyoma.xfer.ready"
@@ -560,7 +567,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
             incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, XFER_BEGIN, XFER_DATA, XFER_END),
+            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, XFER_BEGIN, XFER_DATA, XFER_END),
         ) { CompanionPlugin(it, sink) }
     }
 }

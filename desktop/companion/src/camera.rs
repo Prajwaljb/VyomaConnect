@@ -28,6 +28,9 @@ pub async fn capture_and_send(sender: &Sender, me: &Identity, pinned: &[u8], pho
 }
 
 async fn capture() -> Result<Vec<u8>> {
+    if !available() {
+        bail!(UNAVAILABLE);
+    }
     let (device, size) = find_camera().await.context("no camera found")?;
     let out = tokio::time::timeout(
         Duration::from_secs(15),
@@ -50,17 +53,49 @@ async fn capture() -> Result<Vec<u8>> {
     Ok(out.stdout)
 }
 
-/// The first colour camera (one that offers MJPEG; IR cameras are greyscale only) and its
+const UNAVAILABLE: &str = "the laptop's lid is closed, so its camera can't see";
+
+/// Whether a photo can be taken now, cheaply (sysfs only, every stats tick): some camera is plugged
+/// in, and it isn't only the laptop's built-in one behind a closed lid.
+pub fn available() -> bool {
+    let lid_closed = lid_closed();
+    camera_nodes().iter().any(|node| !lid_closed || !built_in(node))
+}
+
+/// The laptop's lid is shut (ACPI). Desktops have no lid: never closed.
+fn lid_closed() -> bool {
+    let Ok(dir) = std::fs::read_dir("/proc/acpi/button/lid") else { return false };
+    dir.flatten().any(|e| std::fs::read_to_string(e.path().join("state")).is_ok_and(|s| s.contains("closed")))
+}
+
+/// A camera wired into the machine (the lid's webcam) rather than plugged into a port: its USB
+/// device says `removable=fixed`, or its port `connect_type=hardwired`.
+fn built_in(node: &str) -> bool {
+    let Ok(dev) = std::fs::canonicalize(format!("/sys/class/video4linux/{node}/device/..")) else { return false };
+    std::fs::read_to_string(dev.join("removable")).is_ok_and(|r| r.trim() == "fixed")
+        || std::fs::read_to_string(dev.join("port/connect_type")).is_ok_and(|t| t.trim() == "hardwired")
+}
+
+/// The capture node of each camera (index 0; the others are metadata).
+fn camera_nodes() -> Vec<String> {
+    let mut nodes: Vec<String> = std::fs::read_dir("/sys/class/video4linux")
+        .map(|d| {
+            d.flatten()
+                .filter(|e| std::fs::read_to_string(e.path().join("index")).is_ok_and(|i| i.trim() == "0"))
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    nodes.sort();
+    nodes
+}
+
+/// The first colour camera that can see (one that offers MJPEG; IR cameras are greyscale only) and its
 /// largest MJPEG size. Querying formats doesn't switch the camera on.
 async fn find_camera() -> Option<(String, String)> {
-    let mut nodes: Vec<String> = std::fs::read_dir("/sys/class/video4linux")
-        .ok()?
-        .flatten()
-        .filter(|e| std::fs::read_to_string(e.path().join("index")).is_ok_and(|i| i.trim() == "0"))
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    nodes.sort();
-    for node in nodes {
+    // Behind a closed lid the built-in camera sees only the keyboard; a plugged-in one still works.
+    let lid_closed = lid_closed();
+    for node in camera_nodes().into_iter().filter(|n| !lid_closed || !built_in(n)) {
         let device = format!("/dev/{node}");
         let Ok(out) = tokio::process::Command::new("ffmpeg")
             .args(["-hide_banner", "-f", "v4l2", "-list_formats", "compressed", "-i", &device])

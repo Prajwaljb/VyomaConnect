@@ -32,6 +32,8 @@ class SettingsRepository(private val context: Context) {
         val deviceName = stringPreferencesKey("device_name")
         val onboarded = booleanPreferencesKey("onboarded")
         val manualHosts = stringSetPreferencesKey("manual_hosts")
+        /** Pause in the background away from Wi-Fi; on unless turned off. */
+        val outdoorMode = booleanPreferencesKey("outdoor_mode")
     }
 
     private val prefs: Flow<Preferences> get() = context.dataStore.data
@@ -67,6 +69,9 @@ class SettingsRepository(private val context: Context) {
     val manualHosts: Flow<Set<String>> = prefs.map { it[Keys.manualHosts].orEmpty() }.distinctUntilChanged()
     suspend fun addManualHost(host: String) = context.dataStore.edit { it[Keys.manualHosts] = it[Keys.manualHosts].orEmpty() + host }
     suspend fun removeManualHost(host: String) = context.dataStore.edit { it[Keys.manualHosts] = it[Keys.manualHosts].orEmpty() - host }
+
+    val outdoorMode: Flow<Boolean> = prefs.map { it[Keys.outdoorMode] ?: true }.distinctUntilChanged()
+    suspend fun setOutdoorMode(enabled: Boolean) = context.dataStore.edit { it[Keys.outdoorMode] = enabled }
 
     suspend fun setOnboarded() = context.dataStore.edit { it[Keys.onboarded] = true }
 }
