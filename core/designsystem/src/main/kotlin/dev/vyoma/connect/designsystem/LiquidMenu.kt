@@ -379,6 +379,9 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
             Modifier
                 .layout { m, c ->
                     val from = from()
+                    // Where it goes is decided from the element's full size: from the dipped one, a
+                    // tile on the edge of fitting below grew upwards, then flipped down as it sprang back.
+                    val at = home()
                     val menuW = MENU_WIDTH.toPx()
                     val menuH = headerHeight.toPx() + ROW_HEIGHT.toPx() * r.items.size +
                         GROUP_GAP.toPx() * r.items.dropLast(1).count { it.groupEnd } + PAD.toPx() * 2
@@ -386,26 +389,26 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                     val gap = 10.dp.toPx()
                     // Above the element when it fits there (read from the finger up), else below, else
                     // on whichever side has more room; aligned to its nearer side; always on screen.
-                    val left = (if (from.center.x < c.maxWidth / 2f) from.left else from.right - menuW)
+                    val left = (if (at.center.x < c.maxWidth / 2f) at.left else at.right - menuW)
                         .coerceIn(margin, (c.maxWidth - margin - menuW).coerceAtLeast(margin))
                     val minTop = bars.getTop(this) + margin
                     // Above floating chrome lower on screen than the element's middle (the tab bar).
-                    val chromeTop = menus.occluderBounds().filter { it.top > from.center.y }.minOfOrNull { it.top }
+                    val chromeTop = menus.occluderBounds().filter { it.top > at.center.y }.minOfOrNull { it.top }
                     val maxBottom = minOf(c.maxHeight - bars.getBottom(this) - margin, chromeTop?.minus(gap) ?: Float.MAX_VALUE)
-                    val above = from.top - gap - menuH
-                    val below = from.bottom + gap
+                    val above = at.top - gap - menuH
+                    val below = at.bottom + gap
                     val top = if (r.morph != null) {
                         // Grows in place from the element's own corner: down from its top edge, or up
                         // from its bottom edge when there's no room below.
                         when {
-                            from.top + menuH <= maxBottom -> from.top
-                            minOf(from.bottom, maxBottom) - menuH >= minTop -> minOf(from.bottom, maxBottom) - menuH
+                            at.top + menuH <= maxBottom -> at.top
+                            minOf(at.bottom, maxBottom) - menuH >= minTop -> minOf(at.bottom, maxBottom) - menuH
                             else -> maxBottom - menuH
                         }
                     } else when {
                         above >= minTop -> above
                         below + menuH <= maxBottom -> below
-                        from.top - minTop > maxBottom - from.bottom -> minTop
+                        at.top - minTop > maxBottom - at.bottom -> minTop
                         else -> maxBottom - menuH
                     }.coerceAtMost(maxBottom - menuH).coerceAtLeast(minTop)
                     target[0] = left; target[1] = top
@@ -445,16 +448,21 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                 }
                 .glassChrome(backdrop, shape, blur = 13.dp, bevel = 16.dp)
                 // Morphing, the element's own colour, clearing into glass as the drop grows. Draining
-                // home it floods back in from the start: clear glass shrinking onto a tile blurred its
-                // neighbours across it (a blue smear over the red Screen tile, its menu text ghosting
-                // through) and only turned the tile's colour at the very end.
+                // home it floods back in as the drop nears the element's size: clear glass shrinking
+                // onto a tile blurred its neighbours across it (a blue smear over the red Screen tile,
+                // its menu text ghosting through). Keyed to size, not progress: a tall menu flooded
+                // by progress was a big solid slab of tile colour sliding home.
                 .then(
                     if (r.morph == null) Modifier else Modifier.drawBehind {
                         val f = formed()
-                        val a = if (!closing) r.morph.color.alpha * (1f - smooth(f / 0.5f))
-                        // Solid by halfway home (nothing behind shows through), easing to the
-                        // element's own alpha as it lands so the hand-over matches.
-                        else lerp(r.morph.color.alpha, 1f, smooth(f / 0.3f)) * (1f - smooth((f - 0.5f) / 0.45f))
+                        val a = if (!closing) r.morph.color.alpha * (1f - smooth(f / 0.5f)) else {
+                            // How much of the drop the element would fill: solid from about two
+                            // thirds (nothing behind shows through), easing to the element's own
+                            // alpha as it lands so the hand-over matches.
+                            val h = home()
+                            val fill = (h.width * h.height / (size.width * size.height).coerceAtLeast(1f)).coerceIn(0f, 1f)
+                            lerp(r.morph.color.alpha, 1f, smooth(f / 0.3f)) * smooth((fill - 0.25f) / 0.4f)
+                        }
                         if (a > 0.003f) drawOutline(shape.createOutline(size, layoutDirection, this), r.morph.color.copy(alpha = a))
                     },
                 )
