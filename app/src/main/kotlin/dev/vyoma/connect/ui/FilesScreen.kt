@@ -1,5 +1,8 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.material.icons.rounded.Download
 import dev.vyoma.connect.designsystem.LocalStatus
 
 import androidx.compose.ui.text.font.FontWeight
@@ -73,8 +76,9 @@ import dev.vyoma.connect.protocol.plugin.builtin.PcFileEvent
 
 /**
  * The PC's home folder, browsed from the phone through the companion. Folders open in place
- * (back goes up a level before leaving); tapping a file downloads it to Downloads/Vyoma, with the
- * usual transfer notification, and opens it when it lands. "Upload here" puts phone files into
+ * (back goes up a level before leaving); tapping a file fetches it into the app's cache and opens
+ * it (nothing is kept), and its download button saves it to Downloads/Vyoma with the usual
+ * transfer notification. "Upload here" puts phone files into
  * the folder on screen.
  */
 @Composable
@@ -98,13 +102,15 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit, initialPath:
     LaunchedEffect(plugin) {
         plugin?.fileEvents?.collect { e ->
             when (e) {
-                is PcFileEvent.Saved -> {
-                    haptics.perform(Haptic.Success)
+                // Looked at: straight into a viewer. Saved: it stays put, and says where.
+                is PcFileEvent.Saved -> if (e.temporary) {
                     val open = Intent(Intent.ACTION_VIEW)
                         .setDataAndType(Uri.parse(e.location), AndroidShareSink.mimeOf(e.name))
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     runCatching { context.startActivity(open) }
-                        .onFailure { status.show("${e.name} is in Downloads/Vyoma", haptic = false) }
+                        .onFailure { status.show("No app here opens ${e.name}. Save it instead", failure = true) }
+                } else {
+                    status.show("Saved to Downloads/Vyoma", icon = Icons.Rounded.Download)
                 }
                 is PcFileEvent.Uploaded -> {
                     haptics.perform(Haptic.Success)
@@ -198,7 +204,8 @@ fun FilesScreen(vm: AppViewModel, pcId: String, onBack: () -> Unit, initialPath:
                             busy = child in fetching,
                             showDivider = i != last,
                             modifier = (if (i != last) Modifier.joinNext() else Modifier).cardSegment(first = i == 0, last = i == last),
-                            onClick = { if (f.isDir) path = child else vm.downloadPcFile(plugin, child) },
+                            onClick = { if (f.isDir) path = child else vm.downloadPcFile(plugin, child, keep = false) },
+                            onSave = { vm.downloadPcFile(plugin, child) },
                         )
                     }
                 }
@@ -260,7 +267,7 @@ private fun Crumb(name: String, current: Boolean, icon: ImageVector? = null, onC
 }
 
 @Composable
-private fun FileRow(f: PcFile, busy: Boolean, showDivider: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun FileRow(f: PcFile, busy: Boolean, showDivider: Boolean, modifier: Modifier, onClick: () -> Unit, onSave: () -> Unit) {
     val context = LocalContext.current
     val (icon, color) = if (f.isDir) Icons.Rounded.Folder to SystemColor.BLUE else kindOf(f.name)
     val date = if (f.modified > 0) ago(f.modified).toString() else null
@@ -274,7 +281,13 @@ private fun FileRow(f: PcFile, busy: Boolean, showDivider: Boolean, modifier: Mo
         trailing = when {
             busy -> { { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) } }
             f.isDir -> { { Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) } }
-            else -> null
+            // A tap only opens it to look at; this keeps a copy on the phone.
+            else -> { {
+                Box(
+                    Modifier.size(40.dp).pressable(glass = true, onClick = onSave).semantics { contentDescription = "Save ${f.name} to the phone" },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Rounded.Download, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp)) }
+            } }
         },
         onClick = onClick,
     )

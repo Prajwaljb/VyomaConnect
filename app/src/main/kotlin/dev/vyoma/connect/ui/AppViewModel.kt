@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.HapticEngine
 import dev.vyoma.connect.data.LiteGlass
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.OutgoingFile
@@ -22,7 +23,6 @@ import dev.vyoma.connect.protocol.device.PairState
 import dev.vyoma.connect.protocol.plugin.builtin.BatteryState
 import dev.vyoma.connect.protocol.plugin.builtin.ClipEntry
 import dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin
-import dev.vyoma.connect.protocol.plugin.builtin.FindMyPhonePlugin
 import dev.vyoma.connect.protocol.plugin.builtin.LockPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.MprisPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.PingPlugin
@@ -53,6 +53,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val liteGlass: StateFlow<LiteGlass> = settings.liteGlass
         .stateIn(viewModelScope, SharingStarted.Eagerly, LiteGlass(on = false, chosen = false, detected = false))
     val canvasGlow: StateFlow<Boolean> = settings.canvasGlow.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val hapticStyle: StateFlow<HapticEngine?> = settings.hapticStyle.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    fun setHapticStyle(style: HapticEngine?) = viewModelScope.launch { settings.setHapticStyle(style) }
 
     /** Every known device, ordered: connected, pairing, available, offline. */
     val devices: StateFlow<List<DeviceState>> = container.hub.filterNotNull()
@@ -131,7 +133,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         devices.value.filter { it.identity.companionOf == id }.forEach { c -> act(c.identity.deviceId) { it.unpair() } }
     }
     fun ping(id: String) = act(id) { it.plugin<PingPlugin>(PingPlugin.ID)?.ping("Ping from Vyoma") }
-    fun ringPc(id: String) = act(id) { it.plugin<FindMyPhonePlugin>(FindMyPhonePlugin.ID)?.ringPeer() }
     fun lockPc(id: String) = act(id) { it.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(true) }
     fun setPcLocked(id: String, locked: Boolean) = act(id) {
         // Unlocking wakes the screen too: kdeconnectd unlocks but a screen that idled off stays dark.
@@ -223,7 +224,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
     fun listPcFiles(plugin: CompanionPlugin, path: String) = viewModelScope.launch { plugin.listFiles(path) }
-    fun downloadPcFile(plugin: CompanionPlugin, path: String) = viewModelScope.launch { plugin.download(path) }
+    fun downloadPcFile(plugin: CompanionPlugin, path: String, keep: Boolean = true) = viewModelScope.launch { plugin.download(path, keep) }
     // App scope: an upload keeps going if you leave the browser.
     fun uploadPcFiles(plugin: CompanionPlugin, folder: String, files: List<OutgoingFile>) =
         container.appScope.launch { plugin.upload(folder, files) }

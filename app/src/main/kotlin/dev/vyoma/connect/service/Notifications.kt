@@ -118,8 +118,11 @@ object Notifications {
             .setCategory(Notification.CATEGORY_PROGRESS)
         if (Build.VERSION.SDK_INT >= 36) {
             builder.setStyle(Notification.ProgressStyle().setProgress(percent).setStyledByProgress(true))
-            builder.setShortCriticalText("$percent%")
-            builder.setRequestPromotedOngoing(true)
+            // Live Updates came in 16 QPR2 (36.1): calling them on 16.0 throws.
+            if (Build.VERSION.SDK_INT_FULL >= Build.VERSION_CODES_FULL.BAKLAVA_1) {
+                builder.setShortCriticalText("$percent%")
+                builder.setRequestPromotedOngoing(true)
+            }
         } else {
             builder.setProgress(100, percent, total <= 0)
         }

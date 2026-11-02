@@ -91,6 +91,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import kotlin.math.exp
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.isSpecified
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -208,6 +213,26 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
 
         // ---- touch surface ----
         val dots = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
+        // Light pools under the finger and flows after it (eased toward it each frame), lighting the
+        // dots it passes. Drawn only while touched or fading: nothing runs at rest.
+        val accent = MaterialTheme.colorScheme.primary
+        var finger by remember { mutableStateOf(Offset.Unspecified) }
+        var touching by remember { mutableStateOf(false) }
+        var flow by remember { mutableStateOf(Offset.Unspecified) }
+        var glow by remember { mutableFloatStateOf(0f) }
+        LaunchedEffect(touching) {
+            var last = withFrameNanos { it }
+            while (touching || glow > 0.01f) {
+                withFrameNanos { now ->
+                    val dt = ((now - last) / 1e9f).coerceIn(0f, 0.05f)
+                    last = now
+                    val f = finger
+                    if (f.isSpecified) flow = if (flow.isSpecified) flow + (f - flow) * (1f - exp(-dt * 14f)) else f
+                    glow += ((if (touching) 1f else 0f) - glow) * (1f - exp(-dt * if (touching) 16f else 5f))
+                }
+            }
+            glow = 0f
+        }
         Box(
             Modifier
                 .weight(1f)
@@ -217,67 +242,90 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                 .pointerInput(pad) {
                     val slop = viewConfiguration.touchSlop
                     awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        val start = down.uptimeMillis
-                        var maxPointers = 1
-                        var travelled = 0f
-                        var dragging = false
-                        var ended = false
-                        while (!ended) {
-                            val event = withTimeoutOrNull(if (!dragging && travelled < slop && maxPointers == 1) 420L else Long.MAX_VALUE) { awaitPointerEvent() }
-                            if (event == null) {
-                                // Held still: grab for drag-and-drop.
-                                if (travelled < slop && maxPointers == 1) {
-                                    dragging = true
-                                    haptics.perform(Haptic.Hold)
-                                    act { press() }
-                                }
-                                continue
-                            }
-                            val pressed = event.changes.filter { it.pressed }
-                            maxPointers = maxOf(maxPointers, pressed.size)
-                            if (pressed.size == 1 && maxPointers == 1 || dragging && pressed.isNotEmpty()) {
-                                val d = pressed.first().positionChange()
-                                travelled += hypot(d.x, d.y)
-                                if (travelled > slop || dragging) {
-                                    val a = accelerate(d)
-                                    synchronized(motion) { motion[0] += a.x; motion[1] += a.y }
-                                }
-                            } else if (pressed.size >= 2) {
-                                val d = pressed.map { it.positionChange() }.reduce { acc, o -> acc + o } / pressed.size.toFloat()
-                                travelled += hypot(d.x, d.y)
-                                if (travelled > slop) synchronized(motion) { motion[2] += d.x * SCROLL_SCALE; motion[3] += d.y * SCROLL_SCALE }
-                            }
-                            event.changes.forEach { it.consume() }
-                            ended = event.changes.none { it.pressed }
-                            if (ended) {
-                                val duration = event.changes.first().uptimeMillis - start
-                                when {
-                                    dragging -> {
-                                        haptics.perform(Haptic.Detent)
-                                        act { release() }
+                        try {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val start = down.uptimeMillis
+                            finger = down.position
+                            if (glow < 0.05f) flow = down.position
+                            touching = true
+                            var maxPointers = 1
+                            var travelled = 0f
+                            var dragging = false
+                            var ended = false
+                            while (!ended) {
+                                val event = withTimeoutOrNull(if (!dragging && travelled < slop && maxPointers == 1) 420L else Long.MAX_VALUE) { awaitPointerEvent() }
+                                if (event == null) {
+                                    // Held still: grab for drag-and-drop.
+                                    if (travelled < slop && maxPointers == 1) {
+                                        dragging = true
+                                        haptics.perform(Haptic.Hold)
+                                        act { press() }
                                     }
-                                    travelled < slop && duration < 260 -> {
-                                        haptics.perform(Haptic.Tap)
-                                        when (maxPointers) {
-                                            1 -> act { click() }
-                                            2 -> act { rightClick() }
-                                            else -> act { middleClick() }
+                                    continue
+                                }
+                                val pressed = event.changes.filter { it.pressed }
+                                pressed.firstOrNull()?.let { finger = it.position }
+                                maxPointers = maxOf(maxPointers, pressed.size)
+                                if (pressed.size == 1 && maxPointers == 1 || dragging && pressed.isNotEmpty()) {
+                                    val d = pressed.first().positionChange()
+                                    travelled += hypot(d.x, d.y)
+                                    if (travelled > slop || dragging) {
+                                        val a = accelerate(d)
+                                        synchronized(motion) { motion[0] += a.x; motion[1] += a.y }
+                                    }
+                                } else if (pressed.size >= 2) {
+                                    val d = pressed.map { it.positionChange() }.reduce { acc, o -> acc + o } / pressed.size.toFloat()
+                                    travelled += hypot(d.x, d.y)
+                                    if (travelled > slop) synchronized(motion) { motion[2] += d.x * SCROLL_SCALE; motion[3] += d.y * SCROLL_SCALE }
+                                }
+                                event.changes.forEach { it.consume() }
+                                ended = event.changes.none { it.pressed }
+                                if (ended) {
+                                    touching = false
+                                    val duration = event.changes.first().uptimeMillis - start
+                                    when {
+                                        dragging -> {
+                                            haptics.perform(Haptic.Detent)
+                                            act { release() }
+                                        }
+                                        travelled < slop && duration < 260 -> {
+                                            haptics.perform(Haptic.Tap)
+                                            when (maxPointers) {
+                                                1 -> act { click() }
+                                                2 -> act { rightClick() }
+                                                else -> act { middleClick() }
+                                            }
                                         }
                                     }
                                 }
                             }
+                        } finally {
+                            // A gesture taken away (the page closing) ends the glow too.
+                            touching = false
                         }
                     }
                 },
         ) {
-            Canvas(Modifier.fillMaxSize()) {
+            Canvas(Modifier.fillMaxSize().clip(RoundedCornerShape(32.dp))) {
                 val step = 28.dp.toPx()
+                val g = glow
+                val at = flow
+                val reach = 110.dp.toPx()
+                if (g > 0.01f && at.isSpecified) {
+                    drawCircle(
+                        Brush.radialGradient(listOf(accent.copy(alpha = 0.22f * g), accent.copy(alpha = 0.07f * g), Color.Transparent), at, reach),
+                        radius = reach, center = at,
+                    )
+                }
                 var y = step
                 while (y < size.height) {
                     var x = step
                     while (x < size.width) {
-                        drawCircle(dots, radius = 1.6f, center = Offset(x, y))
+                        val c = Offset(x, y)
+                        // Dots near the light catch it: brighter and a touch bigger.
+                        val lit = if (g > 0.01f && at.isSpecified) (1f - (c - at).getDistance() / reach).coerceIn(0f, 1f) * g else 0f
+                        if (lit > 0f) drawCircle(accent.copy(alpha = 0.06f + 0.5f * lit), radius = 1.6f + 1.4f * lit, center = c)
+                        else drawCircle(dots, radius = 1.6f, center = c)
                         x += step
                     }
                     y += step

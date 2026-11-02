@@ -236,9 +236,11 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   no chip rows), the tile card, then "Run on PC" command capsules and "Captures". A paired PC that's AWAY keeps Home:
   an AwayCard (Try again + Use USB), dimmed cached status, no media/volume, tiles at 40% and untappable. Files tab:
   Send tiles, On the PC folders, Captures, Transfers, latest clips + "All clipboard history". PC details (header
-  "i") leads with Connection (Link + Ping, Find this PC + Ring, battery), then one Commands row, then Security.
+  "i") leads with Connection (Link + Ping, battery), then one Commands row, then Security. Find PC is gone
+  everywhere (the user saw no use for it); its Home slot is Send clip, and Camera's slot is Touchpad without the companion.
 - Outcomes show in the status bubble (`LocalStatus.current.show(text, icon?, failure?, haptic?)`, designsystem/Status.kt):
-  an opaque glass capsule that drops from the top, swells on jelly, holds 1.6 s (2.6 s for failures). Never Toast
+  liquid glass (`glassChrome` over the whole app recorded by `StatusHost`, bevel 16, text onSurface; the old flat
+  slab let its text fall back to black in dark mode) that drops from the top, swells on jelly, holds 1.6 s (2.6 s for failures). Never Toast
   inside MainActivity (separate small activities and the VM still toast: they have no bubble host). Pass
   `haptic = false` when the caller already played one.
 - First run: the radar sweeps 3 times and rests (tap it or "Search again" for more), three numbered steps, address
@@ -317,19 +319,30 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   spring doesn't jump. Tried and dropped: drawing InnerGlow as edge-only strips (no GPU gain, more draw calls).
 
 ## Haptics (`Haptic` in Motion.kt; always through `HapticFeedback.perform`)
-Compositions of vibrator primitives where the motor has them; a missing primitive is swapped for its nearest
-(low tick -> tick -> click, thud -> click; a rise is dropped); with nothing left, the phone's predefined effect
-(`Haptic.predefined`: click/tick/heavy click/double click), which always vibrates and is the maker's own tuned
-haptic (O-Haptics etc). Never fall back to view constants: OEMs map some to nothing (silent on a OnePlus).
-Pixel / O-Haptics style: each `Haptic` is a `VibrationEffect.Composition` of primitives (CLICK, TICK, LOW_TICK, THUD,
-QUICK_RISE; scaled, some paired: ToggleOn rises tick→click, ToggleOff falls click→low tick, Success two rising clicks),
-played by `Haptics` (attached in `VyomaTheme`) with USAGE_TOUCH so the system touch setting applies; phones without
-those primitives fall back to the view's stock constant. This S24 FE's THUD lasts 300 ms: use it only for Failure.
+`Haptics.engine` (`HapticEngine`), chosen per phone, or by the user in Settings > Effects > Vibration style (with a
+sample run on pick):
+- SYSTEM for OnePlus/OPPO/realme: `View.performHapticFeedback` with long-standing constants only (`Haptic.system`:
+  VIRTUAL_KEY, KEYBOARD_TAP, CLOCK_TICK, LONG_PRESS, TEXT_HANDLE_MOVE, CONFIRM, REJECT). A Nord CE 3 claims every
+  primitive and tuned click/tick yet played them all as buzzes; newer constants (SEGMENT_TICK...) were silent there.
+- PRIMITIVES (Crisp): a `VibrationEffect.Composition` of CLICK, TICK, LOW_TICK, THUD, QUICK_RISE (ToggleOn rises
+  tick→click, ToggleOff falls click→low tick, Success two rising clicks); a missing primitive takes its nearest.
+- TUNED (Classic): predefined click/tick/heavy/double, only where all report YES (UNKNOWN is Android's long stand-in buzz).
+- PULSES / PLAIN_PULSES: 1.5-3 resonance cycles (4-18 ms) per note, with or without amplitude.
+Played with USAGE_TOUCH so the system touch setting applies. `Vibrator.resonantFrequency` is Android 14+: reading it on
+13 crashed every tap on a moto g52 (use `resonance()`). Run lint on both modules (`NewApi`) before shipping.
+This S24 FE's THUD lasts 300 ms: use it only for Failure.
 Picking one of several (chips, players) is `Select`.
 Tap = buttons/cards · Key = keyboard-like keys · ToggleOn/ToggleOff = switches and toggle controls · Select = tabs,
 segments · Detent = steps while dragging a value (every 10% volume, scroll-wheel notches) · Edge = end stops and
 mode thresholds · Hold = long-press grab · Success/Failure = outcomes (sent, paired, declined). One haptic per action;
-never haptics on passive updates.
+never haptics on passive updates. Dragging the tab bar's drop also rolls a `Bubble` under the thumb every 14 dp
+(at most every 34 ms) between the tab ticks.
+
+## Water (held drops)
+The tab bar's drop is water while held: `liquidLens(ripple = { Offset(px, phase) })` sways what's seen through it with
+slow crossing swells, and the drop sloshes at constant volume (wider = shorter) faster and stronger the harder it's
+dragged (`stir`, settling over 0.9 s). Its clock runs only while held. The touchpad's glass lights under the finger:
+an accent pool that flows after it (eased each frame) and brightens the dot grid nearby; nothing runs at rest.
 
 ## Widgets (Glance, Phase 1)
 Same palette tokens; system widget corner radius; never show a spinner forever. Render cached state and an

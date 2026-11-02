@@ -80,6 +80,11 @@ import dev.vyoma.connect.designsystem.liquidLens
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlin.math.abs
+import kotlin.math.sin
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.mutableFloatStateOf
 import kotlinx.coroutines.launch
 
 enum class Tab(val label: String, val icon: ImageVector) {
@@ -180,6 +185,12 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
     val lift = remember { Animatable(0f) }
     var hover by remember { mutableIntStateOf(-1) }
     var pulse by remember { mutableStateOf<Job?>(null) }
+    // Water while it's held (the user asked for it to read as water, 2026-11): seconds since it
+    // lifted, which drives slow swells inside it, and how stirred it is, which grows with how
+    // fast it's dragged and settles on its own (a slosh that dies away in a few wobbles).
+    var clock by remember { mutableFloatStateOf(0f) }
+    val stir = remember { Animatable(0f) }
+    var water by remember { mutableStateOf<Job?>(null) }
 
     fun glide(toLeft: Float) {
         // Already headed there: restarting would swap which edge leads (and its spring) mid-flight,
@@ -192,6 +203,19 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
     fun lifted(up: Boolean) {
         pulse?.cancel()
         pulse = scope.launch { lift.animateTo(if (up) 1f else 0f, if (up) VyomaMotion.spatial() else VyomaMotion.release()) }
+        // The clock runs only while the drop is up: nothing animates at rest.
+        if (up && water?.isActive != true) water = scope.launch {
+            val start = withFrameNanos { it }
+            do {
+                withFrameNanos { clock = (it - start) / 1e9f }
+            } while (hover >= 0 || lift.value > 0.01f)
+        }
+    }
+    fun stirred(by: Float) {
+        scope.launch {
+            stir.snapTo((stir.value + by).coerceAtMost(1f))
+            stir.animateTo(0f, tween(900, easing = LinearOutSlowInEasing))
+        }
     }
     // The drop only lifts under a finger (as on iOS); a programmatic switch just glides.
     LaunchedEffect(tab) {
@@ -207,8 +231,11 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
         val stretch = (w / itemPx - 1f).coerceIn(0f, 1f)
         val up = lift.value
         val rest = size.height - 2 * pad
-        val h = (rest + (2 * overflow + 2 * pad) * up) * (1f - 0.14f * stretch)
-        val ww = w + 2 * overflow * up.coerceAtLeast(0f) * 1.6f + rest * 0.06f * up.coerceAtMost(0f)
+        // Sloshing keeps its volume: as it grows wide it gets shorter, and back. Faster when stirred.
+        val held = up.coerceIn(0f, 1f)
+        val slosh = sin(clock * (7f + 5f * stir.value)) * (0.012f + 0.05f * stir.value) * held
+        val h = (rest + (2 * overflow + 2 * pad) * up) * (1f - 0.14f * stretch) * (1f - slosh)
+        val ww = (w + 2 * overflow * up.coerceAtLeast(0f) * 1.6f + rest * 0.06f * up.coerceAtMost(0f)) * (1f + slosh)
         val cx = pad + l + w / 2
         return Rect(Offset(cx - ww / 2, (size.height - h) / 2), Size(ww, h))
     }
@@ -218,7 +245,12 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
     Box(
         Modifier
             .height(BarHeight)
-            .liquidLens(backdrop, strength = { lift.value }, zoom = { 1f + 0.1f * lift.value.coerceIn(0f, 1f) }, style = LensStyle.Lift, rect = { pill() })
+            .liquidLens(
+                backdrop, strength = { lift.value }, zoom = { 1f + 0.1f * lift.value.coerceIn(0f, 1f) }, style = LensStyle.Lift,
+                // Slow swells through the water: a calm sway when held still, more when stirred.
+                ripple = { Offset((1.2f + 2.4f * stir.value) * density.density * lift.value.coerceIn(0f, 1f), clock * (1.6f + 2f * stir.value)) },
+                rect = { pill() },
+            )
             .glassChrome(backdrop, CircleShape, blur = 6.dp, bevel = 16.dp)
             .drawBehind {
                 // The resting pill is gone early in the lift: magnified inside the growing drop, its
@@ -244,6 +276,11 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
                     if (hover != currentTab.ordinal) haptics.perform(Haptic.Select)
                     var dragged = false
                     var cancelled = false
+                    // A soft bubble under the thumb every so often as the drop rolls along.
+                    val bubbleEvery = 14.dp.toPx()
+                    var rolled = 0f
+                    var lastX = down.position.x
+                    var lastBuzz = 0L
                     while (true) {
                         val e = awaitPointerEvent()
                         val c = e.changes.firstOrNull { it.id == down.id }
@@ -254,10 +291,21 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
                         if (dragged) {
                             c.consume()
                             follow(c.position.x)
+                            val dx = abs(c.position.x - lastX)
+                            lastX = c.position.x
+                            stirred(dx / itemPx * 0.5f)
+                            rolled += dx
+                            val now = c.uptimeMillis
                             val i = indexAt(c.position.x)
                             if (i != hover) {
                                 hover = i
                                 haptics.perform(Haptic.Select)
+                                rolled = 0f
+                                lastBuzz = now
+                            } else if (rolled >= bubbleEvery && now - lastBuzz >= 34) {
+                                haptics.perform(Haptic.Bubble)
+                                rolled = 0f
+                                lastBuzz = now
                             }
                         }
                     }

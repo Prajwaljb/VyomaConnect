@@ -1,7 +1,10 @@
 package dev.vyoma.connect.platform
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.Application
+import android.content.Context
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
@@ -97,11 +100,23 @@ class FrameBudget(private val onSlow: (ratio: Float) -> Unit) {
         }
     }
 
-    private companion object {
-        const val TAG = "FrameBudget"
-        const val WINDOW = 240
-        const val SLOW_RATIO = 2.2f
-        const val SLOW_WINDOWS = 3
-        const val WARMUP_MS = 30_000L
+    companion object {
+        /**
+         * A phone that likely can't draw the full glass in time, judged before any frame: one that
+         * doesn't claim Android 13's media performance class and has under 7 GB of RAM. A moto g52
+         * (4-6 GB, no class) is one; an S24 FE (class 33) and a Nord CE 3 (8-12 GB) aren't.
+         */
+        fun looksModest(context: Context): Boolean {
+            val am = context.getSystemService(ActivityManager::class.java) ?: return false
+            if (am.isLowRamDevice) return true
+            val ram = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }.totalMem
+            return Build.VERSION.MEDIA_PERFORMANCE_CLASS < Build.VERSION_CODES.TIRAMISU && ram < 7_000_000_000L
+        }
+
+        private const val TAG = "FrameBudget"
+        private const val WINDOW = 240
+        private const val SLOW_RATIO = 2.2f
+        private const val SLOW_WINDOWS = 3
+        private const val WARMUP_MS = 30_000L
     }
 }

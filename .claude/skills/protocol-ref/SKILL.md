@@ -93,6 +93,11 @@ body fields before implementing one.
 - `vyoma.stats` also carries `camera: bool`: false when the only cameras are built in (`removable=fixed` /
   `connect_type=hardwired`) and the lid is closed (`/proc/acpi/button/lid/*/state`). The phone dims its Camera tile
   (NoPhotography icon) and a tap says why; the companion also refuses such a capture.
+- `vyoma.stats` also carries `ac: bool` (absent on a desktop): a Mains or USB-C supply is online. Stock battery packets
+  only say `isCharging`, false on a charger at a charge limit or full, so the phone shows "Plugged in" from this.
+- USB tethering (no adb): the companion's `tether.rs` finds the phone on a `rndis_host`/`cdc_ncm`/`cdc_ether` interface
+  (its default gateway there from /proc/net/route, else the one ARP neighbour) and dials port 1716 every 5 s while a
+  trusted phone is unlinked, accepting whichever trusted certificate answers (`link::connect_trusted`).
 - `vyoma.pc.power {action: sleep|restart|shutdown|logout}` → `vyoma.pc.powered {action, error?}`. Sleep is
   Solid's `suspendToRam`; the others are `org.kde.Shutdown` (`logoutAndReboot`/`logoutAndShutdown`/`logout`), i.e.
   graceful, apps asked to close. The phone confirms every action first and treats no reply in 5 s as done.

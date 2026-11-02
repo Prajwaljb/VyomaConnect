@@ -80,6 +80,9 @@ interface ShareSink {
 
     /** Like [createFile], for images that belong with the user's pictures (PC screenshots). */
     fun createPicture(from: Device, name: String, size: Long): IncomingFile? = createFile(from, name, size, null)
+
+    /** A file only to look at: kept out of the user's files and cleared on its own. Platforms without such a place save it. */
+    fun createTemporary(from: Device, name: String, size: Long): IncomingFile? = createFile(from, name, size, null)
 }
 
 interface IncomingFile {

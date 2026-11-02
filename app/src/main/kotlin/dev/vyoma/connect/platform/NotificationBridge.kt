@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
@@ -141,7 +142,8 @@ object NotificationBridge : NotificationSource {
         actionsByKey[key] = plainActions
 
         // Android 11+ hides other packages from us; the notification carries its app's info.
-        val appInfo = extras.getParcelable(EXTRA_APP_INFO, ApplicationInfo::class.java)
+        val appInfo = if (Build.VERSION.SDK_INT >= 33) extras.getParcelable(EXTRA_APP_INFO, ApplicationInfo::class.java)
+        else @Suppress("DEPRECATION") extras.getParcelable(EXTRA_APP_INFO)
         val icon = iconFor(context, sbn.packageName, appInfo)
         val update = !seen.add(key)
         return PhoneNotification(

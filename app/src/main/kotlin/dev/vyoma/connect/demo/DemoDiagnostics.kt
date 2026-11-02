@@ -3,6 +3,7 @@ package dev.vyoma.connect.demo
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.Application
+import android.app.ApplicationExitInfo
 import android.content.ContentValues
 import android.content.Context
 import android.os.Build
@@ -20,6 +21,7 @@ import android.view.FrameMetrics
 import android.view.Window
 import dev.vyoma.connect.BuildConfig
 import dev.vyoma.connect.container
+import dev.vyoma.connect.protocol.VLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -111,11 +113,55 @@ object DemoDiagnostics {
         listeners.remove(window)?.let { runCatching { window.removeOnFrameMetricsAvailableListener(it) } }
     }
 
+    /**
+     * After a launch that crashed (in Kotlin, in native code such as the GPU driver, or froze), writes
+     * the crash and a full log to Downloads at once: a phone that crashes on every tap can't reach
+     * Settings to make one. Each crash is reported once.
+     */
+    suspend fun reportCrashes(context: Context) = withContext(Dispatchers.IO) {
+        runCatching {
+            val am = context.getSystemService(ActivityManager::class.java)
+            val seen = File(context.filesDir, "demo-crash-seen")
+            val since = seen.takeIf { it.exists() }?.readText()?.trim()?.toLongOrNull() ?: 0L
+            val exits = am.getHistoricalProcessExitReasons(context.packageName, 0, 8)
+                .filter { it.timestamp > since && it.reason in CRASHES }
+            seen.writeText((exits.maxOfOrNull { it.timestamp } ?: since).coerceAtLeast(since).toString())
+            if (exits.isEmpty()) return@runCatching
+            val text = buildString {
+                for (e in exits) {
+                    section("Crash")
+                    line("When", SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date(e.timestamp)))
+                    line("Kind", when (e.reason) {
+                        ApplicationExitInfo.REASON_CRASH -> "app (Kotlin/Java)"
+                        ApplicationExitInfo.REASON_CRASH_NATIVE -> "native (system library or GPU driver)"
+                        else -> "froze (not responding)"
+                    })
+                    line("Description", e.description.orEmpty())
+                    e.traceInputStream?.use { it.readBytes() }?.let { bytes ->
+                        // Native: a tombstone (protobuf); its frames are readable text runs. ANR: plain text.
+                        val trace = if (e.reason == ApplicationExitInfo.REASON_CRASH_NATIVE) readable(bytes) else bytes.decodeToString()
+                        appendLine(trace.lines().take(400).joinToString("\n"))
+                    }
+                }
+            }
+            VLog.i("DemoDiagnostics", "wrote " + write(context, "vyoma-crash-", text + report(context)))
+        }.onFailure { VLog.w("DemoDiagnostics", "couldn't write the crash report", it) }
+    }
+
+    /** The runs of printable text in a binary trace, one per line. */
+    private fun readable(bytes: ByteArray): String =
+        Regex("[\\x20-\\x7e]{6,}").findAll(String(bytes, Charsets.ISO_8859_1)).joinToString("\n") { it.value }
+
+    private val CRASHES = setOf(ApplicationExitInfo.REASON_CRASH, ApplicationExitInfo.REASON_CRASH_NATIVE, ApplicationExitInfo.REASON_ANR)
+
     /** Writes the log to Downloads; returns the file name. */
     suspend fun writeLog(context: Context): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            val name = "vyoma-demo-log-" + SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date()) + ".txt"
-            val text = report(context)
+        runCatching { write(context, "vyoma-demo-log-", report(context)) }
+    }
+
+    private fun write(context: Context, prefix: String, text: String): String {
+        run {
+            val name = prefix + SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date()) + ".txt"
             val resolver = context.contentResolver
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, name)
@@ -131,7 +177,7 @@ object DemoDiagnostics {
                 resolver.delete(uri, null, null)
                 throw e
             }
-            name
+            return name
         }
     }
 
@@ -140,7 +186,9 @@ object DemoDiagnostics {
         val pm = context.packageManager.getPackageInfo(context.packageName, 0)
         val power = context.getSystemService(PowerManager::class.java)
         val am = context.getSystemService(ActivityManager::class.java)
-        val display = context.display
+        // The app's own context (a crash report at launch) has no display of its own.
+        val display = runCatching { context.display }.getOrNull()
+            ?: context.getSystemService(android.hardware.display.DisplayManager::class.java)?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
         val res = context.resources
         val upMs = SystemClock.uptimeMillis() - installedAt
 
@@ -172,7 +220,7 @@ object DemoDiagnostics {
         val theme = container.settings.theme.first()
         line("App theme", "${theme.darkMode}, palette ${theme.palette}")
         val glass = container.settings.liteGlass.first()
-        line("Glass", if (!glass.on) "full" else "lighter (" + (if (glass.chosen) "chosen" else "auto: frames too slow") + ")")
+        line("Glass", if (!glass.on) "full" else "lighter (" + (if (glass.chosen) "chosen" else "auto: a modest phone, or frames too slow") + ")")
 
         section("Power")
         line("Battery saver", power.isPowerSaveMode.toString())
