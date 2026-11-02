@@ -52,6 +52,8 @@ data class PcStats(
     val handoff: String? = null,
     /** False when no camera can see (the laptop's only one is behind its closed lid); null: not said. */
     val camera: Boolean? = null,
+    /** On its charger, whether or not the battery is taking charge (a charge limit holds it); null: not said. */
+    val ac: Boolean? = null,
 )
 
 /** Where a screenshot or camera photo request is. [Done.location] is something the UI can open. */
@@ -98,7 +100,8 @@ sealed interface XferResult {
 }
 
 sealed interface PcFileEvent {
-    data class Saved(val name: String, val location: String) : PcFileEvent
+    /** [temporary]: fetched only to look at (see [CompanionPlugin.download]), not saved to the user's files. */
+    data class Saved(val name: String, val location: String, val temporary: Boolean = false) : PcFileEvent
     data class Failed(val name: String, val reason: String) : PcFileEvent
     /** Uploaded into [folder]; [name] is what the PC saved it as (it never overwrites). */
     data class Uploaded(val name: String, val folder: String) : PcFileEvent
@@ -284,9 +287,16 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         }
     }
 
-    /** Downloads a PC file into the phone's Downloads; progress shows like any received file. */
-    suspend fun download(path: String) {
+    /** Paths fetched only to look at; see [download]. */
+    private val viewing = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Fetches a PC file. [keep]: into the phone's Downloads, with progress like any received file;
+     * otherwise only to look at, somewhere temporary that clears itself ([ShareSink.createTemporary]).
+     */
+    suspend fun download(path: String, keep: Boolean = true) {
         if (path in _fetching.value) return
+        if (keep) viewing.remove(path) else viewing.add(path)
         _fetching.update { it + path }
         if (!ctx.send(packet(FILES_GET) { put("path", path) })) {
             _fetching.update { it - path }
@@ -366,25 +376,27 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         }
         packet.string("error")?.let { return done(PcFileEvent.Failed(name, it)) }
         if (!packet.hasPayload) return done(PcFileEvent.Failed(name, "The PC sent nothing"))
+        val view = viewing.remove(path)
         ctx.scope.launch(Dispatchers.IO) {
             val size = packet.payloadSize
-            val id = Transfers.start(ctx.device, name, incoming = true, total = size)
-            val target = sink.createFile(ctx.device, name, size, null)
+            // A file only being looked at isn't a received file: no transfer entry or notification.
+            val id = if (view) null else Transfers.start(ctx.device, name, incoming = true, total = size)
+            val target = if (view) sink.createTemporary(ctx.device, name, size) else sink.createFile(ctx.device, name, size, null)
             if (target == null) {
-                Transfers.finish(id, ok = false)
+                id?.let { Transfers.finish(it, ok = false) }
                 return@launch done(PcFileEvent.Failed(name, "Couldn't save it"))
             }
             try {
                 val input = ctx.device.openPayload(packet) ?: error("no payload")
-                input.use { it.copyWithProgress(target.output) { n -> Transfers.progress(id, n) } }
+                input.use { it.copyWithProgress(target.output) { n -> id?.let { Transfers.progress(it, n) } } }
                 target.output.close()
                 val location = target.complete() ?: error("not saved")
-                Transfers.finish(id, ok = true, location = location)
-                done(PcFileEvent.Saved(name, location))
+                id?.let { Transfers.finish(it, ok = true, location = location) }
+                done(PcFileEvent.Saved(name, location, temporary = view))
             } catch (e: Exception) {
                 VLog.w(TAG, "file transfer failed: ${e.message}")
                 target.abort()
-                Transfers.finish(id, ok = false)
+                id?.let { Transfers.finish(it, ok = false) }
                 done(PcFileEvent.Failed(name, "The transfer was interrupted"))
             }
         }
@@ -517,6 +529,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                 uptimeSeconds = packet.long("uptime"),
                 handoff = packet.string("handoff"),
                 camera = packet.bool("camera"),
+                ac = packet.bool("ac"),
             )
         }
         return true

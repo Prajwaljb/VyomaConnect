@@ -152,7 +152,7 @@ import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.MoreHoriz
-import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.Terminal
@@ -366,7 +366,7 @@ fun PcDashboard(
             actions = listOf(
                 // One job per tap; a long press pours out a liquid glass menu of the tile's other jobs
                 // (LocalMenu). Slots never move: without the companion, PC files becomes Files (the
-                // tab), Screen becomes Ping and Camera becomes Send clip. Hues stay off the meters'
+                // tab), Screen becomes Ping and Camera becomes Touchpad. Hues stay off the meters'
                 // green/yellow/red.
                 Control(
                     Icons.Rounded.UploadFile, "Send files", SystemColor.BLUE, progress = sending,
@@ -396,8 +396,10 @@ fun PcDashboard(
                         status.show("Camera unavailable: the laptop's lid is closed", icon = Icons.Rounded.NoPhotography, failure = true)
                     }
                 }
-                else Control(
-                    Icons.Rounded.ContentPasteGo, "Send clip", SystemColor.ORANGE,
+                else Control(Icons.Rounded.TouchApp, "Touchpad", SystemColor.ORANGE, opens = true, onClick = onTouchpad),
+                // Find PC's old slot (the user had no use for it, 2026-11).
+                Control(
+                    Icons.Rounded.ContentPasteGo, "Send clip", SystemColor.TEAL,
                     menu = listOf(
                         MenuItem("Send what's copied", Icons.Rounded.ContentPasteGo) {
                             if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied to send", failure = true)
@@ -407,7 +409,6 @@ fun PcDashboard(
                 ) {
                     if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied to send", failure = true)
                 },
-                Control(Icons.Rounded.NotificationsActive, "Find PC", SystemColor.TEAL) { vm.ringPc(id); status.show("Ringing the PC", icon = Icons.Rounded.NotificationsActive, haptic = false) },
                 // Held, the commands themselves: run one straight from Home.
                 Control(
                     Icons.Rounded.Terminal, "Commands", SystemColor.GRAY, opens = true,
@@ -427,13 +428,25 @@ fun PcDashboard(
                     active = pc.locked == true,
                     toggle = true,
                 ) { vm.setPcLocked(id, pc.locked != true) },
-                Control(
-                    if (pc.sink?.muted == true) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
-                    if (pc.sink?.muted == true) "Muted" else "Mute",
-                    SystemColor.RED,
-                    active = pc.sink?.muted == true,
-                    toggle = pc.sink != null,
-                ) { pc.sink?.let { vm.setSinkMuted(id, it.name, !it.muted) } ?: status.show("Volume control isn't on for this PC", failure = true) },
+                // Turned all the way down is as silent as muted, so it reads the same; tapped, it
+                // comes back at a third rather than staying at nothing.
+                run {
+                    val silent = pc.sink?.let { it.muted || it.volume <= 0 } == true
+                    Control(
+                        if (silent) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
+                        if (silent) "Muted" else "Mute",
+                        SystemColor.RED,
+                        active = silent,
+                        toggle = pc.sink != null,
+                    ) {
+                        val sink = pc.sink ?: return@Control status.show("Volume control isn't on for this PC", failure = true)
+                        when {
+                            sink.muted -> vm.setSinkMuted(id, sink.name, false)
+                            sink.volume <= 0 -> vm.setSinkVolume(id, sink.name, sink.maxVolume / 3)
+                            else -> vm.setSinkMuted(id, sink.name, true)
+                        }
+                    }
+                },
             ),
             modifier = modifier,
             // Away, the tiles keep their places but rest, quiet and untappable.
@@ -667,7 +680,7 @@ internal fun VolumeBar(
                 underlay = card,
                 edgeHaptics = false,
             )
-            Icon(if (sink.muted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null, tint = muted, modifier = Modifier.size(20.dp))
+            Icon(if (sink.muted || level <= 0f) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null, tint = muted, modifier = Modifier.size(20.dp))
         }
     }
 }
@@ -916,12 +929,15 @@ private fun PcStatus(battery: BatteryState?, stale: Boolean, stats: PcStats?, sh
         modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.large).padding(horizontal = 20.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // On its charger but not taking charge (full, or held at a charge limit): stock KDE Connect
+        // only says "not charging", so the companion's word on the charger decides.
+        val plugged = battery != null && !battery.charging && stats?.ac == true
         if (battery != null) {
-            val color = if (battery.charge <= 15 && !battery.charging) SystemColor.RED else SystemColor.GREEN
+            val color = if (battery.charge <= 15 && !battery.charging && !plugged) SystemColor.RED else SystemColor.GREEN
             // A cached reading shows dimmed until the PC sends a fresh one.
             Box(Modifier.graphicsLayer { alpha = if (stale) 0.5f else 1f }) {
                 Gauge(
-                    if (battery.charging) "Charging" else "Battery", "${battery.charge}", "%",
+                    if (battery.charging) "Charging" else if (plugged) "Plugged in" else "Battery", "${battery.charge}", "%",
                     battery.charge / 100f, color, Modifier, size = 80.dp, stroke = 7.dp,
                     valueStyle = MaterialTheme.typography.headlineSmall,
                 )
@@ -930,7 +946,7 @@ private fun PcStatus(battery: BatteryState?, stale: Boolean, stats: PcStats?, sh
         }
         if (!showLoad) {
             if (battery != null) Column(Modifier.weight(1f)) {
-                Text(if (battery.charging) "Charging" else if (battery.low) "Battery low" else "On battery", style = MaterialTheme.typography.titleMedium)
+                Text(if (battery.charging) "Charging" else if (plugged) "Plugged in" else if (battery.low) "Battery low" else "On battery", style = MaterialTheme.typography.titleMedium)
                 Text(
                     if (stale) "Last known level" else "PC battery",
                     style = MaterialTheme.typography.bodySmall,

@@ -1,5 +1,6 @@
 package dev.vyoma.connect.designsystem
 
+import android.annotation.SuppressLint
 import android.graphics.RuntimeShader
 import android.os.Build
 import androidx.annotation.ChecksSdkIntAtLeast
@@ -283,7 +284,8 @@ internal class InnerGlow {
          * the UI thread whenever its draw cache was rebuilt). Sharing is safe: a draw takes a copy
          * of the uniforms as they are then, and all of this runs on the UI thread.
          */
-        val bandShader by lazy(LazyThreadSafetyMode.NONE) { RuntimeShader(BAND_AGSL) }
+        // Read only where liquidGlassSupported.
+        val bandShader by lazy(LazyThreadSafetyMode.NONE) { @SuppressLint("NewApi") RuntimeShader(BAND_AGSL) }
 
         const val BAND_AGSL = """
 uniform float2 size;
@@ -670,7 +672,7 @@ fun Modifier.glassChrome(
             }
             val r = blur.toPx()
             val shift = backdrop.origin - position
-            if (lens == null) {
+            if (lens == null || !liquidGlassSupported) {
                 blurred.renderEffect = blurs[r]
                 blurred.record { translate(shift.x, shift.y) { drawLayer(backdrop.layer) } }
                 drawLayer(blurred)
@@ -777,8 +779,10 @@ fun Modifier.liquidLens(
     style: LensStyle = LensStyle.Drop,
     /** 0 = clear water, 1 = frosted white (a slider knob at rest that clears as it's grabbed). */
     frost: () -> Float = { 0f },
+    /** Water moving inside the drop: x is how far (px) what's seen through it sways, y the swells' phase (radians). */
+    ripple: () -> Offset = { Offset.Zero },
     rect: DrawScope.() -> Rect,
-): Modifier = if (!liquidGlassSupported) this else this then LiquidLensElement(backdrop, strength, zoom, underlay, style, frost, rect)
+): Modifier = if (!liquidGlassSupported) this else this then LiquidLensElement(backdrop, strength, zoom, underlay, style, frost, ripple, rect)
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private data class LiquidLensElement(
@@ -788,9 +792,10 @@ private data class LiquidLensElement(
     val underlay: Color,
     val style: LensStyle,
     val frost: () -> Float,
+    val ripple: () -> Offset,
     val rect: DrawScope.() -> Rect,
 ) : ModifierNodeElement<LiquidLensNode>() {
-    override fun create() = LiquidLensNode(backdrop, strength, zoom, underlay, style, frost, rect)
+    override fun create() = LiquidLensNode(backdrop, strength, zoom, underlay, style, frost, ripple, rect)
     override fun update(node: LiquidLensNode) {
         node.backdrop = backdrop
         node.strength = strength
@@ -798,6 +803,7 @@ private data class LiquidLensElement(
         node.underlay = underlay
         node.style = style
         node.frost = frost
+        node.ripple = ripple
         node.rect = rect
         node.invalidateDraw()
     }
@@ -811,6 +817,7 @@ private class LiquidLensNode(
     var underlay: Color,
     var style: LensStyle,
     var frost: () -> Float,
+    var ripple: () -> Offset,
     var rect: DrawScope.() -> Rect,
 ) : Modifier.Node(), DrawModifierNode, GlobalPositionAwareModifierNode, CompositionLocalConsumerModifierNode {
     private var position = Offset.Zero
@@ -831,7 +838,7 @@ private class LiquidLensNode(
         val dark = currentValueOf(LocalContentColor).luminance() > 0.5f
         val p = painter ?: LensPainter(requireGraphicsContext()).also { painter = it }
         val shift = backdrop?.let { it.origin - position }
-        with(p) { paint(a, r, zoom(), style, underlay, dark, backdrop, shift ?: Offset.Zero, frost().coerceIn(0f, 1f)) }
+        with(p) { paint(a, r, zoom(), style, underlay, dark, backdrop, shift ?: Offset.Zero, frost().coerceIn(0f, 1f), ripple()) }
     }
 
     override fun onDetach() {
@@ -850,7 +857,7 @@ internal class LensPainter(private val graphics: GraphicsContext) {
     private val drop = graphics.createGraphicsLayer()
     private val glass = LiquidGlass()
 
-    fun ContentDrawScope.paint(a: Float, r: Rect, zoom: Float, style: LensStyle, underlay: Color, dark: Boolean, backdrop: Backdrop?, shift: Offset, frost: Float = 0f) {
+    fun ContentDrawScope.paint(a: Float, r: Rect, zoom: Float, style: LensStyle, underlay: Color, dark: Boolean, backdrop: Backdrop?, shift: Offset, frost: Float = 0f, ripple: Offset = Offset.Zero) {
         self.record { this@paint.drawContent() }
         // Under the drop only the drop shows: drawing the original there too doubled anything
         // seen through a translucent surface (a pill's label showed twice, magnified and not).
@@ -871,7 +878,7 @@ internal class LensPainter(private val graphics: GraphicsContext) {
             // Quantized so a frost animation rebuilds the shader a few dozen times, not every frame.
             tint = Color.White.copy(alpha = androidx.compose.ui.util.lerp(if (dark) style.milk.first else style.milk.second, 0.97f, (frost * 32).roundToInt() / 32f)),
             spec = if (dark) 0.55f else 0.9f,
-            shade = if (dark) 0f else 0.12f, blur = 0f,
+            shade = if (dark) 0f else 0.12f, blur = 0f, ripple = ripple.x, phase = ripple.y,
         )
         drop.alpha = a
         drop.record(IntSize(r.width.roundToInt() + 2 * m, r.height.roundToInt() + 2 * m)) {
@@ -966,17 +973,19 @@ private class BlurCache {
 internal class LiquidGlass {
     // Shared, compiled once (see InnerGlow's): a RenderEffect copies the uniforms when it's built.
     private val shader = sharedShader
-    private var last = FloatArray(17) { Float.NaN }
+    private var last = FloatArray(19) { Float.NaN }
     private var effect: RenderEffect? = null
 
     internal fun effect(
         size: Size, margin: Float, radius: Float, bevel: Float, refract: Float, zoom: Float, disperse: Float, tint: Color, spec: Float, shade: Float, blur: Float,
+        /** Water moving inside (px of sway) and where its swells are; see [liquidLens]'s ripple. */
+        ripple: Float = 0f, phase: Float = 0f,
     ): RenderEffect {
         // Where the light is (see SpecularLight), as a unit vector in screen axes.
         val a = Math.toRadians(SpecularLight.angle.toDouble())
         val lx = cos(a).toFloat()
         val ly = sin(a).toFloat()
-        val args = floatArrayOf(size.width, size.height, margin, radius, bevel, refract, zoom, disperse, tint.red, tint.green, tint.blue, tint.alpha, spec, shade, blur, lx, ly)
+        val args = floatArrayOf(size.width, size.height, margin, radius, bevel, refract, zoom, disperse, tint.red, tint.green, tint.blue, tint.alpha, spec, shade, blur, lx, ly, ripple, phase)
         effect?.let { if (args.contentEquals(last)) return it }
         last = args
         shader.setFloatUniform("size", size.width, size.height)
@@ -990,6 +999,8 @@ internal class LiquidGlass {
         shader.setFloatUniform("spec", spec)
         shader.setFloatUniform("shade", shade)
         shader.setFloatUniform("light", lx, ly)
+        shader.setFloatUniform("ripple", ripple)
+        shader.setFloatUniform("phase", phase)
         val glass = android.graphics.RenderEffect.createRuntimeShaderEffect(shader, "content")
         val full = if (blur > 0f) {
             android.graphics.RenderEffect.createChainEffect(
@@ -1015,6 +1026,8 @@ uniform float4 tint;
 uniform float spec;
 uniform float shade;
 uniform float2 light;
+uniform float ripple;
+uniform float phase;
 
 half4 main(float2 p) {
     float2 c = size * 0.5;
@@ -1033,6 +1046,11 @@ half4 main(float2 p) {
     float2 lo = float2(0.5);
     float2 hi = size + 2.0 * margin - 0.5;
     float2 at = margin + c + rel / zoom;
+    // Water moving inside a held drop: two slow crossing swells nudge what's seen through it.
+    if (ripple > 0.0) {
+        at += ripple * float2(sin(at.y * 0.085 + phase) + 0.5 * sin(at.x * 0.05 - phase * 0.7),
+                              cos(at.x * 0.07 + phase * 1.3) + 0.5 * cos(at.y * 0.06 + phase * 0.9));
+    }
     half4 col;
     if (t <= 0.0) {
         // The flat middle (most pixels): straight through, one sample.

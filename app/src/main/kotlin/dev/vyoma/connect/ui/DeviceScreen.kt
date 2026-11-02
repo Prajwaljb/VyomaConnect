@@ -26,7 +26,6 @@ import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.BatteryStd
 import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.LinkOff
-import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -68,6 +67,7 @@ fun DeviceScreen(
         companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
     }
     val pcLevels = companionPlugin?.let { rememberPcControls(it) }
+    val pcStats by (companionPlugin?.stats ?: remember { MutableStateFlow(null) }).collectAsState()
     var confirmPower by rememberSaveable { mutableStateOf<PcPower?>(null) }
     val fingerprint = remember(state?.isReachable, state?.isPaired) { vm.fingerprint(deviceId) }
 
@@ -110,26 +110,16 @@ fun DeviceScreen(
                     subtitle = if (state.isReachable) "${state.plugins.size} features active" else "Open KDE Connect on it, or join the same network",
                     icon = if (TransportKind.USB in state.transports) Icons.Rounded.Usb else Icons.Rounded.Wifi,
                     iconTint = if (state.isReachable) SystemColor.BLUE.color else SystemColor.GRAY.color,
-                    showDivider = battery != null || companionOnline,
+                    showDivider = battery != null,
                     // Checks the link end to end: the PC shows a "Ping!" notification.
                     trailing = if (live) { { PillButton("Ping", prominent = false, onClick = { vm.ping(deviceId); status.show("Pinged: look for it on the PC") }) } } else null,
                 )
-                // With the companion, the camera has Find PC's slot in the controls.
-                if (companionOnline) {
-                    ListRow(
-                        title = "Find this PC",
-                        subtitle = "Rings it so you can find it",
-                        icon = Icons.Rounded.NotificationsActive,
-                        iconTint = SystemColor.YELLOW.color,
-                        showDivider = battery != null,
-                        trailing = { PillButton("Ring", prominent = false, onClick = { vm.ringPc(deviceId); status.show("Ringing the PC", icon = Icons.Rounded.NotificationsActive) }) },
-                    )
-                }
                 battery?.let { b ->
+                    val plugged = !b.charging && pcStats?.ac == true
                     ListRow(
                         title = "Battery ${b.charge}%",
-                        subtitle = if (b.charging) "Charging" else if (b.low) "Low" else "On battery",
-                        icon = if (b.charging) Icons.Rounded.BatteryChargingFull else Icons.Rounded.BatteryStd,
+                        subtitle = if (b.charging) "Charging" else if (plugged) "Plugged in" else if (b.low) "Low" else "On battery",
+                        icon = if (b.charging || plugged) Icons.Rounded.BatteryChargingFull else Icons.Rounded.BatteryStd,
                         iconTint = if (b.low) SystemColor.RED.color else SystemColor.GREEN.color,
                     )
                 }

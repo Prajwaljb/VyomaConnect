@@ -14,6 +14,8 @@ import dev.vyoma.connect.designsystem.ThemeSettings
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import dev.vyoma.connect.platform.FrameBudget
+import dev.vyoma.connect.designsystem.HapticEngine
 
 private val Context.dataStore by preferencesDataStore("settings")
 
@@ -34,6 +36,8 @@ class SettingsRepository(private val context: Context) {
         val manualHosts = stringSetPreferencesKey("manual_hosts")
         /** Pause in the background away from Wi-Fi; on unless turned off. */
         val outdoorMode = booleanPreferencesKey("outdoor_mode")
+        /** A HapticEngine's name; absent means the phone's own pick. */
+        val hapticStyle = stringPreferencesKey("haptic_style")
     }
 
     private val prefs: Flow<Preferences> get() = context.dataStore.data
@@ -51,10 +55,16 @@ class SettingsRepository(private val context: Context) {
     suspend fun setPalette(palette: Palette) = context.dataStore.edit { it[Keys.palette] = palette.name }
     suspend fun setDarkMode(mode: DarkMode) = context.dataStore.edit { it[Keys.darkMode] = mode.name }
 
-    /** Lighter glass: the user's choice if they made one, else what FrameBudget found. */
+    /**
+     * Lighter glass: the user's choice if they made one, else what FrameBudget found, else whether
+     * this looks like a modest phone ([FrameBudget.looksModest]), so one starts light from the
+     * first launch instead of after two slow ones.
+     */
     val liteGlass: Flow<LiteGlass> = prefs.map { p ->
-        LiteGlass(on = p[Keys.liteGlass] ?: p[Keys.liteGlassAuto] ?: false, chosen = p[Keys.liteGlass] != null, detected = p[Keys.liteGlassAuto] ?: false)
+        val detected = p[Keys.liteGlassAuto] ?: modest
+        LiteGlass(on = p[Keys.liteGlass] ?: detected, chosen = p[Keys.liteGlass] != null, detected = detected)
     }.distinctUntilChanged()
+    private val modest by lazy { FrameBudget.looksModest(context) }
     suspend fun setLiteGlass(enabled: Boolean) = context.dataStore.edit { it[Keys.liteGlass] = enabled }
     /** One more launch found too slow; the second turns lighter glass on (one could be a fluke). */
     suspend fun recordSlowLaunch() = context.dataStore.edit {
@@ -69,6 +79,9 @@ class SettingsRepository(private val context: Context) {
     val manualHosts: Flow<Set<String>> = prefs.map { it[Keys.manualHosts].orEmpty() }.distinctUntilChanged()
     suspend fun addManualHost(host: String) = context.dataStore.edit { it[Keys.manualHosts] = it[Keys.manualHosts].orEmpty() + host }
     suspend fun removeManualHost(host: String) = context.dataStore.edit { it[Keys.manualHosts] = it[Keys.manualHosts].orEmpty() - host }
+
+    val hapticStyle: Flow<HapticEngine?> = prefs.map { p -> p[Keys.hapticStyle]?.let { runCatching { HapticEngine.valueOf(it) }.getOrNull() } }.distinctUntilChanged()
+    suspend fun setHapticStyle(style: HapticEngine?) = context.dataStore.edit { if (style == null) it.remove(Keys.hapticStyle) else it[Keys.hapticStyle] = style.name }
 
     val outdoorMode: Flow<Boolean> = prefs.map { it[Keys.outdoorMode] ?: true }.distinctUntilChanged()
     suspend fun setOutdoorMode(enabled: Boolean) = context.dataStore.edit { it[Keys.outdoorMode] = enabled }

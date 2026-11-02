@@ -21,7 +21,6 @@ enum class QuickAction(val icon: Int, val label: String, val description: String
     VOLUME_UP(R.drawable.ic_w_volume_up, "Vol +", "Turn the PC up"),
     MUTE(R.drawable.ic_w_mute, "Mute PC", "Mute or unmute the PC"),
     LOCK(R.drawable.ic_w_lock, "Lock PC", "Lock the PC's screen"),
-    RING(R.drawable.ic_w_ring, "Find PC", "Play a sound on the PC"),
     PING(R.drawable.ic_w_ping, "Ping", "Show a ping on the PC"),
     ;
 
@@ -40,7 +39,6 @@ enum class QuickAction(val icon: Int, val label: String, val description: String
         VOLUME_UP -> Act(icon, label, Widgets.command(context, Commands.VOLUME_UP))
         MUTE -> Act(icon, label, Widgets.command(context, Commands.MUTE_PC))
         LOCK -> Act(icon, label, Widgets.command(context, Commands.LOCK_PC))
-        RING -> Act(icon, label, Widgets.command(context, Commands.RING_PC))
         PING -> Act(icon, label, Widgets.command(context, Commands.PING))
     }
 

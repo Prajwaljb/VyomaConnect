@@ -69,6 +69,7 @@ import androidx.glance.unit.ColorProvider
 import dev.vyoma.connect.R
 import dev.vyoma.connect.container
 import dev.vyoma.connect.protocol.plugin.builtin.BatteryPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.Transfer
 import dev.vyoma.connect.protocol.plugin.builtin.Transfers
 import dev.vyoma.connect.service.CommandReceiver
@@ -172,6 +173,11 @@ object Widgets {
         val primary = Commands.primary(c)
         val known = primary ?: c.hub.value?.devices?.value?.values?.firstOrNull { it.state.value.isPaired && !it.state.value.isCompanion }
         val pcBattery = primary?.plugin<BatteryPlugin>(BatteryPlugin.ID)?.remote?.value
+        // On its charger at a charge limit, stock KDE Connect says "not charging"; the companion knows better.
+        val pcOnAc = primary?.let { pc ->
+            c.hub.value?.devices?.value?.values?.firstOrNull { it.state.value.identity.companionOf == pc.state.value.identity.deviceId }
+                ?.plugin<CompanionPlugin>(CompanionPlugin.ID)?.stats?.value?.ac
+        } == true
         val phone = c.battery.state.value
         val np = c.media.nowPlaying.value
         val running = Transfers.all.value.filter { it.state == Transfer.State.RUNNING }
@@ -179,7 +185,7 @@ object Widgets {
             pcName = known?.name ?: state.value?.pcName,
             connected = primary != null,
             pcBattery = pcBattery?.charge,
-            pcCharging = pcBattery?.charging == true,
+            pcCharging = pcBattery?.charging == true || pcOnAc,
             phoneBattery = phone?.charge,
             phoneCharging = phone?.charging == true,
             title = np?.player?.title?.takeIf { it.isNotBlank() },

@@ -72,16 +72,19 @@ val LocalStatus = staticCompositionLocalOf { StatusController() }
 @Composable
 fun StatusHost(content: @Composable () -> Unit) {
     val controller = remember { StatusController() }
+    // The app is recorded as the bubble's backdrop (replaying a recorded list costs nothing extra),
+    // so it's the same liquid glass as the tab bar.
+    val backdrop = rememberBackdrop()
     CompositionLocalProvider(LocalStatus provides controller) {
         Box(Modifier.fillMaxSize()) {
-            content()
-            StatusBubble(controller)
+            Box(Modifier.fillMaxSize().backdropSource(backdrop)) { content() }
+            StatusBubble(controller, backdrop)
         }
     }
 }
 
 @Composable
-private fun BoxScope.StatusBubble(c: StatusController) {
+private fun BoxScope.StatusBubble(c: StatusController, backdrop: Backdrop) {
     val haptics = LocalHapticFeedback.current
     val drop = remember { Animatable(0f) }
     val spread = remember { Animatable(0f) }
@@ -102,7 +105,6 @@ private fun BoxScope.StatusBubble(c: StatusController) {
         if (c.current?.id == msg.id) c.current = null
     }
     val m = shown ?: return
-    val dark = isDarkUi
     Row(
         Modifier
             .align(Alignment.TopCenter)
@@ -117,10 +119,8 @@ private fun BoxScope.StatusBubble(c: StatusController) {
                 scaleY = 0.8f + 0.2f * p.coerceIn(0f, 1f)
             }
             .semantics { liveRegion = LiveRegionMode.Polite }
-            .shadow(16.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.3f), spotColor = Color.Black.copy(alpha = 0.3f))
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .border(0.8.dp, if (dark) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.06f), CircleShape)
+            // Liquid glass like the tab bar; it was a flat grey slab whose text fell back to black in dark mode.
+            .glassChrome(backdrop, CircleShape, blur = 10.dp, bevel = 16.dp)
             .height(48.dp)
             .widthIn(min = 120.dp)
             .padding(start = 14.dp, end = 20.dp),
@@ -129,6 +129,6 @@ private fun BoxScope.StatusBubble(c: StatusController) {
         val tone = if (m.failure) SystemColor.RED.color else SystemColor.GREEN.color
         Icon(m.icon ?: if (m.failure) Icons.Rounded.Error else Icons.Rounded.CheckCircle, null, tint = tone, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(10.dp))
-        Text(m.text, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(m.text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }

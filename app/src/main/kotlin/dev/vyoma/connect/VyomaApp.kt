@@ -18,6 +18,7 @@ import dev.vyoma.connect.protocol.device.DeviceHub
 import dev.vyoma.connect.protocol.device.FileTrustStore
 import dev.vyoma.connect.designsystem.AppCanvas
 import dev.vyoma.connect.designsystem.GlassQuality
+import dev.vyoma.connect.designsystem.Haptics
 import dev.vyoma.connect.platform.AndroidClipboard
 import dev.vyoma.connect.platform.FrameBudget
 import dev.vyoma.connect.platform.AndroidShareSink
@@ -79,6 +80,7 @@ class VyomaApp : Application() {
             DemoDiagnostics.install(this)
         }
         container = AppContainer(this)
+        if (BuildConfig.DEMO) container.appScope.launch { DemoDiagnostics.reportCrashes(this@VyomaApp) }
         // Lighter glass: the user's setting, or found here when this phone can't keep up with the full kind.
         val budget = FrameBudget { container.appScope.launch { container.settings.recordSlowLaunch() } }
         budget.install(this)
@@ -90,6 +92,9 @@ class VyomaApp : Application() {
         }
         container.appScope.launch(Dispatchers.Main) {
             container.settings.canvasGlow.collect { AppCanvas.glow = it }
+        }
+        container.appScope.launch(Dispatchers.Main) {
+            container.settings.hapticStyle.collect { Haptics.chosen = it }
         }
         // Whether any of our activities is started: background work scales down when it isn't.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {

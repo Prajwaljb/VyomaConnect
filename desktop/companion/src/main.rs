@@ -16,6 +16,7 @@ mod pc;
 mod screen;
 mod screenshot;
 mod stats;
+mod tether;
 mod usb;
 mod xfer;
 
@@ -66,6 +67,7 @@ async fn main() -> Result<()> {
     let shared = Arc::new(Shared { host, me, connected: Mutex::default(), seen: Mutex::default(), media });
 
     tokio::spawn(usb::watch());
+    tokio::spawn(watch_tether(shared.clone()));
 
     let mdns = mdns_sd::ServiceDaemon::new()?;
     let events = mdns.browse(SERVICE)?;
@@ -142,8 +144,56 @@ fn identity_packet(shared: &Shared) -> Value {
     )
 }
 
+/// The port Vyoma listens on (KDE Connect's).
+const PHONE_PORT: u16 = 1716;
+const TETHER_POLL: Duration = Duration::from_secs(5);
+/// After a tethered address didn't answer as a trusted phone, leave it this long.
+const TETHER_BACKOFF: Duration = Duration::from_secs(30);
+
+/// Phones tethered over USB (see tether.rs): dialled when a trusted phone isn't linked yet. The
+/// link is the same as over Wi-Fi, so everything works with no USB debugging.
+async fn watch_tether(shared: Arc<Shared>) {
+    let next_try: Arc<Mutex<HashMap<IpAddr, Instant>>> = Arc::default();
+    loop {
+        tokio::time::sleep(TETHER_POLL).await;
+        for ip in tether::phones() {
+            if next_try.lock().unwrap().get(&ip).is_some_and(|t| Instant::now() < *t) {
+                continue;
+            }
+            let connected = shared.connected.lock().unwrap().clone();
+            let free: HashMap<String, Vec<u8>> = shared.host.trusted_phones().into_iter().filter(|(id, _)| !connected.contains(id)).collect();
+            if free.is_empty() {
+                continue;
+            }
+            next_try.lock().unwrap().insert(ip, Instant::now() + TETHER_BACKOFF);
+            let (shared, next_try) = (shared.clone(), next_try.clone());
+            tokio::spawn(async move {
+                let addr = SocketAddr::new(ip, PHONE_PORT);
+                match link::connect_trusted(addr, &shared.me, &identity_packet(&shared), &free).await {
+                    Ok((id, link)) => {
+                        // A Wi-Fi dial may have won meanwhile: then this one just closes.
+                        if !shared.connected.lock().unwrap().insert(id.clone()) {
+                            return;
+                        }
+                        info!("{id}: found over USB tethering at {ip}");
+                        shared.seen.lock().unwrap().insert(id.clone(), addr);
+                        next_try.lock().unwrap().remove(&ip);
+                        let _ = run(&shared, &id, addr, &free[&id], link).await.inspect_err(|e| warn!("{id}: {e:#}"));
+                        shared.connected.lock().unwrap().remove(&id);
+                    }
+                    Err(e) => info!("tethered {ip}: {e:#}"),
+                }
+            });
+        }
+    }
+}
+
 async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u8]) -> Result<()> {
-    let mut link = link::connect(addr, &shared.me, &identity_packet(shared), phone_id, pinned).await?;
+    let link = link::connect(addr, &shared.me, &identity_packet(shared), phone_id, pinned).await?;
+    run(shared, phone_id, addr, pinned, link).await
+}
+
+async fn run(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u8], mut link: link::Link) -> Result<()> {
     let name = link.phone_identity["body"]["deviceName"].as_str().unwrap_or(phone_id).to_string();
     info!("linked with {name} at {addr}");
 
@@ -294,9 +344,25 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
     result
 }
 
+/// Whether the PC runs from a charger (mains or a USB-C power source); None with no such supply (a desktop).
+fn on_ac() -> Option<bool> {
+    let mut seen = false;
+    for entry in std::fs::read_dir("/sys/class/power_supply").ok()?.flatten() {
+        let read = |f: &str| std::fs::read_to_string(entry.path().join(f)).map(|s| s.trim().to_owned()).unwrap_or_default();
+        if !matches!(read("type").as_str(), "Mains" | "USB") {
+            continue;
+        }
+        seen = true;
+        if read("online") == "1" {
+            return Some(true);
+        }
+    }
+    seen.then_some(false)
+}
+
 /// Stats, plus `handoff`: the title of a web video the phone could continue (absent otherwise),
 /// so the phone only offers "Continue on phone" when it would work; and `camera`: whether a photo
-/// can be taken (false behind a closed lid with no other camera).
+/// can be taken (false behind a closed lid with no other camera); and `ac`: on a charger.
 async fn stream_stats(sender: Sender, lease: Arc<Mutex<Instant>>, media: Option<Arc<media::Media>>) {
     let mut stats = match stats::Stats::new() {
         Ok(s) => s,
@@ -311,6 +377,11 @@ async fn stream_stats(sender: Sender, lease: Arc<Mutex<Instant>>, media: Option<
         }
         // So the phone can say "Camera unavailable" up front instead of after a failed tap.
         body["camera"] = json!(camera::available());
+        // Stock battery packets only say "charging": a laptop on its charger that holds at a
+        // charge limit (or is full) reads as on battery without this.
+        if let Some(ac) = on_ac() {
+            body["ac"] = json!(ac);
+        }
         if sender.send(&packet("vyoma.stats", body)).await.is_err() {
             return;
         }

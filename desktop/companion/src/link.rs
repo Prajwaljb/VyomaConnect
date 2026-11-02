@@ -5,6 +5,7 @@
 //! against the certificate kdeconnectd pinned for that phone. Protocol v8: identities are
 //! exchanged again inside TLS, and only that copy counts.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -89,6 +90,13 @@ fn keepalive(tcp: &TcpStream) {
 }
 
 pub async fn connect(addr: SocketAddr, me: &Identity, identity: &Value, phone_id: &str, pinned_cert: &[u8]) -> Result<Link> {
+    let trusted = HashMap::from([(phone_id.to_string(), pinned_cert.to_vec())]);
+    Ok(connect_trusted(addr, me, identity, &trusted).await?.1)
+}
+
+/// Like [connect], to whichever of the [trusted] phones (id to certificate) answers at [addr];
+/// for an address found without knowing who's there (a USB tethering link).
+pub async fn connect_trusted(addr: SocketAddr, me: &Identity, identity: &Value, trusted: &HashMap<String, Vec<u8>>) -> Result<(String, Link)> {
     let mut tcp = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr)).await.context("connect timed out")??;
     tcp.set_nodelay(true)?;
     keepalive(&tcp);
@@ -99,9 +107,9 @@ pub async fn connect(addr: SocketAddr, me: &Identity, identity: &Value, phone_id
     let acceptor = TlsAcceptor::from(Arc::new(server_config(me)?));
     let tls = tokio::time::timeout(Duration::from_secs(10), acceptor.accept(tcp)).await.context("TLS timed out")??;
     let peer = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).context("phone sent no certificate")?;
-    if peer.as_ref() != pinned_cert {
-        bail!("certificate doesn't match the one KDE Connect trusts for {phone_id}");
-    }
+    let Some(phone_id) = trusted.iter().find(|(_, cert)| peer.as_ref() == cert.as_slice()).map(|(id, _)| id.clone()) else {
+        bail!("certificate isn't one KDE Connect trusts");
+    };
 
     let (read, write) = tokio::io::split(tls);
     let sender = Sender(Arc::new(Mutex::new(write)));
@@ -111,10 +119,10 @@ pub async fn connect(addr: SocketAddr, me: &Identity, identity: &Value, phone_id
         .await
         .context("no identity from phone")??
         .context("phone closed during handshake")?;
-    if phone_identity["type"] != "kdeconnect.identity" || phone_identity["body"]["deviceId"] != phone_id {
+    if phone_identity["type"] != "kdeconnect.identity" || phone_identity["body"]["deviceId"] != phone_id.as_str() {
         bail!("unexpected identity from phone");
     }
-    Ok(Link { sender, receiver, phone_identity })
+    Ok((phone_id, Link { sender, receiver, phone_identity }))
 }
 
 pub fn server_config(me: &Identity) -> Result<rustls::ServerConfig> {
