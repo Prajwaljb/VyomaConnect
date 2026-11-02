@@ -1044,8 +1044,17 @@ half4 main(float2 p) {
         float3 ray = refract(float3(0.0, 0.0, -1.0), normal, 1.0 / 1.5);
         float h = bevel * sqrt(max(1.0 - t * t, 0.0));
         float2 shift = ray.xy * (h + bendBy) / -ray.z;
+        float2 behind = clamp(at, lo, hi);
         at = clamp(at + shift, lo, hi);
-        col = content.eval(at);
+        // The bent image is squeezed into the rim, so a gap between two bright things (the dark beyond
+        // the element, say) became a hard dark line under the highlight. Smear it along the bend, more
+        // towards the edge where it's squeezed most: the rim shades in as a gradient instead.
+        float2 smear = shift * (0.35 * t * t);
+        col = (content.eval(at) * 0.4
+            + content.eval(clamp(at - smear, lo, hi)) * 0.2 + content.eval(clamp(at + smear, lo, hi)) * 0.2
+            + content.eval(clamp(at - 2.0 * smear, lo, hi)) * 0.1 + content.eval(clamp(at + 2.0 * smear, lo, hi)) * 0.1);
+        // And it carries some of what's right behind it, so the far side's dark doesn't land as a band.
+        col = mix(col, content.eval(behind), half(0.5 * smoothstep(0.35, 0.95, t)));
         if (disperse > 0.0) {
             float2 k = shift * disperse * 0.3;
             col.r = content.eval(clamp(at + k, lo, hi)).r;

@@ -49,6 +49,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -129,7 +130,7 @@ fun AutomationScreen(vm: AppViewModel, onBack: () -> Unit, onEdit: (String?) -> 
         if (rules.isNotEmpty()) {
             item(key = "mine-label") { SectionLabel("Your rules", Modifier.animateItem(placementSpec = null)) }
             item(key = "mine") {
-                SectionCard(Modifier.animateItem(placementSpec = null).animateContentSize(VyomaMotion.jelly())) {
+                SectionCard(Modifier.animateItem(placementSpec = null).animateContentSize(VyomaMotion.jelly())) { Column(Modifier.clipToBounds()) {
                     rules.forEachIndexed { i, rule ->
                         val look = rule.trigger.look()
                         key(rule.id) { Bubble(appear = rule.id !in initial, ready = landed) {
@@ -154,7 +155,7 @@ fun AutomationScreen(vm: AppViewModel, onBack: () -> Unit, onEdit: (String?) -> 
                             )
                         } }
                     }
-                }
+                } }
             }
         }
         if (timed && !exact) {
@@ -178,7 +179,7 @@ fun AutomationScreen(vm: AppViewModel, onBack: () -> Unit, onEdit: (String?) -> 
         if (offers.isNotEmpty()) {
             item(key = "ideas-label") { SectionLabel(if (rules.isEmpty()) "Start with one of these" else "Suggestions", Modifier.animateItem(placementSpec = null)) }
             item(key = "ideas") {
-                SectionCard(Modifier.animateItem(placementSpec = null).animateContentSize(VyomaMotion.jelly())) {
+                SectionCard(Modifier.animateItem(placementSpec = null).animateContentSize(VyomaMotion.jelly())) { Column(Modifier.clipToBounds()) {
                     // Every suggestion stays composed: an added one shrinks out, a removed rule's bubbles back.
                     val last = Suggestions.all.indexOfLast { it.key !in added }
                     Suggestions.all.forEachIndexed { i, s ->
@@ -201,7 +202,7 @@ fun AutomationScreen(vm: AppViewModel, onBack: () -> Unit, onEdit: (String?) -> 
                             )
                         }
                     }
-                }
+                } }
             }
         }
         if (log.isNotEmpty()) {
@@ -226,7 +227,8 @@ fun AutomationScreen(vm: AppViewModel, onBack: () -> Unit, onEdit: (String?) -> 
     }
 }
 
-// Lists here pass placementSpec = null: the cards grow and shrink on their own springs and push what's
+// Rows bubble inside a clip at the card's inner edge: the swell past full size drew over the card's
+// edge and the card above. Lists here pass placementSpec = null: the cards grow and shrink on their own springs and push what's
 // below them along; a second (placement) spring on the next item lagged and slid it over the growing card.
 
 /** A row that bubbles in when it arrives: it swells past its size on a jelly spring as the card makes room. */
@@ -243,7 +245,7 @@ private fun BubbleVisibility(visible: Boolean, content: @Composable () -> Unit) 
 }
 
 private val bubbleIn = expandVertically(spring(dampingRatio = 0.8f, stiffness = 420f), expandFrom = Alignment.Top) +
-    scaleIn(spring(dampingRatio = 0.45f, stiffness = 320f), initialScale = 0.6f) + fadeIn(spring(stiffness = 500f))
+    scaleIn(spring(dampingRatio = 0.55f, stiffness = 320f), initialScale = 0.6f) + fadeIn(spring(stiffness = 500f))
 private val bubbleOut = shrinkVertically(spring(dampingRatio = 1f, stiffness = 500f), shrinkTowards = Alignment.Top) +
     scaleOut(spring(stiffness = 600f), targetScale = 0.7f) + fadeOut(spring(stiffness = 900f))
 
