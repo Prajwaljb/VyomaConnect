@@ -180,8 +180,8 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   red except Sleep).
 - Switches (`VyomaSwitch`): accent track (NOT iOS green: the user disliked it on pure black), round white thumb with a
   squash at the ends; tap or DRAG the thumb (lands on the nearer side); touched, it lifts into the `Lift` lens.
-  In drag callbacks read `positionChange()` BEFORE `consume()` (a consumed change reports zero movement). `SegmentedControl`: grey thumb that lifts into a lens on touch
-  and can be slid to another option; release picks. Same drawn-at-rest / lens-while-held rule. Custom gestures inside
+  In drag callbacks read `positionChange()` BEFORE `consume()` (a consumed change reports zero movement). `SegmentedControl`: grey thumb that lifts into the TAB BAR'S drop on touch (same physics,
+  user 2026-11-03: follows the finger, droplet stretch + wobble, swells 7 dp × 1.6 wide, grain haptics); release picks. Same drawn-at-rest / lens-while-held rule. Custom gestures inside
   scrolling pages use `awaitHorizontalTouchSlopOrCancellation` + `horizontalDrag` (consuming), and treat a null
   slop result as a tap only if the pointer lifted unconsumed: a swipe starting on the segmented control once
   switched the app to Light.
