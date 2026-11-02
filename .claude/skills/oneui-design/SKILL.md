@@ -335,14 +335,16 @@ Picking one of several (chips, players) is `Select`.
 Tap = buttons/cards · Key = keyboard-like keys · ToggleOn/ToggleOff = switches and toggle controls · Select = tabs,
 segments · Detent = steps while dragging a value (every 10% volume, scroll-wheel notches) · Edge = end stops and
 mode thresholds · Hold = long-press grab · Success/Failure = outcomes (sent, paired, declined). One haptic per action;
-never haptics on passive updates. Dragging the tab bar's drop also rolls a `Bubble` under the thumb every 14 dp
-(at most every 34 ms) between the tab ticks.
+never haptics on passive updates. Dragging the tab bar's drop plays a swipe texture: `Haptic.Grain` (the
+faintest low tick; TEXT_HANDLE_MOVE on SYSTEM) every 6 dp, at most every 18 ms, between the tab ticks.
+Not a "bubble" thump per step: the user wants a continuous swipe feel.
 
-## Water (held drops)
-The tab bar's drop is water while held: `liquidLens(ripple = { Offset(px, phase) })` sways what's seen through it with
-slow crossing swells, and the drop sloshes at constant volume (wider = shorter) faster and stronger the harder it's
-dragged (`stir`, settling over 0.9 s). Its clock runs only while held. The touchpad's glass lights under the finger:
-an accent pool that flows after it (eased each frame) and brightens the dot grid nearby; nothing runs at rest.
+## Droplet elasticity (held drops)
+The tab bar's drop is an elastic droplet, not rippling water (the user rejected a ripple inside the lens): it
+stretches along its motion with its speed and thins to keep its volume, and when it stops the stretch overshoots
+and wobbles out on an underdamped spring (`SQUASH_K` 260, `SQUASH_C` 9 in TabBar.kt), stepped per frame only while
+held or settling. The touchpad's glass lights under the finger: an accent pool that flows after it (eased each
+frame) and brightens the dot grid nearby; nothing runs at rest.
 
 ## Widgets (Glance, Phase 1)
 Same palette tokens; system widget corner radius; never show a spinner forever. Render cached state and an
