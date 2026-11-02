@@ -83,6 +83,9 @@ import kotlinx.coroutines.delay
 import kotlin.math.abs
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.withFrameNanos
+import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.ui.draw.drawWithContent
+import kotlin.coroutines.cancellation.CancellationException
 import androidx.compose.runtime.mutableFloatStateOf
 import kotlinx.coroutines.launch
 
@@ -102,8 +105,28 @@ private val ItemWidth = 82.dp
  * screen in one frame. Hidden tabs aren't drawn, so they cost nothing per frame.
  */
 @Composable
-fun TabsRoot(tab: Tab, onTab: (Tab) -> Unit, onTouchpad: () -> Unit, content: @Composable (Tab) -> Unit) {
+fun TabsRoot(tab: Tab, onTab: (Tab) -> Unit, backToHome: Boolean, onTouchpad: () -> Unit, content: @Composable (Tab) -> Unit) {
     val backdrop = rememberBackdrop()
+    // Back on another tab goes Home, under the finger like a page: the tab slides off over Home
+    // (parallaxed and dimmed, as under a pushed page), and finishes or snaps back from wherever you let go.
+    val swipe = remember { Animatable(0f) }
+    val swipeScope = rememberCoroutineScope()
+    PredictiveBackHandler(enabled = backToHome && tab != Tab.HOME) { events ->
+        try {
+            events.collect { swipe.snapTo(it.progress) }
+        } catch (e: CancellationException) {
+            swipeScope.launch { swipe.animateTo(0f, VyomaMotion.page()) }
+            throw e
+        }
+        swipeScope.launch {
+            swipe.animateTo(1f, VyomaMotion.page())
+            onTab(Tab.HOME)
+            // The tabs switch without their crossfade (see below) while this still reads 1.
+            withFrameNanos {}
+            withFrameNanos {}
+            swipe.snapTo(0f)
+        }
+    }
     val holder = rememberSaveableStateHolder()
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val visited = remember { mutableStateListOf(tab) }
@@ -126,11 +149,29 @@ fun TabsRoot(tab: Tab, onTab: (Tab) -> Unit, onTouchpad: () -> Unit, content: @C
                     key(t) {
                         val active = t == tab
                         val shown = remember { Animatable(if (active) 1f else 0f) }
-                        LaunchedEffect(active) { shown.animateTo(if (active) 1f else 0f, if (active) VyomaMotion.spatial() else VyomaMotion.effects()) }
+                        LaunchedEffect(active) {
+                            if (swipe.value > 0f) shown.snapTo(if (active) 1f else 0f) // a back swipe already moved them
+                            else shown.animateTo(if (active) 1f else 0f, if (active) VyomaMotion.spatial() else VyomaMotion.effects())
+                        }
+                        val peeking = t == Tab.HOME && !active
                         Box(
                             Modifier.fillMaxSize().layout { measurable, constraints ->
                                 val page = measurable.measure(constraints)
                                 layout(page.width, page.height) {
+                                    val back = swipe.value
+                                    // While a back swipe runs (and the frame it lands on), only it places the tabs:
+                                    // the one leaving slides with the finger and Home waits under it.
+                                    if (back > 0f) {
+                                        if (t != Tab.HOME && !active) return@layout
+                                        page.placeWithLayer(0, 0) {
+                                            translationX = when {
+                                                t != Tab.HOME -> back * size.width
+                                                active -> 0f
+                                                else -> -(1f - back) * size.width / 4
+                                            }
+                                        }
+                                        return@layout
+                                    }
                                     if (!active && shown.value < 0.01f) return@layout
                                     page.placeWithLayer(0, 0) {
                                         val p = shown.value
@@ -141,6 +182,10 @@ fun TabsRoot(tab: Tab, onTab: (Tab) -> Unit, onTouchpad: () -> Unit, content: @C
                                         translationX = (1f - p) * size.width / 12 * (if (active) travel.dir else -travel.dir)
                                     }
                                 }
+                            }.drawWithContent {
+                                drawContent()
+                                val back = swipe.value
+                                if (peeking && back > 0f) drawRect(Color.Black, alpha = 0.4f * (1f - back))
                             },
                         ) { holder.SaveableStateProvider(t.name) { content(t) } }
                     }

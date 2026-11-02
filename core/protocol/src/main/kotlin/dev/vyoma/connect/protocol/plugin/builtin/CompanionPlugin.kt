@@ -125,6 +125,9 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
 
     private val _folder = MutableStateFlow<PcFolder?>(null)
     val folder: StateFlow<PcFolder?> = _folder.asStateFlow()
+    /** Every folder listed this session, so a folder page shows at once (going back to it, or swiping back over it). */
+    private val listed = java.util.concurrent.ConcurrentHashMap<String, PcFolder>()
+    fun cached(path: String): PcFolder? = listed[path]
 
     /** PC paths being downloaded right now. */
     private val _fetching = MutableStateFlow<Set<String>>(emptySet())
@@ -301,7 +304,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     suspend fun listFiles(path: String) {
         val previous = _folder.value
         // Keep the old entries on a refresh of the same folder so the list doesn't flash empty.
-        _folder.value = if (previous?.path == path) previous.copy(loading = true, error = null) else PcFolder(path)
+        _folder.value = if (previous?.path == path) previous.copy(loading = true, error = null)
+            else listed[path]?.copy(loading = true) ?: PcFolder(path)
         if (!ctx.send(packet(FILES_LIST) { put("path", path) })) {
             _folder.update { if (it?.path == path) it.copy(loading = false, error = "The PC isn't reachable") else it }
         }
@@ -381,9 +385,11 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                 modified = o["modified"]?.jsonPrimitive?.longOrNull ?: 0,
             )
         }
+        val result = PcFolder(path, entries, loading = false, error = packet.string("error"), truncated = packet.bool("truncated") == true)
+        if (result.error == null) listed[path] = result
         _folder.update { current ->
             if (current != null && current.path != path) return@update current // the user has moved on
-            PcFolder(path, entries, loading = false, error = packet.string("error"), truncated = packet.bool("truncated") == true)
+            result
         }
     }
 
