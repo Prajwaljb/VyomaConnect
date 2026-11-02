@@ -288,7 +288,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   element's own corner (down from its top edge, or up from its bottom when there's no room; aligned to its nearer
   side), never popping out above/below it. With `icon`/`iconAt`/`ink`/`label`, the tile shrinks to its icon: the face
   (minus the icon) fades by 25% formed and the icon glides onto the menu item that already uses the same icon (never shown twice), else into a 44 dp header slot beside the label, crossfading
-  from tile ink to onSurface. The PC output capsule morphs the same way (face only, no icon). The overlay gives the face `LocalContentColor = onSurface` (plain text there drew black, then flipped white at handover). Media player picker
+  from tile ink to onSurface. The PC output capsule morphs the same way (face only, no icon). The overlay gives the face `LocalContentColor = onSurface` (plain text there drew black, then flipped white at handover). Draining home, the items fade out in the top 30% of the drain and the element's colour floods in solid by halfway (easing to its own alpha as it lands): clear glass shrinking onto a tile blurred its neighbours across it (a blue smear over the red Screen tile) with the menu text ghosting through. Media player picker
   still pours from its button, current item checked; never a dialog. Morph open/close measured ~8% janky (lens rebuilt per frame). Tiles with a hold menu show a quiet
   "•••" (MoreHoriz, 60% ink) in the chevron's corner; one mark per tile.
 - Things that hit a limit stretch (rubber band, diminishing) instead of stopping dead: see the volume bar.

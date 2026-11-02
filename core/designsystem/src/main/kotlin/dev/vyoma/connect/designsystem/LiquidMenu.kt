@@ -389,10 +389,17 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                     compositingStrategy = CompositingStrategy.ModulateAlpha
                 }
                 .glassChrome(backdrop, shape, blur = 13.dp, bevel = 16.dp)
-                // Morphing, the element's own colour, clearing into glass as the drop grows.
+                // Morphing, the element's own colour, clearing into glass as the drop grows. Draining
+                // home it floods back in from the start: clear glass shrinking onto a tile blurred its
+                // neighbours across it (a blue smear over the red Screen tile, its menu text ghosting
+                // through) and only turned the tile's colour at the very end.
                 .then(
                     if (r.morph == null) Modifier else Modifier.drawBehind {
-                        val a = r.morph.color.alpha * (1f - smooth(formed() / 0.5f))
+                        val f = formed()
+                        val a = if (!closing) r.morph.color.alpha * (1f - smooth(f / 0.5f))
+                        // Solid by halfway home (nothing behind shows through), easing to the
+                        // element's own alpha as it lands so the hand-over matches.
+                        else lerp(r.morph.color.alpha, 1f, smooth(f / 0.3f)) * (1f - smooth((f - 0.5f) / 0.45f))
                         if (a > 0.003f) drawOutline(shape.createOutline(size, layoutDirection, this), r.morph.color.copy(alpha = a))
                     },
                 )
@@ -411,7 +418,7 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                             layout(p.width, p.height) { p.place(0, 0) }
                         }
                         .graphicsLayer {
-                            alpha = 1f - smooth(formed() / 0.25f)
+                            alpha = 1f - smooth(formed() / if (closing) 0.5f else 0.25f)
                             compositingStrategy = CompositingStrategy.ModulateAlpha
                         },
                 ) {
@@ -426,7 +433,8 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                     .wrapContentSize(Alignment.TopStart, unbounded = true)
                     .requiredWidth(MENU_WIDTH)
                     .graphicsLayer {
-                        alpha = ink.value.coerceIn(0f, 1f)
+                        // Draining, the items are gone before the element's colour floods in under them.
+                        alpha = ink.value.coerceIn(0f, 1f) * (if (closing) smooth((formed() - 0.7f) / 0.3f) else 1f)
                         compositingStrategy = CompositingStrategy.ModulateAlpha
                     }
                     .padding(vertical = PAD),
