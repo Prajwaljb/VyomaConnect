@@ -717,7 +717,10 @@ fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: 
                     } else {
                         // Lifted in place: a tap. Taken by the page (a scroll): nothing changes.
                         val c = currentEvent.changes.firstOrNull { it.id == down.id }
-                        settle(if (c != null && !c.pressed && !c.isConsumed) !current else current)
+                        val tapped = c != null && !c.pressed && !c.isConsumed
+                        // The tap is the switch's: a row it sits on (one that opens something) mustn't take it too.
+                        if (tapped) c!!.consume()
+                        settle(if (tapped) !current else current)
                     }
                 }
             }
