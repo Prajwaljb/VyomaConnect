@@ -90,6 +90,12 @@ body fields before implementing one.
 - `vyoma.pc.wake` (no reply), sent with every unlock from the phone: kdeconnectd unlocks via logind but a screen that
   idled off stayed dark. The companion runs `kscreen-doctor --dpms on`, ScreenSaver `SimulateUserActivity`, then logind
   `Session.Unlock` on `session/auto`.
+- `vyoma.away {lock, pause, mute, after, undo}` (no reply), the phone's walk-away rules merged (enabled "PC goes away"
+  rules; `after` = the shortest wait in seconds). Sent on every companion link (`onStart`/`onLinkAdded`) and whenever the
+  rules change (`CompanionPlugin.away`). When all of that phone's links close and it stays gone `max(after, 10)` s
+  (plus the ~30 s keepalive), the companion pauses every playing MPRIS player, mutes the default sink (`pactl`) and
+  locks via logind `Session.Lock` on `session/auto` (desktop/companion/src/away.rs); with `undo`, its next link unmutes
+  and resumes what it paused. A returning link bumps a generation counter that cancels the pending timer.
 - `vyoma.stats` also carries `camera: bool`: false when the only cameras are built in (`removable=fixed` /
   `connect_type=hardwired`) and the lid is closed (`/proc/acpi/button/lid/*/state`). The phone dims its Camera tile
   (NoPhotography icon) and a tap says why; the companion also refuses such a capture.

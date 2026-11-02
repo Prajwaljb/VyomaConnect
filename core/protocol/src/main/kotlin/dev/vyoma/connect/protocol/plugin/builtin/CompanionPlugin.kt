@@ -91,6 +91,12 @@ data class PcApp(val id: Long, val name: String, val binary: String?, val title:
 data class PcControls(val displays: List<PcDisplay> = emptyList(), val apps: List<PcApp> = emptyList())
 
 /** What the PC can be asked to do with itself. All go through Plasma, as from its own menu. */
+/**
+ * What the PC does by itself once this phone has been gone [afterSeconds] (on top of the ~30 s it
+ * takes to notice), from the phone's "PC goes away" rules; with [undo], put back when it returns.
+ */
+data class AwayRules(val lock: Boolean = false, val pause: Boolean = false, val mute: Boolean = false, val afterSeconds: Int = 0, val undo: Boolean = false)
+
 enum class PcPower(val wire: String) { SLEEP("sleep"), RESTART("restart"), SHUTDOWN("shutdown"), LOGOUT("logout") }
 
 /** How one attempt at a resumable send ended; [Failed.retry] says whether trying again can help. */
@@ -222,7 +228,21 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
      * A companion has one link, so a new one means it restarted (or Wi-Fi changed under it) and the
      * old session's answers will never come; the device can stay reachable throughout, so no onStop.
      */
-    override suspend fun onLinkAdded() = abandonReplies()
+    override suspend fun onLinkAdded() {
+        abandonReplies()
+        sendAway()
+    }
+
+    override suspend fun onStart() = sendAway()
+
+    /** Tells the PC the current walk-away rules ([away]); sent on every link too, so a restarted companion knows them. */
+    suspend fun sendAway() {
+        val rules = away.value
+        ctx.send(packet(AWAY) {
+            put("lock", rules.lock); put("pause", rules.pause); put("mute", rules.mute)
+            put("after", rules.afterSeconds); put("undo", rules.undo)
+        })
+    }
 
     private fun abandonReplies() {
         for (key in xferReplies.keys.toList()) xferReplies.remove(key)?.complete(packet(XFER_DONE) { put(LOST, true) })
@@ -562,6 +582,9 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val PC_POWER = "vyoma.pc.power"
         const val PC_POWERED = "vyoma.pc.powered"
         const val PC_WAKE = "vyoma.pc.wake"
+        const val AWAY = "vyoma.away"
+        /** The phone's walk-away rules, set by the app; every companion gets them on link and on change. */
+        val away = kotlinx.coroutines.flow.MutableStateFlow(AwayRules())
         private const val SET_INTERVAL_MS = 60L
         const val XFER_BEGIN = "vyoma.xfer.begin"
         const val XFER_READY = "vyoma.xfer.ready"
@@ -580,7 +603,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
             incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, XFER_BEGIN, XFER_DATA, XFER_END),
+            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END),
         ) { CompanionPlugin(it, sink) }
     }
 }

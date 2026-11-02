@@ -6,6 +6,7 @@ import android.app.Application
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
+import dev.vyoma.connect.automation.RuleEngine
 import dev.vyoma.connect.data.SettingsRepository
 import dev.vyoma.connect.demo.Demo
 import dev.vyoma.connect.demo.DemoDiagnostics
@@ -131,6 +132,8 @@ class AppContainer(private val app: Application) {
     val contacts by lazy { AndroidContacts(app) }
     val calls by lazy { CallMonitor(app, contacts) }
     val signal by lazy { SignalMonitor(app) }
+    /** "When / Do" rules; started with the link service (and by its alarms). */
+    val automation by lazy { RuleEngine(app, this) }
 
     private val hubLock = Mutex()
     private val _hub = MutableStateFlow<DeviceHub?>(null)

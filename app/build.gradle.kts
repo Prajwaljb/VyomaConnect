@@ -69,4 +69,9 @@ dependencies {
     implementation(libs.androidx.glance.appwidget)
     implementation(libs.androidx.glance.material3)
     implementation(libs.androidx.palette)
+
+    testImplementation(libs.junit)
+    testImplementation(kotlin("test-junit"))
+    // Android's org.json is a stub on the JVM; the real one for rule (de)serialisation tests.
+    testImplementation("org.json:json:20231013")
 }

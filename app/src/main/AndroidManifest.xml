@@ -16,6 +16,8 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Rules that run at a set time (the user allows it in system settings). -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- Calls & messages on the PC (KDE Connect SMS app, call alerts, contacts sync) -->
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.SEND_SMS" />
@@ -114,6 +116,13 @@
         <receiver
             android:name=".service.CommandReceiver"
             android:exported="false" />
+
+        <!-- Automation rules: a scheduled time, or exact timing just allowed. -->
+        <receiver
+            android:name=".automation.RuleAlarmReceiver"
+            android:exported="false">
+            <intent-filter><action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" /></intent-filter>
+        </receiver>
 
         <!-- Quick Settings tiles -->
         <service android:name=".widget.ClipboardTile" android:exported="true" android:icon="@drawable/ic_w_clipboard" android:label="Send clipboard"
