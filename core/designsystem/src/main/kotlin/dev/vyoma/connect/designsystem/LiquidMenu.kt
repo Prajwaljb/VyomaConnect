@@ -63,6 +63,12 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.composed
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.CornerRadius
@@ -153,6 +159,28 @@ class MenuController {
 
     /** True while [owner]'s menu stands in for it (read it in a graphicsLayer to hide the element). */
     fun covers(owner: Any): Boolean = request?.morph?.owner === owner
+
+    /** Chrome floating over the page (see [menuOccluder]); read only while a menu lays out and draws. */
+    internal val occluders = mutableListOf<Array<LayoutCoordinates?>>()
+
+    /** Where that chrome is now, in root coordinates. */
+    internal fun occluderBounds(): List<Rect> = occluders.mapNotNull { h -> h[0]?.takeIf { it.isAttached }?.boundsInRoot() }
+}
+
+/**
+ * Marks floating chrome (the tab bar) that page elements pass under. A tile's menu stands in for
+ * the tile, so it passes under it too: it opens and settles clear of it, and draining home it's
+ * hidden where the tile is (a tile half under the tab bar drew whole over the bar for the last
+ * frames of the drain, then snapped behind it).
+ */
+fun Modifier.menuOccluder(): Modifier = composed {
+    val menus = LocalMenu.current
+    val holder = remember { arrayOfNulls<LayoutCoordinates>(1) }
+    DisposableEffect(menus) {
+        menus.occluders += holder
+        onDispose { menus.occluders -= holder }
+    }
+    onPlaced { holder[0] = it }
 }
 
 val LocalMenu = staticCompositionLocalOf { MenuController() }
@@ -251,6 +279,7 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
     val scrim = remember { Animatable(0f) }
     val ink = remember { Animatable(0f) }
     var closing by remember { mutableStateOf(false) }
+    val menus = LocalMenu.current
     val bars = WindowInsets.systemBars
     // Where the drop is this frame (set while laying it out), so the element's face can hold still.
     val origin = remember { FloatArray(2) }
@@ -346,7 +375,9 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                     val left = (if (from.center.x < c.maxWidth / 2f) from.left else from.right - menuW)
                         .coerceIn(margin, (c.maxWidth - margin - menuW).coerceAtLeast(margin))
                     val minTop = bars.getTop(this) + margin
-                    val maxBottom = c.maxHeight - bars.getBottom(this) - margin
+                    // Above floating chrome lower on screen than the element's middle (the tab bar).
+                    val chromeTop = menus.occluderBounds().filter { it.top > from.center.y }.minOfOrNull { it.top }
+                    val maxBottom = minOf(c.maxHeight - bars.getBottom(this) - margin, chromeTop?.minus(gap) ?: Float.MAX_VALUE)
                     val above = from.top - gap - menuH
                     val below = from.bottom + gap
                     val top = if (r.morph != null) {
@@ -354,7 +385,7 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                         // from its bottom edge when there's no room below.
                         when {
                             from.top + menuH <= maxBottom -> from.top
-                            from.bottom - menuH >= minTop -> from.bottom - menuH
+                            minOf(from.bottom, maxBottom) - menuH >= minTop -> minOf(from.bottom, maxBottom) - menuH
                             else -> maxBottom - menuH
                         }
                     } else when {
@@ -376,6 +407,16 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                     val p = m.measure(Constraints.fixed(width, height))
                     layout(c.maxWidth, c.maxHeight) { p.place(l.roundToInt(), t.roundToInt()) }
                 }
+                // A stand-in for a tile passes under the chrome the tile passes under (menuOccluder).
+                .then(
+                    if (r.morph == null) Modifier else Modifier.drawWithContent {
+                        val chrome = menus.occluderBounds()
+                        if (chrome.isEmpty()) return@drawWithContent drawContent()
+                        val holes = Path()
+                        for (b in chrome) holes.addRoundRect(RoundRect(b.translate(-origin[0], -origin[1]), CornerRadius(b.minDimension / 2)))
+                        clipPath(holes, ClipOp.Difference) { this@drawWithContent.drawContent() }
+                    },
+                )
                 // Taps on the glass stay on the glass.
                 .then(if (closing) Modifier else Modifier.pointerInput(Unit) { detectTapGestures { } })
                 // Closing, the glass dissolves the whole way while it drains towards the element
