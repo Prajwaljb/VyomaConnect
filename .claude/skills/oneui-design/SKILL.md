@@ -107,9 +107,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   `LiquidGlass`/`liquidLens`: physically based, like Telegram's/Apple's: Snell refraction (n≈1.5) through a
   quarter-circle rim (≤ 1/5 of the element) over a slab 6 rims deep, so the rim shows what's ACROSS the element and
   beyond it (the recorded margin), bent like water. Rejected: plain outward bend, weak inward/convex bend).
-  The user wants THIS Snell refraction (the Telegram-studied one): chrome rim shows what's across the element. Keep the
-  rim shader exactly as it is (2026-11-03): two attempts at the faint dark line inside the rim (smear + blend, then
-  an eased-in tilt) were both rejected; the user prefers the original.
+  The user wants THIS Snell refraction (the Telegram-studied one): chrome rim shows what's across the element. The plain
+  rim is the user's favourite ("og was the best"): bars, buttons, knobs keep it exactly. Only big panes (shorter
+  half > 3 rims: dialogs, menus) ease the rim's tilt in from the flat face (a polished edge): the abrupt start
+  creased a thin dark line ~14 dp inside a popup's rim. Rejected: smear + blend, easing everywhere, a full oval rod.
   A "wrap" variant that sampled outside the edge was tried and rejected ("you removed the refraction"). Knob,
   switch, segmented and tab drops use `Lift` (outward Snell, negative depth). Under a drop only the drop shows
   (`LensPainter` cuts the original out and crossfades it while the drop forms).
