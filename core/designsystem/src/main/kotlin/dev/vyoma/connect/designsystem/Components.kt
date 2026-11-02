@@ -1,5 +1,8 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.runtime.withFrameNanos
+import kotlinx.coroutines.Job
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.semantics.contentDescription
@@ -791,10 +794,12 @@ fun PillButton(
 }
 
 /**
- * iOS 26 segmented control: a capsule track with a raised thumb that slides between options as a
- * gel (leading edge first, trailing edge catching up). Touched, the thumb lifts into a clear drop of
- * liquid glass a little bigger than the track that magnifies the label under it, and you can slide
- * it to another option; let go, it settles as the thumb again. Drawn, not laid out.
+ * iOS 26 segmented control with the tab bar's liquid drop (same physics, user's call 2026-11-03):
+ * the thumb slides between options as a gel (leading edge first, trailing edge catching up).
+ * Touched, it lifts into a clear drop of liquid glass bigger than the track that magnifies the label
+ * under it, follows the finger smoothly (a tick per option, a fine grain between), stretches along its
+ * motion like a water droplet and wobbles back to round when it stops; let go, it settles on the
+ * option under the thumb. Drawn, not laid out.
  */
 @Composable
 fun SegmentedControl(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
@@ -803,42 +808,79 @@ fun SegmentedControl(options: List<String>, selected: Int, onSelect: (Int) -> Un
     val left = remember { Animatable(-1f) }
     val right = remember { Animatable(-1f) }
     val lift = remember { Animatable(0f) }
+    var hover by remember { mutableIntStateOf(-1) }
+    var pulse by remember { mutableStateOf<Job?>(null) }
+    // The held drop's elastic stretch (+ longer, - taller) and its rate, as on the tab bar.
+    var squash by remember { mutableFloatStateOf(0f) }
+    var squashV by remember { mutableFloatStateOf(0f) }
+    var elastic by remember { mutableStateOf<Job?>(null) }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val current by rememberUpdatedState(selected)
     val pick by rememberUpdatedState(onSelect)
-    fun glide(i: Int) {
+    fun glide(toLeft: Float) {
         if (seg == 0f) return
-        val l = i * seg
         if (left.value < 0f) {
-            scope.launch { left.snapTo(l); right.snapTo(l + seg) }
+            scope.launch { left.snapTo(toLeft); right.snapTo(toLeft + seg) }
             return
         }
-        val forward = l > left.targetValue
-        scope.launch { left.animateTo(l, if (forward) VyomaMotion.trailing() else VyomaMotion.leading()) }
-        scope.launch { right.animateTo(l + seg, if (forward) VyomaMotion.leading() else VyomaMotion.trailing()) }
+        // Already headed there: restarting would swap which edge leads mid-flight.
+        if (toLeft == left.targetValue && toLeft + seg == right.targetValue) return
+        val forward = toLeft > left.targetValue
+        scope.launch { left.animateTo(toLeft, if (forward) VyomaMotion.trailing() else VyomaMotion.leading()) }
+        scope.launch { right.animateTo(toLeft + seg, if (forward) VyomaMotion.leading() else VyomaMotion.trailing()) }
     }
-    LaunchedEffect(selected, seg) { glide(selected) }
+    fun lifted(up: Boolean) {
+        pulse?.cancel()
+        pulse = scope.launch { lift.animateTo(if (up) 1f else 0f, if (up) VyomaMotion.spatial() else VyomaMotion.release()) }
+        if (up && elastic?.isActive != true) elastic = scope.launch {
+            var last = withFrameNanos { it }
+            do {
+                withFrameNanos { now ->
+                    val dt = ((now - last) / 1e9f).coerceIn(0f, 1f / 30)
+                    last = now
+                    val speed = if (seg > 0f) abs(left.velocity + right.velocity) / 2f / seg else 0f
+                    val target = (speed * 0.09f).coerceAtMost(0.32f)
+                    squashV += (DROP_SQUASH_K * (target - squash) - DROP_SQUASH_C * squashV) * dt
+                    squash += squashV * dt
+                }
+            } while (hover >= 0 || lift.value > 0.01f || abs(squash) > 0.002f || abs(squashV) > 0.02f)
+            squash = 0f
+            squashV = 0f
+        }
+    }
+    LaunchedEffect(selected, seg) { if (hover < 0) glide(selected * seg) }
     val dark = isDarkUi
     val thumb = if (dark) Color(0xFF636366) else Color.White
     val shadow = Color.Black.copy(alpha = if (dark) 0f else 0.1f)
     val card = MaterialTheme.colorScheme.surfaceContainerLow
     val pad = with(LocalDensity.current) { 3.dp.toPx() }
-    // The thumb in the control's coordinates, swelling past the track while lifted.
+    val overflow = with(LocalDensity.current) { 7.dp.toPx() }
+    // The thumb in the control's coordinates: resting inside the padding; lifted, a drop outgrowing
+    // the track, drawn in and stretched along its motion while it travels (the tab bar's pill()).
     fun DrawScope.thumbRect(): Rect {
-        val k = lift.value.coerceAtLeast(0f)
-        val grow = 7.dp.toPx() * k
-        return Rect(pad + left.value - grow, pad - grow, pad + right.value + grow, size.height - pad + grow)
+        val l = left.value
+        val w = right.value - l
+        val stretch = if (seg > 0f) (w / seg - 1f).coerceIn(0f, 1f) else 0f
+        val up = lift.value
+        val rest = size.height - 2 * pad
+        val sq = squash * up.coerceIn(0f, 1f)
+        val shrink = 1f - 0.45f * sq.coerceAtLeast(0f)
+        val h = (rest + (2 * overflow + 2 * pad) * up) * (1f - 0.14f * stretch) / (1f + sq) * shrink
+        val ww = (w + 2 * overflow * up.coerceAtLeast(0f) * 1.6f + rest * 0.06f * up.coerceAtMost(0f)) * (1f + 0.4f * sq) * shrink
+        val cx = pad + l + w / 2
+        return Rect(Offset(cx - ww / 2, (size.height - h) / 2), Size(ww, h))
     }
     Box(
         modifier
             .fillMaxWidth()
             .height(40.dp)
-            .liquidLens(null, strength = { lift.value }, zoom = { 1f + 0.12f * lift.value.coerceIn(0f, 1f) }, underlay = card, style = LensStyle.Lift, rect = { thumbRect() })
+            .liquidLens(null, strength = { lift.value }, zoom = { 1f + 0.1f * lift.value.coerceIn(0f, 1f) }, underlay = card, style = LensStyle.Lift, rect = { thumbRect() })
             .background(MaterialTheme.colorScheme.onSurface.copy(alpha = if (dark) 0.12f else 0.07f), CircleShape)
             .drawBehind {
                 if (left.value < 0f) return@drawBehind
-                val a = 1f - lift.value.coerceIn(0f, 1f)
+                // Gone early in the lift: magnified inside the growing drop, the thumb read as a haze.
+                val a = if (liquidGlassSupported) 1f - (lift.value * 3f).coerceIn(0f, 1f) else 1f - lift.value.coerceIn(0f, 1f)
                 if (a < 0.01f) return@drawBehind
                 val r = thumbRect()
                 val corner = CornerRadius(r.height / 2)
@@ -846,32 +888,59 @@ fun SegmentedControl(options: List<String>, selected: Int, onSelect: (Int) -> Un
                 drawRoundRect(thumb, r.topLeft, r.size, corner, alpha = a)
             }
             .pointerInput(options.size) {
-                fun indexAt(x: Float) = ((x - pad) / (size.width - 2 * pad) * options.size).toInt().coerceIn(0, options.lastIndex)
+                val lastIndex = options.lastIndex
+                fun indexAt(x: Float) = ((x - pad) / (size.width - 2 * pad) * options.size).toInt().coerceIn(0, lastIndex)
                 awaitEachGesture {
                     val down = awaitFirstDown()
-                    var hover = indexAt(down.position.x)
-                    scope.launch { lift.animateTo(1f, VyomaMotion.spatial()) }
-                    if (hover != current) { haptics.perform(Haptic.Select); glide(hover) }
-                    fun follow(x: Float) {
-                        val i = indexAt(x)
-                        if (i != hover) { hover = i; haptics.perform(Haptic.Select); glide(i) }
+                    hover = indexAt(down.position.x)
+                    lifted(true)
+                    glide(hover * seg)
+                    if (hover != current) haptics.perform(Haptic.Select)
+                    // The drop follows the finger itself, not just from option to option.
+                    fun follow(x: Float) = glide((x - pad - seg / 2).coerceIn(0f, lastIndex * seg))
+                    val grainEvery = 6.dp.toPx()
+                    var slid = 0f
+                    var lastX = down.position.x
+                    var lastGrain = 0L
+                    fun moved(c: PointerInputChange) {
+                        follow(c.position.x)
+                        slid += abs(c.position.x - lastX)
+                        lastX = c.position.x
+                        val now = c.uptimeMillis
+                        val i = indexAt(c.position.x)
+                        if (i != hover) {
+                            hover = i
+                            haptics.perform(Haptic.Select)
+                            slid = 0f
+                            lastGrain = now
+                        } else if (slid >= grainEvery && now - lastGrain >= 18) {
+                            haptics.perform(Haptic.Grain)
+                            slid = 0f
+                            lastGrain = now
+                        }
                     }
-                    // Sideways claims the gesture (the thumb follows); a vertical swipe belongs to the page.
+                    // Sideways claims the gesture (the drop follows); a vertical swipe belongs to the page.
                     val drag = awaitHorizontalTouchSlopOrCancellation(down.id) { c, _ ->
                         c.consume()
-                        follow(c.position.x)
+                        moved(c)
                     }
                     val cancelled = if (drag != null) {
                         !horizontalDrag(drag.id) { c ->
                             c.consume()
-                            follow(c.position.x)
+                            moved(c)
                         }
                     } else {
                         val c = currentEvent.changes.firstOrNull { it.id == down.id }
                         c == null || c.pressed || c.isConsumed
                     }
-                    scope.launch { lift.animateTo(0f, VyomaMotion.release()) }
-                    if (cancelled) glide(current) else if (hover != current) pick(hover) else glide(current)
+                    val i = hover
+                    hover = -1
+                    lifted(false)
+                    when {
+                        cancelled -> glide(current * seg)
+                        i != current -> { glide(i * seg); pick(i) }
+                        else -> glide(i * seg)
+                    }
                 }
             }
             .padding(3.dp)
@@ -880,6 +949,8 @@ fun SegmentedControl(options: List<String>, selected: Int, onSelect: (Int) -> Un
         Row(Modifier.fillMaxSize()) {
             options.forEachIndexed { i, label ->
                 val on = i == selected
+                // While held, the label under the drop reads as chosen (as the tab bar's do).
+                val shown = if (hover >= 0) i == hover else on
                 Box(
                     Modifier
                         .weight(1f)
@@ -890,7 +961,7 @@ fun SegmentedControl(options: List<String>, selected: Int, onSelect: (Int) -> Un
                     Text(
                         label,
                         style = MaterialTheme.typography.labelLarge,
-                        color = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (shown) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                     )
                 }
@@ -898,6 +969,10 @@ fun SegmentedControl(options: List<String>, selected: Int, onSelect: (Int) -> Un
         }
     }
 }
+
+/** The held drop's elastic spring (as the tab bar's): stiffness, and damping well under critical so it wobbles. */
+private const val DROP_SQUASH_K = 260f
+private const val DROP_SQUASH_C = 9f
 
 /**
  * Apple's two sliders in one. With a [knob] it's the iOS 26 slider: a slim track and a wide white
