@@ -107,7 +107,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   `LiquidGlass`/`liquidLens`: physically based, like Telegram's/Apple's: Snell refraction (n≈1.5) through a
   quarter-circle rim (≤ 1/5 of the element) over a slab 6 rims deep, so the rim shows what's ACROSS the element and
   beyond it (the recorded margin), bent like water. Rejected: plain outward bend, weak inward/convex bend).
-  The user wants THIS Snell refraction (the Telegram-studied one): chrome rim shows what's across the element.
+  The user wants THIS Snell refraction (the Telegram-studied one): chrome rim shows what's across the element. The rim
+  smears its sample along the bend (more towards the edge) and blends up to half of what's right behind it
+  (smoothstep 0.35–0.95 of the rim): the bend squeezed the far side's dark into a hard line under the highlight
+  (user: "the dark contrast line"). Keep the bend; never let it band.
   A "wrap" variant that sampled outside the edge was tried and rejected ("you removed the refraction"). Knob,
   switch, segmented and tab drops use `Lift` (outward Snell, negative depth). Under a drop only the drop shows
   (`LensPainter` cuts the original out and crossfades it while the drop forms).
@@ -415,7 +418,8 @@ command list). Saves when you leave the page (or the tick); a new rule never run
 ("PC is connected") so they work after both "When" and "Only if"; mid-sentence lower-casing keeps acronyms (`inSentence`).
 Motion (user asked for "bubble in", decided as UX): rows that arrive bubble in (expand + scale 0.6 on a 0.45-damped
 spring + fade) and leaving rows shrink out; cards grow on `animateContentSize(jelly())` and every item passes
-`animateItem(placementSpec = null)` (a placement spring slid the next label over the growing card). Switching a rule
+`animateItem(placementSpec = null)` (a placement spring slid the next label over the growing card). Rows bubble
+inside a `clipToBounds` Column in the card (the swell past full size drew over the card edge and the card above). Switching a rule
 OFF keeps it in place, resting (badge + text at 50%, switch untouched, badge bounces 0.8 → 1); only Remove (editor,
 for a rule from a suggestion) gives the suggestion back. Anything the editor sends back (`vm.ruleArrival`) waits
 until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played out of sight.
