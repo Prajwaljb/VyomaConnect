@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import dev.vyoma.connect.platform.FrameBudget
-import dev.vyoma.connect.designsystem.HapticEngine
 
 private val Context.dataStore by preferencesDataStore("settings")
 
@@ -36,8 +35,6 @@ class SettingsRepository(private val context: Context) {
         val manualHosts = stringSetPreferencesKey("manual_hosts")
         /** Pause in the background away from Wi-Fi; on unless turned off. */
         val outdoorMode = booleanPreferencesKey("outdoor_mode")
-        /** A HapticEngine's name; absent means the phone's own pick. */
-        val hapticStyle = stringPreferencesKey("haptic_style")
     }
 
     private val prefs: Flow<Preferences> get() = context.dataStore.data
@@ -80,8 +77,6 @@ class SettingsRepository(private val context: Context) {
     suspend fun addManualHost(host: String) = context.dataStore.edit { it[Keys.manualHosts] = it[Keys.manualHosts].orEmpty() + host }
     suspend fun removeManualHost(host: String) = context.dataStore.edit { it[Keys.manualHosts] = it[Keys.manualHosts].orEmpty() - host }
 
-    val hapticStyle: Flow<HapticEngine?> = prefs.map { p -> p[Keys.hapticStyle]?.let { runCatching { HapticEngine.valueOf(it) }.getOrNull() } }.distinctUntilChanged()
-    suspend fun setHapticStyle(style: HapticEngine?) = context.dataStore.edit { if (style == null) it.remove(Keys.hapticStyle) else it[Keys.hapticStyle] = style.name }
 
     val outdoorMode: Flow<Boolean> = prefs.map { it[Keys.outdoorMode] ?: true }.distinctUntilChanged()
     suspend fun setOutdoorMode(enabled: Boolean) = context.dataStore.edit { it[Keys.outdoorMode] = enabled }

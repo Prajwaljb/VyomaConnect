@@ -319,11 +319,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   spring doesn't jump. Tried and dropped: drawing InnerGlow as edge-only strips (no GPU gain, more draw calls).
 
 ## Haptics (`Haptic` in Motion.kt; always through `HapticFeedback.perform`)
-`Haptics.engine` (`HapticEngine`), chosen per phone, or by the user in Settings > Effects > Vibration style (with a
-sample run on pick):
-- SYSTEM for OnePlus/OPPO/realme: `View.performHapticFeedback` with long-standing constants only (`Haptic.system`:
-  VIRTUAL_KEY, KEYBOARD_TAP, CLOCK_TICK, LONG_PRESS, TEXT_HANDLE_MOVE, CONFIRM, REJECT). A Nord CE 3 claims every
-  primitive and tuned click/tick yet played them all as buzzes; newer constants (SEGMENT_TICK...) were silent there.
+`Haptics.engine` (`HapticEngine`, internal), chosen per phone; no user setting (the Settings picker was removed
+2026-11-02 once each phone's pick was confirmed; the user barely felt a difference between styles):
+- PLAIN_PULSES for OnePlus/OPPO/realme. A Nord CE 3 claims every primitive and tuned click/tick yet played them all as
+  buzzes, and `View.performHapticFeedback` (a SYSTEM engine, removed) didn't work either; plain pulses were crisp.
 - PRIMITIVES (Crisp): a `VibrationEffect.Composition` of CLICK, TICK, LOW_TICK, THUD, QUICK_RISE (ToggleOn rises
   tick→click, ToggleOff falls click→low tick, Success two rising clicks); a missing primitive takes its nearest.
 - TUNED (Classic): predefined click/tick/heavy/double, only where all report YES (UNKNOWN is Android's long stand-in buzz).
@@ -336,7 +335,7 @@ Tap = buttons/cards · Key = keyboard-like keys · ToggleOn/ToggleOff = switches
 segments · Detent = steps while dragging a value (every 10% volume, scroll-wheel notches) · Edge = end stops and
 mode thresholds · Hold = long-press grab · Success/Failure = outcomes (sent, paired, declined). One haptic per action;
 never haptics on passive updates. Dragging the tab bar's drop plays a swipe texture: `Haptic.Grain` (the
-faintest low tick; TEXT_HANDLE_MOVE on SYSTEM) every 6 dp, at most every 18 ms, between the tab ticks.
+faintest low tick) every 6 dp, at most every 18 ms, between the tab ticks.
 Not a "bubble" thump per step: the user wants a continuous swipe feel.
 
 ## Droplet elasticity (held drops)
@@ -377,7 +376,7 @@ Short, friendly, specific ("Connected via Wi-Fi", "Make sure this code matches o
   Measure: `dumpsys gfxinfo` frames over 6 s at rest, and `framestats` (ui vs issue vs gpu) for transitions.
 
 ## Haptics engine ladder (2026-11-02)
-`Haptics.engine`: PRIMITIVES (click+tick primitives) → TUNED (maker's predefined click/tick/heavy/double only when
+`Haptics.engine`: OnePlus/OPPO/realme → PLAIN_PULSES; otherwise PRIMITIVES (click+tick primitives) → TUNED (maker's predefined click/tick/heavy/double only when
 `areAllEffectsSupported` says YES; UNKNOWN means Android's long stand-in buzz) → PULSES (amplitude control: pulses of
 1.5–3 resonance cycles, ~8–17 ms) → PLAIN_PULSES. Never createPredefined on an UNKNOWN phone (the OnePlus Nord CE3
 "only buzzes"). Demo diagnostics log `Haptics.describe()`. Tab/segment ticks (Select) are TICK 1.0.

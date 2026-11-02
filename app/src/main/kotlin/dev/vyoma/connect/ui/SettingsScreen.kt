@@ -73,15 +73,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import dev.vyoma.connect.designsystem.perform
 import dev.vyoma.connect.designsystem.Haptics
-import dev.vyoma.connect.designsystem.HapticEngine
-import dev.vyoma.connect.designsystem.MenuItem
-import dev.vyoma.connect.designsystem.LocalMenu
-import kotlinx.coroutines.delay
-import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onPlaced
-import androidx.compose.ui.layout.LayoutCoordinates
-import androidx.compose.material.icons.rounded.Vibration
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.Check
@@ -209,45 +200,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     haptic = if (glass.on) Haptic.ToggleOff else Haptic.ToggleOn,
                     onClick = { vm.setLiteGlass(!glass.on) },
                     trailing = { VyomaSwitch(checked = glass.on, onCheckedChange = { vm.setLiteGlass(it) }, contentDescription = "Lighter glass") },
-                    showDivider = Haptics.choices().isNotEmpty(),
+                    showDivider = false,
                 )
-                // Phones play clicks very differently; a tester can pick what feels crisp on theirs.
-                if (Haptics.choices().isNotEmpty()) {
-                    val style by vm.hapticStyle.collectAsStateWithLifecycle()
-                    val menus = LocalMenu.current
-                    val row = remember { arrayOfNulls<LayoutCoordinates>(1) }
-                    val scope = rememberCoroutineScope()
-                    val haptics = LocalHapticFeedback.current
-                    val auto = Haptics.auto
-                    ListRow(
-                        title = "Vibration style",
-                        subtitle = style?.label ?: "Automatic (${auto?.label ?: "none"})",
-                        icon = Icons.Rounded.Vibration,
-                        iconTint = SystemColor.PINK.color,
-                        modifier = Modifier.onPlaced { row[0] = it },
-                        onClick = {
-                            val at = row[0]?.takeIf { it.isAttached } ?: return@ListRow
-                            fun pick(e: HapticEngine?) {
-                                vm.setHapticStyle(e)
-                                Haptics.chosen = e
-                                // A sample: a tap, then a run of ticks, so styles can be compared.
-                                scope.launch {
-                                    delay(350)
-                                    haptics.perform(Haptic.Tap)
-                                    repeat(4) { delay(110); haptics.perform(Haptic.Select) }
-                                    delay(240)
-                                    haptics.perform(Haptic.ToggleOn)
-                                }
-                            }
-                            menus.show(
-                                at.boundsInRoot(),
-                                listOf(MenuItem("Automatic (${auto?.label ?: "none"})", if (style == null) Icons.Rounded.Check else null, groupEnd = true) { pick(null) }) +
-                                    Haptics.choices().map { e -> MenuItem(e.label, if (style == e) Icons.Rounded.Check else null) { pick(e) } },
-                                title = "Vibration style",
-                            )
-                        },
-                    )
-                }
             }
         }
 
