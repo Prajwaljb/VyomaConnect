@@ -116,6 +116,11 @@ enum class Haptic(
     Hold(HapticFeedbackType.LongPress, VibrationEffect.EFFECT_HEAVY_CLICK, HapticFeedbackConstants.LONG_PRESS, listOf(Note(PRIMITIVE_QUICK_RISE, 0.5f), Note(PRIMITIVE_CLICK, 0.9f, 10))),
     /** Glass forming or bursting (the header's title bubble): barely there. */
     Bubble(HapticFeedbackType.SegmentFrequentTick, VibrationEffect.EFFECT_TICK, HapticFeedbackConstants.TEXT_HANDLE_MOVE, listOf(Note(PRIMITIVE_LOW_TICK, 0.38f))),
+    /**
+     * One grain of a swipe texture (a drop slid along the tab bar): the faintest tick, fired every
+     * few dp of travel so a drag feels like a fine, continuous swipe rather than separate taps.
+     */
+    Grain(HapticFeedbackType.SegmentFrequentTick, VibrationEffect.EFFECT_TICK, HapticFeedbackConstants.TEXT_HANDLE_MOVE, listOf(Note(PRIMITIVE_LOW_TICK, 0.22f))),
     /** Two rising clicks. */
     Success(HapticFeedbackType.Confirm, VibrationEffect.EFFECT_DOUBLE_CLICK, HapticFeedbackConstants.CONFIRM, listOf(Note(PRIMITIVE_CLICK, 0.66f), Note(PRIMITIVE_CLICK, 1f, 70))),
     /** A heavy thud (this motor's lasts 300 ms, so one is plenty) and a dull tick after it. */
