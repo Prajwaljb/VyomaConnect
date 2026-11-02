@@ -15,11 +15,9 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 
 /** Accent families. Surfaces are always neutral, so the accent is the only color. */
@@ -55,11 +53,6 @@ fun VyomaTheme(settings: ThemeSettings = ThemeSettings(), content: @Composable (
     }
     val context = LocalContext.current
     remember(context) { Haptics.attach(context) }
-    val view = LocalView.current
-    DisposableEffect(view) {
-        Haptics.view = java.lang.ref.WeakReference(view)
-        onDispose { if (Haptics.view?.get() === view) Haptics.view = null }
-    }
     val target = remember(settings, dark) {
         val accentSource: ColorScheme? = if (settings.palette == Palette.DYNAMIC && Build.VERSION.SDK_INT >= 31) {
             if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)

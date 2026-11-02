@@ -1,6 +1,5 @@
 package dev.vyoma.connect.ui
 
-import dev.vyoma.connect.designsystem.HapticEngine
 import dev.vyoma.connect.data.LiteGlass
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.OutgoingFile
@@ -53,8 +52,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val liteGlass: StateFlow<LiteGlass> = settings.liteGlass
         .stateIn(viewModelScope, SharingStarted.Eagerly, LiteGlass(on = false, chosen = false, detected = false))
     val canvasGlow: StateFlow<Boolean> = settings.canvasGlow.stateIn(viewModelScope, SharingStarted.Eagerly, true)
-    val hapticStyle: StateFlow<HapticEngine?> = settings.hapticStyle.stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    fun setHapticStyle(style: HapticEngine?) = viewModelScope.launch { settings.setHapticStyle(style) }
 
     /** Every known device, ordered: connected, pairing, available, offline. */
     val devices: StateFlow<List<DeviceState>> = container.hub.filterNotNull()
