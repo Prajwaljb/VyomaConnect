@@ -1040,12 +1040,7 @@ half4 main(float2 p) {
         // The flat middle (most pixels): straight through, one sample.
         col = content.eval(at);
     } else {
-        // The slope eases in from the flat middle (no kink where the rim starts): starting at an
-        // angle, the bent image met the straight one in a crease, a thin dark line inside the rim.
-        // The outer rim, and how far it bends, are as before.
-        const float easeIn = 0.35;
-        float tilt = (t < easeIn ? t * t / (2.0 * easeIn) : t - easeIn * 0.5) / (1.0 - easeIn * 0.5);
-        float3 normal = normalize(float3(n * tilt, sqrt(max(1.0 - tilt * tilt, 0.0))));
+        float3 normal = normalize(float3(n * t, sqrt(max(1.0 - t * t, 0.0))));
         float3 ray = refract(float3(0.0, 0.0, -1.0), normal, 1.0 / 1.5);
         float h = bevel * sqrt(max(1.0 - t * t, 0.0));
         float2 shift = ray.xy * (h + bendBy) / -ray.z;
