@@ -224,29 +224,64 @@ fun MenuHost(content: @Composable () -> Unit) {
  */
 @Composable
 private fun DialogOverlay(d: HostedDialog, backdrop: Backdrop, onGone: () -> Unit) {
-    val shown = remember { Animatable(0f) }
+    // Forms like a drop of water, as the menus pour: a thin pill swells out of the middle, width
+    // first and height after on a wobbling spring, its corners rounding from capsule to card; the
+    // words show once it has mostly formed. Leaving, the words fade as the glass drains back into a pill. (It was a plain fade and 8% scale, which read as an ordinary pop-up.)
+    val wide = remember { Animatable(DROP_WIDE) }
+    val tall = remember { Animatable(DROP_TALL) }
+    val scrim = remember { Animatable(0f) }
+    val ink = remember { Animatable(0f) }
+    fun formed() = ((minOf(wide.value, tall.value) - DROP_TALL) / (1f - DROP_TALL)).coerceIn(0f, 1f)
     LaunchedEffect(d.leaving) {
-        if (!d.leaving) shown.animateTo(1f, DIALOG_IN)
-        else {
-            shown.animateTo(0f, DIALOG_OUT)
+        if (!d.leaving) {
+            launch { scrim.animateTo(1f, VyomaMotion.effects()) }
+            launch { wide.animateTo(1f, POUR_WIDE) }
+            launch { tall.animateTo(1f, POUR_TALL) }
+            snapshotFlow { minOf(wide.value, tall.value) > 0.7f }.first { it }
+            ink.animateTo(1f, VyomaMotion.effects())
+        } else {
+            launch { scrim.animateTo(0f, VyomaMotion.effects()) }
+            launch { ink.animateTo(0f, INK_OUT) }
+            launch { wide.animateTo(DROP_WIDE, DIALOG_DRAIN_WIDE) }
+            launch { tall.animateTo(DROP_TALL, DIALOG_DRAIN_TALL) }
+            // Gone once the glass has faded (see its alpha), not when the springs settle: a faint pill lingered.
+            snapshotFlow { formed() < 0.03f }.first { it }
             onGone()
         }
     }
-    // The back gesture sinks it under the finger (the predictive preview); letting go finishes, or it rises back.
+    // The back gesture squeezes it towards a pill under the finger (the predictive preview); letting go
+    // drains it the rest of the way, or it swells back.
     val backScope = rememberCoroutineScope()
     PredictiveBackHandler(enabled = !d.leaving) { events ->
         try {
-            events.collect { e -> shown.snapTo(1f - BACK_PEEK * e.progress) }
+            events.collect { e ->
+                tall.snapTo(1f - BACK_PEEK * e.progress)
+                wide.snapTo(1f - BACK_PEEK / 2 * e.progress)
+                scrim.snapTo(1f - BACK_PEEK * e.progress)
+            }
         } catch (e: CancellationException) {
-            backScope.launch { shown.animateTo(1f, DIALOG_IN) }
+            backScope.launch {
+                launch { scrim.animateTo(1f, VyomaMotion.effects()) }
+                launch { wide.animateTo(1f, POUR_WIDE) }
+                tall.animateTo(1f, POUR_TALL)
+            }
             throw e
         }
         d.onDismiss()
     }
+    val shape = remember {
+        object : Shape {
+            override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+                val card = with(density) { DIALOG_RADIUS.toPx() }
+                val corner = lerp(minOf(size.width, size.height) / 2, card, formed()).coerceAtMost(minOf(size.width, size.height) / 2)
+                return Outline.Rounded(RoundRect(0f, 0f, size.width, size.height, CornerRadius(corner)))
+            }
+        }
+    }
     Box(
         Modifier
             .fillMaxSize()
-            .drawBehind { drawRect(Color.Black, alpha = SCRIM * shown.value.coerceIn(0f, 1f)) }
+            .drawBehind { drawRect(Color.Black, alpha = SCRIM * scrim.value.coerceIn(0f, 1f)) }
             .then(
                 if (d.leaving) Modifier.pointerInput(Unit) {
                     awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
@@ -256,21 +291,30 @@ private fun DialogOverlay(d: HostedDialog, backdrop: Backdrop, onGone: () -> Uni
             .padding(24.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Box(
-            Modifier
-                .widthIn(max = 420.dp)
-                .fillMaxWidth()
-                .graphicsLayer {
-                    val v = shown.value
-                    alpha = v.coerceIn(0f, 1f)
-                    val sc = 0.92f + 0.08f * v
-                    scaleX = sc; scaleY = sc
-                    compositingStrategy = CompositingStrategy.ModulateAlpha
-                }
-                .pointerInput(Unit) { detectTapGestures { } }
-                .glassChrome(backdrop, DIALOG_SHAPE, blur = 18.dp, bevel = 16.dp)
-                .clip(DIALOG_SHAPE),
-        ) { d.card() }
+        Box(Modifier.widthIn(max = 420.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier
+                    .graphicsLayer {
+                        // The glass itself fades in over the first moments only, so the pill never pops.
+                        alpha = (formed() * 2.5f).coerceIn(0f, 1f)
+                        compositingStrategy = CompositingStrategy.ModulateAlpha
+                    }
+                    .pointerInput(Unit) { detectTapGestures { } }
+                    .glassChrome(backdrop, shape, blur = 18.dp, bevel = 16.dp)
+                    .clip(shape)
+                    // The drop's size, around the card laid out at full size (so its words never reflow).
+                    .layout { m, c ->
+                        val card = m.measure(c.copy(minWidth = c.maxWidth))
+                        val w = (card.width * wide.value.coerceAtLeast(0f)).roundToInt().coerceAtLeast(1)
+                        val h = (card.height * tall.value.coerceAtLeast(0f)).roundToInt().coerceAtLeast(1)
+                        layout(w, h) { card.place((w - card.width) / 2, (h - card.height) / 2) }
+                    }
+                    .graphicsLayer {
+                        alpha = ink.value.coerceIn(0f, 1f)
+                        compositingStrategy = CompositingStrategy.ModulateAlpha
+                    },
+            ) { d.card() }
+        }
     }
 }
 
@@ -609,12 +653,16 @@ private val ICON_SIZE = 22.dp
 private val GROUP_GAP = 9.dp
 private val PAD = 8.dp
 private const val SCRIM = 0.35f
-private val DIALOG_SHAPE = RoundedCornerShape(28.dp)
+private val DIALOG_RADIUS = 28.dp
+/** A dialog starts (and ends) as a pill this share of its size. */
+private const val DROP_WIDE = 0.4f
+private const val DROP_TALL = 0.12f
+/** Quicker than a menu's drain: a dialog is bigger and has nowhere to flow back to. */
+private val DIALOG_DRAIN_TALL = spring<Float>(dampingRatio = 1f, stiffness = 700f)
+private val DIALOG_DRAIN_WIDE = spring<Float>(dampingRatio = 1f, stiffness = 450f)
 /** How far the back gesture's preview takes a dialog, or a menu draining home, towards gone before you let go. */
 private const val BACK_PEEK = 0.3f
 private const val MENU_BACK_PEEK = 0.55f
-private val DIALOG_IN = spring<Float>(dampingRatio = 0.72f, stiffness = 420f)
-private val DIALOG_OUT = tween<Float>(140, easing = LinearEasing)
 /** Opening: the width runs out quickly, the height pours after it with a soft wobble. */
 private val POUR_WIDE = spring<Float>(dampingRatio = 0.8f, stiffness = 700f)
 private val POUR_TALL = spring<Float>(dampingRatio = 0.6f, stiffness = 340f)
