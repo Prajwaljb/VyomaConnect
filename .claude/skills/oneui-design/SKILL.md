@@ -340,7 +340,8 @@ faintest low tick; TEXT_HANDLE_MOVE on SYSTEM) every 6 dp, at most every 18 ms, 
 Not a "bubble" thump per step: the user wants a continuous swipe feel.
 
 ## Droplet elasticity (held drops)
-The tab bar's drop is an elastic droplet, not rippling water (the user rejected a ripple inside the lens): it
+The tab bar's drop is an elastic droplet, not rippling water (the user rejected a ripple inside the lens). Pulled, it draws in
+(smaller overall with speed, length 0.8x and height ~0.55x at full speed) and is full size at rest. It
 stretches along its motion with its speed and thins to keep its volume, and when it stops the stretch overshoots
 and wobbles out on an underdamped spring (`SQUASH_K` 260, `SQUASH_C` 9 in TabBar.kt), stepped per frame only while
 held or settling. The touchpad's glass lights under the finger: an accent pool that flows after it (eased each

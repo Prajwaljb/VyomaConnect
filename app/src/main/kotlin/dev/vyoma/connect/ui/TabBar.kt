@@ -234,10 +234,13 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
         val stretch = (w / itemPx - 1f).coerceIn(0f, 1f)
         val up = lift.value
         val rest = size.height - 2 * pad
-        // The droplet keeps its volume: as it stretches longer it gets thinner, and back.
+        // Pulled along, the droplet draws in: smaller overall the faster it goes (length too,
+        // the user asked, 2026-11), still longer than tall; it springs back to full size when it
+        // stops, wobbling through round. At rest it's unchanged.
         val sq = squash * up.coerceIn(0f, 1f)
-        val h = (rest + (2 * overflow + 2 * pad) * up) * (1f - 0.14f * stretch) / (1f + sq)
-        val ww = (w + 2 * overflow * up.coerceAtLeast(0f) * 1.6f + rest * 0.06f * up.coerceAtMost(0f)) * (1f + sq)
+        val shrink = 1f - 0.9f * sq.coerceAtLeast(0f)
+        val h = (rest + (2 * overflow + 2 * pad) * up) * (1f - 0.14f * stretch) / (1f + sq) * shrink
+        val ww = (w + 2 * overflow * up.coerceAtLeast(0f) * 1.6f + rest * 0.06f * up.coerceAtMost(0f)) * (1f + 0.4f * sq) * shrink
         val cx = pad + l + w / 2
         return Rect(Offset(cx - ww / 2, (size.height - h) / 2), Size(ww, h))
     }
