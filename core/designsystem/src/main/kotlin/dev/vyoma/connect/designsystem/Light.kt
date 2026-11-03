@@ -39,6 +39,16 @@ object SpecularLight {
      */
     val content: Float get() = REST + (angle - REST) * 0.4f
 
+    /**
+     * Where a shadow [by] px long falls: straight away from the light, so straight down at rest and
+     * sliding sideways as the phone tilts (up to 45 deg, where it's as far across as down). Pass
+     * [content] for things on the page, so their shadows sway as little as their light.
+     */
+    fun cast(by: Float, light: Float = angle): androidx.compose.ui.geometry.Offset {
+        val a = Math.toRadians(light.toDouble())
+        return androidx.compose.ui.geometry.Offset(-kotlin.math.cos(a).toFloat() * by, -kotlin.math.sin(a).toFloat() * by)
+    }
+
     internal fun publish(a: Float) {
         // Hand tremor is a degree or two: below that nothing is redrawn.
         if (abs(a - angle) >= 1.5f) angle = a
