@@ -13,11 +13,13 @@ use std::net::{IpAddr, Ipv4Addr};
 /// Drivers of the USB network a phone's tethering shows up as.
 const DRIVERS: [&str; 3] = ["rndis_host", "cdc_ncm", "cdc_ether"];
 
-/// Where a phone might be: over USB tethering, or as the gateway of the PC's Wi-Fi (a hotspot, maybe).
+/// Where a phone might be: over USB tethering, as the gateway of the PC's Wi-Fi (a hotspot, maybe),
+/// or through an adb forward over the cable (usb.rs).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Via {
     Usb,
     Hotspot,
+    Cable,
 }
 
 /// Addresses of phones tethered over USB right now, and Wi-Fi gateways that may be phone hotspots.

@@ -76,6 +76,9 @@ data class GamepadState(
     val my: Int = 0,
 )
 
+/** How the controller's states reach the PC beside the link. */
+enum class GamepadRoute { WIFI, USB }
+
 /** The pad games on the PC see. */
 enum class PadKind(val wire: String) { XBOX("xbox"), DUALSENSE("dualsense") }
 
@@ -600,18 +603,21 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     /** The PC's offer of a UDP port and key for the controller (see [streamGamepad]). */
     private class UdpOffer(val port: Int, val key: ByteArray)
     private val gamepadOffer = MutableStateFlow<UdpOffer?>(null)
-    private val _gamepadFast = MutableStateFlow(false)
-    /** Whether the controller is going over UDP (Wi-Fi with a companion that offers it) rather than the link. */
-    val gamepadFast: StateFlow<Boolean> = _gamepadFast.asStateFlow()
+    private val _gamepadRoute = MutableStateFlow<GamepadRoute?>(null)
+    /** How the controller's states travel beside the link right now; null: only the link. */
+    val gamepadRoute: StateFlow<GamepadRoute?> = _gamepadRoute.asStateFlow()
 
     /**
      * Sends [states] to the PC's virtual pad for as long as this runs: every change at once (the flow
      * conflates, so a slow link only ever carries the newest), and the current one each second, which
      * keeps the pad alive (the PC lets go of everything after 4 s of silence). Ending it closes the pad.
      *
-     * Once the PC offers UDP (and it's reached over a network, not the USB tunnel), changes go as
-     * signed datagrams instead, repeated every [GAMEPAD_REPEAT_MS] so a lost one heals fast; the link
-     * still carries the once-a-second state. Every state is numbered so the PC drops older ones.
+     * Once the PC offers its side channel, changes go there as signed frames instead: down the USB
+     * cable when it's plugged in (the companion's adb reverse of [GAMEPAD_WIRED_PORT]; no Wi-Fi
+     * stalls), else as UDP datagrams (when reached over a network), repeated every
+     * [GAMEPAD_REPEAT_MS] so a lost one heals fast. The cable is tried again each second, so plugging
+     * in mid-game moves over. The link still carries the once-a-second state. Every state is
+     * numbered so the PC drops older ones.
      */
     suspend fun streamGamepad(states: StateFlow<GamepadState>) = withContext(Dispatchers.IO) {
         _gamepadError.value = null
@@ -619,26 +625,68 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         var seq = 0
         var used: UdpOffer? = null
         var socket: java.net.DatagramSocket? = null
+        var wired: java.net.Socket? = null
         var mac: javax.crypto.Mac? = null
         var lastLink = 0L
+        fun route() {
+            _gamepadRoute.value = when {
+                wired != null -> GamepadRoute.USB
+                socket != null -> GamepadRoute.WIFI
+                else -> null
+            }
+        }
+        /** Moves to the cable if it's plugged in (and the PC listens there). */
+        fun tryWired() {
+            if (wired != null || used == null) return
+            wired = runCatching {
+                java.net.Socket().apply {
+                    tcpNoDelay = true
+                    connect(java.net.InetSocketAddress(java.net.InetAddress.getLoopbackAddress(), GAMEPAD_WIRED_PORT), 300)
+                }
+            }.getOrNull()
+            if (wired != null) {
+                socket?.close()
+                socket = null
+                VLog.i(TAG, "controller over the USB cable")
+                route()
+            }
+        }
         try {
             var current = states.value
             while (true) {
                 val offer = gamepadOffer.value
                 if (offer !== used) {
                     used = offer
-                    socket?.close()
-                    socket = offer?.let { ctx.device.datagramTo(it.port) }
+                    socket?.close(); socket = null
+                    runCatching { wired?.close() }; wired = null
                     mac = offer?.let { o -> javax.crypto.Mac.getInstance("HmacSHA256").apply { init(javax.crypto.spec.SecretKeySpec(o.key, "HmacSHA256")) } }
-                    _gamepadFast.value = socket != null
-                    if (socket != null) VLog.i(TAG, "controller over UDP to port ${offer?.port}")
+                    tryWired()
+                    if (wired == null) {
+                        socket = offer?.let { ctx.device.datagramTo(it.port) }
+                        if (socket != null) VLog.i(TAG, "controller over UDP to port ${offer?.port}")
+                    }
+                    route()
                 }
                 seq++
                 val now = System.nanoTime() / 1_000_000
-                val fast = socket?.let { s ->
-                    runCatching { s.send(java.net.DatagramPacket(gamepadDatagram(current, sid, seq, mac!!), GAMEPAD_DATAGRAM)) }.isSuccess
-                } ?: false
+                val frame = if (used != null) gamepadDatagram(current, sid, seq, mac!!) else null
+                var fast = false
+                wired?.let { w ->
+                    fast = runCatching { w.getOutputStream().apply { write(frame!!); flush() } }.isSuccess
+                    if (!fast) {
+                        // Unplugged (or the PC went): back to Wi-Fi.
+                        runCatching { w.close() }
+                        wired = null
+                        socket = used?.let { ctx.device.datagramTo(it.port) }
+                        VLog.i(TAG, "controller cable gone; " + if (socket != null) "over UDP" else "over the link")
+                        route()
+                    }
+                }
+                if (!fast) socket?.let { s ->
+                    fast = runCatching { s.send(java.net.DatagramPacket(frame!!, GAMEPAD_DATAGRAM)) }.isSuccess
+                }
                 if (!fast || now - lastLink >= GAMEPAD_HEARTBEAT_MS) {
+                    if (fast) tryWired()
                     lastLink = now
                     ctx.send(packet(GAMEPAD_STATE) {
                         put("b", current.buttons)
@@ -656,8 +704,9 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
             }
         } finally {
             socket?.close()
+            runCatching { wired?.close() }
             gamepadOffer.value = null
-            _gamepadFast.value = false
+            _gamepadRoute.value = null
             withContext(kotlinx.coroutines.NonCancellable) { ctx.send(packet(GAMEPAD_CLOSE)) }
         }
     }
@@ -769,6 +818,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val GAMEPAD_UDP = "vyoma.gamepad.udp"
         private const val GAMEPAD_HEARTBEAT_MS = 1_000L
         private const val GAMEPAD_REPEAT_MS = 100L
+        /** The phone's end of the companion's adb reverse for the wired controller; must match usb.rs WIRED. */
+        const val GAMEPAD_WIRED_PORT = 1866
         private const val GAMEPAD_BODY = 35
         private const val GAMEPAD_DATAGRAM = 51
         const val DESKTOP_STEP = "vyoma.desktop.step"

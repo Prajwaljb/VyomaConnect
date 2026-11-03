@@ -21,6 +21,12 @@ const PAYLOAD_SHIFT: u16 = 100;
 /// kdeconnectd's "connect to the phone's address" lands on this PC's mirror. Without them
 /// nothing sent from the phone ever arrived over the cable. Must match LanPayloads.USB_FORWARD_SHIFT.
 const FORWARD_SHIFT: u16 = 200;
+/// The controller's wired channel: the phone's 1866 reaches the companion's own 127.0.0.1:1766
+/// (gamepad.rs). Outside 1716..1764 like the tunnel; must match CompanionPlugin.GAMEPAD_WIRED_PORT.
+const WIRED: [&str; 2] = ["tcp:1866", "tcp:1766"];
+/// The phone's own listener, reached from here through `adb forward`, so the companion can link
+/// over the cable alone (Wi-Fi off, or a network that keeps them apart).
+const PHONE_LISTENER: &str = "tcp:1716";
 const POLL: Duration = Duration::from_secs(3);
 /// How long to keep retrying a phone that shows "unauthorized" (the RSA prompt is on its screen).
 const AUTH_WAIT: Duration = Duration::from_secs(90);
@@ -44,6 +50,9 @@ pub async fn watch() {
             tokio::spawn(async move { setup_all(&adb).await });
         }
         known = now;
+        if known.is_empty() {
+            CABLE.lock().unwrap().clear();
+        }
         polls = polls.wrapping_add(1);
         if !known.is_empty() && polls % TUNNEL_CHECK_POLLS == 0 {
             let adb = adb.clone();
@@ -87,9 +96,19 @@ async fn setup_all(adb: &PathBuf) {
     }
 }
 
+/// Local ports that reach a plugged-in phone's own listener (adb forwards), by serial.
+static CABLE: std::sync::Mutex<Vec<(String, u16)>> = std::sync::Mutex::new(Vec::new());
+
+/// Where the companion can dial plugged-in Vyoma phones over the cable (127.0.0.1 ports).
+pub fn cable_ports() -> Vec<u16> {
+    CABLE.lock().unwrap().iter().map(|(_, p)| *p).collect()
+}
+
 /// Re-creates the tunnel on any plugged-in Vyoma phone that has lost it.
 async fn recheck_tunnels(adb: &PathBuf) {
-    for (serial, state) in list_devices(adb).await {
+    let devices = list_devices(adb).await;
+    CABLE.lock().unwrap().retain(|(serial, _)| devices.iter().any(|(s, st)| s == serial && st == "device"));
+    for (serial, state) in devices {
         if state != "device" || NOT_VYOMA.lock().unwrap().contains(&serial) {
             continue;
         }
@@ -97,7 +116,10 @@ async fn recheck_tunnels(adb: &PathBuf) {
         let mirror = format!("tcp:{}", PAYLOAD_PORTS.start() + PAYLOAD_SHIFT);
         let forwards = run(adb, &serial, &["forward", "--list"]).await.unwrap_or_default();
         let forward = format!("tcp:{} tcp:{}", PAYLOAD_PORTS.start() + FORWARD_SHIFT, PAYLOAD_PORTS.start());
-        if !list.contains(REVERSE[0]) || !list.contains(&mirror) || !forwards.contains(&forward) {
+        let cable = CABLE.lock().unwrap().iter().find(|(s, _)| *s == serial).map(|(_, p)| format!("tcp:{p} {PHONE_LISTENER}"));
+        if !list.contains(REVERSE[0]) || !list.contains(&mirror) || !list.contains(WIRED[0]) || !forwards.contains(&forward)
+            || !cable.is_some_and(|c| forwards.contains(&c))
+        {
             info!("{serial}: USB tunnel was gone (adb server restarted?); setting it up again");
             setup(adb, &serial).await;
         }
@@ -125,6 +147,18 @@ async fn setup(adb: &PathBuf, serial: &str) {
     match run(adb, serial, &["reverse", REVERSE[0], REVERSE[1]]).await {
         Some(_) => info!("{serial}: USB tunnel ready"),
         None => warn!("{serial}: couldn't set up the USB tunnel"),
+    }
+    if run(adb, serial, &["reverse", WIRED[0], WIRED[1]]).await.is_none() {
+        warn!("{serial}: no wired channel for the controller");
+    }
+    // tcp:0 lets adb pick a free local port and print it.
+    match run(adb, serial, &["forward", "tcp:0", PHONE_LISTENER]).await.and_then(|o| o.trim().parse::<u16>().ok()) {
+        Some(port) => {
+            let mut cable = CABLE.lock().unwrap();
+            cable.retain(|(s, _)| s != serial);
+            cable.push((serial.to_string(), port));
+        }
+        None => warn!("{serial}: can't reach the phone's listener over the cable"),
     }
     let mut mirrored = 0;
     for port in PAYLOAD_PORTS {
