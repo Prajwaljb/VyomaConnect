@@ -447,6 +447,12 @@ until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played ou
   what's under it (zoom 1 + 0.1 x lift), the lens placed before the bar's `glassChrome`. Tried and rejected: Apple's
   ringed drop optics (flipped ring, dark band, caustic, rainbow: read as a thick double border), a minifying drop
   frosted like the bar, and a clear drop lit only by a thin rim line. Don't change it unless asked.
+- Lens shadow physics (lifted drops only): the drop hovers h = 0.16 x short side x lift above its surface. Its shadow
+  falls away from `SpecularLight` (follows tilt) and down by h, blur 2 dp + 1.4h, fainter as it spreads
+  (alpha / (1 + h / 0.3 short side)), drawn outside the drop only. A faint caustic (white radial, dark 9% / light 22%)
+  lands on the surface inside the drop, offset the same way, and is refracted with it.
+- Rim light by true normals: card rims (`RimLight`) and bands (`InnerGlow`) light each bit of edge by its outline
+  normal through the corner's own curve. Facing by position from the centre lit a wide card's whole corner as a blob.
 - Shapes: cards `large` (26 dp), hero cards `extraLarge` (32 dp), chips/icons `medium` (20 dp).
 
 ## Layout
