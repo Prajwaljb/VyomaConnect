@@ -30,6 +30,8 @@ class SettingsRepository(private val context: Context) {
         val slowLaunches = intPreferencesKey("slow_launches")
         /** The accent glows behind the page; on unless turned off. */
         val canvasGlow = booleanPreferencesKey("canvas_glow")
+        /** Apple's tinted glass; on unless the user picks clear glass. */
+        val tintedGlass = booleanPreferencesKey("tinted_glass")
         val deviceName = stringPreferencesKey("device_name")
         val onboarded = booleanPreferencesKey("onboarded")
         val manualHosts = stringSetPreferencesKey("manual_hosts")
@@ -71,6 +73,8 @@ class SettingsRepository(private val context: Context) {
     }
     val canvasGlow: Flow<Boolean> = prefs.map { it[Keys.canvasGlow] ?: true }.distinctUntilChanged()
     suspend fun setCanvasGlow(enabled: Boolean) = context.dataStore.edit { it[Keys.canvasGlow] = enabled }
+    val tintedGlass: Flow<Boolean> = prefs.map { it[Keys.tintedGlass] ?: true }.distinctUntilChanged()
+    suspend fun setTintedGlass(enabled: Boolean) = context.dataStore.edit { it[Keys.tintedGlass] = enabled }
     suspend fun setDeviceName(name: String) = context.dataStore.edit { it[Keys.deviceName] = name }
     /** PCs added by address (Tailscale IP, MagicDNS name, another subnet). */
     val manualHosts: Flow<Set<String>> = prefs.map { it[Keys.manualHosts].orEmpty() }.distinctUntilChanged()

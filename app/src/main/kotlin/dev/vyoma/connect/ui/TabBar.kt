@@ -292,7 +292,7 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
     }
 
     // iOS 26: the selected tab sits on a plain neutral capsule; its colour is in the icon and label.
-    val fill = if (isDarkUi) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.07f)
+    val fill = if (isDarkUi) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.12f)
     Box(
         Modifier
             .height(BarHeight)

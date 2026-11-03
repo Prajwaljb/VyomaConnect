@@ -681,18 +681,21 @@ fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: 
         VyomaMotion.effects(), label = "track",
     )
     val card = MaterialTheme.colorScheme.surfaceContainerLow
-    val padDp = 2.5.dp
+    val padDp = 2.dp
+    // iOS 26's switch: a wide, flat track (63 x 28 pt) and a capsule knob ~1.55 times as wide as tall
+    // (a round knob was the iOS 7 one); held, it lifts into a bigger drop.
     fun DrawScope.thumb(): Rect {
         val pad = padDp.toPx()
         val d = size.height - 2 * pad
+        val rest = d * KNOB_ASPECT
         val k = swell.value.coerceAtLeast(0f)
         val raw = position.value
         val p = raw.coerceIn(0f, 1f)
         // Overshoot past either end squashes the thumb against the wall instead of leaving the track.
         val squash = abs(raw - p) * d * 1.5f
         val h = d * (1f + 0.4f * k)
-        val w = d * (1f + 0.75f * k) - squash
-        val cx = pad + d / 2 + (size.width - 2 * pad - d) * p
+        val w = rest * (1f + 0.35f * k) - squash
+        val cx = pad + rest / 2 + (size.width - 2 * pad - rest) * p
         return Rect(cx - w / 2, size.height / 2 - h / 2, cx + w / 2, size.height / 2 + h / 2)
     }
     fun settle(on: Boolean) {
@@ -705,7 +708,7 @@ fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: 
     }
     Spacer(
         modifier
-            .size(52.dp, 32.dp)
+            .size(60.dp, 28.dp)
             .semantics {
                 role = Role.Switch
                 contentDescription?.let { this.contentDescription = it }
@@ -713,7 +716,7 @@ fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: 
                 onClick { settle(!checked); true }
             }
             .pointerInput(Unit) {
-                val travel = size.width - size.height.toFloat()
+                val travel = size.width - 2 * padDp.toPx() - (size.height - 2 * padDp.toPx()) * KNOB_ASPECT
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     held = true
@@ -1065,6 +1068,9 @@ fun LiquidSlider(
     )
 }
 
+/** Width over height of the switch's knob at rest, as iOS 26's. */
+private const val KNOB_ASPECT = 1.55f
+
 /** The knob: a wide capsule centred on the value, kept inside the track; lifted it grows ~45%. */
 private fun DrawScope.sliderKnob(value: Float, swell: Float, knob: Dp): Rect {
     val k = swell.coerceAtLeast(0f)
@@ -1080,10 +1086,14 @@ private fun DrawScope.sliderKnob(value: Float, swell: Float, knob: Dp): Rect {
  * pill, so a resting slider costs no offscreen layers. Faded by [alpha] as the lens takes over.
  */
 fun DrawScope.frostedKnob(r: Rect, alpha: Float) {
+    if (r.width < 1f) return
     val a = alpha.coerceIn(0f, 1f)
-    if (a < 0.01f || r.width < 1f) return
     val corner = CornerRadius(r.height / 2)
-    drawRoundRect(Color.Black.copy(alpha = 0.14f * a), r.topLeft + Offset(0f, 1.dp.toPx()), r.size, corner)
+    // Apple's knob shadow: soft and a little below, not a hard 1 dp ledge. It stays while the knob is
+    // held (Apple's lifted knob casts one too), softer and wider as the drop lifts.
+    val lift = 1f - a
+    with(SoftShadow) { draw(r, corner.x, Color.Black.copy(alpha = 0.22f - 0.06f * lift), (5f + 5f * lift).dp.toPx(), (1.5f + 1.5f * lift).dp.toPx()) }
+    if (a < 0.01f) return
     drawRoundRect(Color.White, r.topLeft, r.size, corner, alpha = a)
     drawRoundRect(
         Brush.verticalGradient(listOf(Color.White, Color.Black.copy(alpha = 0.06f)), startY = r.top, endY = r.bottom),

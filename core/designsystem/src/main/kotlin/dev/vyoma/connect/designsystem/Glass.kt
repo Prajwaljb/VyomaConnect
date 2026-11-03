@@ -154,10 +154,21 @@ object Glass {
         @Composable @ReadOnlyComposable
         get() = MaterialTheme.colorScheme.primary.toned(1.2f, if (isDarkUi) 0.56f else 0.5f)
 
-    /** Tint laid over real backdrop blur. */
+    /**
+     * Tint laid over real backdrop blur. Dark is Apple's dark glass: a mid grey, so over true black
+     * the pane reads as ~#2E2E30 (iOS 26 bars over black measure ~#3F3F3F; ours was ~#0C0C0D, a bar you
+     * could only find by its rim), and bright content under it is toned down rather than shown raw.
+     */
     val chrome: Color
         @Composable @ReadOnlyComposable
-        get() = if (isDarkUi) Color(0xFF1C1D21).copy(alpha = 0.42f) else Color.White.copy(alpha = 0.38f)
+        get() = when {
+            // Apple's light glass, solved from iOS 26 Music over white and over yellow: a light grey
+            // mixed in at ~44% (white reads 232 under it, a saturated yellow stays yellow but softened).
+            !isDarkUi -> if (GlassQuality.tinted) Color(0xFFD4D5D9).copy(alpha = 0.44f) else Color.White.copy(alpha = 0.38f)
+            GlassQuality.tinted -> Color(0xFF7C7C82).copy(alpha = 0.38f)
+            // Clear glass (the setting): the lens halves this again.
+            else -> Color(0xFF1C1D21).copy(alpha = 0.42f)
+        }
 
     val edge: Brush
         @Composable @ReadOnlyComposable
@@ -327,6 +338,41 @@ half4 main(float2 xy) {
     }
 }
 
+/**
+ * Apple's floating-glass shadow: soft, wide, all round with a little more underneath (iOS 26's tab bar
+ * on white measures ~6% dark at its edge, gone ~12 dp out). Drawn only outside the shape, since the
+ * glass is see-through and a shadow under it would grey it. A blurred round rect is analytic on the
+ * GPU, so this is cheap to draw every frame. UI thread only (shared paint).
+ */
+internal object SoftShadow {
+    private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    private val filters = HashMap<Int, android.graphics.BlurMaskFilter>()
+    private val hole = Path()
+
+    fun DrawScope.draw(rect: Rect, corner: Float, color: Color, blur: Float, drop: Float) {
+        if (color.alpha <= 0f || blur < 1f || rect.width < 1f || rect.height < 1f) return
+        val key = blur.roundToInt()
+        paint.maskFilter = filters.getOrPut(key) { android.graphics.BlurMaskFilter(key.toFloat(), android.graphics.BlurMaskFilter.Blur.NORMAL) }
+        paint.color = color.toArgb()
+        val c = corner.coerceAtMost(rect.minDimension / 2)
+        hole.reset()
+        hole.addRoundRect(RoundRect(rect, CornerRadius(c)))
+        clipPath(hole, ClipOp.Difference) {
+            drawIntoCanvas { it.nativeCanvas.drawRoundRect(rect.left, rect.top + drop, rect.right, rect.bottom + drop, c, c, paint) }
+        }
+    }
+}
+
+/**
+ * The shadow under floating glass, per theme and size: bigger panes (menus, dialogs) cast wider ones,
+ * as Apple's do. Dark mode's is deep, for when chrome floats over lighter content (on black it's moot).
+ */
+internal fun DrawScope.chromeShadow(rect: Rect, corner: Float, dark: Boolean) {
+    val blur = (rect.minDimension * 0.22f).coerceIn(8.dp.toPx(), 22.dp.toPx())
+    val color = if (dark) Color.Black.copy(alpha = 0.5f) else Color(0xFF0B1220).copy(alpha = 0.13f)
+    with(SoftShadow) { draw(rect, corner, color, blur, drop = blur * 0.25f) }
+}
+
 /** Where [specularRim]'s sweep puts the light before turning it (0.625 of a turn from 3 o'clock). */
 private const val RIM_LAYOUT_DEG = 225f
 
@@ -460,8 +506,13 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
             val center = Offset(size.width / 2, size.height / 2)
             val glow = InnerGlow()
             val band = Color.White.copy(alpha = if (base != null) 0.18f else if (dark) 0.34f else 0.6f)
-            val bandWidth = (size.minDimension * 0.12f).coerceAtMost((if (size.minDimension < 64.dp.toPx()) 3 else 4).dp.toPx())
+            // Thin, as Apple's edge light is (~2 pt).
+            val bandWidth = (size.minDimension * 0.06f).coerceAtMost(2.dp.toPx())
+            val radius = (outline as? Outline.Rounded)?.roundRect?.topLeftCornerRadius?.x ?: (size.minDimension / 2)
             onDrawBehind {
+                // Light mode: a small soft shadow, as Apple's glass buttons on pale surfaces have (on a
+                // dark card one would only muddy the edge, so the rim does the work there).
+                if (!dark) with(SoftShadow) { draw(Rect(Offset.Zero, size), radius, Color(0xFF0B1220).copy(alpha = 0.1f), 6.dp.toPx(), 1.5.dp.toPx()) }
                 drawOutline(outline, fill)
                 // The light's angle is read here only, so tilting redraws the edge and nothing else.
                 val light = SpecularLight.angle
@@ -629,7 +680,9 @@ fun Modifier.glassChrome(
     var position by remember { mutableStateOf(Offset.Zero) }
     val fill = tint ?: Glass.chrome
     // Lighter glass: opaque enough that the missing blur isn't missed (content passing under stays a shadow).
-    val liteFill = fill.copy(alpha = maxOf(fill.alpha, if (tint == null) 0.92f else 0.6f))
+    // (Dark's default tint is a grey that would turn light if made opaque: there it's the grey it shows over black.)
+    val liteFill = if (tint == null && GlassQuality.tinted) (if (isDarkUi) Color(0xFF2E2E31) else Color(0xFFE8E8EC)).copy(alpha = 0.94f)
+        else fill.copy(alpha = maxOf(fill.alpha, if (tint == null) 0.92f else 0.6f))
     // The rim's inner band of light (see InnerGlow).
     val glow = remember { InnerGlow() }
     val band = Color.White.copy(alpha = if (isDarkUi) 0.52f else 0.6f)
@@ -654,14 +707,23 @@ fun Modifier.glassChrome(
                 }
             },
         )
+        // Its shadow, ahead of any clip; it swells with the pressed glass.
+        .drawBehind {
+            if (size.width < 1f || size.height < 1f) return@drawBehind
+            val grow = if (lens == null) 0f else (size.minDimension * 0.08f * press.value).coerceAtLeast(-size.minDimension * 0.04f)
+            val corner = ((shape.createOutline(size, layoutDirection, this) as? Outline.Rounded)?.roundRect?.topLeftCornerRadius?.x
+                ?: size.minDimension / 2).coerceAtMost(size.minDimension / 2) + grow
+            chromeShadow(Rect(-grow, -grow, size.width + grow, size.height + grow), corner, dark)
+        }
         // The shader clips to the shape itself, and its rim needs to reach past the edge.
         .then(if (lens == null) Modifier.clip(shape) else Modifier)
         .drawBehind {
             // An empty slot (an actions row with nothing in it) draws nothing.
             if (size.width < 1f || size.height < 1f) return@drawBehind
             // Read while drawing, so switching it redraws every element in place.
-            val bandWidth = (size.minDimension * 0.1f).coerceAtMost(4.dp.toPx())
-            val roll = (size.minDimension * 0.18f).coerceAtMost(10.dp.toPx())
+            // Apple's inner light is a short gradient right at the edge (~2 pt on a dark bar), not a wide glow.
+            val bandWidth = (size.minDimension * 0.05f).coerceAtMost(2.dp.toPx())
+            val roll = (size.minDimension * 0.1f).coerceAtMost(6.dp.toPx())
             if (GlassQuality.lite) {
                 val outline = shape.createOutline(size, layoutDirection, this)
                 drawOutline(outline, liteFill)
@@ -680,7 +742,9 @@ fun Modifier.glassChrome(
                 with(glow) { draw(shape.createOutline(size, layoutDirection, this@drawBehind), band, bandWidth, shade = shade, depth = roll) }
                 return@drawBehind
             }
-            // The rim stays a fifth of the element at most, so small buttons are still mostly clear.
+            // Apple's proportions (iOS 26 bars measure a bend band ~8% of their height; big panes ~17 pt):
+            // a tenth of the element, at most the bevel. The slab is twice as deep in rims, so the
+            // rim still throws the view as far across the element.
             val rim = bevel.toPx().coerceAtMost(size.minDimension * LensStyle.Chrome.rim)
             // A deep slab throws the edge's view across the element; the margin is what lies
             // beyond its far side.
@@ -691,7 +755,7 @@ fun Modifier.glassChrome(
             val grow = (size.minDimension * 0.08f * p).coerceAtLeast(-size.minDimension * 0.04f)
             val g = Size(size.width + 2 * grow, size.height + 2 * grow)
             // The far side plus what lies beyond it, and room for the inflated shape and the blur.
-            val m = (rim * 2f).roundToInt() + 12
+            val m = (rim * 4f).roundToInt() + 12
             // Blurred and refracted in one pass at quarter resolution: inside, it only bends blurred
             // content, which looks the same at that size, for a sixteenth of the GPU fill. What
             // would show the lower resolution is the outline and the highlight, so the shader's
@@ -705,8 +769,8 @@ fun Modifier.glassChrome(
                 ?: size.minDimension / 2).coerceAtMost(size.minDimension / 2) + grow
             blurred.renderEffect = lens.effect(
                 gs * q, (m - inflate) * q, radius = (corner + inflate) * q, bevel = rim * q, refract = depth * q, zoom = 1f,
-                // Clear in dark mode; light mode keeps more milk so dark labels stay legible over photos.
-                disperse = LensStyle.Chrome.disperse, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.92f),
+                // Dark: Apple's grey glass, as tinted; light keeps a little more milk so dark labels stay legible over photos.
+                disperse = LensStyle.Chrome.disperse, tint = fill.copy(alpha = fill.alpha * if (GlassQuality.tinted && tint == null) 1f else if (!dark) 0.92f else 0.5f),
                 spec = 0.15f + 0.2f * p.coerceIn(0f, 1f), shade = if (dark) 0f else 0.1f, blur = r * q,
             )
             val o = m + grow
@@ -749,7 +813,7 @@ fun Modifier.glassChrome(
 class LensStyle(val rim: Float, val depth: Float, val disperse: Float, val milk: Pair<Float, Float> = 0.05f to 0.12f) {
     companion object {
         /** Bars and buttons (chrome): water-like, the rim shows what's across the element. */
-        val Chrome = LensStyle(rim = 0.2f, depth = 6f, disperse = 0.04f)
+        val Chrome = LensStyle(rim = 0.1f, depth = 12f, disperse = 0.05f)
         /** A tube holding liquid: a wide rim so the surface visibly climbs the walls. */
         val Tube = LensStyle(rim = 0.3f, depth = 3f, disperse = 0f)
         /** Drops that move or grow over content: a thinner, calmer rim so what's under the middle
@@ -913,6 +977,8 @@ internal class LensPainter(private val graphics: GraphicsContext) {
  */
 object GlassQuality {
     var lite by mutableStateOf(false)
+    /** Apple's tinted glass (the default); off is the clearer glass (Settings > Clear glass). */
+    var tinted by mutableStateOf(true)
 }
 
 /** Liquid glass needs AGSL (Android 13); below that chrome stays frosted and lenses aren't drawn. */
@@ -1043,7 +1109,9 @@ half4 main(float2 p) {
         // A big pane (a dialog, a menu) has a polished edge: its slope eases in from the flat face.
         // Starting at an angle, the bent image met the straight one in a crease, a thin dark line
         // inside the rim. Bars, buttons and knobs (no wider than 3 rims) keep the plain rim exactly.
-        float big = smoothstep(3.0 * bevel, 4.5 * bevel, min(c.x, c.y));
+        // (Rims are a tenth of the element, so anything at exactly 5 rims is a bar or button; only
+        // panes whose rim hit the bevel cap are bigger.)
+        float big = smoothstep(5.2 * bevel, 6.2 * bevel, min(c.x, c.y));
         float eased = (t < 0.35 ? t * t / 0.7 : t - 0.175) / 0.825;
         float tilt = mix(t, eased, big);
         float3 normal = normalize(float3(n * tilt, sqrt(max(1.0 - tilt * tilt, 0.0))));
