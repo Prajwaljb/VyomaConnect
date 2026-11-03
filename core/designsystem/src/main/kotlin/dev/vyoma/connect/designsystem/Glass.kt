@@ -261,8 +261,9 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
         if (!lit || d.rimLit.alpha <= 0f) return
         with(glow) { draw(outline, d.band, band, light, shade = d.shade, depth = roll, corner = corner, exponent = if (corner != null) SmoothCornerShape.EXPONENT else 2f) }
         translate(inset, inset) {
-            val c = Offset(width / 2 - inset, height / 2 - inset)
-            drawOutline(edge, specularRim(d.rimLit, d.rimBase, c, light, size = Size(width, height)), style = Stroke(stroke))
+            val area = Size(width - 2 * inset, height - 2 * inset)
+            val r = corner ?: (edge as? Outline.Rounded)?.roundRect?.takeIf { it.isSimple }?.topLeftCornerRadius?.x ?: (edge as? Outline.Rectangle)?.let { 0f }
+            with(RimLight) { stroke(edge, d.rimLit, d.rimBase, stroke, area, r, if (corner != null) SmoothCornerShape.EXPONENT else 2f, light) }
         }
     }
 }
@@ -342,7 +343,7 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
                 val light = SpecularLight.angle
                 // No rolled shading here: on small round controls it turned them into plastic balls.
                 with(glow) { draw(outline, band, bandWidth, light, corner = smooth, exponent = if (smooth != null) SmoothCornerShape.EXPONENT else 2f) }
-                drawOutline(outline, specularRim(lit, rimBase, center, light, size = size), style = stroke)
+                with(RimLight) { stroke(outline, lit, rimBase, stroke.width, size, radius, if (smooth != null && (outline !is Outline.Rounded)) SmoothCornerShape.EXPONENT else 2f, light) }
             }
         }
         .clip(shape)

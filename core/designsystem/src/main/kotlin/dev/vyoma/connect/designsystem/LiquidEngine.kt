@@ -197,6 +197,16 @@ uniform half4 color;
 uniform float depth;
 uniform half4 shade;
 
+// The outward normal of a rounded rect (half-size c) whose corners are superellipse quarters of
+// extent `radius` and exponent `exponent` (2 = circular).
+float2 edgeNormal(float2 p, float2 c, float radius, float exponent) {
+    float2 sg = float2(p.x < 0.0 ? -1.0 : 1.0, p.y < 0.0 ? -1.0 : 1.0);
+    float r = max(radius, 0.001);
+    float2 q = abs(p) - c + r;
+    if (q.x > 0.0 && q.y > 0.0) return normalize(pow(q / r, float2(exponent - 1.0)) + 1e-5) * sg;
+    return q.x > q.y ? float2(sg.x, 0.0) : float2(0.0, sg.y);
+}
+
 half4 main(float2 xy) {
     float2 c = size * 0.5;
     float2 p = xy - c;
@@ -217,8 +227,10 @@ half4 main(float2 xy) {
     float t = clamp(1.0 + d / width, 0.0, 1.0);
     // Eases in from nothing, so the band has no inner edge to see.
     float band = t * t * t;
-    // Which way this bit of edge faces, as on a squircle: lit facing the light, and the far side.
-    float2 n = normalize(p / max(c, float2(1.0)) + 1e-4);
+    // Which way this bit of edge truly faces (the outline's normal, through the corner's own curve):
+    // the light slides round a corner as it does on Apple's tiles. Facing by position from the middle
+    // gave every point of a wide card's corner one direction, so the whole corner lit up as a blob.
+    float2 n = edgeNormal(p, c, radius, exponent);
     float f = dot(n, light);
     // Spreads along the edge but gathers towards where it faces the light, so the lit corners stand out.
     float k = pow(max(f, 0.0), 1.6) + opposite * pow(max(-f, 0.0), 1.6);
@@ -249,7 +261,7 @@ internal object SoftShadow {
     private val filters = HashMap<Int, android.graphics.BlurMaskFilter>()
     private val hole = Path()
 
-    fun DrawScope.draw(rect: Rect, corner: Float, color: Color, blur: Float, drop: Float) {
+    fun DrawScope.draw(rect: Rect, corner: Float, color: Color, blur: Float, drop: Float, dx: Float = 0f) {
         if (color.alpha <= 0f || blur < 1f || rect.width < 1f || rect.height < 1f) return
         val key = blur.roundToInt()
         paint.maskFilter = filters.getOrPut(key) { android.graphics.BlurMaskFilter(key.toFloat(), android.graphics.BlurMaskFilter.Blur.NORMAL) }
@@ -258,7 +270,7 @@ internal object SoftShadow {
         hole.reset()
         hole.addRoundRect(RoundRect(rect, CornerRadius(c)))
         clipPath(hole, ClipOp.Difference) {
-            drawIntoCanvas { it.nativeCanvas.drawRoundRect(rect.left, rect.top + drop, rect.right, rect.bottom + drop, c, c, paint) }
+            drawIntoCanvas { it.nativeCanvas.drawRoundRect(rect.left + dx, rect.top + drop, rect.right + dx, rect.bottom + drop, c, c, paint) }
         }
     }
 }
@@ -300,6 +312,66 @@ internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float =
         postScale(stretch, 1f, center.x, center.y)
     })
     return ShaderBrush(shader)
+}
+
+/**
+ * The hairline rim of a glass pane, lit by which way each bit of its edge truly faces (the same normal
+ * as [InnerGlow]'s band): brightest facing the light, [opposite] as bright on the far side, [base]
+ * between. Corners carry the light round smoothly, as on Apple's tiles, instead of lighting up whole
+ * (a sweep around the middle, [specularRim], does that on wide cards). Android 13+; [specularRim] below.
+ */
+internal object RimLight {
+    private val shader by lazy(LazyThreadSafetyMode.NONE) { @SuppressLint("NewApi") RuntimeShader(AGSL) }
+
+    /** Strokes [outline] (sized [area], corners of extent [corner] and [exponent]) [width] wide. */
+    fun DrawScope.stroke(
+        outline: Outline, lit: Color, base: Color, width: Float, area: Size, corner: Float?,
+        exponent: Float = 2f, light: Float = SpecularLight.angle, opposite: Float = 0.8f, alpha: Float = 1f,
+    ) {
+        if (!liquidGlassSupported || corner == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            drawOutline(outline, specularRim(lit, base, Offset(area.width / 2, area.height / 2), light, opposite, area), alpha = alpha, style = Stroke(width))
+            return
+        }
+        val a = Math.toRadians(light.toDouble())
+        shader.setFloatUniform("size", area.width, area.height)
+        shader.setFloatUniform("radius", corner.coerceAtMost(area.minDimension / 2))
+        shader.setFloatUniform("exponent", exponent)
+        shader.setFloatUniform("light", cos(a).toFloat(), sin(a).toFloat())
+        shader.setFloatUniform("opposite", opposite)
+        shader.setFloatUniform("lit", lit.red, lit.green, lit.blue, lit.alpha)
+        shader.setFloatUniform("base", base.red, base.green, base.blue, base.alpha)
+        drawOutline(outline, ShaderBrush(shader), alpha = alpha, style = Stroke(width))
+    }
+
+    private const val AGSL = """
+uniform float2 size;
+uniform float radius;
+uniform float exponent;
+uniform float2 light;
+uniform float opposite;
+uniform half4 lit;
+uniform half4 base;
+
+// The outward normal of a rounded rect (half-size c) whose corners are superellipse quarters of
+// extent `radius` and exponent `exponent` (2 = circular).
+float2 edgeNormal(float2 p, float2 c, float radius, float exponent) {
+    float2 sg = float2(p.x < 0.0 ? -1.0 : 1.0, p.y < 0.0 ? -1.0 : 1.0);
+    float r = max(radius, 0.001);
+    float2 q = abs(p) - c + r;
+    if (q.x > 0.0 && q.y > 0.0) return normalize(pow(q / r, float2(exponent - 1.0)) + 1e-5) * sg;
+    return q.x > q.y ? float2(sg.x, 0.0) : float2(0.0, sg.y);
+}
+
+half4 main(float2 xy) {
+    float2 c = size * 0.5;
+    float2 n = edgeNormal(xy - c, c, radius, exponent);
+    float f = dot(n, light);
+    // As the band: broad and soft, gathered towards the light and the far side.
+    float k = clamp(pow(max(f, 0.0), 1.6) + opposite * pow(max(-f, 0.0), 1.6), 0.0, 1.0);
+    half4 col = mix(base, lit, half(k));
+    return half4(col.rgb * col.a, col.a);
+}
+"""
 }
 
 
@@ -428,6 +500,23 @@ internal class LensPainter(private val graphics: GraphicsContext) {
             drawLayer(self)
             drawContext.canvas.restore()
         }
+        // Shadow physics, for drops lifted off what they sit on: the drop hovers `h` above it, higher
+        // as it lifts. Its shadow falls away from the light (SpecularLight, so it follows the phone's
+        // tilt) and a little down, by that height; its penumbra widens with the height, and the same
+        // light spread over the wider area makes it fainter. Only outside the drop: under clear glass
+        // a shadow would grey it.
+        val la = Math.toRadians(SpecularLight.angle.toDouble())
+        val lx = cos(la).toFloat()
+        val ly = sin(la).toFloat()
+        val lifted = style.depth < 0f
+        val h = r.minDimension * 0.16f * a
+        val fall = Offset(-lx * h * 0.6f, -ly * h * 0.3f + h * 0.5f)
+        if (lifted && h > 0.5f) {
+            val blur = 2.dp.toPx() + h * 1.4f
+            val k = a / (1f + h / (r.minDimension * 0.3f))
+            val color = if (dark) Color.Black.copy(alpha = 0.5f * k) else Color(0xFF0B1220).copy(alpha = 0.2f * k)
+            with(SoftShadow) { draw(r, r.minDimension / 2, color, blur, drop = fall.y, dx = fall.x) }
+        }
         val rim = r.minDimension * style.rim
         // Room for the rim to look past the far edge.
         val m = (r.minDimension * style.rim * (2f + abs(style.depth).coerceAtMost(4f) * 0.5f)).roundToInt() + 1
@@ -444,6 +533,16 @@ internal class LensPainter(private val graphics: GraphicsContext) {
             translate(m - r.left, m - r.top) {
                 if (backdrop != null) translate(shift.x, shift.y) { drawLayer(backdrop.layer) }
                 drawLayer(self)
+                // The caustic: the drop focuses the light it lets through into a soft bright patch on
+                // the surface, inside the shadow's footprint (seen through the drop, so it's refracted too).
+                if (lifted && h > 0.5f) {
+                    val at = r.center + fall * 1.4f
+                    val rr = r.minDimension * 0.42f
+                    drawCircle(
+                        Brush.radialGradient(listOf(Color.White.copy(alpha = (if (dark) 0.09f else 0.22f) * a), Color.Transparent), at, rr),
+                        rr, at,
+                    )
+                }
             }
         }
         translate(r.left - m, r.top - m) { drawLayer(drop) }
@@ -451,15 +550,16 @@ internal class LensPainter(private val graphics: GraphicsContext) {
         // nothing around it to refract, and without this its rim vanished.
         val half = 0.5.dp.toPx()
         val edge = r.deflate(half)
-        drawRoundRect(
-            specularRim(
-                Color.White.copy(alpha = if (dark) 0.6f else 1f),
-                if (dark) Color.White.copy(alpha = 0.1f) else Color(0xFF1A2B4C).copy(alpha = 0.14f),
-                edge.center,
-                size = edge.size,
-            ),
-            edge.topLeft, edge.size, CornerRadius(edge.height / 2), alpha = a, style = Stroke(1.dp.toPx()),
-        )
+        translate(edge.left, edge.top) {
+            with(RimLight) {
+                stroke(
+                    Outline.Rounded(RoundRect(Rect(Offset.Zero, edge.size), CornerRadius(edge.minDimension / 2))),
+                    Color.White.copy(alpha = if (dark) 0.6f else 1f),
+                    if (dark) Color.White.copy(alpha = 0.1f) else Color(0xFF1A2B4C).copy(alpha = 0.14f),
+                    1.dp.toPx(), edge.size, edge.minDimension / 2, alpha = a,
+                )
+            }
+        }
     }
 
     fun release() {
