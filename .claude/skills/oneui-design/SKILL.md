@@ -442,16 +442,20 @@ until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played ou
 - Selected tab: neutral capsule (light 12% black, dark 14% white); colour only in the icon and label.
 - Switch: iOS 26 proportions, 60x28 dp track, capsule knob 1.55:1. Slider: 6 dp track, 24 dp capsule knob.
 - Accent: kept; Apple's glass itself is neutral, colour lives in active glyphs/labels and filled primary actions.
-- Lifted drops (tab drop, segmented/switch/slider knobs; `LensStyle.Lift` -> shader `drop` branch), measured from iOS
-  Music's tab drop, edge inwards: a bright ring where the steepest edge flips to show what's ACROSS the drop (smeared
-  along the edge, never legible; rainbow dispersion there), a dark band where the rim's middle magnifies what's just
-  OUTSIDE (the dark beyond the bar), a thin caustic line between them, then a body slightly lighter than the bar.
-  Rim 14% of the drop's short side. The tab and segmented drops MINIFY what's behind (zoom 1 - 0.14 x lift): the
-  bar seen through the drop shrinks, its edges inset inside the drop with what's beyond them as the bands (iOS Music).
-  Magnifying it read as a stretched bar.
+- Lifted drops (tab drop, segmented/switch/slider knobs; `LensStyle.Lift` -> shader `drop` branch), as iOS Music's
+  tab drop: clear all through, a thin pale rim (`LensLight`, full resolution) and an edge that bends further and
+  further OUTWARDS (shift = 1.7 x bevel x t^2), so content compresses into the rim and, where the drop outgrows the
+  bar, the dark beyond the bar shows as top/bottom bands. Dispersion only a hint (0.015). Rim 14% of the drop's short
+  side. A flipped "across" ring with a smear, a dark band and a caustic line were tried: they read as a thick double
+  border with rainbow fringes and were removed. The tab and segmented drops MINIFY what's behind (zoom 1 - 0.14 x lift).
+- Liquid engine (`LiquidEngine.kt`): a drop never re-renders glass. The tab drop is placed after the bar's
+  `glassChrome` and sees the page behind plus the bar as a plain tint capsule (`liquidLens(over = barTint)`); recording
+  the rendered bar showed its rim and band shrunk inside the drop as a second border.
 - Shapes: cards, tiles and icon squircles use `SmoothCornerShape` (continuous corners: superellipse quarters, n 4.2,
   spanning 1.32x the radius), as macOS/iOS 26 tiles. Theme shapes medium/large/extraLarge are smooth. Pills, circles,
   menus and dialogs stay true round-rects (the lens shader's SDF needs them). Glass that shades a smooth card passes
-  its radius (`InnerGlow.draw(corner = ...)`), else a path outline falls back to slow stacked strokes.
+  its radius (`InnerGlow.draw(corner = ..., exponent = SmoothCornerShape.EXPONENT)`), else a path outline falls back
+  to slow stacked strokes. The band's SDF uses the same superellipse (divided by its gradient for an even width): a
+  circular-corner SDF on a squircle pooled light in each corner. Cards carry light in the edge only, no radial glow.
 - Light-mode shadows sit clearly below (drop 0.45 x blur, 16%), as Apple's Voice Memos buttons; glass over photos
   defines itself by its rim instead.

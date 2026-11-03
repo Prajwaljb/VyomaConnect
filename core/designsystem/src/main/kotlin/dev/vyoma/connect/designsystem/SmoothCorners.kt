@@ -75,17 +75,17 @@ class SmoothCornerShape(
         }
     }
 
-    /** The corner radius in px, for glass that shades its edge as a rounded rect (close enough inside). */
-    fun radiusPx(size: Size, density: Density): Float = topStart.toPx(size, density)
+    /** The corner's extent in px (where its curve starts), for glass that shades the edge with [EXPONENT]. */
+    fun radiusPx(size: Size, density: Density): Float = span(topStart.toPx(size, density), size)
 
     override fun equals(other: Any?) = other is SmoothCornerShape && topStart == other.topStart && topEnd == other.topEnd &&
         bottomEnd == other.bottomEnd && bottomStart == other.bottomStart
 
     override fun hashCode() = ((topStart.hashCode() * 31 + topEnd.hashCode()) * 31 + bottomEnd.hashCode()) * 31 + bottomStart.hashCode()
 
-    private companion object {
+    companion object {
         const val EXPONENT = 4.2f
-        const val SPAN = 1.32f
-        const val STEPS = 14
+        private const val SPAN = 1.32f
+        private const val STEPS = 14
     }
 }

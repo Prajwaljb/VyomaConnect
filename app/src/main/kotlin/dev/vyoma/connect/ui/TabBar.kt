@@ -293,14 +293,18 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
 
     // iOS 26: the selected tab sits on a plain neutral capsule; its colour is in the icon and label.
     val fill = if (isDarkUi) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.12f)
+    // The bar's own tint, as its glass lays it over the page (see glassChrome).
+    val barTint = Glass.chrome.let { it.copy(alpha = it.alpha * if (isDarkUi) 0.5f else 0.92f) }
     Box(
         Modifier
             .height(BarHeight)
             .menuOccluder()
-            // The bar seen through the drop shrinks (iOS Music: its edges show inset inside the drop, the dark
-            // beyond them as bands), so the drop reads as a lens held above it, not a magnifier on it.
-            .liquidLens(backdrop, strength = { lift.value }, zoom = { 1f - 0.14f * lift.value.coerceIn(0f, 1f) }, style = LensStyle.Lift, rect = { pill() })
             .glassChrome(backdrop, CircleShape, blur = 1.5.dp, bevel = 16.dp)
+            // Inside the bar's glass, so the drop sees the page, the bar as its plain tint and the tabs,
+            // never the bar's rendered glass (its rim, shrunk inside the drop, was a second border). The bar
+            // seen through the drop shrinks (iOS Music: its edges show inset inside the drop, what's beyond
+            // them as bands), so the drop reads as a lens held above it, not a magnifier on it.
+            .liquidLens(backdrop, strength = { lift.value }, zoom = { 1f - 0.14f * lift.value.coerceIn(0f, 1f) }, style = LensStyle.Lift, over = barTint, rect = { pill() })
             .drawBehind {
                 // The resting pill is gone early in the lift: magnified inside the growing drop, its
                 // grey read as a white haze (where drops can be drawn).
