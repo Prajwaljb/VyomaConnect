@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.accent
 import androidx.compose.material.icons.rounded.Park
 import dev.vyoma.connect.designsystem.LocalStatus
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -160,18 +161,20 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
             SectionCard(contentPadding = PaddingValues(vertical = 16.dp)) {
                 Text("Accent", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(horizontal = 20.dp))
                 Spacer(Modifier.height(12.dp))
-                // All six in view, evenly spread: a sixth sliver at the edge hid one choice.
+                // All seven in view, evenly spread: a sixth sliver at the edge hid one choice.
                 BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-                // One size for all six names (see fitTogether), each allowed a little past its share.
+                // One size for all seven names (see fitTogether), each allowed a little past its share.
                 val label = fitTogether(
                     Palette.entries.map { it.label }, MaterialTheme.typography.labelSmall, maxWidth / Palette.entries.size + SWATCH_BLEED,
                 )
+                // Each circle leaves a gap in its share (seven at 44 dp touched on a 412 dp phone).
+                val swatch = (maxWidth / Palette.entries.size - 8.dp).coerceAtMost(44.dp)
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Palette.entries.forEach { p ->
-                        PaletteSwatch(p, selected = theme.palette == p, label, Modifier.weight(1f)) { vm.setPalette(p) }
+                        PaletteSwatch(p, selected = theme.palette == p, label, swatch, Modifier.weight(1f)) { vm.setPalette(p) }
                     }
                 }
                 }
@@ -426,25 +429,34 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
 }
 
 @Composable
-private fun PaletteSwatch(palette: Palette, selected: Boolean, label: TextStyle, modifier: Modifier, onClick: () -> Unit) {
+private fun PaletteSwatch(palette: Palette, selected: Boolean, label: TextStyle, size: androidx.compose.ui.unit.Dp, modifier: Modifier, onClick: () -> Unit) {
     val dark = MaterialTheme.colorScheme.background.red < 0.5f
     val ring by animateColorAsState(if (selected) MaterialTheme.colorScheme.onSurface else Color.Transparent, label = "ring")
     val inset by animateDpAsState(if (selected) 5.dp else 0.dp, VyomaMotion.spatial(), label = "inset")
     // Equal shares (labels differ in width, so spreading the columns spaced the circles unevenly).
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.pressable(haptic = Haptic.Select, onClick = onClick)) {
         Box(
-            Modifier.size(44.dp).clip(CircleShape).border(2.dp, ring, CircleShape).padding(inset.coerceAtLeast(0.dp)), // the spring overshoots below zero
+            Modifier.size(size).clip(CircleShape).border(2.dp, ring, CircleShape).padding(inset.coerceAtLeast(0.dp)), // the spring overshoots below zero
             contentAlignment = Alignment.Center,
         ) {
-            val fill = if (palette == Palette.DYNAMIC) {
-                // Wallpaper option previews the live Material You primary with a soft sweep.
-                Brush.sweepGradient(listOf(MaterialTheme.colorScheme.primary, Color(0xFF5CE1E6), MaterialTheme.colorScheme.primary))
+            val context = androidx.compose.ui.platform.LocalContext.current
+            val pcWall = AppCanvas.wallpaper
+            val fill = if (palette == Palette.PC && pcWall != null) {
+                // The PC option previews its accent over the wallpaper's own colours.
+                val a = pcWall.accent(dark) ?: MaterialTheme.colorScheme.primary
+                Brush.sweepGradient(listOf(a) + pcWall.colors.take(4).map { Color(0xFF000000.toInt() or it).toned(1.3f) } + a)
+            } else if (palette == Palette.PC || palette == Palette.PHONE) {
+                // The phone's Material You primary (not the app's: that may be the PC's), with a soft sweep.
+                val phone = remember(context, dark) {
+                    if (dark) androidx.compose.material3.dynamicDarkColorScheme(context).primary else androidx.compose.material3.dynamicLightColorScheme(context).primary
+                }
+                Brush.sweepGradient(listOf(phone, Color(0xFF5CE1E6), phone))
             } else {
                 // Flat: a dark-to-light gradient made them glossy balls. The deep shade the accent fills
                 // with (switches, sliders), not the pastel dark-theme text tone, which read washed out.
                 SolidColor(if (dark) palette.dark.toned(1.2f, 0.5f) else palette.light)
             }
-            Box(Modifier.size(44.dp).clip(CircleShape).background(fill), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(size).clip(CircleShape).background(fill), contentAlignment = Alignment.Center) {
                 if (selected) Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))
             }
         }

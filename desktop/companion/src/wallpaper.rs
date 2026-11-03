@@ -30,6 +30,16 @@ pub async fn colors() -> Result<Vec<[u8; 3]>> {
     Ok(out.stdout.chunks_exact(3).take(COLS * ROWS).map(|c| [c[0], c[1], c[2]]).collect())
 }
 
+/// What identifies the wallpaper as shown: its file and when the file and Plasma's setting last
+/// changed. Cheap (a config read and two stats), so it can be checked every few seconds.
+pub fn signature() -> Option<(PathBuf, Option<std::time::SystemTime>, Option<std::time::SystemTime>)> {
+    let home = std::env::var_os("HOME")?;
+    let config = Path::new(&home).join(".config/plasma-org.kde.plasma.desktop-appletsrc");
+    let path = current()?;
+    let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    Some((path.clone(), mtime(&path), mtime(&config)))
+}
+
 /// The image Plasma's desktop shows (the first screen's), from its desktop config. A wallpaper
 /// package resolves to its largest image; no image set means Plasma's default, Next.
 fn current() -> Option<PathBuf> {

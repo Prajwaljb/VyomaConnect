@@ -43,7 +43,7 @@ class SettingsRepository(private val context: Context) {
 
     val theme: Flow<ThemeSettings> = prefs.map { p ->
         ThemeSettings(
-            palette = p[Keys.palette]?.let { runCatching { Palette.valueOf(it) }.getOrNull() } ?: Palette.DYNAMIC,
+            palette = p[Keys.palette]?.let { runCatching { Palette.valueOf(it) }.getOrNull() } ?: Palette.PC,
             darkMode = p[Keys.darkMode]?.let { runCatching { DarkMode.valueOf(it) }.getOrNull() } ?: DarkMode.SYSTEM,
         )
     }.distinctUntilChanged()

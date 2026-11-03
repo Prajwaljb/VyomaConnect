@@ -22,7 +22,10 @@ import androidx.compose.ui.unit.dp
 
 /** Accent families. Surfaces are always neutral, so the accent is the only color. */
 enum class Palette(val label: String, val light: Color, val dark: Color) {
-    DYNAMIC("Wallpaper", Color(0xFF3B82F6), Color(0xFF7DB4FF)),
+    /** The PC's desktop wallpaper (from the companion); the phone's until the PC has sent it. */
+    PC("PC", Color(0xFF3B82F6), Color(0xFF7DB4FF)),
+    /** The phone's wallpaper (Material You). Renamed from DYNAMIC, so a saved "DYNAMIC" (the old default) reads as [PC]. */
+    PHONE("Phone", Color(0xFF3B82F6), Color(0xFF7DB4FF)),
     OCEAN("Ocean", Color(0xFF1A73E8), Color(0xFF8AB8FF)),
     GRAPHITE("Graphite", Color(0xFF46515E), Color(0xFFB7C2CF)),
     EMBER("Ember", Color(0xFFE8572A), Color(0xFFFF9A73)),
@@ -34,7 +37,7 @@ enum class DarkMode { SYSTEM, LIGHT, DARK }
 
 @Immutable
 data class ThemeSettings(
-    val palette: Palette = Palette.DYNAMIC,
+    val palette: Palette = Palette.PC,
     val darkMode: DarkMode = DarkMode.SYSTEM,
 )
 
@@ -53,13 +56,16 @@ fun VyomaTheme(settings: ThemeSettings = ThemeSettings(), content: @Composable (
     }
     val context = LocalContext.current
     remember(context) { Haptics.attach(context) }
-    val target = remember(settings, dark) {
-        val accentSource: ColorScheme? = if (settings.palette == Palette.DYNAMIC && Build.VERSION.SDK_INT >= 31) {
+    // Read here, so a new PC wallpaper re-themes the app as it arrives.
+    val pcWall = if (settings.palette == Palette.PC) AppCanvas.wallpaper else null
+    val target = remember(settings, dark, pcWall) {
+        val pc = pcWall?.accent(dark)
+        val accentSource: ColorScheme? = if (pc == null && settings.palette in setOf(Palette.PC, Palette.PHONE) && Build.VERSION.SDK_INT >= 31) {
             if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         } else {
             null
         }
-        buildScheme(settings, dark, accentSource)
+        buildScheme(settings, dark, accentSource, pc)
     }
     TrackSpecularLight()
     MaterialTheme(
@@ -70,10 +76,10 @@ fun VyomaTheme(settings: ThemeSettings = ThemeSettings(), content: @Composable (
     )
 }
 
-private fun buildScheme(settings: ThemeSettings, dark: Boolean, dynamic: ColorScheme?): ColorScheme {
+private fun buildScheme(settings: ThemeSettings, dark: Boolean, dynamic: ColorScheme?, pc: Color? = null): ColorScheme {
     // Material You's accents are muted; a little more colour at the same lightness reads crisper
     // without changing how legible a label on it is.
-    val accent = dynamic?.primary?.saturate(1.35f) ?: if (dark) settings.palette.dark else settings.palette.light
+    val accent = pc ?: dynamic?.primary?.saturate(1.35f) ?: if (dark) settings.palette.dark else settings.palette.light
     val canvas = if (dark) Color.Black else LightCanvas
     val card = if (dark) DarkCard else LightCard
     // Secondary text is where contrast was weakest: lifted toward the primary, still clearly second.
@@ -125,6 +131,32 @@ private fun Color.blend(other: Color, otherWeight: Float) = Color(
 
 /** More (or less) chroma at the same HSL lightness. */
 private fun Color.saturate(by: Float): Color = toned(saturation = by)
+
+/**
+ * The accent a desktop wallpaper gives: its most vivid colour (saturated and mid-light, so neither
+ * a grey sky nor a black corner wins), made bold enough for controls and set to the theme's
+ * lightness (the dark theme's accents are pastel, the light theme's deep). Null for a wallpaper of
+ * greys, which falls back to the phone's accent.
+ */
+fun CanvasWallpaper.accent(dark: Boolean): Color? {
+    var best: Color? = null
+    var bestScore = 0.1f
+    for (c in colors) {
+        val col = Color(0xFF000000.toInt() or c)
+        val max = maxOf(col.red, col.green, col.blue)
+        val min = minOf(col.red, col.green, col.blue)
+        val l = (max + min) / 2f
+        val s = if (max == min) 0f else (max - min) / (1f - kotlin.math.abs(2f * l - 1f))
+        val score = s * (1f - kotlin.math.abs(l - 0.5f) * 1.4f).coerceAtLeast(0f)
+        if (score > bestScore) { bestScore = score; best = col }
+    }
+    val c = best ?: return null
+    val max = maxOf(c.red, c.green, c.blue)
+    val min = minOf(c.red, c.green, c.blue)
+    val l = (max + min) / 2f
+    val s = (max - min) / (1f - kotlin.math.abs(2f * l - 1f))
+    return c.toned(saturation = (0.72f / s).coerceIn(1f, 3f), lightness = if (dark) 0.7f else 0.47f)
+}
 
 /**
  * The same hue with its HSL saturation scaled by [saturation] and, if given, its [lightness] set:
