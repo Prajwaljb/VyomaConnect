@@ -16,7 +16,10 @@ import kotlin.math.sin
 /**
  * Apple's continuous ("squircle") corners, as on macOS/iOS 26 tiles, cards and icons: the curve starts
  * further along the edge and eases into it, so there's no visible point where a straight side meets a
- * circular arc. Each corner is a superellipse quarter ([EXPONENT]) spanning [SPAN] times the radius,
+ * circular arc. Apple's corner (Figma's 60% "iOS" smoothing: a circular arc of the radius over the middle 36°,
+ * eased into each side over 1.6x the radius) is matched within 0.6% of the radius by a superellipse quarter
+ * ([EXPONENT] 2.75) spanning [SPAN] times the radius; each corner is one. A squarer exponent (4.2 was tried)
+ * pinches the apex into a visible point. Corners are
  * kept within half the short side (so a small radius reads like a rounded rect, never a capsule).
  */
 class SmoothCornerShape(
@@ -84,8 +87,8 @@ class SmoothCornerShape(
     override fun hashCode() = ((topStart.hashCode() * 31 + topEnd.hashCode()) * 31 + bottomEnd.hashCode()) * 31 + bottomStart.hashCode()
 
     companion object {
-        const val EXPONENT = 4.2f
-        private const val SPAN = 1.32f
+        const val EXPONENT = 2.75f
+        private const val SPAN = 1.3f
         private const val STEPS = 14
     }
 }

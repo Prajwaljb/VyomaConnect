@@ -210,7 +210,7 @@ fun CapturesRow(onTake: (() -> Unit)?, onOpen: () -> Unit, modifier: Modifier = 
         val thumb = r?.items?.firstOrNull()?.thumb
         Box(
             // Plain like the Captures page's thumbnails: a photo needs no glass.
-            Modifier.size(56.dp, 40.dp).clip(RoundedCornerShape(10.dp))
+            Modifier.size(56.dp, 40.dp).clip(SmoothCornerShape(14.dp))
                 .background(if (isDarkUi) Color.White.copy(alpha = 0.06f) else Color(0xFF1A2B4C).copy(alpha = 0.06f)),
             contentAlignment = Alignment.Center,
         ) {

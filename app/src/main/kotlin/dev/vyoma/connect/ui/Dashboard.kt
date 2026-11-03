@@ -520,7 +520,7 @@ private fun CapturePreview(uri: Uri, mime: String, what: String, onDismiss: () -
                 .padding(14.dp),
         ) {
             Box(
-                Modifier.fillMaxWidth().aspectRatio(image?.let { it.width.toFloat() / it.height } ?: (16f / 9f)).clip(MaterialTheme.shapes.large).background(Glass.raised),
+                Modifier.fillMaxWidth().aspectRatio(image?.let { it.width.toFloat() / it.height } ?: (16f / 9f)).clip(SmoothCornerShape(18.dp)).background(Glass.raised),
                 contentAlignment = Alignment.Center,
             ) {
                 image?.let { Image(it, what, Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
