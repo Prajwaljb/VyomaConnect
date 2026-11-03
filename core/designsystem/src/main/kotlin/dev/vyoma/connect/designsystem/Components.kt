@@ -361,7 +361,7 @@ fun CollapsingHeaderScaffold(
             ) {
                 if (navigation != null) {
                     Box(
-                        Modifier.align(Alignment.CenterStart).size(CHROME_SIZE).glassChrome(backdrop, CircleShape, blur = 6.dp, bevel = 16.dp, interactive = true),
+                        Modifier.align(Alignment.CenterStart).size(CHROME_SIZE).glassChrome(backdrop, CircleShape, blur = 1.5.dp, bevel = 16.dp, interactive = true),
                         contentAlignment = Alignment.Center,
                     ) { CompositionLocalProvider(LocalOnChrome provides true) { navigation() } }
                 }
@@ -388,10 +388,10 @@ fun CollapsingHeaderScaffold(
                             scaleY = 1f + 0.12f * maxOf(pop, away)
                         }
                         .drawWithContent { if (bubblePop.value < 1f) drawContent() }
-                        .glassChrome(backdrop, CircleShape, blur = 6.dp, bevel = 16.dp),
+                        .glassChrome(backdrop, CircleShape, blur = 1.5.dp, bevel = 16.dp),
                 )
                 Row(
-                    Modifier.align(Alignment.CenterEnd).height(CHROME_SIZE).glassChrome(backdrop, CircleShape, blur = 6.dp, bevel = 16.dp, interactive = true),
+                    Modifier.align(Alignment.CenterEnd).height(CHROME_SIZE).glassChrome(backdrop, CircleShape, blur = 1.5.dp, bevel = 16.dp, interactive = true),
                     verticalAlignment = Alignment.CenterVertically,
                 ) { CompositionLocalProvider(LocalOnChrome provides true) { actions() } }
             }

@@ -93,9 +93,6 @@ class VyomaApp : Application() {
         container.appScope.launch(Dispatchers.Main) {
             container.settings.canvasGlow.collect { AppCanvas.glow = it }
         }
-        container.appScope.launch(Dispatchers.Main) {
-            container.settings.tintedGlass.collect { GlassQuality.tinted = it }
-        }
         // Whether any of our activities is started: background work scales down when it isn't.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             private var started = 0
