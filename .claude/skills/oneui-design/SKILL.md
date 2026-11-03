@@ -443,6 +443,9 @@ until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played ou
 - Blur: LOW on bars and buttons, content stays legible and the rim mirrors it (Safari's search pill shows the building's
   lines sharp; iOS Music shows the art and mirrored text): bars/buttons 1.5 dp, header bubble 2.5 dp, at HALF resolution
   (`CHROME_RES` 0.5; a quarter turned content to mush). Menus 13 dp, dialogs 18 dp stay heavy, as Apple's menus.
+- Shadows follow the tilt light: every shadow is offset by `SpecularLight.cast(length, light)`, straight away from
+  the light (straight down at rest, as far across as down at the 45 deg limit). Chrome, knobs and lifted drops use
+  `angle`; cards and raised chips `content` (sways 40%). Read in the draw phase only.
 - Shadow: every floating glass casts a soft shadow ONLY outside its shape (`SoftShadow`/`chromeShadow`): light ~6% at
   the edge, gone ~10–12 dp out, a little heavier below; dark 50% black. Small one on raised controls in light mode.
   Knob shadow stays (wider) while held.

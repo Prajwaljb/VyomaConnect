@@ -1110,7 +1110,9 @@ fun DrawScope.frostedKnob(r: Rect, alpha: Float) {
     // Apple's knob shadow: soft and a little below, not a hard 1 dp ledge. It stays while the knob is
     // held (Apple's lifted knob casts one too), softer and wider as the drop lifts.
     val lift = 1f - a
-    with(SoftShadow) { draw(r, corner.x, Color.Black.copy(alpha = 0.22f - 0.06f * lift), (5f + 5f * lift).dp.toPx(), (1.5f + 1.5f * lift).dp.toPx()) }
+    // Away from the light (follows the tilt, as the lifted drop's does).
+    val fall = SpecularLight.cast((1.5f + 1.5f * lift).dp.toPx())
+    with(SoftShadow) { draw(r, corner.x, Color.Black.copy(alpha = 0.22f - 0.06f * lift), (5f + 5f * lift).dp.toPx(), fall.y, fall.x) }
     if (a < 0.01f) return
     drawRoundRect(Color.White, r.topLeft, r.size, corner, alpha = a)
     drawRoundRect(

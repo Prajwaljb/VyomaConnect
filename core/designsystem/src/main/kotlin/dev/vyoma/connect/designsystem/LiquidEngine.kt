@@ -115,7 +115,8 @@ import kotlin.math.roundToInt
  *  - Lenses ([liquidLens], [LensPainter]): a drop never re-renders glass. It sees the page behind
  *    it, the glass it lifts out of as a plain tinted shape, and the element's own content; so
  *    nothing's rim is ever drawn twice.
- *  - Shadows ([SoftShadow], [chromeShadow]): soft, outside the shape only (glass is see-through).
+ *  - Shadows ([SoftShadow], [chromeShadow]): soft, outside the shape only (glass is see-through), cast away
+ *    from [SpecularLight] ([SpecularLight.cast]), so they slide as the phone tilts.
  */
 
 /**
@@ -285,7 +286,9 @@ internal fun DrawScope.chromeShadow(rect: Rect, corner: Float, dark: Boolean) {
     val blur = (rect.minDimension * 0.22f).coerceIn(8.dp.toPx(), 22.dp.toPx())
     // Apple's light-mode buttons (Voice Memos) cast theirs clearly downwards.
     val color = if (dark) Color.Black.copy(alpha = 0.5f) else Color(0xFF0B1220).copy(alpha = 0.16f)
-    with(SoftShadow) { draw(rect, corner, color, blur, drop = blur * if (dark) 0.25f else 0.45f) }
+    // Away from the light: it slides sideways as the phone tilts, as the rims' light swings.
+    val fall = SpecularLight.cast(blur * if (dark) 0.25f else 0.45f)
+    with(SoftShadow) { draw(rect, corner, color, blur, drop = fall.y, dx = fall.x) }
 }
 
 /** Where [specularRim]'s sweep puts the light before turning it (0.625 of a turn from 3 o'clock). */
