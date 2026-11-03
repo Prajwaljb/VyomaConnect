@@ -442,3 +442,14 @@ until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played ou
 - Selected tab: neutral capsule (light 12% black, dark 14% white); colour only in the icon and label.
 - Switch: iOS 26 proportions, 60x28 dp track, capsule knob 1.55:1. Slider: 6 dp track, 24 dp capsule knob.
 - Accent: kept; Apple's glass itself is neutral, colour lives in active glyphs/labels and filled primary actions.
+- Lifted drops (tab drop, segmented/switch/slider knobs; `LensStyle.Lift` -> shader `drop` branch), measured from iOS
+  Music's tab drop, edge inwards: a bright ring where the steepest edge flips to show what's ACROSS the drop (smeared
+  along the edge, never legible; rainbow dispersion there), a dark band where the rim's middle magnifies what's just
+  OUTSIDE (the dark beyond the bar), a thin caustic line between them, then a body slightly lighter than the bar.
+  Rim 14% of the drop's short side.
+- Shapes: cards, tiles and icon squircles use `SmoothCornerShape` (continuous corners: superellipse quarters, n 4.2,
+  spanning 1.32x the radius), as macOS/iOS 26 tiles. Theme shapes medium/large/extraLarge are smooth. Pills, circles,
+  menus and dialogs stay true round-rects (the lens shader's SDF needs them). Glass that shades a smooth card passes
+  its radius (`InnerGlow.draw(corner = ...)`), else a path outline falls back to slow stacked strokes.
+- Light-mode shadows sit clearly below (drop 0.45 x blur, 16%), as Apple's Voice Memos buttons; glass over photos
+  defines itself by its rim instead.

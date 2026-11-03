@@ -22,6 +22,7 @@ import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Movie
 import dev.vyoma.connect.designsystem.isDarkUi
+import dev.vyoma.connect.designsystem.SmoothCornerShape
 import androidx.compose.ui.graphics.lerp
 import dev.vyoma.connect.designsystem.glassCard
 import dev.vyoma.connect.designsystem.glassRaised
@@ -189,7 +190,7 @@ private fun SendTile(icon: ImageVector, label: String, color: SystemColor, enabl
             .height(96.dp)
             .graphicsLayer { if (!enabled) alpha = 0.4f }
             .pressable(enabled = enabled, onClick = onClick)
-            .glassRaised(RoundedCornerShape(20.dp), fill.copy(alpha = 0.92f))
+            .glassRaised(SmoothCornerShape(20.dp), fill.copy(alpha = 0.92f))
             .padding(14.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
@@ -221,7 +222,7 @@ private fun FolderTile(f: PcFolderLink, modifier: Modifier, onClick: () -> Unit)
         modifier
             .height(88.dp)
             .pressable(onClick = onClick)
-            .glassRaised(RoundedCornerShape(16.dp))
+            .glassRaised(SmoothCornerShape(16.dp))
             .padding(12.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {

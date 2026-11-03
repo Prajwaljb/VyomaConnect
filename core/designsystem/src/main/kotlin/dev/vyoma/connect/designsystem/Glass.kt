@@ -248,12 +248,14 @@ internal class InnerGlow {
         shade: Color = Color.Transparent, depth: Float = width,
         /** The outline's size, when it isn't the element's (glass swollen under a finger). */
         area: Size = size,
+        /** The corner radius of a path outline (continuous corners), shaded as a rounded rect. */
+        corner: Float? = null,
     ) {
         if (color.alpha <= 0f || width <= 0f || area.minDimension < 1f) return
         val radius = when (outline) {
             is Outline.Rectangle -> 0f
             is Outline.Rounded -> outline.roundRect.topLeftCornerRadius.x.takeIf { outline.roundRect.isSimple }
-            else -> null
+            else -> corner
         }
         if (shader != null && radius != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val a = Math.toRadians(light.toDouble())
@@ -358,8 +360,9 @@ internal object SoftShadow {
  */
 internal fun DrawScope.chromeShadow(rect: Rect, corner: Float, dark: Boolean) {
     val blur = (rect.minDimension * 0.22f).coerceIn(8.dp.toPx(), 22.dp.toPx())
-    val color = if (dark) Color.Black.copy(alpha = 0.5f) else Color(0xFF0B1220).copy(alpha = 0.13f)
-    with(SoftShadow) { draw(rect, corner, color, blur, drop = blur * 0.25f) }
+    // Apple's light-mode buttons (Voice Memos) cast theirs clearly downwards.
+    val color = if (dark) Color.Black.copy(alpha = 0.5f) else Color(0xFF0B1220).copy(alpha = 0.16f)
+    with(SoftShadow) { draw(rect, corner, color, blur, drop = blur * if (dark) 0.25f else 0.45f) }
 }
 
 /** Where [specularRim]'s sweep puts the light before turning it (0.625 of a turn from 3 o'clock). */
@@ -394,7 +397,7 @@ internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float =
  * Paints one glass pane of [outline]: soft shadow outside it (never under it, so the glass stays
  * clear), an even fill, and the specular rim. Cached per size by the callers (drawWithCache).
  */
-private class GlassPainter(private val d: GlassDepth, private val flat: Color?, private val lit: Boolean, density: Float) {
+private class GlassPainter(private val d: GlassDepth, private val flat: Color?, private val lit: Boolean, density: Float, private val corner: Float? = null) {
     private val drop = d.shadowDrop * density
     private val stroke = 1f * density
     private val band = 8f * density
@@ -425,7 +428,7 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
             drawOutline(outline, fill)
         }
         if (!lit || d.rimLit.alpha <= 0f) return
-        with(glow) { draw(outline, d.band, band, light, shade = d.shade, depth = roll) }
+        with(glow) { draw(outline, d.band, band, light, shade = d.shade, depth = roll, corner = corner) }
         translate(inset, inset) {
             val c = Offset(width / 2 - inset, height / 2 - inset)
             drawOutline(edge, specularRim(d.rimLit, d.rimBase, c, light, size = Size(width, height)), style = Stroke(stroke))
@@ -446,7 +449,7 @@ fun Modifier.glassCard(shape: Shape, fill: Color? = null, lit: Boolean = true): 
             // Inset by half the hairline so all of it shows inside the clip.
             val half = 0.5f * density
             val edge = shape.createOutline(Size(size.width - 2 * half, size.height - 2 * half), layoutDirection, this)
-            val painter = GlassPainter(d, fill, lit, density)
+            val painter = GlassPainter(d, fill, lit, density, (shape as? SmoothCornerShape)?.radiusPx(size, this))
             onDrawBehind { with(painter) { paint(outline, edge, half, size.height, size.width) } }
         }
         .clip(shape)
@@ -464,9 +467,10 @@ fun Modifier.glassLightOver(shape: Shape): Modifier = composed {
         val glow = InnerGlow()
         val band = 8f * density
         val roll = 16f * density
+        val corner = (shape as? SmoothCornerShape)?.radiusPx(size, this)
         onDrawWithContent {
             drawContent()
-            with(glow) { draw(outline, d.band, band, SpecularLight.content, shade = d.shade, depth = roll) }
+            with(glow) { draw(outline, d.band, band, SpecularLight.content, shade = d.shade, depth = roll, corner = corner) }
         }
     }
 }
@@ -496,7 +500,8 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
             val glow = InnerGlow()
             val band = Color.White.copy(alpha = if (base != null) 0.18f else if (dark) 0.34f else 0.6f)
             val bandWidth = (size.minDimension * 0.12f).coerceAtMost((if (size.minDimension < 64.dp.toPx()) 3 else 4).dp.toPx())
-            val radius = (outline as? Outline.Rounded)?.roundRect?.topLeftCornerRadius?.x ?: (size.minDimension / 2)
+            val smooth = (shape as? SmoothCornerShape)?.radiusPx(size, this)
+            val radius = (outline as? Outline.Rounded)?.roundRect?.topLeftCornerRadius?.x ?: smooth ?: (size.minDimension / 2)
             onDrawBehind {
                 // Light mode: a small soft shadow, as Apple's glass buttons on pale surfaces have (on a
                 // dark card one would only muddy the edge, so the rim does the work there).
@@ -505,7 +510,7 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
                 // The light's angle is read here only, so tilting redraws the edge and nothing else.
                 val light = SpecularLight.angle
                 // No rolled shading here: on small round controls it turned them into plastic balls.
-                with(glow) { draw(outline, band, bandWidth, light) }
+                with(glow) { draw(outline, band, bandWidth, light, corner = smooth) }
                 drawOutline(outline, specularRim(lit, rimBase, center, light, size = size), style = stroke)
             }
         }
@@ -537,9 +542,11 @@ fun Modifier.specularEdge(shape: Shape, width: Dp = 1.dp, lit: Color = Color.Whi
  */
 fun Modifier.cardSegment(first: Boolean, last: Boolean, radius: Dp = 26.dp): Modifier = composed {
     val d = glassDepth
-    val shape = androidx.compose.foundation.shape.RoundedCornerShape(
-        topStart = if (first) radius else 0.dp, topEnd = if (first) radius else 0.dp,
-        bottomStart = if (last) radius else 0.dp, bottomEnd = if (last) radius else 0.dp,
+    val shape = SmoothCornerShape(
+        topStart = androidx.compose.foundation.shape.CornerSize(if (first) radius else 0.dp),
+        topEnd = androidx.compose.foundation.shape.CornerSize(if (first) radius else 0.dp),
+        bottomEnd = androidx.compose.foundation.shape.CornerSize(if (last) radius else 0.dp),
+        bottomStart = androidx.compose.foundation.shape.CornerSize(if (last) radius else 0.dp),
     )
     // Slices can't each catch the light: their edges would rule lines between the rows.
     glassCard(shape, d.fill, lit = false)
@@ -808,11 +815,10 @@ class LensStyle(val rim: Float, val depth: Float, val disperse: Float, val milk:
          *  stays readable. */
         val Drop = LensStyle(rim = 0.18f, depth = 2.6f, disperse = 0.03f)
         /** Lifted drops that outgrow what they sit on (the tab bar's drop, slider, switch and
-         *  segmented knobs). The rim looks outward (negative depth): the edge gathers in what's
-         *  around, the way a drop of water on glass rims itself with its surroundings. Looking
-         *  inward, the rim replayed the track or bar as mirrored stripes. Crystal clear: any milk
-         *  read as a dirty white haze as it grew. */
-        val Lift = LensStyle(rim = 0.22f, depth = -1.1f, disperse = 0.03f, milk = 0f to 0.02f)
+         *  segmented knobs): Apple's drop optics (the shader's `drop` branch, chosen by the negative
+         *  depth): bright flipped ring, dark band of what's outside, caustic line, a body a little
+         *  lighter than what it sits on (iOS Music's drop: 155 over a 120 bar). */
+        val Lift = LensStyle(rim = 0.14f, depth = -1.1f, disperse = 0.06f, milk = 0.12f to 0.04f)
     }
 }
 
@@ -926,6 +932,7 @@ internal class LensPainter(private val graphics: GraphicsContext) {
             tint = Color.White.copy(alpha = androidx.compose.ui.util.lerp(if (dark) style.milk.first else style.milk.second, 0.97f, (frost * 32).roundToInt() / 32f)),
             spec = if (dark) 0.55f else 0.9f,
             shade = if (dark) 0f else 0.12f, blur = 0f,
+            drop = if (style.depth < 0f) 1f else 0f,
         )
         drop.alpha = a
         drop.record(IntSize(r.width.roundToInt() + 2 * m, r.height.roundToInt() + 2 * m)) {
@@ -1020,7 +1027,7 @@ private class BlurCache {
 internal class LiquidGlass {
     // Shared, compiled once (see InnerGlow's): a RenderEffect copies the uniforms when it's built.
     private val shader = sharedShader
-    private var last = FloatArray(19) { Float.NaN }
+    private var last = FloatArray(20) { Float.NaN }
     private var effect: RenderEffect? = null
 
     internal fun effect(
@@ -1029,12 +1036,14 @@ internal class LiquidGlass {
         vibrance: Float = 1f,
         /** The rim's glow: how far it lifts what's under the bevel towards white. */
         gloss: Float = 0f,
+        /** 1 = a lifted drop's optics (see the shader) instead of the plain Snell rim. */
+        drop: Float = 0f,
     ): RenderEffect {
         // Where the light is (see SpecularLight), as a unit vector in screen axes.
         val a = Math.toRadians(SpecularLight.angle.toDouble())
         val lx = cos(a).toFloat()
         val ly = sin(a).toFloat()
-        val args = floatArrayOf(size.width, size.height, margin, radius, bevel, refract, zoom, disperse, tint.red, tint.green, tint.blue, tint.alpha, spec, shade, blur, lx, ly, vibrance, gloss)
+        val args = floatArrayOf(size.width, size.height, margin, radius, bevel, refract, zoom, disperse, tint.red, tint.green, tint.blue, tint.alpha, spec, shade, blur, lx, ly, vibrance, gloss, drop)
         effect?.let { if (args.contentEquals(last)) return it }
         last = args
         shader.setFloatUniform("size", size.width, size.height)
@@ -1050,6 +1059,7 @@ internal class LiquidGlass {
         shader.setFloatUniform("light", lx, ly)
         shader.setFloatUniform("vibrance", vibrance)
         shader.setFloatUniform("gloss", gloss)
+        shader.setFloatUniform("drop", drop)
         val glass = android.graphics.RenderEffect.createRuntimeShaderEffect(shader, "content")
         val full = if (blur > 0f) {
             android.graphics.RenderEffect.createChainEffect(
@@ -1077,6 +1087,7 @@ uniform float shade;
 uniform float2 light;
 uniform float vibrance;
 uniform float gloss;
+uniform float drop;
 
 half4 main(float2 p) {
     float2 c = size * 0.5;
@@ -1099,6 +1110,30 @@ half4 main(float2 p) {
     if (t <= 0.0) {
         // The flat middle (most pixels): straight through, one sample.
         col = content.eval(at);
+    } else if (drop > 0.5) {
+        // A lifted drop, as iOS 26's tab drop (measured from Apple Music, edge inwards): a bright ring
+        // where the steepest edge shows what's ACROSS the drop, a dark band where the rim's middle
+        // magnifies what's just OUTSIDE it (the dark beyond the bar), a thin caustic line where the
+        // two meet, then the body. A strong convex drop: magnifying outwards, flipping across at the edge.
+        float outward = bevel * 1.6 * smoothstep(0.0, 0.6, t);
+        float across = min(c.x, c.y) * 1.1;
+        float s = mix(outward, -across, smoothstep(0.62, 0.8, t));
+        float2 shift = n * s;
+        at = clamp(at + shift, lo, hi);
+        col = content.eval(at);
+        // The flipped ring is smeared along the edge (Apple's reads as smooth light, never as the
+        // text it's looking at): two more taps along the tangent there.
+        float smear = smoothstep(0.62, 0.8, t) * across * 0.12;
+        if (smear > 0.5) {
+            float2 tan = float2(-n.y, n.x) * smear;
+            col = (col + content.eval(clamp(at + tan, lo, hi)) + content.eval(clamp(at - tan, lo, hi))) / 3.0;
+        }
+        if (disperse > 0.0) {
+            // The flipped edge splits colour most (App Store's drop shows a rainbow there).
+            float2 k = n * (abs(s) * disperse * 0.4);
+            col.r = content.eval(clamp(at + k, lo, hi)).r;
+            col.b = content.eval(clamp(at - k, lo, hi)).b;
+        }
     } else {
         // A big pane (a dialog, a menu) has a polished edge: its slope eases in from the flat face.
         // Starting at an angle, the bent image met the straight one in a crease, a thin dark line
@@ -1129,6 +1164,12 @@ half4 main(float2 p) {
     float face0 = pow(max(f0, 0.0), 1.6) + 0.8 * pow(max(-f0, 0.0), 1.6);
     float g = gloss * t * t * (0.3 + 0.7 * face0);
     col.rgb += (half3(col.a) - col.rgb) * half(g);
+    if (drop > 0.5) {
+        // The drop's own light: a Fresnel sheen on the flipped ring and the caustic line inside it.
+        float u = (t - 0.6) / 0.035;
+        float lift = 0.14 * smoothstep(0.8, 1.0, t) + 0.38 * exp(-u * u) * step(0.001, t);
+        col.rgb += (half3(col.a) - col.rgb) * half(lift);
+    }
     // A thin specular rim, brightest where it faces the light and its opposite.
     float rim = 1.0 - smoothstep(0.0, 1.8, -d);
     // Lit by the same facing as the inner band and the rim stroke (the shape's normalised position,

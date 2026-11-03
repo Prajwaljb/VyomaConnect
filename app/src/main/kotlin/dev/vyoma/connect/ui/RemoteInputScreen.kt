@@ -8,6 +8,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.layout.layout
 import dev.vyoma.connect.designsystem.VyomaMotion
+import dev.vyoma.connect.designsystem.SmoothCornerShape
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.runtime.getValue
@@ -238,7 +239,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
-                .glassCard(RoundedCornerShape(32.dp))
+                .glassCard(SmoothCornerShape(32.dp))
                 .pointerInput(pad) {
                     val slop = viewConfiguration.touchSlop
                     awaitEachGesture {
@@ -306,7 +307,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                     }
                 },
         ) {
-            Canvas(Modifier.fillMaxSize().clip(RoundedCornerShape(32.dp))) {
+            Canvas(Modifier.fillMaxSize().clip(SmoothCornerShape(32.dp))) {
                 val step = 28.dp.toPx()
                 val g = glow
                 val at = flow
@@ -502,7 +503,7 @@ private fun TypingBar(caretMoved: Int, onText: (String) -> Unit, onKey: (Special
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .glassRaised(RoundedCornerShape(20.dp))
+                    .glassRaised(SmoothCornerShape(20.dp))
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 if (value.text == sentinel) {

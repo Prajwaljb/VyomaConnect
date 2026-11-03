@@ -6,6 +6,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.rememberTextMeasurer
 import dev.vyoma.connect.designsystem.MenuMorph
+import dev.vyoma.connect.designsystem.SmoothCornerShape
 import dev.vyoma.connect.designsystem.LocalStatus
 
 import androidx.compose.foundation.layout.widthIn
@@ -235,8 +236,8 @@ fun DeviceGlyph(state: DeviceState, size: Dp = 64.dp) {
         Box(
             Modifier
                 .fillMaxSize()
-                .specularEdge(RoundedCornerShape(size * 0.3f), 1.2.dp)
-                .clip(RoundedCornerShape(size * 0.3f))
+                .specularEdge(SmoothCornerShape(size * 0.3f), 1.2.dp)
+                .clip(SmoothCornerShape(size * 0.3f))
                 // A deep shade of the accent, like an app icon: the white glyph stands out on it (a pastel
                 // accent left it washed out).
                 .background(Brush.linearGradient(listOf(accent.toned(1.2f, 0.64f), accent.toned(1.2f, 0.5f)))),
@@ -794,7 +795,7 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
                     }
                 },
             )
-            .glassRaised(RoundedCornerShape(TileRadius), fill),
+            .glassRaised(SmoothCornerShape(TileRadius), fill),
     ) { TileFace(c, ink) }
 }
 
@@ -851,7 +852,7 @@ private fun ToggleTile(c: Control, modifier: Modifier, enabled: Boolean) {
     val offGlyph = if (dark) tone else lerp(tone, Color.Black, 0.35f)
     val onGlyph = lerp(tone, Color.Black, 0.35f)
     val ink = lerp(MaterialTheme.colorScheme.onSurface, Color(0xFF1C1C1E), on)
-    val shape = RoundedCornerShape(TileRadius)
+    val shape = SmoothCornerShape(TileRadius)
     // Off, a body of its own: on the bare canvas (no card under it any more) the faint raised fill vanished.
     val toggleOff = if (dark) Color.White.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.55f)
     Column(
