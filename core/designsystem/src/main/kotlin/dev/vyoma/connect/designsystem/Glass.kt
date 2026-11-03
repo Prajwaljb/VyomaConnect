@@ -1115,7 +1115,7 @@ half4 main(float2 p) {
         // where the steepest edge shows what's ACROSS the drop, a dark band where the rim's middle
         // magnifies what's just OUTSIDE it (the dark beyond the bar), a thin caustic line where the
         // two meet, then the body. A strong convex drop: magnifying outwards, flipping across at the edge.
-        float outward = bevel * 1.6 * smoothstep(0.0, 0.6, t);
+        float outward = bevel * 1.0 * smoothstep(0.0, 0.6, t);
         float across = min(c.x, c.y) * 1.1;
         float s = mix(outward, -across, smoothstep(0.62, 0.8, t));
         float2 shift = n * s;

@@ -297,7 +297,9 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
         Modifier
             .height(BarHeight)
             .menuOccluder()
-            .liquidLens(backdrop, strength = { lift.value }, zoom = { 1f + 0.1f * lift.value.coerceIn(0f, 1f) }, style = LensStyle.Lift, rect = { pill() })
+            // The bar seen through the drop shrinks (iOS Music: its edges show inset inside the drop, the dark
+            // beyond them as bands), so the drop reads as a lens held above it, not a magnifier on it.
+            .liquidLens(backdrop, strength = { lift.value }, zoom = { 1f - 0.14f * lift.value.coerceIn(0f, 1f) }, style = LensStyle.Lift, rect = { pill() })
             .glassChrome(backdrop, CircleShape, blur = 1.5.dp, bevel = 16.dp)
             .drawBehind {
                 // The resting pill is gone early in the lift: magnified inside the growing drop, its
