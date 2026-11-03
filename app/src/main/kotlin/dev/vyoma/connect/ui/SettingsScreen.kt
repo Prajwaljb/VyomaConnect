@@ -14,6 +14,7 @@ import dev.vyoma.connect.designsystem.toned
 import dev.vyoma.connect.designsystem.DialogButton
 import androidx.compose.foundation.layout.fillMaxWidth
 import dev.vyoma.connect.designsystem.RowChevron
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import dev.vyoma.connect.designsystem.BounceIconButton
@@ -79,6 +80,8 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.AutoMode
 import androidx.compose.material.icons.rounded.Gradient
+import androidx.compose.material.icons.rounded.Wallpaper
+import dev.vyoma.connect.designsystem.AppCanvas
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material3.Icon
@@ -123,7 +126,16 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
         onPauseOrDispose { }
     }
     val power = context.getSystemService(PowerManager::class.java)
-    val unrestricted = power.isIgnoringBatteryOptimizations(context.packageName)
+    // Read on every resume (nothing read the tick, so it showed only when something else redrew,
+    // seconds later), and again a moment after in case the system commits the change late.
+    var unrestricted by remember { mutableStateOf(power.isIgnoringBatteryOptimizations(context.packageName)) }
+    LaunchedEffect(resumeTick) {
+        repeat(4) { i ->
+            unrestricted = power.isIgnoringBatteryOptimizations(context.packageName)
+            if (unrestricted) return@LaunchedEffect
+            kotlinx.coroutines.delay(if (i == 0) 150L else 400L)
+        }
+    }
 
     CollapsingHeaderScaffold(
         title = "Settings",
@@ -180,7 +192,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                 val canvasGlow by vm.canvasGlow.collectAsStateWithLifecycle()
                 ListRow(
                     title = "Background glow",
-                    subtitle = "Accent glow behind each screen",
+                    subtitle = "A soft glow behind each screen",
                     icon = Icons.Rounded.Gradient,
                     iconTint = SystemColor.BLUE.color,
                     showDivider = true,
@@ -188,6 +200,18 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                     haptic = if (canvasGlow) Haptic.ToggleOff else Haptic.ToggleOn,
                     onClick = { vm.setCanvasGlow(!canvasGlow) },
                     trailing = { VyomaSwitch(checked = canvasGlow, onCheckedChange = { vm.setCanvasGlow(it) }, contentDescription = "Background glow") },
+                )
+                val wallpaper by vm.canvasWallpaper.collectAsStateWithLifecycle()
+                ListRow(
+                    title = "PC wallpaper colours",
+                    subtitle = if (AppCanvas.wallpaper == null) "Needs the companion on your PC" else "Glow in your desktop's colours",
+                    icon = Icons.Rounded.Wallpaper,
+                    iconTint = SystemColor.CYAN.color,
+                    showDivider = true,
+                    enabled = canvasGlow,
+                    haptic = if (wallpaper) Haptic.ToggleOff else Haptic.ToggleOn,
+                    onClick = { vm.setCanvasWallpaper(!wallpaper) },
+                    trailing = { VyomaSwitch(checked = wallpaper && canvasGlow, onCheckedChange = { vm.setCanvasWallpaper(it) }, contentDescription = "PC wallpaper colours") },
                 )
                 val glass by vm.liteGlass.collectAsStateWithLifecycle()
                 ListRow(

@@ -309,13 +309,17 @@ private data class PressScaleElement(val pressedScale: Float, val enabled: Boole
     }
 }
 
+/** True under a [glassCard]: a press's light may spread into the card (which clips it). */
+internal val InGlassCard = androidx.compose.ui.modifier.modifierLocalOf { false }
+
 /**
  * [glass]: a capsule or circle that dips even when asked not to scale (the chrome handles it).
  * [glow]: light gathers under the finger: everything that dips does (tiles, rows and cards too,
  * not only pills), so every surface answers a touch the same way.
  */
 private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var glass: Boolean, var glow: Boolean) :
-    Modifier.Node(), PointerInputModifierNode, LayoutModifierNode, DrawModifierNode, CompositionLocalConsumerModifierNode {
+    Modifier.Node(), PointerInputModifierNode, LayoutModifierNode, DrawModifierNode, CompositionLocalConsumerModifierNode,
+    androidx.compose.ui.modifier.ModifierLocalModifierNode {
     private val sx = Animatable(1f)
     private val sy = Animatable(1f)
     /** How lit the glass is under the finger: up while held, eases out after. Only with [glass]. */
@@ -347,12 +351,20 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
         // Light gathers under the finger and follows it, inside the capsule. No refraction: a lens
         // over a button's own label only ever looked like a glitch.
         val at = if (touch.isSpecified) touch else center
+        // White light can't show on light glass: there the finger leaves a faint shade instead.
+        val tone = if (dark) Color.White.copy(alpha = 0.16f * a) else Color(0xFF1A2B4C).copy(alpha = 0.08f * a)
+        if (InGlassCard.current) {
+            // Inside a card (a button, a row) the light flows on into the card's glass and stops only
+            // at the card's edge (its clip): kept to the button, it ended in a hard line there.
+            val reach = (size.maxDimension * 0.7f).coerceIn(56.dp.toPx(), 160.dp.toPx())
+            drawCircle(Brush.radialGradient(listOf(tone, Color.Transparent), at, reach), radius = reach, center = at)
+            return
+        }
         // Round for capsules and circles; a rounded rectangle (tile-like) for anything larger.
         val r = minOf(size.minDimension / 2, 20.dp.toPx())
         clipPath(Path().apply { addRoundRect(RoundRect(0f, 0f, size.width, size.height, CornerRadius(r))) }) {
             drawCircle(
-                // White light can't show on light glass: there the finger leaves a faint shade instead.
-                Brush.radialGradient(listOf((if (dark) Color.White.copy(alpha = 0.16f * a) else Color(0xFF1A2B4C).copy(alpha = 0.08f * a)), Color.Transparent), at, size.maxDimension * 0.7f),
+                Brush.radialGradient(listOf(tone, Color.Transparent), at, size.maxDimension * 0.7f),
                 radius = size.maxDimension * 0.7f, center = at,
             )
         }

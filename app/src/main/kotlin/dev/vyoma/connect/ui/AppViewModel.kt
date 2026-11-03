@@ -145,6 +145,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The command last run on [id] (Commands' long-press runs it again), if it still exists. */
     fun lastCommand(id: String) = uiPrefs.getString("last_command_$id", null)
+
+    /** Which desktop's shortcuts the touchpad's gestures send (see DesktopKind). */
+    fun desktopKind(): DesktopKind = uiPrefs.getString("desktop_kind", null)?.let { k -> DesktopKind.entries.firstOrNull { it.name == k } } ?: DesktopKind.PLASMA
+    fun setDesktopKind(kind: DesktopKind) = uiPrefs.edit { putString("desktop_kind", kind.name) }
     fun openCommandSetup(id: String) = act(id) { it.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.openSetup() }
     fun forget(id: String) { container.hub.value?.forget(id) }
 
@@ -248,6 +252,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setDarkMode(m: DarkMode) = viewModelScope.launch { settings.setDarkMode(m) }
     fun setLiteGlass(enabled: Boolean) = viewModelScope.launch { settings.setLiteGlass(enabled) }
     fun setCanvasGlow(enabled: Boolean) = viewModelScope.launch { settings.setCanvasGlow(enabled) }
+    val canvasWallpaper: StateFlow<Boolean> = settings.canvasWallpaper.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    fun setCanvasWallpaper(enabled: Boolean) = viewModelScope.launch { settings.setCanvasWallpaper(enabled) }
     val outdoorMode: StateFlow<Boolean> = settings.outdoorMode.stateIn(viewModelScope, SharingStarted.Eagerly, true)
     fun setOutdoorMode(enabled: Boolean) = viewModelScope.launch { settings.setOutdoorMode(enabled) }
 

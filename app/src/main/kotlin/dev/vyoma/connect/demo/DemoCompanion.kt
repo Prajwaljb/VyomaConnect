@@ -57,6 +57,14 @@ internal class DemoCompanion(credentials: LocalCredentials, private val pc: Demo
             CompanionPlugin.FILES_GET -> get(packet.string("path").orEmpty(), session)
             CompanionPlugin.FILES_PUT -> session.launch(Dispatchers.IO) { put(packet) }
             CompanionPlugin.PC_REQUEST -> sendControls()
+            // A dusk wallpaper: deep blue sky over a warm horizon.
+            CompanionPlugin.WALLPAPER_REQUEST -> send(packet(CompanionPlugin.WALLPAPER) {
+                put("cols", 4)
+                put("rows", 4)
+                put("colors", kotlinx.serialization.json.JsonArray(DEMO_WALLPAPER.map { c ->
+                    kotlinx.serialization.json.JsonArray(listOf(c shr 16 and 255, c shr 8 and 255, c and 255).map { kotlinx.serialization.json.JsonPrimitive(it) })
+                }))
+            })
             CompanionPlugin.PC_SET -> {
                 packet.string("display")?.let { d -> packet.double("brightness")?.let { if (d == "display0") brightness = it.coerceIn(0.01, 1.0) } }
                 packet.long("app")?.let { id ->
@@ -243,13 +251,20 @@ internal class DemoCompanion(credentials: LocalCredentials, private val pc: Demo
             protocolVersion = DeviceIdentity.PROTOCOL_VERSION,
             incomingCapabilities = setOf(
                 CompanionPlugin.STATS_REQUEST, CompanionPlugin.SCREENSHOT_REQUEST, CompanionPlugin.CAMERA_REQUEST, CompanionPlugin.HANDOFF_REQUEST,
-                CompanionPlugin.FILES_LIST, CompanionPlugin.FILES_GET, CompanionPlugin.FILES_PUT,
+                CompanionPlugin.FILES_LIST, CompanionPlugin.FILES_GET, CompanionPlugin.FILES_PUT, CompanionPlugin.WALLPAPER_REQUEST,
             ),
             outgoingCapabilities = setOf(
                 CompanionPlugin.STATS, CompanionPlugin.SCREENSHOT, CompanionPlugin.CAMERA, CompanionPlugin.HANDOFF,
-                CompanionPlugin.FILES_LISTING, CompanionPlugin.FILES_FILE, CompanionPlugin.FILES_SAVED,
+                CompanionPlugin.FILES_LISTING, CompanionPlugin.FILES_FILE, CompanionPlugin.FILES_SAVED, CompanionPlugin.WALLPAPER,
             ),
             companionOf = pcId,
         )
     }
 }
+
+private val DEMO_WALLPAPER = listOf(
+    0x1B2A6B, 0x23307A, 0x2E3A8C, 0x3A3F95,
+    0x2C4C9C, 0x4A5BB0, 0x6A5FB0, 0x8C5E9E,
+    0x3E7FB8, 0x9C7AA8, 0xE07A6A, 0xF29A5C,
+    0x14324F, 0x3A3A55, 0x6B4048, 0x8A4A3A,
+)

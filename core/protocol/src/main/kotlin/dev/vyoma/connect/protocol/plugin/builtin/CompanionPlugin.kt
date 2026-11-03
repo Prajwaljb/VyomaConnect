@@ -33,6 +33,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import dev.vyoma.connect.protocol.link.copyWithProgress
@@ -63,6 +64,12 @@ sealed interface CaptureState {
     data class Done(val location: String, val mime: String, val at: Long) : CaptureState
     data class Failed(val reason: String, val at: Long) : CaptureState
 }
+
+/**
+ * The PC's wallpaper as a [cols] x [rows] grid of colours (0xRRGGBB, row-major from the top left),
+ * for the phone's background: stretched smoothly, it's the wallpaper's light, blurred.
+ */
+data class PcWallpaper(val cols: Int, val rows: Int, val colors: List<Int>)
 
 /** One entry of a PC folder. Sizes are 0 for folders; [modified] is epoch millis. */
 data class PcFile(val name: String, val isDir: Boolean, val size: Long, val modified: Long)
@@ -142,6 +149,22 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     val controls: StateFlow<PcControls?> = _controls.asStateFlow()
 
     suspend fun requestControls() = ctx.send(packet(PC_REQUEST))
+
+    private val _wallpaper = MutableStateFlow<PcWallpaper?>(null)
+    /** The PC's wallpaper colours, asked for on every link (it may have changed since). */
+    val wallpaper: StateFlow<PcWallpaper?> = _wallpaper.asStateFlow()
+
+    suspend fun requestWallpaper() = ctx.send(packet(WALLPAPER_REQUEST))
+
+    private fun receiveWallpaper(packet: NetworkPacket) {
+        val cols = packet.int("cols") ?: return
+        val rows = packet.int("rows") ?: return
+        val colors = (packet.body["colors"] as? JsonArray).orEmpty().mapNotNull { e ->
+            val c = (e as? JsonArray)?.mapNotNull { it.jsonPrimitive.intOrNull } ?: return@mapNotNull null
+            if (c.size < 3) null else (c[0].coerceIn(0, 255) shl 16) or (c[1].coerceIn(0, 255) shl 8) or c[2].coerceIn(0, 255)
+        }
+        if (cols > 0 && rows > 0 && colors.size == cols * rows) _wallpaper.value = PcWallpaper(cols, rows, colors)
+    }
 
     /** Changes waiting to go, by what they change: a drag sends its newest value ~16 times a second. */
     private val pendingSets = LinkedHashMap<String, JsonObject>()
@@ -234,9 +257,13 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     override suspend fun onLinkAdded() {
         abandonReplies()
         sendAway()
+        requestWallpaper()
     }
 
-    override suspend fun onStart() = sendAway()
+    override suspend fun onStart() {
+        sendAway()
+        requestWallpaper()
+    }
 
     /** Tells the PC the current walk-away rules ([away]); sent on every link too, so a restarted companion knows them. */
     suspend fun sendAway() {
@@ -542,6 +569,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         if (packet.type == FILES_FILE) receiveFile(packet)
         if (packet.type == FILES_SAVED) receiveSaved(packet)
         if (packet.type == PC) receiveControls(packet)
+        if (packet.type == WALLPAPER) receiveWallpaper(packet)
         if (packet.type == XFER_READY) receiveXfer("ready", packet)
         if (packet.type == XFER_DONE) receiveXfer("done", packet)
         if (packet.type == PC_POWERED) pendingPower?.also { pendingPower = null }?.complete(packet.string("error"))
@@ -583,6 +611,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val SCREEN_STOP = "vyoma.screen.stop"
         private const val SCREEN_TIMEOUT_MS = 60_000L
         const val PC = "vyoma.pc"
+        const val WALLPAPER = "vyoma.wallpaper"
+        const val WALLPAPER_REQUEST = "vyoma.wallpaper.request"
         const val PC_REQUEST = "vyoma.pc.request"
         const val PC_SET = "vyoma.pc.set"
         const val PC_POWER = "vyoma.pc.power"
@@ -608,8 +638,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END),
+            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER),
+            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST),
         ) { CompanionPlugin(it, sink) }
     }
 }

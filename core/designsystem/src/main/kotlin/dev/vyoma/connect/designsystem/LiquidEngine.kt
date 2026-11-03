@@ -540,14 +540,30 @@ internal class LensPainter(private val graphics: GraphicsContext) {
                 // The caustic: the drop focuses the light it lets through into a soft bright patch on
                 // the surface, inside the shadow's footprint (seen through the drop, so it's refracted too).
                 // It's the lens's own image, so it has the lens's shape (long while it's stretched) and moves
-                // rigidly with it. Its area follows the lens's, which stretching keeps, so its brightness holds.
+                // rigidly with it. It's in focus at full lift: rising, it's bigger and softer, and it
+                // tightens to a bright core in a soft halo as the drop arrives. Focused light brightens the
+                // colour under it (a dodge: a blue track glows bluer, black stays black, as real light on a
+                // dark surface does) with only a faint white bloom, so it never greys what it lands on.
                 if (lifted && h > 0.5f) {
                     val at = r.center + fall
-                    val rx = r.width * 0.36f
-                    val ry = r.height * 0.36f
-                    val peak = (if (dark) 0.09f else 0.22f) * a
+                    val blur = 1f + 0.8f * (1f - a)
+                    val rx = r.width * 0.34f * blur
+                    val ry = r.height * 0.34f * blur
+                    val focus = a * a
                     withTransform({ scale(rx / ry, 1f, at) }) {
-                        drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = peak), Color.Transparent), at, ry), ry, at)
+                        if (dark) {
+                            val core = 0.34f * focus
+                            drawCircle(
+                                Brush.radialGradient(0f to Color.White.copy(alpha = core), (0.25f + 0.25f * (1f - focus)) to Color.White.copy(alpha = core * 0.45f), 1f to Color.Transparent, center = at, radius = ry),
+                                ry, at, blendMode = BlendMode.ColorDodge,
+                            )
+                        }
+                        // On a light surface a dodge burns straight to white; there it's just a faint bloom.
+                        val bloom = ry * (if (dark) 0.6f else 0.5f)
+                        drawCircle(
+                            Brush.radialGradient(listOf(Color.White.copy(alpha = (if (dark) 0.05f else 0.28f) * focus), Color.Transparent), at, bloom),
+                            bloom, at,
+                        )
                     }
                 }
             }

@@ -132,7 +132,10 @@ class MenuMorph(
 )
 
 /** A [GlassDialog] drawn by the [MenuHost] (so it's real glass over the page), not in a window of its own. */
-internal class HostedDialog {
+internal class HostedDialog(
+    /** The row it was opened from, in root coordinates: it grows out of it and drains back into it. */
+    val from: Rect? = null,
+) {
     var onDismiss by mutableStateOf({})
     var card by mutableStateOf<@Composable () -> Unit>({})
     /** Its GlassDialog left composition: it fades out, then the host drops it. */
@@ -146,6 +149,24 @@ class MenuController {
     /** True under a [MenuHost]; the default controller has nowhere to draw dialogs. */
     internal var hosted = false
     internal val dialogs = mutableStateListOf<HostedDialog>()
+
+    private var anchor: Rect? = null
+    private var anchorAt = 0L
+
+    /**
+     * Where the next dialog comes from: the row just tapped ([ListRow] calls this before its click).
+     * A dialog that opens within a moment grows out of it; later ones (opened by something else) don't.
+     */
+    fun anchor(bounds: Rect) {
+        anchor = bounds
+        anchorAt = android.os.SystemClock.uptimeMillis()
+    }
+
+    internal fun takeAnchor(): Rect? {
+        val a = anchor?.takeIf { android.os.SystemClock.uptimeMillis() - anchorAt < 1000L && !it.isEmpty }
+        anchor = null
+        return a
+    }
 
     /**
      * [from] is the pressed element's bounds in root coordinates (`boundsInRoot()`), [fromRadius]
@@ -227,11 +248,17 @@ private fun DialogOverlay(d: HostedDialog, backdrop: Backdrop, onGone: () -> Uni
     // Forms like a drop of water, as the menus pour: a thin pill swells out of the middle, width
     // first and height after on a wobbling spring, its corners rounding from capsule to card; the
     // words show once it has mostly formed. Leaving, the words fade as the glass drains back into a pill. (It was a plain fade and 8% scale, which read as an ordinary pop-up.)
-    val wide = remember { Animatable(DROP_WIDE) }
-    val tall = remember { Animatable(DROP_TALL) }
+    // Opened from a row, it's that row that swells into the dialog (its own rect, moving to the
+    // middle as it grows) and drains back into it; otherwise a drop forms in the middle.
+    val from = d.from
+    val wide = remember { Animatable(if (from != null) 0f else DROP_WIDE) }
+    val tall = remember { Animatable(if (from != null) 0f else DROP_TALL) }
     val scrim = remember { Animatable(0f) }
     val ink = remember { Animatable(0f) }
-    fun formed() = ((minOf(wide.value, tall.value) - DROP_TALL) / (1f - DROP_TALL)).coerceIn(0f, 1f)
+    val rest = if (from != null) 0f else DROP_TALL
+    fun formed() = ((minOf(wide.value, tall.value) - rest) / (1f - rest)).coerceIn(0f, 1f)
+    // The finished card's centre, in root coordinates (where the row travels to).
+    var home by remember { mutableStateOf<androidx.compose.ui.geometry.Offset?>(null) }
     LaunchedEffect(d.leaving) {
         if (!d.leaving) {
             launch { scrim.animateTo(1f, VyomaMotion.effects()) }
@@ -242,8 +269,8 @@ private fun DialogOverlay(d: HostedDialog, backdrop: Backdrop, onGone: () -> Uni
         } else {
             launch { scrim.animateTo(0f, VyomaMotion.effects()) }
             launch { ink.animateTo(0f, INK_OUT) }
-            launch { wide.animateTo(DROP_WIDE, DIALOG_DRAIN_WIDE) }
-            launch { tall.animateTo(DROP_TALL, DIALOG_DRAIN_TALL) }
+            launch { wide.animateTo(if (from != null) 0f else DROP_WIDE, DIALOG_DRAIN_WIDE) }
+            launch { tall.animateTo(if (from != null) 0f else DROP_TALL, DIALOG_DRAIN_TALL) }
             // Gone once the glass has faded (see its alpha), not when the springs settle: a faint pill lingered.
             snapshotFlow { formed() < 0.03f }.first { it }
             onGone()
@@ -273,7 +300,8 @@ private fun DialogOverlay(d: HostedDialog, backdrop: Backdrop, onGone: () -> Uni
         object : Shape {
             override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
                 val card = with(density) { DIALOG_RADIUS.toPx() }
-                val corner = lerp(minOf(size.width, size.height) / 2, card, formed()).coerceAtMost(minOf(size.width, size.height) / 2)
+                val start = if (from != null) with(density) { ROW_RADIUS.toPx() } else minOf(size.width, size.height) / 2
+                val corner = lerp(start, card, formed()).coerceAtMost(minOf(size.width, size.height) / 2)
                 return Outline.Rounded(RoundRect(0f, 0f, size.width, size.height, CornerRadius(corner)))
             }
         }
@@ -291,12 +319,25 @@ private fun DialogOverlay(d: HostedDialog, backdrop: Backdrop, onGone: () -> Uni
             .padding(24.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.widthIn(max = 420.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.widthIn(max = 420.dp).fillMaxWidth().onPlaced { home = it.boundsInRoot().center },
+            contentAlignment = Alignment.Center,
+        ) {
             Box(
                 Modifier
+                    // From a row: it travels from the row to the middle as it grows (placement, so the
+                    // glass sees the page where it really is).
+                    .then(if (from != null) Modifier.offset {
+                        val c = home ?: return@offset IntOffset.Zero
+                        IntOffset(
+                            ((from.center.x - c.x) * (1f - wide.value)).roundToInt(),
+                            ((from.center.y - c.y) * (1f - tall.value)).roundToInt(),
+                        )
+                    } else Modifier)
                     .graphicsLayer {
                         // The glass itself fades in over the first moments only, so the pill never pops.
-                        alpha = (formed() * 2.5f).coerceIn(0f, 1f)
+                        // From a row it's there at once: the row is what grows.
+                        alpha = if (from != null) (if (home == null) 0f else (formed() * 8f).coerceIn(0f, 1f)) else (formed() * 2.5f).coerceIn(0f, 1f)
                         compositingStrategy = CompositingStrategy.ModulateAlpha
                     }
                     .pointerInput(Unit) { detectTapGestures { } }
@@ -305,8 +346,8 @@ private fun DialogOverlay(d: HostedDialog, backdrop: Backdrop, onGone: () -> Uni
                     // The drop's size, around the card laid out at full size (so its words never reflow).
                     .layout { m, c ->
                         val card = m.measure(c.copy(minWidth = c.maxWidth))
-                        val w = (card.width * wide.value.coerceAtLeast(0f)).roundToInt().coerceAtLeast(1)
-                        val h = (card.height * tall.value.coerceAtLeast(0f)).roundToInt().coerceAtLeast(1)
+                        val w = (if (from != null) lerp(from.width, card.width.toFloat(), wide.value) else card.width * wide.value.coerceAtLeast(0f)).roundToInt().coerceAtLeast(1)
+                        val h = (if (from != null) lerp(from.height, card.height.toFloat(), tall.value) else card.height * tall.value.coerceAtLeast(0f)).roundToInt().coerceAtLeast(1)
                         layout(w, h) { card.place((w - card.width) / 2, (h - card.height) / 2) }
                     }
                     .graphicsLayer {
@@ -652,6 +693,9 @@ private val ICON_HEADER_HEIGHT = 44.dp
 private val ICON_SIZE = 22.dp
 private val GROUP_GAP = 9.dp
 private val PAD = 8.dp
+/** The corner a dialog grows out of a row with (rows sit in cards). */
+private val ROW_RADIUS = 18.dp
+
 private const val SCRIM = 0.35f
 private val DIALOG_RADIUS = 28.dp
 /** A dialog starts (and ends) as a pill this share of its size. */

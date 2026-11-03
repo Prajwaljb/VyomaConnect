@@ -18,6 +18,13 @@ import dev.vyoma.connect.protocol.crypto.LocalCredentials
 import dev.vyoma.connect.protocol.device.DeviceHub
 import dev.vyoma.connect.protocol.device.FileTrustStore
 import dev.vyoma.connect.designsystem.AppCanvas
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.filterNotNull
+import dev.vyoma.connect.designsystem.CanvasWallpaper
 import dev.vyoma.connect.designsystem.GlassQuality
 import dev.vyoma.connect.platform.AndroidClipboard
 import dev.vyoma.connect.platform.FrameBudget
@@ -92,6 +99,29 @@ class VyomaApp : Application() {
         }
         container.appScope.launch(Dispatchers.Main) {
             container.settings.canvasGlow.collect { AppCanvas.glow = it }
+        }
+        // The PC's wallpaper colours for the canvas: the last ones kept, so the look holds while the
+        // PC is away, and replaced whenever a companion sends new ones.
+        val canvasPrefs = getSharedPreferences("ui", MODE_PRIVATE)
+        canvasPrefs.getString("pc_wallpaper", null)?.let(::decodeWallpaper)?.let { AppCanvas.wallpaper = it }
+        container.appScope.launch(Dispatchers.Main) {
+            container.settings.canvasWallpaper.collect { AppCanvas.useWallpaper = it }
+        }
+        container.appScope.launch(Dispatchers.Main) {
+            @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+            container.hub.filterNotNull().flatMapLatest { hub ->
+                hub.devices.flatMapLatest { all ->
+                    val each = all.values.map { d ->
+                        d.state.map { d.plugin<CompanionPlugin>(CompanionPlugin.ID) }.distinctUntilChanged()
+                            .flatMapLatest { it?.wallpaper ?: flowOf(null) }
+                    }
+                    if (each.isEmpty()) flowOf(null) else merge(*each.toTypedArray())
+                }
+            }.filterNotNull().distinctUntilChanged().collect { w ->
+                val grid = CanvasWallpaper(w.cols, w.rows, w.colors.toIntArray())
+                AppCanvas.wallpaper = grid
+                canvasPrefs.edit().putString("pc_wallpaper", "${w.cols},${w.rows}," + w.colors.joinToString(",")).apply()
+            }
         }
         // Whether any of our activities is started: background work scales down when it isn't.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
@@ -188,3 +218,12 @@ class AppContainer(private val app: Application) {
 }
 
 val Application.container: AppContainer get() = (this as VyomaApp).container
+
+/** "cols,rows,c1,c2,…" as saved above; null if it doesn't add up. */
+private fun decodeWallpaper(saved: String): CanvasWallpaper? {
+    val n = saved.split(',').mapNotNull { it.trim().toIntOrNull() }
+    if (n.size < 3) return null
+    val (cols, rows) = n[0] to n[1]
+    val colors = n.drop(2)
+    return if (cols > 0 && rows > 0 && colors.size == cols * rows) CanvasWallpaper(cols, rows, colors.toIntArray()) else null
+}
