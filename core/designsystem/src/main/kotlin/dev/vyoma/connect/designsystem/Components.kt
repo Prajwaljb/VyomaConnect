@@ -585,8 +585,8 @@ fun IconBadge(icon: ImageVector, tint: Color, size: Dp = 34.dp) {
     Box(
         Modifier
             .size(size)
-            .specularEdge(RoundedCornerShape(size * 0.28f), 0.8.dp, lit = Color.White.copy(alpha = 0.35f), base = Color.White.copy(alpha = 0.08f))
-            .clip(RoundedCornerShape(size * 0.28f))
+            .specularEdge(SmoothCornerShape(size * 0.28f), 0.8.dp, lit = Color.White.copy(alpha = 0.35f), base = Color.White.copy(alpha = 0.08f))
+            .clip(SmoothCornerShape(size * 0.28f))
             .background(Brush.verticalGradient(listOf(tint.copy(alpha = 0.88f).compositeOver(Color.White), tint))),
         contentAlignment = Alignment.Center,
     ) {

@@ -53,6 +53,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.vyoma.connect.designsystem.BounceIconButton
+import dev.vyoma.connect.designsystem.SmoothCornerShape
 import dev.vyoma.connect.designsystem.CollapsingHeaderScaffold
 import dev.vyoma.connect.designsystem.LocalStatus
 import dev.vyoma.connect.designsystem.PillButton
@@ -174,7 +175,7 @@ fun CapturesStrip(onTake: (() -> Unit)?, onSeeAll: () -> Unit, modifier: Modifie
                     .size(96.dp, THUMB_H)
                     .semantics { contentDescription = "See all ${r.total} captures" }
                     .pressable(onClick = onSeeAll)
-                    .glassRaised(RoundedCornerShape(18.dp)),
+                    .glassRaised(SmoothCornerShape(18.dp)),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {

@@ -185,7 +185,8 @@ private fun ColorScheme.animated(): ColorScheme {
 val VyomaShapes = Shapes(
     extraSmall = RoundedCornerShape(10.dp),
     small = RoundedCornerShape(14.dp),
-    medium = RoundedCornerShape(20.dp),
-    large = RoundedCornerShape(26.dp),
-    extraLarge = RoundedCornerShape(32.dp),
+    // Cards, tiles and sheets: Apple's continuous corners (macOS/iOS 26 tiles), not circular arcs.
+    medium = SmoothCornerShape(20.dp),
+    large = SmoothCornerShape(26.dp),
+    extraLarge = SmoothCornerShape(32.dp),
 )

@@ -2,6 +2,7 @@ package dev.vyoma.connect.ui
 
 import dev.vyoma.connect.service.LastSeen
 import dev.vyoma.connect.designsystem.LocalStatus
+import dev.vyoma.connect.designsystem.SmoothCornerShape
 import androidx.compose.material.icons.rounded.Terminal
 import kotlinx.coroutines.flow.MutableStateFlow
 import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
@@ -498,7 +499,7 @@ private fun AwayCard(vm: AppViewModel, modifier: Modifier = Modifier) {
 private fun CompanionPromoCard(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
     SectionCard(modifier, contentPadding = PaddingValues(20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(SystemColor.BLUE.color), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(36.dp).clip(SmoothCornerShape(11.dp)).background(SystemColor.BLUE.color), contentAlignment = Alignment.Center) {
                 Icon(Icons.Rounded.AutoAwesome, null, tint = Color.White, modifier = Modifier.size(20.dp))
             }
             Spacer(Modifier.width(12.dp))
