@@ -331,7 +331,11 @@ class GamepadActivity : ComponentActivity() {
  * Where everything sits, for a landscape screen of [w] x [h] px: each control's usual spot, unless
  * the profile moved it ([places], fractions of the screen) or resized it.
  */
-private class PadLayout(val w: Float, val h: Float, d: Density, private val places: Map<PadControl, Place>, val analog: Boolean) {
+private class PadLayout(
+    val w: Float, val h: Float, d: Density, private val places: Map<PadControl, Place>, val analog: Boolean,
+    /** A DualSense's shape: D-pad up top on the left, both sticks low and level (an Xbox pad swaps them). */
+    private val ps: Boolean,
+) {
     val u = with(d) { 1.dp.toPx() }
     private val edge = 20 * u
 
@@ -344,8 +348,8 @@ private class PadLayout(val w: Float, val h: Float, d: Density, private val plac
         PadControl.MENU -> Offset(w / 2 + 78 * u, h * 0.34f)
         PadControl.GUIDE -> Offset(w / 2, h * 0.34f)
         PadControl.FACE -> Offset(w - edge - 78 * u, h * 0.56f)
-        PadControl.DPAD -> Offset(w * 0.32f, h - edge - 58 * u)
-        PadControl.LSTICK -> Offset(edge + 92 * u, h * 0.56f)
+        PadControl.DPAD -> if (ps) Offset(edge + 92 * u, h * 0.56f) else Offset(w * 0.32f, h - edge - 58 * u)
+        PadControl.LSTICK -> if (ps) Offset(w * 0.32f, h - edge - 58 * u) else Offset(edge + 92 * u, h * 0.56f)
         PadControl.RSTICK -> Offset(w * 0.68f, h - edge - 58 * u)
     }
 
@@ -535,7 +539,9 @@ private fun GamepadScreen(
             val w = with(density) { maxWidth.toPx() }
             val h = with(density) { maxHeight.toPx() }
             val places: Map<PadControl, Place> = if (editing) edits.toMap() else profile.places
-            val layout = remember(w, h, density, places, profile.analogTriggers) { PadLayout(w, h, density, places, profile.analogTriggers) }
+            val layout = remember(w, h, density, places, profile.analogTriggers, profile.kind) {
+                PadLayout(w, h, density, places, profile.analogTriggers, profile.kind == PadKind.DUALSENSE)
+            }
             val input = if (editing) {
                 Modifier.pointerInput(w, h, density, profile.analogTriggers) {
                     // Drag a control to move it; a second finger pinches it bigger or smaller.
@@ -545,7 +551,7 @@ private fun GamepadScreen(
                         while (true) {
                             val event = awaitPointerEvent()
                             val down = event.changes.filter { it.pressed }
-                            val now = PadLayout(w, h, density, edits.toMap(), profile.analogTriggers)
+                            val now = PadLayout(w, h, density, edits.toMap(), profile.analogTriggers, profile.kind == PadKind.DUALSENSE)
                             val first = event.changes.firstOrNull { it.pressed && !it.previousPressed }
                             if (first != null && down.size == 1) {
                                 chosen = now.controlAt(first.position)
