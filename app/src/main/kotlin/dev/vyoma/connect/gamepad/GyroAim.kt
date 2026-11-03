@@ -16,6 +16,12 @@ import kotlin.math.sqrt
  * you aims up, as on a Switch. Out come either mouse pixels (running totals, the companion moves its
  * gyro mouse by the difference) or a right-stick push.
  *
+ * Drift (the user saw the pointer creep while holding still, 2026-11-03): the S24 FE's gyro keeps a
+ * leftover offset of about 0.009 rad/s after Android's own calibration, and hands tremble. So the
+ * offset is relearned whenever the phone has been steady for [STEADY_NS], and slow turning is
+ * tightened (scaled down towards zero below [TIGHT_RAD_S]) rather than cut at a hard edge, which kept
+ * creep just past the edge and made fine aim jump.
+ *
  * Runs on the main thread's looper; [onMove] follows every reading while [active].
  */
 class GyroAim(context: Context, private val rotation: () -> Int, private val onMove: () -> Unit) : SensorEventListener {
@@ -46,6 +52,12 @@ class GyroAim(context: Context, private val rotation: () -> Int, private val onM
     private val up = floatArrayOf(0f, 0f, 1f)
     private var lastNs = 0L
     private var running = false
+    /** The gyro's leftover offset, relearned while the phone is steady. */
+    private val bias = FloatArray(3)
+    private val steadySum = FloatArray(3)
+    private val steadyFirst = FloatArray(3)
+    private var steadyCount = 0
+    private var steadySince = 0L
 
     fun start() {
         if (running || gyro == null) return
@@ -72,15 +84,15 @@ class GyroAim(context: Context, private val rotation: () -> Int, private val onM
         val dt = if (lastNs == 0L) 0f else ((e.timestamp - lastNs) / 1e9f).coerceIn(0f, 0.05f)
         lastNs = e.timestamp
         if (!active) return
-        val (wx, wy, wz) = Triple(e.values[0], e.values[1], e.values[2])
+        learnBias(e.values, e.timestamp)
+        val (wx, wy, wz) = Triple(e.values[0] - bias[0], e.values[1] - bias[1], e.values[2] - bias[2])
         // Turning right is clockwise seen from above: minus the spin around "up".
         var yaw = -(wx * up[0] + wy * up[1] + wz * up[2])
         // The screen's horizontal axis is the device's y one way round, minus it the other.
         var pitch = if (rotation() == Surface.ROTATION_270) -wy else wy
         if (invertY) pitch = -pitch
-        // Below this the phone is only resting in the hands.
-        yaw = calm(yaw)
-        pitch = calm(pitch)
+        yaw = tighten(yaw)
+        pitch = tighten(pitch)
         // About 10 px per degree at speed 1.
         restX += yaw * dt * PX_PER_RAD * speed
         restY += -pitch * dt * PX_PER_RAD * speed
@@ -96,7 +108,34 @@ class GyroAim(context: Context, private val rotation: () -> Int, private val onM
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
-    private fun calm(v: Float) = if (abs(v) < CALM_RAD_S) 0f else v - sign(v) * CALM_RAD_S
+    /**
+     * Steady means every reading stays within [STEADY_SPREAD] of where this run of them began; after
+     * [STEADY_NS] of that, their average is the offset (eased in, so one still moment can't jolt it).
+     */
+    private fun learnBias(v: FloatArray, ns: Long) {
+        val calm = steadyCount > 0 && (0..2).all { abs(v[it] - steadyFirst[it]) < STEADY_SPREAD } &&
+            (0..2).all { abs(v[it]) < STEADY_MAX }
+        if (!calm) {
+            for (i in 0..2) { steadyFirst[i] = v[i]; steadySum[i] = 0f }
+            steadyCount = 0
+            steadySince = ns
+            if ((0..2).any { abs(v[it]) >= STEADY_MAX }) return
+        }
+        for (i in 0..2) steadySum[i] += v[i]
+        steadyCount++
+        if (ns - steadySince >= STEADY_NS) {
+            for (i in 0..2) bias[i] += (steadySum[i] / steadyCount - bias[i]) * 0.5f
+            for (i in 0..2) steadySum[i] = 0f
+            steadyCount = 0
+            steadySince = ns
+        }
+    }
+
+    /** Slow turning scaled down smoothly (squared below [TIGHT_RAD_S]); faster is untouched. */
+    private fun tighten(v: Float): Float {
+        val a = abs(v)
+        return if (a >= TIGHT_RAD_S) v else v * (a / TIGHT_RAD_S)
+    }
 
     private fun push(v: Float): Float {
         if (v == 0f) return 0f
@@ -106,7 +145,10 @@ class GyroAim(context: Context, private val rotation: () -> Int, private val onM
     private companion object {
         const val PX_PER_RAD = 573f
         const val FULL_STICK_RAD_S = 2.1f
-        const val CALM_RAD_S = 0.01f
+        const val TIGHT_RAD_S = 0.04f
+        const val STEADY_SPREAD = 0.015f
+        const val STEADY_MAX = 0.03f
+        const val STEADY_NS = 800_000_000L
         const val STICK_FLOOR = 0.15f
     }
 }

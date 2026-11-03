@@ -517,4 +517,6 @@ Layout editor: every movable part dashed-outlined, the chosen one solid accent; 
 (0.6–1.6×); a glass bar at the top (Reset, − size% +, Cancel, Done) and a hint under it; Back cancels. Places are
 saved as screen fractions + scale (`PadProfiles`, SharedPreferences "gamepad"). Gyro (GyroAim): yaw around gravity's
 up (player space), pitch around the screen's horizontal axis, top edge towards you aims up; 10 px/° mouse or full
-stick at 120°/s at 1×, 0.01 rad/s rest band.
+stick at 120°/s at 1×. Drift (user, 2026-11-03): the offset is relearned after 0.8 s steady (readings within
+0.015 rad/s of each other, under 0.03) and slow turning is tightened (squared below 0.04 rad/s), no hard dead zone.
+Measured: still hand ≤1 px per 0.5 s (was ~10).
