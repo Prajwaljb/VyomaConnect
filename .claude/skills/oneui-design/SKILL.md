@@ -230,8 +230,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   stay true round-rects (the lens shader's SDF needs them). Glass that shades a smooth card passes its radius
   (`InnerGlow.draw(corner = ..., exponent = SmoothCornerShape.EXPONENT)`), else a path outline falls back to slow
   stacked strokes. Cards carry light in the edge only, no radial glow.
-- Light-mode shadows sit clearly below (drop 0.45 x blur, 16%), as Apple's Voice Memos buttons; glass over photos
-  defines itself by its rim instead.
+- Shadows are an even halo, lit from the FRONT (measured: iOS Music's search button over white is -20 at the edge
+  right, diagonal and below alike, gone ~0.5 r out; the lifted slider knob -6 above, -7..-9 below). Chrome leans
+  only 0.08 x blur down (it was 0.45, as "Voice Memos": the top looked shadowless); glass over photos defines
+  itself by its rim instead.
 
 ## Layout
 - Every screen must hold up at large text and display sizes (OnePlus defaults are larger than Samsung's). Test with
@@ -443,9 +445,10 @@ until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played ou
 - Blur: LOW on bars and buttons, content stays legible and the rim mirrors it (Safari's search pill shows the building's
   lines sharp; iOS Music shows the art and mirrored text): bars/buttons 1.5 dp, header bubble 2.5 dp, at HALF resolution
   (`CHROME_RES` 0.5; a quarter turned content to mush). Menus 13 dp, dialogs 18 dp stay heavy, as Apple's menus.
-- Shadows follow the tilt light: every shadow is offset by `SpecularLight.cast(length, light)`, straight away from
-  the light (straight down at rest, as far across as down at the 45 deg limit). Chrome, knobs and lifted drops use
-  `angle`; cards and raised chips `content` (sways 40%). Read in the draw phase only.
+- Shadows follow the tilt light: every shadow is offset by `SpecularLight.cast(drop, sway, light)`: `drop` down at
+  rest, and the `sway` offset turns with the light (45 deg: 0.71 sway across, 0.29 up). Chrome 0.08/0.35 x blur,
+  lifted drops 0.25/0.6 h, knob 0.5/1.5 dp, raised chips 0.5/2 dp. Chrome, knobs and drops use `angle`; cards
+  `content` (sways 40%). Read in the draw phase only.
 - Shadow: every floating glass casts a soft shadow ONLY outside its shape (`SoftShadow`/`chromeShadow`): light ~6% at
   the edge, gone ~10–12 dp out, a little heavier below; dark 50% black. Small one on raised controls in light mode.
   Knob shadow stays (wider) while held.
@@ -460,7 +463,7 @@ until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played ou
   ringed drop optics (flipped ring, dark band, caustic, rainbow: read as a thick double border), a minifying drop
   frosted like the bar, and a clear drop lit only by a thin rim line. Don't change it unless asked.
 - Lens shadow physics (lifted drops only): the drop hovers h = 0.13 x sqrt(area) x lift above its surface. Its shadow
-  falls away from `SpecularLight` (follows tilt) and down by h, blur 2 dp + 1.4h, fainter as it spreads
+  is a near-even halo (0.25h down) sliding away from `SpecularLight` as it sways (0.6h), blur 2 dp + 1.4h, fainter as it spreads
   (alpha / (1 + h / 0.25 sqrt(area))). It shows THROUGH the drop too (iOS's lifted slider knob darkens towards its
   bottom, ~215 on a 243 page): the same shadow is drawn inside the drop record, refracted with it, its middle
   cleared (DstOut ellipse leaning up) where the glass focuses the light, so it reads as a ring deepest at the bottom.
