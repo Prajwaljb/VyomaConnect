@@ -227,8 +227,8 @@ class GamepadActivity : ComponentActivity() {
                     profile = profile,
                     profiles = all,
                     gyroAvailable = gyro.available,
-                    onTouch = { touch = it; recompute() },
-                    onPaused = { paused = it; recompute() },
+                    onTouch = { synchronized(this@GamepadActivity) { touch = it }; recompute() },
+                    onPaused = { synchronized(this@GamepadActivity) { paused = it }; recompute() },
                     onSave = profiles::save,
                     onSelect = profiles::select,
                     onCreate = { profiles.create(it) },
@@ -249,7 +249,23 @@ class GamepadActivity : ComponentActivity() {
         recompute()
     }
 
-    /** The fingers, plus the gyro (when it's aiming), as the profile's pad. */
+    /**
+     * Wi-Fi power saving holds outgoing packets back and sends them in bursts; this lock (made for
+     * games) keeps the radio awake while the controller is on screen.
+     */
+    private val wifiLock by lazy {
+        (applicationContext.getSystemService(WIFI_SERVICE) as android.net.wifi.WifiManager)
+            .createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "vyoma:controller")
+            .apply { setReferenceCounted(false) }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        runCatching { wifiLock.acquire() }
+    }
+
+    /** The fingers, plus the gyro (when it's aiming), as the profile's pad. Called from the main and gyro threads. */
+    @Synchronized
     private fun recompute() {
         val p = profiles.current()
         val t = if (paused) GamepadState() else touch
@@ -269,6 +285,7 @@ class GamepadActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        runCatching { wifiLock.release() }
         // The fingers are gone with the screen: nothing stays held.
         touch = GamepadState()
         recompute()
