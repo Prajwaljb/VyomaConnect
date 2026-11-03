@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
@@ -56,6 +57,28 @@ data class PcStats(
     /** On its charger, whether or not the battery is taking charge (a charge limit holds it); null: not said. */
     val ac: Boolean? = null,
 )
+
+/**
+ * The phone's game controller as the PC's virtual Xbox 360 pad sees it: [buttons] a bitmask of
+ * [GamepadButton]s, sticks -32768..32767 (y down), triggers 0..255.
+ */
+data class GamepadState(
+    val buttons: Int = 0,
+    val lx: Int = 0,
+    val ly: Int = 0,
+    val rx: Int = 0,
+    val ry: Int = 0,
+    val lt: Int = 0,
+    val rt: Int = 0,
+)
+
+/** Bits of [GamepadState.buttons]; the companion's gamepad.rs uses the same order. */
+enum class GamepadButton { A, B, X, Y, LB, RB, BACK, START, GUIDE, LS, RS, UP, DOWN, LEFT, RIGHT;
+    val bit: Int get() = 1 shl ordinal
+}
+
+/** A game's rumble: strengths 0..65535 (the strong low motor, the weak high one); [ms] 0 = until the next. */
+data class Rumble(val strong: Int, val weak: Int, val ms: Int)
 
 /** Where a screenshot or camera photo request is. [Done.location] is something the UI can open. */
 sealed interface CaptureState {
@@ -560,7 +583,44 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     /** A photo from the PC's webcam (the PC shows a notification each time). */
     val photo = Capture(CAMERA_REQUEST, "PC camera")
 
+    private val _rumble = MutableSharedFlow<Rumble>(extraBufferCapacity = 8)
+    /** Rumble from the game on the PC, while the controller is open. */
+    val rumble: SharedFlow<Rumble> = _rumble.asSharedFlow()
+    private val _gamepadError = MutableStateFlow<String?>(null)
+    /** Why the PC couldn't make the virtual pad (no access to /dev/uinput), once it says so. */
+    val gamepadError: StateFlow<String?> = _gamepadError.asStateFlow()
+
+    /**
+     * Sends [states] to the PC's virtual pad for as long as this runs: every change at once (the flow
+     * conflates, so a slow link only ever carries the newest), and the current one each second, which
+     * keeps the pad alive (the PC lets go of everything after 4 s of silence). Ending it closes the pad.
+     */
+    suspend fun streamGamepad(states: StateFlow<GamepadState>) {
+        _gamepadError.value = null
+        try {
+            var current = states.value
+            while (true) {
+                ctx.send(packet(GAMEPAD_STATE) {
+                    put("b", current.buttons)
+                    put("lx", current.lx); put("ly", current.ly)
+                    put("rx", current.rx); put("ry", current.ry)
+                    put("lt", current.lt); put("rt", current.rt)
+                })
+                val sent = current
+                current = withTimeoutOrNull(GAMEPAD_HEARTBEAT_MS) { states.first { it != sent } } ?: sent
+            }
+        } finally {
+            withContext(kotlinx.coroutines.NonCancellable) { ctx.send(packet(GAMEPAD_CLOSE)) }
+        }
+    }
+
+    private fun receiveRumble(packet: NetworkPacket) {
+        packet.string("error")?.let { _gamepadError.value = it; return }
+        _rumble.tryEmit(Rumble(packet.int("strong") ?: 0, packet.int("weak") ?: 0, packet.int("ms") ?: 0))
+    }
+
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
+        if (packet.type == GAMEPAD_RUMBLE) receiveRumble(packet)
         if (packet.type == SCREENSHOT) screenshot.receive(packet)
         if (packet.type == CAMERA) photo.receive(packet)
         if (packet.type == HANDOFF) receiveHandoff(packet)
@@ -619,6 +679,10 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val PC_POWERED = "vyoma.pc.powered"
         const val PC_WAKE = "vyoma.pc.wake"
         const val AWAY = "vyoma.away"
+        const val GAMEPAD_STATE = "vyoma.gamepad.state"
+        const val GAMEPAD_CLOSE = "vyoma.gamepad.close"
+        const val GAMEPAD_RUMBLE = "vyoma.gamepad.rumble"
+        private const val GAMEPAD_HEARTBEAT_MS = 1_000L
         /** The phone's walk-away rules, set by the app; every companion gets them on link and on change. */
         val away = kotlinx.coroutines.flow.MutableStateFlow(AwayRules())
         private const val SET_INTERVAL_MS = 60L
@@ -638,8 +702,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST),
+            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, GAMEPAD_RUMBLE),
+            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE),
         ) { CompanionPlugin(it, sink) }
     }
 }

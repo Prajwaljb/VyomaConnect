@@ -1,5 +1,9 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.platform.LocalContext
+
+import androidx.compose.material.icons.rounded.SportsEsports
+
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
@@ -216,6 +220,15 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                     ConnectionOrb(if (target != null) OrbState.CONNECTED else OrbState.OFFLINE, size = 7.dp)
                     Text(target?.identity?.deviceName ?: "No PC connected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+            }
+            // The phone as a game controller: the other way to drive the PC by hand (needs the companion).
+            val hasCompanion = target != null && devices.any { it.identity.companionOf == target.identity.deviceId && it.isReachable }
+            if (hasCompanion) {
+                val context = LocalContext.current
+                Box(
+                    Modifier.size(48.dp).pressable(glass = true) { GamepadActivity.open(context, target.identity.deviceId) }.glassRaised(CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Rounded.SportsEsports, "Game controller") }
             }
         }
 

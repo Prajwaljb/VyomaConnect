@@ -8,6 +8,7 @@
 mod away;
 mod camera;
 mod files;
+mod gamepad;
 mod identity;
 mod kde;
 mod link;
@@ -140,8 +141,8 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request"],
-            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper"],
+            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.gamepad.state", "vyoma.gamepad.close"],
+            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.gamepad.rumble"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
         }),
@@ -224,6 +225,8 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
     let pc = pc::worker(link.sender.clone(), name.clone());
     // Listings and downloads; dropping the set when the link closes cancels whatever is left.
     let mut file_tasks = tokio::task::JoinSet::new();
+    // The phone as a controller: its pad lives while states keep coming (see gamepad.rs).
+    let mut pad: Option<(tokio::sync::mpsc::Sender<gamepad::Input>, tokio::task::JoinHandle<()>)> = None;
     let result = loop {
         let Some(p) = link.receiver.next().await? else { break Ok(()) };
         while file_tasks.try_join_next().is_some() {}
@@ -291,6 +294,22 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                     let _ = sender.send(&packet("vyoma.wallpaper", reply)).await;
                 });
             }
+            "vyoma.gamepad.state" => {
+                let s = gamepad::State::parse(&p["body"]);
+                if pad.as_ref().is_none_or(|(_, t)| t.is_finished()) {
+                    let (tx, rx) = tokio::sync::mpsc::channel(64);
+                    pad = Some((tx, tokio::spawn(gamepad::run(rx, link.sender.clone(), name.clone()))));
+                }
+                if let Some((tx, _)) = &pad {
+                    // Full means the PC is behind; the next state carries everything anyway.
+                    let _ = tx.try_send(gamepad::Input::State(s));
+                }
+            }
+            "vyoma.gamepad.close" => {
+                if let Some((tx, _)) = &pad {
+                    let _ = tx.try_send(gamepad::Input::Close);
+                }
+            }
             "vyoma.handoff.request" => {
                 let reply = match &shared.media {
                     None => json!({ "error": "can't see the PC's media players" }),
@@ -357,6 +376,10 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
             _ => {}
         }
     };
+    // Dropping the pad lets go of every button.
+    if let Some((_, t)) = pad {
+        t.abort();
+    }
     for t in [shot_task, photo_task, screen_task].into_iter().flatten() {
         t.abort();
     }

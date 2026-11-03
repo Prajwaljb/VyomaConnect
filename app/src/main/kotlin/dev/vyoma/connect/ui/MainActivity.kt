@@ -170,6 +170,7 @@ private fun PermissionGate(onReady: () -> Unit) {
  */
 @Composable
 private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState<Tab>, vm: AppViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     var tab by tabState
     val toTab: (Tab) -> Unit = { t -> backStack.retainAll { it == Screen.Home }; tab = t }
@@ -274,6 +275,8 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                     // At the root, back on another tab goes Home first, like One UI apps.
                     backToHome = backStack.size == 1,
                     onTouchpad = { backStack.add(Screen.Touchpad(null, keyboard = false)) },
+                    onKeyboard = { backStack.add(Screen.Touchpad(null, keyboard = true)) },
+                    onGamepad = { GamepadActivity.open(context, null) },
                 ) { t ->
                     when (t) {
                         Tab.HOME -> HomeScreen(

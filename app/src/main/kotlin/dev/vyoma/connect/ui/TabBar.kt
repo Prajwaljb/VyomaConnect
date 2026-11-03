@@ -1,5 +1,12 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.material.icons.rounded.SportsEsports
+import androidx.compose.material.icons.rounded.Keyboard
+import dev.vyoma.connect.designsystem.liquidPress
+import dev.vyoma.connect.designsystem.MenuItem
+import dev.vyoma.connect.designsystem.LocalMenu
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.selected
@@ -105,7 +112,11 @@ private val ItemWidth = 82.dp
  * screen in one frame. Hidden tabs aren't drawn, so they cost nothing per frame.
  */
 @Composable
-fun TabsRoot(tab: Tab, onTab: (Tab) -> Unit, backToHome: Boolean, onTouchpad: () -> Unit, content: @Composable (Tab) -> Unit) {
+fun TabsRoot(
+    tab: Tab, onTab: (Tab) -> Unit, backToHome: Boolean, onTouchpad: () -> Unit,
+    onKeyboard: () -> Unit = {}, onGamepad: () -> Unit = {},
+    content: @Composable (Tab) -> Unit,
+) {
     val backdrop = rememberBackdrop()
     // Back on another tab goes Home, under the finger like a page: the tab slides off over Home
     // (parallaxed and dimmed, as under a pushed page), and finishes or snaps back from wherever you let go.
@@ -199,8 +210,23 @@ fun TabsRoot(tab: Tab, onTab: (Tab) -> Unit, backToHome: Boolean, onTouchpad: ()
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TabBar(tab, onTab, backdrop)
+            // Held: the other ways to drive the PC by hand.
+            val menus = LocalMenu.current
+            var bounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
             Box(
-                Modifier.size(BarHeight).menuOccluder().glassChrome(backdrop, CircleShape, blur = 1.5.dp, bevel = 16.dp, interactive = true).pressable(pressedScale = 1f, onClick = onTouchpad),
+                Modifier.size(BarHeight).menuOccluder().onGloballyPositioned { bounds = it.boundsInRoot() }
+                    .glassChrome(backdrop, CircleShape, blur = 1.5.dp, bevel = 16.dp, interactive = true)
+                    .liquidPress(
+                        pressedScale = 1f, onLongClickLabel = "More",
+                        onLongClick = {
+                            menus.show(bounds, listOf(
+                                MenuItem("Touchpad", Icons.Rounded.TouchApp, onClick = onTouchpad),
+                                MenuItem("Keyboard", Icons.Rounded.Keyboard, onClick = onKeyboard),
+                                MenuItem("Game controller", Icons.Rounded.SportsEsports, onClick = onGamepad),
+                            ), fromRadius = BarHeight / 2)
+                        },
+                        onClick = onTouchpad,
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(Icons.Rounded.TouchApp, "Touchpad", tint = MaterialTheme.colorScheme.onBackground)

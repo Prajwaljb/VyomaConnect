@@ -95,6 +95,12 @@
             android:screenOrientation="sensorLandscape" />
 
         <activity
+            android:name=".ui.GamepadActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:screenOrientation="sensorLandscape" />
+
+        <activity
             android:name=".ui.FindMyPhoneActivity"
             android:screenOrientation="portrait"
             android:exported="false"

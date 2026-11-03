@@ -132,6 +132,13 @@ body fields before implementing one.
   decodes with MediaCodec (`KEY_LOW_LATENCY`) into a TextureView and shows only the newest of a burst.
   `vyoma.screen.stop` (or closing the payload) ends it; a new request replaces a running cast.
   `VYOMA_SCREEN_TEST=1` on the companion casts a moving test pattern, no portal (safe to screenshot).
+- `vyoma.gamepad.state {b, lx, ly, rx, ry, lt, rt}` (phone → companion): the phone's controller. `b` bitmask in
+  `GamepadButton` order (A B X Y LB RB Back Start Guide LS RS Up Down Left Right), sticks -32768..32767 y down,
+  triggers 0..255. Sent on every change over the normal link (TCP_NODELAY both ends, so it works over the USB
+  tunnel too) and resent each second; the companion's first one creates a uinput Xbox 360 pad (045e:028e,
+  gamepad.rs, raw ioctls, user needs /dev/uinput access: input group/ACL), removed on `vyoma.gamepad.close`, 4 s of
+  silence or link loss (every button released first). `vyoma.gamepad.rumble {strong, weak, ms}` (companion → phone)
+  from the game's FF_RUMBLE effects, or `{error}` when the pad can't be made.
 - `vyoma.wallpaper.request` → `vyoma.wallpaper {cols, rows, colors:[[r,g,b], ...]}` (row-major, top-left first) or
   `{error}`. The companion reads Plasma's wallpaper (`Image=` under `[Wallpaper][org.kde.image][General]` in
   `plasma-org.kde.plasma.desktop-appletsrc`; a package resolves to its largest image; unset = Next) and has ffmpeg

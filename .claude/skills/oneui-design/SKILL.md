@@ -494,3 +494,12 @@ until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played ou
 - Background from the PC's wallpaper (Settings › PC wallpaper colours, on by default, needs the companion):
   `AppCanvas.wallpaper`, a 4x4 colour grid stretched bilinearly, each colour 1.25x saturated then mixed toward the
   canvas (dark 42%, light 32%), fading to the canvas from 35% down. Falls back to the accent aurora.
+
+## Game controller (GamepadActivity, 2026-11-03)
+Landscape, immersive, dark, over the aurora; everything drawn in ONE Canvas (redraw via a counter read in draw).
+Xbox layout: LT LB · close · RB RT along the top, View / Guide / Menu in the middle, left stick and ABXY level,
+D-pad and right stick low. Frosted discs/capsules (white 9% + top-lit rim); held = filled with the colour + glow
+(A green, B red, X blue, Y yellow, shoulders accent). One pointer handler gives each finger a control: sticks float
+(centre where the thumb lands, base follows past the rim, quick tap = L3/R3), a thumb slides across ABXY (between two
+presses both) and round the 8-way D-pad. Haptic.Key on each new press; rumble plays as USAGE_MEDIA. Opened from the
+touchpad header's round button and the tab-bar touchpad button's long-press menu (Touchpad / Keyboard / Game controller).
