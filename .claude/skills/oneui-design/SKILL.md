@@ -507,3 +507,14 @@ D-pad and right stick low. Frosted discs/capsules (white 9% + top-lit rim); held
 (centre where the thumb lands, base follows past the rim, quick tap = L3/R3), a thumb slides across ABXY (between two
 presses both) and round the 8-way D-pad. Haptic.Key on each new press; rumble plays as USAGE_MEDIA. Opened from the
 touchpad header's round button and the tab-bar touchpad button's long-press menu (Touchpad / Keyboard / Game controller).
+Close and a settings gear sit side by side between the shoulders (never movable). The gear opens a glass card over
+a 45% scrim (taps outside close it): Profile chips (one per game, "+ New game", Rename / Delete), The PC sees
+(Xbox controller / DualSense), Triggers (Full at a touch / Analog: slide down), Gyro aim (Off / Always / Holding LT),
+then Gyro moves (Mouse / Right stick), speed slider 0.25–3×, Invert, and Edit layout. While it's open nothing is held.
+DualSense profile: outlined ✕ ○ □ △ (blue, red, pink, green), L1/L2/R1/R2, a blue guide. Analog triggers are slots
+54 dp taller than the capsule: depth down the slot = pressure (fill runs down, notches at quarters, at least 10%).
+Layout editor: every movable part dashed-outlined, the chosen one solid accent; drag moves, a second finger pinches
+(0.6–1.6×); a glass bar at the top (Reset, − size% +, Cancel, Done) and a hint under it; Back cancels. Places are
+saved as screen fractions + scale (`PadProfiles`, SharedPreferences "gamepad"). Gyro (GyroAim): yaw around gravity's
+up (player space), pitch around the screen's horizontal axis, top edge towards you aims up; 10 px/° mouse or full
+stick at 120°/s at 1×, 0.01 rad/s rest band.

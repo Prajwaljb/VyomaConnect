@@ -77,6 +77,20 @@ class Device internal constructor(
 
     /** Where we currently reach this device from; empty when offline. */
     val addresses: List<java.net.InetAddress> get() = links.filter { !it.isClosed }.map { it.remoteAddress }
+
+    /**
+     * A UDP socket connected to [port] on this device, over its newest network link and routed as
+     * that link is; null when it's only reachable through a tunnel (USB's adb forwards are TCP only).
+     */
+    fun datagramTo(port: Int): java.net.DatagramSocket? {
+        val link = links.lastOrNull { !it.isClosed && !it.remoteAddress.isLoopbackAddress } ?: return null
+        val socket = java.net.DatagramSocket()
+        return runCatching {
+            link.payloads?.route(socket, link.remoteAddress)
+            socket.connect(link.remoteAddress, port)
+            socket
+        }.getOrElse { socket.close(); null }
+    }
     private val _state = MutableStateFlow(
         DeviceState(initialIdentity, if (paired) PairState.PAIRED else PairState.UNPAIRED, emptySet()),
     )

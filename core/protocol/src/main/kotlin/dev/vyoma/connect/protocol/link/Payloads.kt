@@ -33,6 +33,9 @@ class PayloadSource(val size: Long, val open: () -> InputStream)
  * Either way the peer must present the same certificate as the link it belongs to.
  */
 interface PayloadTransport {
+    /** Sends [socket]'s traffic to [target] the way this transport's own sockets go (Wi-Fi past a VPN). */
+    fun route(socket: Any, target: java.net.InetAddress) {}
+
     /**
      * Announces [packet] with [source] attached and streams it. Returns true once fully sent.
      * [usbMirror]: the peer (a companion, linked over Wi-Fi) can also reach us through its PC's adb
@@ -52,6 +55,7 @@ internal class LanPayloads(
     private val tuneSocket: (Socket) -> Unit,
     private val route: (Any, java.net.InetAddress) -> Unit,
 ) : PayloadTransport {
+    override fun route(socket: Any, target: java.net.InetAddress) = route.invoke(socket, target)
 
     override suspend fun send(
         link: DeviceLink,

@@ -1,20 +1,35 @@
-//! The phone as a game controller: a virtual Xbox 360 pad (uinput, VID 045e PID 028e, so Steam,
-//! SDL and games map it like the real one), driven by `vyoma.gamepad.state` packets from the phone,
-//! with the game's rumble sent back as `vyoma.gamepad.rumble`.
+//! The phone as a game controller: a virtual pad (uinput) that games take for the real one, an Xbox
+//! 360 pad (VID 045e PID 028e, as xpad reports it) or a DualSense (054c:0ce6, as hid-playstation
+//! reports it over USB, so SDL's own mapping applies), driven by `vyoma.gamepad.state` packets from
+//! the phone, with the game's rumble sent back as `vyoma.gamepad.rumble`. The phone's gyro can also
+//! move a virtual mouse (aim in PC games), made the first time it moves.
 //!
-//! `vyoma.gamepad.state {b, lx, ly, rx, ry, lt, rt}`: `b` a button bitmask (see [Button]), sticks
-//! -32768..32767 (y down, as evdev), triggers 0..255. The phone sends it on every change and resends
-//! it each second while the controller is open; the pad appears with the first one and is removed
-//! (every button let go) on `vyoma.gamepad.close`, after [IDLE] without one, or when the link drops.
-//! `vyoma.gamepad.rumble {strong, weak, ms}`: magnitudes 0..65535; ms 0 = until the next rumble.
+//! `vyoma.gamepad.state {b, lx, ly, rx, ry, lt, rt, kind, mx, my, sid, seq}`: `b` a button bitmask
+//! (see [Button]), sticks -32768..32767 (y down, as evdev), triggers 0..255, `kind` "xbox" or
+//! "dualsense", `mx`/`my` running totals of gyro-mouse pixels (wrapping), `sid` the phone's stream,
+//! `seq` its count within it (older ones are dropped: UDP and the link can reorder). The phone sends
+//! it on every change and each second while the controller is open; the pad appears with the first
+//! one and is removed (every button let go) on `vyoma.gamepad.close`, after [IDLE] without one, or
+//! when the link drops. `vyoma.gamepad.rumble {strong, weak, ms}`: magnitudes 0..65535; ms 0 = until
+//! the next rumble.
+//!
+//! Low latency: once the pad is up the companion offers `vyoma.gamepad.udp {port, key}` (a UDP port
+//! the KDE Connect firewall range allows, a fresh base64 32-byte key). The phone then sends each state
+//! as one [DATAGRAM_LEN]-byte datagram, big-endian: "VYG1", sid u32, seq u32, b u32, lx ly rx ry i16,
+//! lt rt u8, mx my i32, kind u8 (0 xbox, 1 dualsense), then HMAC-SHA256 of all that cut to 16 bytes.
+//! The link keeps carrying the once-a-second state, so a lost datagram heals within a second.
 
 use std::collections::HashMap;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use base64::Engine;
+use ring::hmac;
+use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::{Value, json};
 use tokio::io::unix::AsyncFd;
+use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -32,8 +47,16 @@ pub enum Button {
     A = 0, B, X, Y, Lb, Rb, Back, Start, Guide, Ls, Rs, Up, Down, Left, Right,
 }
 
+/// The pad games see.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum Kind {
+    #[default]
+    Xbox,
+    DualSense,
+}
+
 /// evdev key codes, in [Button] order (as the kernel's xpad driver reports a 360 pad).
-const KEYS: [u16; 11] = [
+const XBOX_KEYS: [u16; 11] = [
     0x130, // BTN_A
     0x131, // BTN_B
     0x133, // BTN_X
@@ -47,9 +70,41 @@ const KEYS: [u16; 11] = [
     0x13e, // BTN_THUMBR
 ];
 
+/// The same for a DualSense, as hid-playstation reports one: triangle is BTN_NORTH (0x133), square
+/// BTN_WEST (0x134), the other way round from xpad's X/Y. L2/R2 also click as buttons.
+const DUALSENSE_KEYS: [u16; 11] = [0x130, 0x131, 0x134, 0x133, 0x136, 0x137, 0x13a, 0x13b, 0x13c, 0x13d, 0x13e];
+const BTN_TL2: u16 = 0x138;
+const BTN_TR2: u16 = 0x139;
+
+impl Kind {
+    fn keys(self) -> &'static [u16; 11] {
+        match self {
+            Kind::Xbox => &XBOX_KEYS,
+            Kind::DualSense => &DUALSENSE_KEYS,
+        }
+    }
+
+    fn parse(s: &str) -> Kind {
+        if s == "dualsense" { Kind::DualSense } else { Kind::Xbox }
+    }
+
+    /// A stick value as this pad reports it (a DualSense's sticks are 0..255, 128 the middle).
+    fn stick(self, v: i32) -> i32 {
+        match self {
+            Kind::Xbox => v,
+            Kind::DualSense => (v + 32768) >> 8,
+        }
+    }
+}
+
 const EV_SYN: u16 = 0x00;
 const EV_KEY: u16 = 0x01;
+const EV_REL: u16 = 0x02;
 const EV_ABS: u16 = 0x03;
+const REL_X: u16 = 0x00;
+const REL_Y: u16 = 0x01;
+const BTN_LEFT: u16 = 0x110;
+const BTN_RIGHT: u16 = 0x111;
 const EV_FF: u16 = 0x15;
 const EV_UINPUT: u16 = 0x0101;
 const UI_FF_UPLOAD: u16 = 1;
@@ -72,6 +127,7 @@ const UI_DEV_SETUP: libc::c_ulong = 0x405c_5503;
 const UI_ABS_SETUP: libc::c_ulong = 0x401c_5504;
 const UI_SET_EVBIT: libc::c_ulong = 0x4004_5564;
 const UI_SET_KEYBIT: libc::c_ulong = 0x4004_5565;
+const UI_SET_RELBIT: libc::c_ulong = 0x4004_5566;
 const UI_SET_ABSBIT: libc::c_ulong = 0x4004_5567;
 const UI_SET_FFBIT: libc::c_ulong = 0x4004_556b;
 const UI_BEGIN_FF_UPLOAD: libc::c_ulong = 0xc068_55c8;
@@ -161,11 +217,26 @@ pub struct State {
     pub ry: i32,
     pub lt: i32,
     pub rt: i32,
+    pub kind: Kind,
+    /// Running totals of gyro-mouse pixels.
+    pub mx: i32,
+    pub my: i32,
+    /// Which stream and where in it; None from a phone that doesn't number its states.
+    pub order: Option<(u32, u32)>,
 }
+
+/// Bytes in one UDP state (see the module docs): 35 of state, 16 of tag.
+pub const DATAGRAM_LEN: usize = 51;
+const BODY_LEN: usize = 35;
+const TAG_LEN: usize = 16;
 
 impl State {
     pub fn parse(body: &Value) -> State {
         let n = |k: &str, lo: i64, hi: i64| body[k].as_i64().unwrap_or(0).clamp(lo, hi) as i32;
+        let order = match (body["sid"].as_u64(), body["seq"].as_u64()) {
+            (Some(sid), Some(seq)) => Some((sid as u32, seq as u32)),
+            _ => None,
+        };
         State {
             buttons: body["b"].as_u64().unwrap_or(0) as u32,
             lx: n("lx", -32768, 32767),
@@ -174,7 +245,38 @@ impl State {
             ry: n("ry", -32768, 32767),
             lt: n("lt", 0, 255),
             rt: n("rt", 0, 255),
+            kind: Kind::parse(body["kind"].as_str().unwrap_or("xbox")),
+            mx: body["mx"].as_i64().unwrap_or(0) as i32,
+            my: body["my"].as_i64().unwrap_or(0) as i32,
+            order,
         }
+    }
+
+    /// A UDP state, if [key] signed it.
+    pub fn from_datagram(d: &[u8], key: &hmac::Key) -> Option<State> {
+        if d.len() != DATAGRAM_LEN || &d[..4] != b"VYG1" {
+            return None;
+        }
+        let tag = hmac::sign(key, &d[..BODY_LEN]);
+        // Constant time, so the tag can't be guessed a byte at a time.
+        if tag.as_ref()[..TAG_LEN].iter().zip(&d[BODY_LEN..]).fold(0u8, |acc, (a, b)| acc | (a ^ b)) != 0 {
+            return None;
+        }
+        let u32_at = |i: usize| u32::from_be_bytes(d[i..i + 4].try_into().unwrap());
+        let i16_at = |i: usize| i16::from_be_bytes(d[i..i + 2].try_into().unwrap()) as i32;
+        Some(State {
+            order: Some((u32_at(4), u32_at(8))),
+            buttons: u32_at(12),
+            lx: i16_at(16),
+            ly: i16_at(18),
+            rx: i16_at(20),
+            ry: i16_at(22),
+            lt: d[24] as i32,
+            rt: d[25] as i32,
+            mx: u32_at(26) as i32,
+            my: u32_at(30) as i32,
+            kind: if d[34] == 1 { Kind::DualSense } else { Kind::Xbox },
+        })
     }
 
     fn pressed(&self, b: u32) -> bool {
@@ -190,6 +292,7 @@ impl State {
 /// The virtual pad. Dropping it removes it from the PC.
 pub struct Pad {
     fd: AsyncFd<OwnedFd>,
+    kind: Kind,
     last: State,
     effects: HashMap<i16, (u16, u16, u16)>,
 }
@@ -208,67 +311,92 @@ fn ioctl_ptr<T>(fd: &OwnedFd, req: libc::c_ulong, v: *mut T) -> Result<()> {
     Ok(())
 }
 
+fn open_uinput() -> Result<OwnedFd> {
+    let path = c"/dev/uinput";
+    let raw = unsafe { libc::open(path.as_ptr(), libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+    if raw < 0 {
+        bail!("can't open /dev/uinput ({}): the user needs to be in the input group", std::io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(raw) })
+}
+
+fn finish_setup(fd: &OwnedFd, id: InputId, name: &[u8], ff_effects_max: u32) -> Result<()> {
+    let mut setup = UinputSetup { id, name: [0; 80], ff_effects_max };
+    setup.name[..name.len()].copy_from_slice(name);
+    ioctl_ptr(fd, UI_DEV_SETUP, &mut setup)?;
+    ioctl_int(fd, UI_DEV_CREATE, 0)
+}
+
+fn write_events(fd: &OwnedFd, events: &[(u16, u16, i32)]) -> Result<()> {
+    let mut buf: Vec<InputEvent> = events.iter().map(|&(kind, code, value)| InputEvent { sec: 0, usec: 0, kind, code, value }).collect();
+    buf.push(InputEvent { sec: 0, usec: 0, kind: EV_SYN, code: 0, value: 0 });
+    let bytes = buf.len() * size_of::<InputEvent>();
+    let n = unsafe { libc::write(fd.as_raw_fd(), buf.as_ptr().cast(), bytes) };
+    if n != bytes as isize {
+        bail!("uinput write: {}", std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 impl Pad {
-    pub fn create() -> Result<Pad> {
-        let path = c"/dev/uinput";
-        let raw = unsafe { libc::open(path.as_ptr(), libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC) };
-        if raw < 0 {
-            bail!("can't open /dev/uinput ({}): the user needs to be in the input group", std::io::Error::last_os_error());
-        }
-        let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    pub fn create(kind: Kind) -> Result<Pad> {
+        let fd = open_uinput()?;
         ioctl_int(&fd, UI_SET_EVBIT, EV_KEY as i32)?;
-        for k in KEYS {
+        for &k in kind.keys() {
             ioctl_int(&fd, UI_SET_KEYBIT, k as i32)?;
+        }
+        if kind == Kind::DualSense {
+            ioctl_int(&fd, UI_SET_KEYBIT, BTN_TL2 as i32)?;
+            ioctl_int(&fd, UI_SET_KEYBIT, BTN_TR2 as i32)?;
         }
         ioctl_int(&fd, UI_SET_EVBIT, EV_ABS as i32)?;
         ioctl_int(&fd, UI_SET_EVBIT, EV_FF as i32)?;
         ioctl_int(&fd, UI_SET_FFBIT, FF_RUMBLE as i32)?;
-        let axes: [(u16, i32, i32, i32, i32); 8] = [
-            (ABS_X, -32768, 32767, 16, 128),
-            (ABS_Y, -32768, 32767, 16, 128),
-            (ABS_RX, -32768, 32767, 16, 128),
-            (ABS_RY, -32768, 32767, 16, 128),
-            (ABS_Z, 0, 255, 0, 0),
-            (ABS_RZ, 0, 255, 0, 0),
-            (ABS_HAT0X, -1, 1, 0, 0),
-            (ABS_HAT0Y, -1, 1, 0, 0),
+        let (lo, hi, mid, fuzz, flat) = match kind {
+            Kind::Xbox => (-32768, 32767, 0, 16, 128),
+            Kind::DualSense => (0, 255, 128, 0, 0),
+        };
+        let axes: [(u16, i32, i32, i32, i32, i32); 8] = [
+            (ABS_X, lo, hi, mid, fuzz, flat),
+            (ABS_Y, lo, hi, mid, fuzz, flat),
+            (ABS_RX, lo, hi, mid, fuzz, flat),
+            (ABS_RY, lo, hi, mid, fuzz, flat),
+            (ABS_Z, 0, 255, 0, 0, 0),
+            (ABS_RZ, 0, 255, 0, 0, 0),
+            (ABS_HAT0X, -1, 1, 0, 0, 0),
+            (ABS_HAT0Y, -1, 1, 0, 0, 0),
         ];
-        for (code, minimum, maximum, fuzz, flat) in axes {
+        for (code, minimum, maximum, value, fuzz, flat) in axes {
             ioctl_int(&fd, UI_SET_ABSBIT, code as i32)?;
-            let mut a = AbsSetup { code, _pad: 0, value: 0, minimum, maximum, fuzz, flat, resolution: 0 };
+            let mut a = AbsSetup { code, _pad: 0, value, minimum, maximum, fuzz, flat, resolution: 0 };
             ioctl_ptr(&fd, UI_ABS_SETUP, &mut a)?;
         }
-        let mut setup = UinputSetup {
+        match kind {
             // A wired 360 pad: what Steam, SDL and Proton all know.
-            id: InputId { bustype: 0x03, vendor: 0x045e, product: 0x028e, version: 0x0110 },
-            name: [0; 80],
-            ff_effects_max: 16,
-        };
-        let name = b"Vyoma Controller (Xbox 360)";
-        setup.name[..name.len()].copy_from_slice(name);
-        ioctl_ptr(&fd, UI_DEV_SETUP, &mut setup)?;
-        ioctl_int(&fd, UI_DEV_CREATE, 0)?;
+            Kind::Xbox => finish_setup(&fd, InputId { bustype: 0x03, vendor: 0x045e, product: 0x028e, version: 0x0110 }, b"Vyoma Controller (Xbox 360)", 16)?,
+            // A USB DualSense under hid-playstation (version 0x8111: SDL's mapping for exactly that).
+            Kind::DualSense => finish_setup(&fd, InputId { bustype: 0x03, vendor: 0x054c, product: 0x0ce6, version: 0x8111 }, b"Vyoma Controller (DualSense)", 16)?,
+        }
         // SAFETY: the AsyncFd owns the fd, so it's deregistered before the fd closes.
         let fd = unsafe { AsyncFd::register(fd) }.context("watch uinput")?;
-        Ok(Pad { fd, last: State::default(), effects: HashMap::new() })
+        // Resting sticks at their middle (0..255 pads would otherwise start pushed hard up-left).
+        let pad = Pad { fd, kind, last: State { kind, ..Default::default() }, effects: HashMap::new() };
+        if kind == Kind::DualSense {
+            write_events(pad.fd.get_ref(), &[(EV_ABS, ABS_X, 128), (EV_ABS, ABS_Y, 128), (EV_ABS, ABS_RX, 128), (EV_ABS, ABS_RY, 128)])?;
+        }
+        Ok(pad)
     }
 
-    fn write(&self, events: &[(u16, u16, i32)]) -> Result<()> {
-        let mut buf: Vec<InputEvent> = events.iter().map(|&(kind, code, value)| InputEvent { sec: 0, usec: 0, kind, code, value }).collect();
-        buf.push(InputEvent { sec: 0, usec: 0, kind: EV_SYN, code: 0, value: 0 });
-        let bytes = buf.len() * size_of::<InputEvent>();
-        let n = unsafe { libc::write(self.fd.get_ref().as_raw_fd(), buf.as_ptr().cast(), bytes) };
-        if n != bytes as isize {
-            bail!("uinput write: {}", std::io::Error::last_os_error());
-        }
-        Ok(())
+    pub fn kind(&self) -> Kind {
+        self.kind
     }
 
     /// Sends what changed since the last state, as one report.
     pub fn apply(&mut self, s: State) -> Result<()> {
         let old = self.last;
+        let k = self.kind;
         let mut ev = Vec::new();
-        for (i, &key) in KEYS.iter().enumerate() {
+        for (i, &key) in k.keys().iter().enumerate() {
             let (was, now) = (old.pressed(i as u32), s.pressed(i as u32));
             if was != now {
                 ev.push((EV_KEY, key, now as i32));
@@ -276,8 +404,16 @@ impl Pad {
         }
         let (hx, hy) = s.hat();
         let (ox, oy) = old.hat();
+        if k == Kind::DualSense {
+            for (key, was, now) in [(BTN_TL2, old.lt > 0, s.lt > 0), (BTN_TR2, old.rt > 0, s.rt > 0)] {
+                if was != now {
+                    ev.push((EV_KEY, key, now as i32));
+                }
+            }
+        }
         for (code, was, now) in [
-            (ABS_X, old.lx, s.lx), (ABS_Y, old.ly, s.ly), (ABS_RX, old.rx, s.rx), (ABS_RY, old.ry, s.ry),
+            (ABS_X, k.stick(old.lx), k.stick(s.lx)), (ABS_Y, k.stick(old.ly), k.stick(s.ly)),
+            (ABS_RX, k.stick(old.rx), k.stick(s.rx)), (ABS_RY, k.stick(old.ry), k.stick(s.ry)),
             (ABS_Z, old.lt, s.lt), (ABS_RZ, old.rt, s.rt), (ABS_HAT0X, ox, hx), (ABS_HAT0Y, oy, hy),
         ] {
             if was != now {
@@ -285,7 +421,7 @@ impl Pad {
             }
         }
         if !ev.is_empty() {
-            self.write(&ev)?;
+            write_events(self.fd.get_ref(), &ev)?;
         }
         self.last = s;
         Ok(())
@@ -342,8 +478,100 @@ impl Pad {
 impl Drop for Pad {
     fn drop(&mut self) {
         // Let go of everything first, so nothing stays held in a game.
-        let _ = self.apply(State::default());
+        let _ = self.apply(State { kind: self.kind, ..Default::default() });
         unsafe { libc::ioctl(self.fd.get_ref().as_raw_fd(), UI_DEV_DESTROY) };
+    }
+}
+
+/// The gyro's virtual mouse (aiming in PC games, which take a mouse over a stick).
+struct Mouse {
+    fd: OwnedFd,
+}
+
+impl Mouse {
+    fn create() -> Result<Mouse> {
+        let fd = open_uinput()?;
+        ioctl_int(&fd, UI_SET_EVBIT, EV_REL as i32)?;
+        ioctl_int(&fd, UI_SET_RELBIT, REL_X as i32)?;
+        ioctl_int(&fd, UI_SET_RELBIT, REL_Y as i32)?;
+        // Buttons make libinput take it for a mouse; they're never pressed.
+        ioctl_int(&fd, UI_SET_EVBIT, EV_KEY as i32)?;
+        ioctl_int(&fd, UI_SET_KEYBIT, BTN_LEFT as i32)?;
+        ioctl_int(&fd, UI_SET_KEYBIT, BTN_RIGHT as i32)?;
+        finish_setup(&fd, InputId { bustype: 0x06, vendor: 0, product: 0, version: 1 }, b"Vyoma Controller (gyro mouse)", 0)?;
+        Ok(Mouse { fd })
+    }
+
+    fn moved(&self, dx: i32, dy: i32) -> Result<()> {
+        let mut ev = Vec::with_capacity(2);
+        if dx != 0 {
+            ev.push((EV_REL, REL_X, dx));
+        }
+        if dy != 0 {
+            ev.push((EV_REL, REL_Y, dy));
+        }
+        if ev.is_empty() { Ok(()) } else { write_events(&self.fd, &ev) }
+    }
+}
+
+impl Drop for Mouse {
+    fn drop(&mut self) {
+        unsafe { libc::ioctl(self.fd.as_raw_fd(), UI_DEV_DESTROY) };
+    }
+}
+
+/// The UDP side channel: where states come in, and the key they're signed with.
+struct Fast {
+    socket: UdpSocket,
+    key: hmac::Key,
+}
+
+impl Fast {
+    /// A port in the range the KDE Connect firewall rule opens (UDP 1714..1764), above kdeconnectd's own.
+    async fn open() -> Result<(Fast, u16, String)> {
+        let mut last = None;
+        for port in 1750..=1764u16 {
+            match UdpSocket::bind(("0.0.0.0", port)).await {
+                Ok(socket) => {
+                    let mut raw = [0u8; 32];
+                    SystemRandom::new().fill(&mut raw).map_err(|_| anyhow::anyhow!("no randomness"))?;
+                    let key = hmac::Key::new(hmac::HMAC_SHA256, &raw);
+                    return Ok((Fast { socket, key }, port, base64::engine::general_purpose::STANDARD.encode(raw)));
+                }
+                Err(e) => last = Some(e),
+            }
+        }
+        Err(last.map(anyhow::Error::from).unwrap_or_else(|| anyhow::anyhow!("no port")))
+    }
+
+    async fn next(&self) -> State {
+        let mut buf = [0u8; 64];
+        loop {
+            if let Ok(n) = self.socket.recv(&mut buf).await
+                && let Some(s) = State::from_datagram(&buf[..n], &self.key)
+            {
+                return s;
+            }
+        }
+    }
+}
+
+/// Keeps states in order: a newer stream replaces the old, an older count within one is dropped.
+#[derive(Default)]
+struct Order {
+    last: Option<(u32, u32)>,
+}
+
+impl Order {
+    fn fresh(&mut self, s: &State) -> bool {
+        let Some((sid, seq)) = s.order else { return true };
+        match self.last {
+            Some((ls, lq)) if ls == sid && (seq.wrapping_sub(lq) as i32) <= 0 => false,
+            _ => {
+                self.last = Some((sid, seq));
+                true
+            }
+        }
     }
 }
 
@@ -355,33 +583,27 @@ pub enum Input {
 /// Runs the pad for one phone while it sends states; returns when it closes or goes quiet.
 pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String) {
     let mut pad: Option<Pad> = None;
+    let mut mouse: Option<Mouse> = None;
+    let mut fast: Option<Fast> = None;
+    let mut order = Order::default();
+    // The gyro mouse's totals last seen (a fresh stream starts its own from anywhere).
+    let mut moved: Option<(u32, i32, i32)> = None;
     loop {
-        let next = async {
+        let rumble = async {
             match pad.as_mut() {
                 Some(p) => p.rumble().await,
                 None => std::future::pending().await,
             }
         };
-        tokio::select! {
+        let datagram = async {
+            match fast.as_ref() {
+                Some(f) => f.next().await,
+                None => std::future::pending().await,
+            }
+        };
+        let state = tokio::select! {
             got = tokio::time::timeout(IDLE, input.recv()) => match got {
-                Ok(Some(Input::State(s))) => {
-                    if pad.is_none() {
-                        match Pad::create() {
-                            Ok(p) => {
-                                info!("{name}: controller connected");
-                                pad = Some(p);
-                            }
-                            Err(e) => {
-                                warn!("{name}: no virtual controller: {e:#}");
-                                let _ = sender.send(&packet("vyoma.gamepad.rumble", json!({ "error": format!("{e:#}") }))).await;
-                                return;
-                            }
-                        }
-                    }
-                    if let Some(p) = pad.as_mut() && let Err(e) = p.apply(s) {
-                        warn!("{name}: controller input failed: {e:#}");
-                    }
-                }
+                Ok(Some(Input::State(s))) => s,
                 Ok(Some(Input::Close)) | Ok(None) | Err(_) => {
                     if pad.take().is_some() {
                         info!("{name}: controller disconnected");
@@ -389,15 +611,68 @@ pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String)
                     return;
                 }
             },
-            r = next => match r {
-                Ok((strong, weak, ms)) => {
-                    let _ = sender.send(&packet("vyoma.gamepad.rumble", json!({ "strong": strong, "weak": weak, "ms": ms }))).await;
+            s = datagram => s,
+            r = rumble => {
+                match r {
+                    Ok((strong, weak, ms)) => {
+                        let _ = sender.send(&packet("vyoma.gamepad.rumble", json!({ "strong": strong, "weak": weak, "ms": ms }))).await;
+                    }
+                    Err(e) => {
+                        warn!("{name}: controller feedback failed: {e:#}");
+                        return;
+                    }
+                }
+                continue;
+            }
+        };
+        if !order.fresh(&state) {
+            continue;
+        }
+        // A different pad asked for: the old one goes (letting go of everything) and the new one comes.
+        if pad.as_ref().is_some_and(|p| p.kind() != state.kind) {
+            pad = None;
+        }
+        if pad.is_none() {
+            match Pad::create(state.kind) {
+                Ok(p) => {
+                    info!("{name}: controller connected ({:?})", state.kind);
+                    pad = Some(p);
                 }
                 Err(e) => {
-                    warn!("{name}: controller feedback failed: {e:#}");
+                    warn!("{name}: no virtual controller: {e:#}");
+                    let _ = sender.send(&packet("vyoma.gamepad.rumble", json!({ "error": format!("{e:#}") }))).await;
                     return;
                 }
-            },
+            }
+            if fast.is_none() {
+                match Fast::open().await {
+                    Ok((f, port, key)) => {
+                        fast = Some(f);
+                        let _ = sender.send(&packet("vyoma.gamepad.udp", json!({ "port": port, "key": key }))).await;
+                    }
+                    Err(e) => warn!("{name}: controller stays on the link (no UDP port: {e:#})"),
+                }
+            }
+        }
+        if let Some(p) = pad.as_mut() && let Err(e) = p.apply(state) {
+            warn!("{name}: controller input failed: {e:#}");
+        }
+        let sid = state.order.map_or(0, |o| o.0);
+        let (dx, dy) = match moved {
+            Some((s, x, y)) if s == sid => (state.mx.wrapping_sub(x), state.my.wrapping_sub(y)),
+            _ => (0, 0),
+        };
+        moved = Some((sid, state.mx, state.my));
+        if dx != 0 || dy != 0 {
+            if mouse.is_none() {
+                match Mouse::create() {
+                    Ok(m) => mouse = Some(m),
+                    Err(e) => warn!("{name}: no gyro mouse: {e:#}"),
+                }
+            }
+            if let Some(m) = &mouse && let Err(e) = m.moved(dx, dy) {
+                warn!("{name}: gyro mouse failed: {e:#}");
+            }
         }
     }
 }
@@ -405,6 +680,48 @@ pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_signed_datagrams_only() {
+        let key = hmac::Key::new(hmac::HMAC_SHA256, &[7u8; 32]);
+        let mut d = Vec::new();
+        d.extend_from_slice(b"VYG1");
+        d.extend_from_slice(&5u32.to_be_bytes());
+        d.extend_from_slice(&9u32.to_be_bytes());
+        d.extend_from_slice(&3u32.to_be_bytes());
+        for v in [-32768i16, 100, 0, 32767] {
+            d.extend_from_slice(&v.to_be_bytes());
+        }
+        d.extend_from_slice(&[200, 0]);
+        d.extend_from_slice(&(-4i32).to_be_bytes());
+        d.extend_from_slice(&7i32.to_be_bytes());
+        d.push(1);
+        let tag = hmac::sign(&key, &d);
+        d.extend_from_slice(&tag.as_ref()[..TAG_LEN]);
+        let s = State::from_datagram(&d, &key).unwrap();
+        assert_eq!((s.order, s.buttons, s.lx, s.ry, s.lt, s.mx, s.my, s.kind), (Some((5, 9)), 3, -32768, 32767, 200, -4, 7, Kind::DualSense));
+        d[20] ^= 1;
+        assert!(State::from_datagram(&d, &key).is_none());
+    }
+
+    #[test]
+    fn drops_stale_states() {
+        let mut o = Order::default();
+        let at = |sid, seq| State { order: Some((sid, seq)), ..Default::default() };
+        assert!(o.fresh(&at(1, 5)));
+        assert!(!o.fresh(&at(1, 4)));
+        assert!(!o.fresh(&at(1, 5)));
+        assert!(o.fresh(&at(1, 6)));
+        assert!(o.fresh(&at(2, 1)));
+        assert!(o.fresh(&State::default()));
+    }
+
+    #[test]
+    fn dualsense_sticks_rest_in_the_middle() {
+        assert_eq!(Kind::DualSense.stick(0), 128);
+        assert_eq!(Kind::DualSense.stick(-32768), 0);
+        assert_eq!(Kind::DualSense.stick(32767), 255);
+    }
 
     #[test]
     fn parses_and_clamps() {
@@ -421,7 +738,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn passes_rumble_back() {
-        let mut p = Pad::create().unwrap();
+        let mut p = Pad::create(Kind::Xbox).unwrap();
         // This pad's own event node (another test may have a pad of the same name up): UI_GET_SYSNAME.
         let mut sys = [0u8; 64];
         assert!(unsafe { libc::ioctl(p.fd.get_ref().as_raw_fd(), 0x8040_552c as libc::c_ulong, sys.as_mut_ptr()) } >= 0);
@@ -465,8 +782,13 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn creates_a_pad() {
-        let mut p = Pad::create().unwrap();
-        p.apply(State { buttons: 1, lx: 1000, ..Default::default() }).unwrap();
+        let kind = Kind::parse(&std::env::var("PAD_KIND").unwrap_or_default());
+        let mut p = Pad::create(kind).unwrap();
+        // A (cross), left stick full right; a second later (SDL takes a trigger's first value as its
+        // rest, so it has to move to count) the right trigger half in.
+        p.apply(State { kind, buttons: 1, lx: 32767, ..Default::default() }).unwrap();
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        p.apply(State { kind, buttons: 1, lx: 32767, rt: 128, ..Default::default() }).unwrap();
         tokio::time::sleep(Duration::from_millis(std::env::var("PAD_HOLD_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(200))).await;
         drop(p);
     }
