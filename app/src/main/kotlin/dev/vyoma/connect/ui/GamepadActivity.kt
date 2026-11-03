@@ -118,7 +118,16 @@ import dev.vyoma.connect.protocol.plugin.builtin.GamepadState
 import dev.vyoma.connect.protocol.plugin.builtin.PadKind
 import dev.vyoma.connect.protocol.plugin.builtin.Rumble
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -131,8 +140,8 @@ import kotlin.math.roundToInt
  * and the PC lets go of every button.
  */
 class GamepadActivity : ComponentActivity() {
-    private var plugin: CompanionPlugin? = null
-    private var pcName: String? = null
+    /** The connected companion's plugin and its PC's name; a new link (the companion restarting) brings a new one. */
+    private val companion = MutableStateFlow<Pair<CompanionPlugin, String?>?>(null)
     /** What the fingers hold; [state] adds the gyro and the profile's pad. */
     private var touch = GamepadState()
     private val state = MutableStateFlow(GamepadState())
@@ -154,12 +163,21 @@ class GamepadActivity : ComponentActivity() {
         }
         // The PC asked for, else whichever PC has its companion connected.
         val wanted = intent.getStringExtra(EXTRA_PC)
-        val devices = application.container.hub.value?.devices?.value?.values.orEmpty()
-        val companion = devices.firstOrNull { d ->
-            d.state.value.isReachable && d.identity.companionOf != null && (wanted == null || d.identity.companionOf == wanted)
+        lifecycleScope.launch {
+            @OptIn(ExperimentalCoroutinesApi::class)
+            application.container.hub.filterNotNull().flatMapLatest { hub ->
+                hub.devices.flatMapLatest { all ->
+                    val each = all.values.map { d ->
+                        d.state.map { st ->
+                            val pc = d.identity.companionOf
+                            if (!st.isReachable || pc == null || (wanted != null && pc != wanted)) return@map null
+                            d.plugin<CompanionPlugin>(CompanionPlugin.ID)?.let { it to all[pc]?.identity?.deviceName }
+                        }
+                    }
+                    if (each.isEmpty()) flowOf(null) else combine(each) { found -> found.firstOrNull { it != null } }
+                }
+            }.distinctUntilChanged { a, b -> a?.first === b?.first && a?.second == b?.second }.collect { companion.value = it }
         }
-        plugin = companion?.plugin(CompanionPlugin.ID)
-        pcName = companion?.identity?.companionOf?.let { pc -> devices.firstOrNull { it.identity.deviceId == pc }?.identity?.deviceName }
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 // The gyro runs only while the profile uses it and the controller is on screen.
@@ -174,14 +192,22 @@ class GamepadActivity : ComponentActivity() {
                     }
                 }
                 launch { profiles.all.collect { applyProfile() } }
-                val p = plugin ?: return@repeatOnLifecycle
-                launch { p.rumble.collect(::rumble) }
-                p.streamGamepad(state)
+                // Streams to whichever companion link is up, moving over when it's replaced.
+                companion.collectLatest { c ->
+                    val p = c?.first ?: return@collectLatest
+                    coroutineScope {
+                        launch { p.rumble.collect(::rumble) }
+                        p.streamGamepad(state)
+                    }
+                }
             }
         }
         setContent {
             val theme by application.container.settings.theme.collectAsStateWithLifecycle(ThemeSettings())
             VyomaTheme(theme.copy(darkMode = DarkMode.DARK)) {
+                val linked by companion.collectAsStateWithLifecycle()
+                val plugin = linked?.first
+                val pcName = linked?.second
                 val error = plugin?.gamepadError?.collectAsStateWithLifecycle()?.value
                 val fast = plugin?.gamepadFast?.collectAsStateWithLifecycle()?.value == true
                 val all by profiles.all.collectAsStateWithLifecycle()

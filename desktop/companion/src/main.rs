@@ -162,7 +162,7 @@ async fn watch_tether(shared: Arc<Shared>) {
     let next_try: Arc<Mutex<HashMap<IpAddr, Instant>>> = Arc::default();
     loop {
         tokio::time::sleep(TETHER_POLL).await;
-        for ip in tether::phones() {
+        for (ip, via) in tether::phones() {
             if next_try.lock().unwrap().get(&ip).is_some_and(|t| Instant::now() < *t) {
                 continue;
             }
@@ -181,12 +181,17 @@ async fn watch_tether(shared: Arc<Shared>) {
                         if !shared.connected.lock().unwrap().insert(id.clone()) {
                             return;
                         }
-                        info!("{id}: found over USB tethering at {ip}");
+                        match via {
+                            tether::Via::Usb => info!("{id}: found over USB tethering at {ip}"),
+                            tether::Via::Hotspot => info!("{id}: found as this PC's hotspot at {ip}"),
+                        }
                         shared.seen.lock().unwrap().insert(id.clone(), addr);
                         next_try.lock().unwrap().remove(&ip);
                         let _ = run(&shared, &id, addr, &free[&id], link).await.inspect_err(|e| warn!("{id}: {e:#}"));
                         shared.connected.lock().unwrap().remove(&id);
                     }
+                    // A router (most Wi-Fi gateways) refuses: not worth a line every 30 s.
+                    Err(e) if via == tether::Via::Hotspot => tracing::debug!("gateway {ip}: {e:#}"),
                     Err(e) => info!("tethered {ip}: {e:#}"),
                 }
             });
