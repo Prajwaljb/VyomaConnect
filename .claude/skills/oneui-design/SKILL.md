@@ -458,7 +458,11 @@ until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played ou
   frosted like the bar, and a clear drop lit only by a thin rim line. Don't change it unless asked.
 - Lens shadow physics (lifted drops only): the drop hovers h = 0.13 x sqrt(area) x lift above its surface. Its shadow
   falls away from `SpecularLight` (follows tilt) and down by h, blur 2 dp + 1.4h, fainter as it spreads
-  (alpha / (1 + h / 0.25 sqrt(area))), drawn outside the drop only. The caustic (focus light) lands on the surface inside the
+  (alpha / (1 + h / 0.25 sqrt(area))). It shows THROUGH the drop too (iOS's lifted slider knob darkens towards its
+  bottom, ~215 on a 243 page): the same shadow is drawn inside the drop record, refracted with it, its middle
+  cleared (DstOut ellipse leaning up) where the glass focuses the light, so it reads as a ring deepest at the bottom.
+  In light mode a lifted knob without a backdrop skips its `underlay`: light cards are 32% white over the canvas, so
+  the opaque card tone made a solid white knob that hid it. Dark keeps the underlay (the drop's body needs it). The caustic (focus light) lands on the surface inside the
   drop, offset the same way, and is refracted with it: an ellipse with the lens's proportions (0.34 x its size), h from
   the lens's area (from its short side, the patch jumped as the drop stretched while dragged). Out of focus while rising
   (1.8x wider, focus = lift^2), it tightens to a bright core in a soft halo. Dark: a ColorDodge core (a blue track glows
