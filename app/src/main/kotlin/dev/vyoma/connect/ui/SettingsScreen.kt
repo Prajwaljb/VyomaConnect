@@ -1,7 +1,6 @@
 package dev.vyoma.connect.ui
 
 import androidx.compose.material.icons.rounded.Park
-import androidx.compose.material.icons.rounded.Contrast
 import dev.vyoma.connect.designsystem.LocalStatus
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.text.BasicText
@@ -189,17 +188,6 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                     haptic = if (canvasGlow) Haptic.ToggleOff else Haptic.ToggleOn,
                     onClick = { vm.setCanvasGlow(!canvasGlow) },
                     trailing = { VyomaSwitch(checked = canvasGlow, onCheckedChange = { vm.setCanvasGlow(it) }, contentDescription = "Background glow") },
-                )
-                val tinted by vm.tintedGlass.collectAsStateWithLifecycle()
-                ListRow(
-                    title = "Clear glass",
-                    subtitle = "See-through bars instead of Apple's tinted glass",
-                    icon = Icons.Rounded.Contrast,
-                    iconTint = SystemColor.GRAY.color,
-                    showDivider = true,
-                    haptic = if (!tinted) Haptic.ToggleOff else Haptic.ToggleOn,
-                    onClick = { vm.setTintedGlass(!tinted) },
-                    trailing = { VyomaSwitch(checked = !tinted, onCheckedChange = { vm.setTintedGlass(!it) }, contentDescription = "Clear glass") },
                 )
                 val glass by vm.liteGlass.collectAsStateWithLifecycle()
                 ListRow(

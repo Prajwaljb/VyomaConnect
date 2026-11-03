@@ -105,12 +105,12 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Real blur only for chrome: record content with `backdropSource(backdrop)` (put it OUTSIDE `aurora()` in the
   modifier chain so the canvas is recorded too), then `glassChrome(backdrop, shape)` (AGSL liquid lens on 33+:
   `LiquidGlass`/`liquidLens`: physically based, like Telegram's/Apple's: Snell refraction (n≈1.5) through a
-  quarter-circle rim (1/10 of the element, ≤ bevel; Apple's bars measure ~8%) over a slab 12 rims deep, so the rim shows what's ACROSS the element and
+  quarter-circle rim (≤ 1/5 of the element) over a slab 6 rims deep, so the rim shows what's ACROSS the element and
   beyond it (the recorded margin), bent like water. Rejected: plain outward bend, weak inward/convex bend).
   The user wants THIS Snell refraction (the Telegram-studied one): chrome rim shows what's across the element.
-  2026-11-03 the user made Apple's images (LiquidGlassEx/) the spec over their own taste: rim proportions, tint, shadow,
-  gloss and blur follow MEASURED reference values (below). Bars and buttons keep the plain tilt. Only big panes (rim at
-  the bevel cap, shorter half > ~5.5 rims: dialogs, menus) ease the rim's tilt in from the flat face (a polished edge): the abrupt start
+  2026-11-03 the user made Apple's images (LiquidGlassEx/) the spec: shadow, gloss, blur and vibrancy follow them (below).
+  Bars, buttons, knobs keep the plain rim. Only big panes (shorter
+  half > 3 rims: dialogs, menus) ease the rim's tilt in from the flat face (a polished edge): the abrupt start
   creased a thin dark line ~14 dp inside a popup's rim. Rejected: smear + blend, easing everywhere, a full oval rod.
   A "wrap" variant that sampled outside the edge was tried and rejected ("you removed the refraction"). Knob,
   switch, segmented and tab drops use `Lift` (outward Snell, negative depth). Under a drop only the drop shows
@@ -425,18 +425,20 @@ OFF keeps it in place, resting (badge + text at 50%, switch untouched, badge bou
 for a rule from a suggestion) gives the suggestion back. Anything the editor sends back (`vm.ruleArrival`) waits
 until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played out of sight.
 
-## Apple Liquid Glass, measured (LiquidGlassEx/ references, 2026-11-03)
-- Tint (default, "Clear glass" setting turns it off): light = #D4D5D9 at 44% (iOS 26 Music: white page 247 reads 232 under
-  the bar, yellow keeps its hue, softened); dark = #7C7C82 at 38% (bars over black read ~#2F2F31; Apple's ~#3F3F3F).
-  Glass is a hair GREYER than a white page in light mode, never whiter.
-- Shadow: every floating glass (bars, buttons, menus, dialogs, knobs) casts a soft shadow ONLY outside its shape
-  (`SoftShadow`/`chromeShadow`): light ~6% dark at the edge, gone ~10–12 dp out, a little heavier below; dark 50% black
-  (only shows over lighter content). Raised controls get a small one in light mode only. Knob shadow stays while held.
-- Rim: a crisp 1–2 px near-white highlight facing the light and opposite, a 1 px dark hairline on the shaded sides,
-  and a thin inner light (~2 dp, `bandWidth` ≤ 2 dp), not a wide glow. Refraction band ~8–10% of a bar's height.
+## Apple Liquid Glass, from the references (LiquidGlassEx/, 2026-11-03)
+- NEVER grey glass. A grey tint (solved from one Music shot) was built and rejected ("did smtg weird"). Real Apple glass
+  passes the background's colour through and DEEPENS it: under macOS/iOS Control Center tiles a flower's saturation goes
+  0.25 -> ~0.47, a blue 0.82 -> 0.93. Shader `vibrance` 1.7 on chrome. Tints stay the original clear ones.
+- Gloss: the bevel glows (`gloss` 0.3 light / 0.22 dark): what's under the rim lifts towards white, most where the edge
+  faces the light and opposite, so the rim reads as a brighter, still coloured band (iOS tiles over blue: bright cyan rim).
+- Blur: LOW on bars and buttons, content stays legible and the rim mirrors it (Safari's search pill shows the building's
+  lines sharp; iOS Music shows the art and mirrored text): bars/buttons 1.5 dp, header bubble 2.5 dp, at HALF resolution
+  (`CHROME_RES` 0.5; a quarter turned content to mush). Menus 13 dp, dialogs 18 dp stay heavy, as Apple's menus.
+- Shadow: every floating glass casts a soft shadow ONLY outside its shape (`SoftShadow`/`chromeShadow`): light ~6% at
+  the edge, gone ~10–12 dp out, a little heavier below; dark 50% black. Small one on raised controls in light mode.
+  Knob shadow stays (wider) while held.
+- Refraction: real UI bends a wide band (Control Center tiles, Music bars): keep the original 1/5 rim. The 8% band of
+  the WWDC demo capsule was tried and rejected.
 - Selected tab: neutral capsule (light 12% black, dark 14% white); colour only in the icon and label.
-- Switch: iOS 26 proportions, 60x28 dp track, capsule knob 1.55:1 (not round). Slider: 6 dp track, 24 dp capsule knob.
-- Blur: bars/buttons light (6 dp: content recognisable under them), menus 13 dp, dialogs 18 dp (Apple's menus and CC
-  tiles turn content into soft blobs).
-- Accent: kept. Apple uses colour in glyphs and labels of selected/active things and for filled primary actions only;
-  glass itself is neutral.
+- Switch: iOS 26 proportions, 60x28 dp track, capsule knob 1.55:1. Slider: 6 dp track, 24 dp capsule knob.
+- Accent: kept; Apple's glass itself is neutral, colour lives in active glyphs/labels and filled primary actions.
