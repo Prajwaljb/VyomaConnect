@@ -470,12 +470,9 @@ until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played ou
   bottom, ~215 on a 243 page): the same shadow is drawn inside the drop record, refracted with it, its middle
   cleared (DstOut ellipse leaning up) where the glass focuses the light, so it reads as a ring deepest at the bottom.
   In light mode a lifted knob without a backdrop skips its `underlay`: light cards are 32% white over the canvas, so
-  the opaque card tone made a solid white knob that hid it. Dark keeps the underlay (the drop's body needs it). The caustic (focus light) lands on the surface inside the
-  drop, offset the same way, and is refracted with it: an ellipse with the lens's proportions (0.34 x its size), h from
-  the lens's area (from its short side, the patch jumped as the drop stretched while dragged). Out of focus while rising
-  (1.8x wider, focus = lift^2), it tightens to a bright core in a soft halo. Dark: a ColorDodge core (a blue track glows
-  bluer, black stays black) + 5% white bloom. Light: only a 28% white bloom, half size; a dodge burns light surfaces
-  to white.
+  the opaque card tone made a solid white knob that hid it. Dark keeps the underlay (the drop's body needs it). No caustic (focus light): a bright patch inside the
+  lifted drop read as a grey smudge on the glass, in every lens (user, 2026-11-04, removed). Apple's lifted knob has
+  none: clear lens, lit rim, shadow round the bottom. Don't add one back.
 - Rim light by true normals: card rims (`RimLight`) and bands (`InnerGlow`) light each bit of edge by its outline
   normal through the corner's own curve. Facing by position from the centre lit a wide card's whole corner as a blob.
 - Liquid engine (`LiquidEngine.kt`): a drop never re-renders glass; it records what is under it and bends that.
