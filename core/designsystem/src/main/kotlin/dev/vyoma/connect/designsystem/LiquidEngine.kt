@@ -318,10 +318,12 @@ class LensStyle(val rim: Float, val depth: Float, val disperse: Float, val milk:
          *  stays readable. */
         val Drop = LensStyle(rim = 0.18f, depth = 2.6f, disperse = 0.03f)
         /** Lifted drops that outgrow what they sit on (the tab bar's drop, slider, switch and
-         *  segmented knobs): Apple's drop optics (the shader's `drop` branch, chosen by the negative
-         *  depth): bright flipped ring, dark band of what's outside, caustic line, a body a little
-         *  lighter than what it sits on (iOS Music's drop: 155 over a 120 bar). */
-        val Lift = LensStyle(rim = 0.14f, depth = -1.1f, disperse = 0.015f, milk = 0.05f to 0.04f)
+         *  segmented knobs). The rim looks outward (negative depth): the edge gathers in what's
+         *  around, the way a drop of water on glass rims itself with its surroundings. Looking
+         *  inward, the rim replayed the track or bar as mirrored stripes. Crystal clear: any milk
+         *  read as a dirty white haze as it grew. (Apple's ringed drop optics were tried and
+         *  rejected: a thick double border with a rainbow edge.) */
+        val Lift = LensStyle(rim = 0.22f, depth = -1.1f, disperse = 0.03f, milk = 0f to 0.02f)
     }
 }
 
@@ -340,20 +342,8 @@ fun Modifier.liquidLens(
     style: LensStyle = LensStyle.Drop,
     /** 0 = clear water, 1 = frosted white (a slider knob at rest that clears as it's grabbed). */
     frost: () -> Float = { 0f },
-    /**
-     * The glass this drop lifts out of (a tab bar drawn by an outer [glassChrome]), as its tint. The
-     * drop sees it as a plain capsule of this element's bounds under the content: never the glass
-     * itself, whose rim and light, shrunk inside the drop, read as a second border.
-     */
-    over: Color = Color.Transparent,
-    /**
-     * The blur of the glass this drop lifts out of, as it shows the [backdrop] (what the bar shows, in
-     * px of the page). The drop sees the page through it, so it reads as the bar's material lifted, not
-     * a crisp hole cut in it. The element's own drawing (the tabs) stays sharp.
-     */
-    blur: Dp = 0.dp,
     rect: DrawScope.() -> Rect,
-): Modifier = if (!liquidGlassSupported) this else this then LiquidLensElement(backdrop, strength, zoom, underlay, style, frost, over, blur, rect)
+): Modifier = if (!liquidGlassSupported) this else this then LiquidLensElement(backdrop, strength, zoom, underlay, style, frost, rect)
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private data class LiquidLensElement(
@@ -363,11 +353,9 @@ private data class LiquidLensElement(
     val underlay: Color,
     val style: LensStyle,
     val frost: () -> Float,
-    val over: Color,
-    val blur: Dp,
     val rect: DrawScope.() -> Rect,
 ) : ModifierNodeElement<LiquidLensNode>() {
-    override fun create() = LiquidLensNode(backdrop, strength, zoom, underlay, style, frost, over, blur, rect)
+    override fun create() = LiquidLensNode(backdrop, strength, zoom, underlay, style, frost, rect)
     override fun update(node: LiquidLensNode) {
         node.backdrop = backdrop
         node.strength = strength
@@ -375,8 +363,6 @@ private data class LiquidLensElement(
         node.underlay = underlay
         node.style = style
         node.frost = frost
-        node.over = over
-        node.blur = blur
         node.rect = rect
         node.invalidateDraw()
     }
@@ -390,8 +376,6 @@ private class LiquidLensNode(
     var underlay: Color,
     var style: LensStyle,
     var frost: () -> Float,
-    var over: Color,
-    var blur: Dp,
     var rect: DrawScope.() -> Rect,
 ) : Modifier.Node(), DrawModifierNode, GlobalPositionAwareModifierNode, CompositionLocalConsumerModifierNode {
     private var position = Offset.Zero
@@ -412,74 +396,13 @@ private class LiquidLensNode(
         val dark = currentValueOf(LocalContentColor).luminance() > 0.5f
         val p = painter ?: LensPainter(requireGraphicsContext()).also { painter = it }
         val shift = backdrop?.let { it.origin - position }
-        with(p) { paint(a, r, zoom(), style, underlay, dark, backdrop, shift ?: Offset.Zero, frost().coerceIn(0f, 1f), over, blur.toPx()) }
+        with(p) { paint(a, r, zoom(), style, underlay, dark, backdrop, shift ?: Offset.Zero, frost().coerceIn(0f, 1f)) }
     }
 
     override fun onDetach() {
         painter?.release()
         painter = null
     }
-}
-
-/**
- * A lens's light, drawn over its optics at full resolution: a crisp 1–2 px edge brightest where it
- * faces [SpecularLight] and opposite (light mode adds a dark hairline on the shaded side, as Apple's),
- * a Fresnel sheen on the steep edge, and for drop optics the caustic line where the flipped ring meets
- * the dark band (iOS Music's drop: 190 between a 25 band and a 155 body). One shared shader; a draw
- * copies its uniforms, and all of this runs on the UI thread.
- */
-internal object LensLight {
-    private val shader by lazy(LazyThreadSafetyMode.NONE) { @SuppressLint("NewApi") RuntimeShader(AGSL) }
-
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-    fun DrawScope.draw(r: Rect, rim: Float, dark: Boolean, alpha: Float, caustic: Boolean) {
-        if (alpha < 0.01f || r.width < 1f) return
-        val a = Math.toRadians(SpecularLight.angle.toDouble())
-        shader.setFloatUniform("origin", r.left, r.top)
-        shader.setFloatUniform("size", r.width, r.height)
-        shader.setFloatUniform("radius", r.minDimension / 2)
-        shader.setFloatUniform("rim", rim.coerceAtLeast(1f))
-        shader.setFloatUniform("light", cos(a).toFloat(), sin(a).toFloat())
-        shader.setFloatUniform("dark", if (dark) 1f else 0f)
-        shader.setFloatUniform("alpha", alpha)
-        shader.setFloatUniform("caustic", if (caustic) 1f else 0f)
-        drawRect(ShaderBrush(shader), r.topLeft, r.size)
-    }
-
-    private const val AGSL = """
-uniform float2 origin;
-uniform float2 size;
-uniform float radius;
-uniform float rim;
-uniform float2 light;
-uniform float dark;
-uniform float alpha;
-uniform float caustic;
-
-half4 main(float2 xy) {
-    float2 c = size * 0.5;
-    float2 p = xy - origin - c;
-    float2 q = abs(p) - c + radius;
-    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
-    float cov = clamp(0.5 - d, 0.0, 1.0);
-    if (cov <= 0.0) return half4(0.0);
-    float t = clamp(1.0 + d / rim, 0.0, 1.0);
-    float2 nn = normalize(p / max(c, float2(1.0)) + 1e-4);
-    float f = dot(nn, light);
-    float face = pow(max(f, 0.0), 1.6) + 0.8 * pow(max(-f, 0.0), 1.6);
-    float line = 1.0 - smoothstep(0.0, 1.6, -d);
-    float nz = sqrt(max(1.0 - t * t, 0.0));
-    float fres = pow(1.0 - nz, 4.0);
-    float u = (t - 0.6) / 0.035;
-    float cau = caustic * exp(-u * u) * step(0.001, t);
-    float k = dark > 0.5 ? 0.75 : 1.0;
-    float a = clamp(k * (line * (0.3 + 0.7 * face) + fres * 0.16 * (0.4 + 0.6 * face) + cau * 0.3 * (0.5 + 0.5 * face)), 0.0, 1.0);
-    float b = (1.0 - dark) * line * (1.0 - face) * 0.16;
-    half3 rgb = half3(a) + half3(0.10, 0.17, 0.30) * half(b * (1.0 - a));
-    float o = a + b * (1.0 - a);
-    return half4(rgb * half(cov * alpha), half(o * cov * alpha));
-}
-"""
 }
 
 /**
@@ -490,11 +413,9 @@ half4 main(float2 xy) {
 internal class LensPainter(private val graphics: GraphicsContext) {
     private val self = graphics.createGraphicsLayer()
     private val drop = graphics.createGraphicsLayer()
-    private val under = graphics.createGraphicsLayer()
     private val glass = LiquidGlass()
-    private var underBlur = -1f
 
-    fun ContentDrawScope.paint(a: Float, r: Rect, zoom: Float, style: LensStyle, underlay: Color, dark: Boolean, backdrop: Backdrop?, shift: Offset, frost: Float = 0f, over: Color = Color.Transparent, blur: Float = 0f) {
+    fun ContentDrawScope.paint(a: Float, r: Rect, zoom: Float, style: LensStyle, underlay: Color, dark: Boolean, backdrop: Backdrop?, shift: Offset, frost: Float = 0f) {
         self.record { this@paint.drawContent() }
         // Under the drop only the drop shows: drawing the original there too doubled anything
         // seen through a translucent surface (a pill's label showed twice, magnified and not).
@@ -516,41 +437,36 @@ internal class LensPainter(private val graphics: GraphicsContext) {
             tint = Color.White.copy(alpha = androidx.compose.ui.util.lerp(if (dark) style.milk.first else style.milk.second, 0.97f, (frost * 32).roundToInt() / 32f)),
             spec = if (dark) 0.55f else 0.9f,
             shade = if (dark) 0f else 0.12f, blur = 0f,
-            drop = if (style.depth < 0f) 1f else 0f,
-            // Seeing the page as a bar does, it deepens colour as the bar does (see glassChrome).
-            vibrance = if (backdrop != null && over.alpha > 0f) 1.7f else 1f,
         )
         drop.alpha = a
-        val box = IntSize(r.width.roundToInt() + 2 * m, r.height.roundToInt() + 2 * m)
-        if (backdrop != null) {
-            // Only the drop's own box of the page, blurred as the bar shows it (rebuilt on change only).
-            if (blur != underBlur) {
-                under.renderEffect = if (blur > 0.5f) BlurEffect(blur, blur, TileMode.Clamp) else null
-                underBlur = blur
-            }
-            under.record(box) { translate(m - r.left + shift.x, m - r.top + shift.y) { drawLayer(backdrop.layer) } }
-        }
-        drop.record(box) {
+        drop.record(IntSize(r.width.roundToInt() + 2 * m, r.height.roundToInt() + 2 * m)) {
             if (underlay.alpha > 0f) drawRect(underlay)
-            if (backdrop != null) drawLayer(under)
             translate(m - r.left, m - r.top) {
-                if (over.alpha > 0f) drawRoundRect(over, cornerRadius = CornerRadius(this@paint.size.height / 2), size = this@paint.size)
+                if (backdrop != null) translate(shift.x, shift.y) { drawLayer(backdrop.layer) }
                 drawLayer(self)
             }
         }
         translate(r.left - m, r.top - m) { drawLayer(drop) }
-        // The drop's light, at full resolution from the same outline: crisp edge, Fresnel sheen
-        // on the steep edge, the caustic line inside it (drop optics only).
-        with(LensLight) { draw(r, rim, dark, a, caustic = false) }
+        // The edge catches the light like the bars' glass does: a drop over a plain track has
+        // nothing around it to refract, and without this its rim vanished.
+        val half = 0.5.dp.toPx()
+        val edge = r.deflate(half)
+        drawRoundRect(
+            specularRim(
+                Color.White.copy(alpha = if (dark) 0.6f else 1f),
+                if (dark) Color.White.copy(alpha = 0.1f) else Color(0xFF1A2B4C).copy(alpha = 0.14f),
+                edge.center,
+                size = edge.size,
+            ),
+            edge.topLeft, edge.size, CornerRadius(edge.height / 2), alpha = a, style = Stroke(1.dp.toPx()),
+        )
     }
 
     fun release() {
         graphics.releaseGraphicsLayer(self)
         graphics.releaseGraphicsLayer(drop)
-        graphics.releaseGraphicsLayer(under)
     }
 }
-
 
 /**
  * The liquid glass pass (AGSL). The shape is a rounded rect given by its size and corner radius,
@@ -646,23 +562,6 @@ half4 main(float2 p) {
     if (t <= 0.0) {
         // The flat middle (most pixels): straight through, one sample.
         col = content.eval(at);
-    } else if (drop > 0.5) {
-        // A lifted drop, as iOS 26's tab drop (Apple Music): clear all through, its body minifying
-        // what's behind (zoom), its rim bending further and further outwards towards the edge, so
-        // content compresses into the rim and, where the drop outgrows the bar, the dark beyond the
-        // bar shows as a band at the top and bottom. No flipped ring, no caustic line.
-        // A round edge: flat almost to the rim, then steepening (a circle's sag), so the body stays a
-        // calm, slightly smaller copy of the bar and only the last few px bend. Apple's body is also
-        // brighter than the bar it lifts from (Music: 110 -> 155 over a bar, black stays ~24).
-        float s = bevel * 1.5 * (1.0 - sqrt(max(1.0 - t * t, 0.0)));
-        float2 shift = n * s;
-        at = clamp(at + shift, lo, hi);
-        col = content.eval(at);
-        if (disperse > 0.0) {
-            float2 k = n * (s * disperse);
-            col.r = content.eval(clamp(at + k, lo, hi)).r;
-            col.b = content.eval(clamp(at - k, lo, hi)).b;
-        }
     } else {
         // A big pane (a dialog, a menu) has a polished edge: its slope eases in from the flat face.
         // Starting at an angle, the bent image met the straight one in a crease, a thin dark line
@@ -682,7 +581,6 @@ half4 main(float2 p) {
             col.b = content.eval(clamp(at - k, lo, hi)).b;
         }
     }
-    if (drop > 0.5 && shade <= 0.0) col.rgb = min(col.rgb * 1.2 + half3(0.03) * col.a, half3(col.a));
     // Vibrancy: Apple's glass deepens the colour of what's behind it (under macOS/iOS Control Center
     // tiles a flower's saturation goes 0.25 -> ~0.47, a blue sky 0.82 -> 0.93), never greys it.
     half lum = dot(col.rgb, half3(0.2126, 0.7152, 0.0722));
@@ -701,9 +599,7 @@ half4 main(float2 p) {
     float f = dot(normalize(rel / max(c, float2(1.0)) + 1e-4), light);
     // As the band: full facing the light, 0.8 on the far side, gathered towards both.
     float facing = pow(max(f, 0.0), 1.6) + 0.8 * pow(max(-f, 0.0), 1.6);
-    // Panes and bars glow across the bevel; a drop's light is only its thin rim (drawn by LensLight):
-    // a sheen over its bevel drew a second ring inside the edge, a ball rather than a lens.
-    float light = drop > 0.5 ? 0.0 : rim * (0.25 + 0.75 * facing) + t * t * t * 0.12;
+    float light = rim * (0.25 + 0.75 * facing) + t * t * t * 0.12;
     col.rgb += half3(light * spec) * col.a;
     // On light backgrounds a highlight alone vanishes: a faint shaded underside gives the edge.
     col.rgb -= half3(rim * shade * (0.4 + 0.6 * max(n.y, 0.0))) * col.a;
