@@ -3,20 +3,39 @@
 //! tethering interface everywhere). Its address there is this PC's gateway on that link, or
 //! failing that the one neighbour on it, both read from /proc; main.rs dials it like a phone
 //! found over mDNS, and only if its certificate is one kdeconnectd trusts.
+//!
+//! A phone's Wi-Fi hotspot is the same story over the air (the PC on the phone's hotspot during a
+//! power cut, its home Wi-Fi gone): the phone is the gateway of the PC's wireless link. Any Wi-Fi
+//! gateway is tried, since a hotspot can't be told from a router; a router just refuses.
 
 use std::net::{IpAddr, Ipv4Addr};
 
 /// Drivers of the USB network a phone's tethering shows up as.
 const DRIVERS: [&str; 3] = ["rndis_host", "cdc_ncm", "cdc_ether"];
 
-/// Addresses of phones tethered over USB right now.
-pub fn phones() -> Vec<IpAddr> {
+/// Where a phone might be: over USB tethering, or as the gateway of the PC's Wi-Fi (a hotspot, maybe).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Via {
+    Usb,
+    Hotspot,
+}
+
+/// Addresses of phones tethered over USB right now, and Wi-Fi gateways that may be phone hotspots.
+pub fn phones() -> Vec<(IpAddr, Via)> {
     let Ok(entries) = std::fs::read_dir("/sys/class/net") else { return Vec::new() };
     let routes = std::fs::read_to_string("/proc/net/route").unwrap_or_default();
     let arp = std::fs::read_to_string("/proc/net/arp").unwrap_or_default();
     let mut out = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
+        if entry.path().join("wireless").exists() {
+            if std::fs::read_to_string(entry.path().join("operstate")).is_ok_and(|s| s.trim() == "up")
+                && let Some(ip) = gateway(&routes, &name)
+            {
+                out.push((IpAddr::V4(ip), Via::Hotspot));
+            }
+            continue;
+        }
         let driver = std::fs::read_link(entry.path().join("device/driver")).ok();
         let Some(driver) = driver.as_ref().and_then(|d| d.file_name()).map(|d| d.to_string_lossy().into_owned()) else { continue };
         if !DRIVERS.contains(&driver.as_str()) {
@@ -26,7 +45,7 @@ pub fn phones() -> Vec<IpAddr> {
             continue;
         }
         if let Some(ip) = gateway(&routes, &name).or_else(|| neighbour(&arp, &name)) {
-            out.push(IpAddr::V4(ip));
+            out.push((IpAddr::V4(ip), Via::Usb));
         }
     }
     out

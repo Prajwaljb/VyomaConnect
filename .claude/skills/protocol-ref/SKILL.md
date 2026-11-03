@@ -149,7 +149,11 @@ body fields before implementing one.
   network, not the USB tunnel: `Device.datagramTo`, routed like payloads past a VPN) then sends each state as a
   51-byte datagram, big-endian: "VYG1", sid, seq, b (u32), lx ly rx ry (i16), lt rt (u8), mx my (i32), kind (u8:
   0 xbox, 1 dualsense), HMAC-SHA256 of those 35 bytes cut to 16. It repeats the latest every 100 ms (a lost one
-  heals fast) and still sends the link state once a second.
+  heals fast) and still sends the link state once a second. The companion logs "controller input arriving over
+  UDP" on the first good datagram. GamepadActivity follows the current companion link (a relink restarts the stream).
+- Finding the phone without mDNS (tether.rs, polled every 5 s while a trusted phone is unlinked): USB tethering
+  (rndis/cdc gateway or neighbour) and any Wi-Fi gateway, i.e. the PC on the phone's hotspot (verified 2026-11-03,
+  during a power cut); both dialled with `connect_trusted` (only kdeconnectd-trusted certs), gateway refusals at debug.
 - `vyoma.wallpaper.request` → `vyoma.wallpaper {cols, rows, colors:[[r,g,b], ...]}` (row-major, top-left first) or
   `{error}`. The companion reads Plasma's wallpaper (`Image=` under `[Wallpaper][org.kde.image][General]` in
   `plasma-org.kde.plasma.desktop-appletsrc`; a package resolves to its largest image; unset = Next) and has ffmpeg

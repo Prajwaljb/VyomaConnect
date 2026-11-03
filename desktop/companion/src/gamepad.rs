@@ -588,6 +588,7 @@ pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String)
     let mut order = Order::default();
     // The gyro mouse's totals last seen (a fresh stream starts its own from anywhere).
     let mut moved: Option<(u32, i32, i32)> = None;
+    let mut over_udp = false;
     loop {
         let rumble = async {
             match pad.as_mut() {
@@ -611,7 +612,13 @@ pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String)
                     return;
                 }
             },
-            s = datagram => s,
+            s = datagram => {
+                if !over_udp {
+                    over_udp = true;
+                    info!("{name}: controller input arriving over UDP");
+                }
+                s
+            }
             r = rumble => {
                 match r {
                     Ok((strong, weak, ms)) => {
