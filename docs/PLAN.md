@@ -126,7 +126,9 @@ desktop/companion/     Rust daemon (Phase 2)
 - **USB mode:** the companion runs `adb reverse`, and also automates the clipboard grant.
 
 ### Phase 3: Real-time features
-- **Gamepad:** uinput virtual **Xbox** (045e:028e-style) and **DualSense-style** pads
+- **Gamepad (first part done 2026-11-03):** virtual Xbox 360 pad over the normal link (works over USB), floating
+  sticks, ABXY/D-pad slides, rumble on the phone. Still to do: gyro aim, DualSense, analog triggers, layout editor
+  and per-game profiles, UDP for lossy Wi-Fi. Plan as first written: uinput virtual **Xbox** (045e:028e-style) and **DualSense-style** pads
   (Steam Input recognises both). Gyro → right stick or mouse with deadzone and smoothing,
   haptics on press, PC rumble → phone vibrator (VibratorManager compositions), and a
   drag-and-drop layout editor with per-game profiles. Inspired by Steam Input, Backbone and Moonlight.

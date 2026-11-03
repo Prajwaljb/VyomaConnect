@@ -22,10 +22,12 @@ import androidx.compose.ui.semantics.semantics
 fun Modifier.liquidPress(
     enabled: Boolean = true,
     haptic: Haptic? = Haptic.Tap,
+    /** As [pressable]'s: 1f for glass that flexes by itself (interactive chrome) instead of dipping. */
+    pressedScale: Float = PressAuto,
     onLongClickLabel: String? = null,
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
-): Modifier = if (onLongClick == null) pressable(enabled = enabled, haptic = haptic, onClick = onClick) else composed {
+): Modifier = if (onLongClick == null) pressable(enabled = enabled, pressedScale = pressedScale, haptic = haptic, onClick = onClick) else composed {
     val haptics = LocalHapticFeedback.current
     val click by rememberUpdatedState(onClick)
     val long by rememberUpdatedState(onLongClick)
@@ -35,7 +37,7 @@ fun Modifier.liquidPress(
             onClick { click(); true }
             onLongClick(onLongClickLabel) { long?.invoke(); true }
         }
-        .pressScale(enabled = enabled)
+        .pressScale(pressedScale, enabled)
         .pointerInput(enabled) {
             if (!enabled) return@pointerInput
             detectTapGestures(

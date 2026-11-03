@@ -33,6 +33,7 @@ internal class DemoCompanion(credentials: LocalCredentials, private val pc: Demo
     private var temp = 54.0
     private var leaseUntil = 0L
     private var streaming: Job? = null
+    private var trigger = false
 
     /** Files the phone uploaded this session, per folder, shown on the next listing. */
     private val uploaded = mutableMapOf<String, MutableList<Entry>>()
@@ -57,6 +58,13 @@ internal class DemoCompanion(credentials: LocalCredentials, private val pc: Demo
             CompanionPlugin.FILES_GET -> get(packet.string("path").orEmpty(), session)
             CompanionPlugin.FILES_PUT -> session.launch(Dispatchers.IO) { put(packet) }
             CompanionPlugin.PC_REQUEST -> sendControls()
+            // A pretend game: pulling a trigger fires, and the pad kicks back (rumble).
+            CompanionPlugin.GAMEPAD_STATE -> {
+                val firing = (packet.int("rt") ?: 0) > 0 || (packet.int("lt") ?: 0) > 0
+                if (firing && !trigger) send(packet(CompanionPlugin.GAMEPAD_RUMBLE) { put("strong", 42000); put("weak", 20000); put("ms", 140) })
+                trigger = firing
+            }
+            CompanionPlugin.GAMEPAD_CLOSE -> trigger = false
             // A dusk wallpaper: deep blue sky over a warm horizon.
             CompanionPlugin.WALLPAPER_REQUEST -> send(packet(CompanionPlugin.WALLPAPER) {
                 put("cols", 4)
@@ -252,10 +260,11 @@ internal class DemoCompanion(credentials: LocalCredentials, private val pc: Demo
             incomingCapabilities = setOf(
                 CompanionPlugin.STATS_REQUEST, CompanionPlugin.SCREENSHOT_REQUEST, CompanionPlugin.CAMERA_REQUEST, CompanionPlugin.HANDOFF_REQUEST,
                 CompanionPlugin.FILES_LIST, CompanionPlugin.FILES_GET, CompanionPlugin.FILES_PUT, CompanionPlugin.WALLPAPER_REQUEST,
+                CompanionPlugin.GAMEPAD_STATE, CompanionPlugin.GAMEPAD_CLOSE,
             ),
             outgoingCapabilities = setOf(
                 CompanionPlugin.STATS, CompanionPlugin.SCREENSHOT, CompanionPlugin.CAMERA, CompanionPlugin.HANDOFF,
-                CompanionPlugin.FILES_LISTING, CompanionPlugin.FILES_FILE, CompanionPlugin.FILES_SAVED, CompanionPlugin.WALLPAPER,
+                CompanionPlugin.FILES_LISTING, CompanionPlugin.FILES_FILE, CompanionPlugin.FILES_SAVED, CompanionPlugin.WALLPAPER, CompanionPlugin.GAMEPAD_RUMBLE,
             ),
             companionOf = pcId,
         )
