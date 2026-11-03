@@ -284,10 +284,9 @@ internal object SoftShadow {
  */
 internal fun DrawScope.chromeShadow(rect: Rect, corner: Float, dark: Boolean) {
     val blur = (rect.minDimension * 0.22f).coerceIn(8.dp.toPx(), 22.dp.toPx())
-    // Apple's light-mode buttons (Voice Memos) cast theirs clearly downwards.
     val color = if (dark) Color.Black.copy(alpha = 0.5f) else Color(0xFF0B1220).copy(alpha = 0.16f)
-    // Away from the light: it slides sideways as the phone tilts, as the rims' light swings.
-    val fall = SpecularLight.cast(blur * if (dark) 0.25f else 0.45f)
+    // An even halo, leaning a little down; it slides as the phone tilts, as the rims' light swings.
+    val fall = SpecularLight.cast(blur * 0.08f, blur * 0.35f)
     with(SoftShadow) { draw(rect, corner, color, blur, drop = fall.y, dx = fall.x) }
 }
 
@@ -512,15 +511,14 @@ internal class LensPainter(private val graphics: GraphicsContext) {
         // slider knob darkens towards its bottom), but not as a solid patch: the glass bends the light
         // it lets through into the caustic, so seen through it the shadow is a ring around that,
         // deepest at the bottom where it falls (see the record below).
-        val la = Math.toRadians(SpecularLight.angle.toDouble())
-        val lx = cos(la).toFloat()
-        val ly = sin(la).toFloat()
         val lifted = style.depth < 0f
         // From the lens's area, which stays steady while it stretches and squashes as it's dragged
         // (its short side swings, and the shadow and caustic jumped with it).
         val body = kotlin.math.sqrt(r.width * r.height)
         val h = body * 0.13f * a
-        val fall = Offset(-lx * h * 0.6f, -ly * h * 0.3f + h * 0.5f)
+        // Lit from the front as all the glass is (iOS's lifted knob: its shadow nearly even round it,
+        // a touch deeper below), sliding away from the light as it sways.
+        val fall = SpecularLight.cast(h * 0.25f, h * 0.6f)
         val shadowBlur = 2.dp.toPx() + h * 1.4f
         val shadow = (a / (1f + h / (body * 0.25f))).let { k -> if (dark) Color.Black.copy(alpha = 0.5f * k) else Color(0xFF0B1220).copy(alpha = 0.2f * k) }
         if (lifted && h > 0.5f) with(SoftShadow) { draw(r, r.minDimension / 2, shadow, shadowBlur, drop = fall.y, dx = fall.x) }

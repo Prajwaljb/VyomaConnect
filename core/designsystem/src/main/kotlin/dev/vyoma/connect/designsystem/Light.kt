@@ -40,13 +40,18 @@ object SpecularLight {
     val content: Float get() = REST + (angle - REST) * 0.4f
 
     /**
-     * Where a shadow [by] px long falls: straight away from the light, so straight down at rest and
-     * sliding sideways as the phone tilts (up to 45 deg, where it's as far across as down). Pass
-     * [content] for things on the page, so their shadows sway as little as their light.
+     * Where a shadow falls. Apple's glass is lit from the front: a floating button's shadow is an even
+     * halo (iOS Music's search button: the same depth to the side as below), leaning only [drop] down.
+     * Tilting swings the light, and the shadow slides the other way, up to [sway] (the offset turns
+     * with the light, so at the 45 deg limit it's 0.71 sway across and 0.29 up). Pass [content] as
+     * [light] for things on the page, so their shadows sway as little as their light.
      */
-    fun cast(by: Float, light: Float = angle): androidx.compose.ui.geometry.Offset {
+    fun cast(drop: Float, sway: Float, light: Float = angle): androidx.compose.ui.geometry.Offset {
         val a = Math.toRadians(light.toDouble())
-        return androidx.compose.ui.geometry.Offset(-kotlin.math.cos(a).toFloat() * by, -kotlin.math.sin(a).toFloat() * by)
+        return androidx.compose.ui.geometry.Offset(
+            -kotlin.math.cos(a).toFloat() * sway,
+            drop + (-kotlin.math.sin(a).toFloat() - 1f) * sway,
+        )
     }
 
     internal fun publish(a: Float) {
