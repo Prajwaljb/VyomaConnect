@@ -22,7 +22,8 @@ import kotlin.math.sqrt
  * tightened (scaled down towards zero below [TIGHT_RAD_S]) rather than cut at a hard edge, which kept
  * creep just past the edge and made fine aim jump.
  *
- * Runs on the main thread's looper; [onMove] follows every reading while [active].
+ * Readings come on a thread of their own ([onMove] runs there, after every reading while [active]):
+ * on the main looper they queued behind each frame the controller drew, and the aim stuttered.
  */
 class GyroAim(context: Context, private val rotation: () -> Int, private val onMove: () -> Unit) : SensorEventListener {
     private val sensors = context.getSystemService(SensorManager::class.java)
@@ -59,19 +60,26 @@ class GyroAim(context: Context, private val rotation: () -> Int, private val onM
     private var steadyCount = 0
     private var steadySince = 0L
 
+    private var thread: android.os.HandlerThread? = null
+
     fun start() {
         if (running || gyro == null) return
         running = true
         lastNs = 0L
-        // 200 Hz: as fast as apps may ask without the high-rate permission.
-        sensors.registerListener(this, gyro, 5_000)
-        gravity?.let { sensors.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+        val t = android.os.HandlerThread("gyro", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY).also { it.start() }
+        thread = t
+        val handler = android.os.Handler(t.looper)
+        // 200 Hz: as fast as apps may ask without the high-rate permission; no batching.
+        sensors.registerListener(this, gyro, 5_000, 0, handler)
+        gravity?.let { sensors.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME, 0, handler) }
     }
 
     fun stop() {
         if (!running) return
         running = false
         sensors.unregisterListener(this)
+        thread?.quitSafely()
+        thread = null
         stickX = 0f; stickY = 0f
     }
 
