@@ -262,17 +262,18 @@ internal object SoftShadow {
     private val filters = HashMap<Int, android.graphics.BlurMaskFilter>()
     private val hole = Path()
 
-    fun DrawScope.draw(rect: Rect, corner: Float, color: Color, blur: Float, drop: Float, dx: Float = 0f) {
+    /** [outside]: only where the shape isn't (opaque or frosted panes); false draws all of it. */
+    fun DrawScope.draw(rect: Rect, corner: Float, color: Color, blur: Float, drop: Float, dx: Float = 0f, outside: Boolean = true) {
         if (color.alpha <= 0f || blur < 1f || rect.width < 1f || rect.height < 1f) return
         val key = blur.roundToInt()
         paint.maskFilter = filters.getOrPut(key) { android.graphics.BlurMaskFilter(key.toFloat(), android.graphics.BlurMaskFilter.Blur.NORMAL) }
         paint.color = color.toArgb()
         val c = corner.coerceAtMost(rect.minDimension / 2)
+        val cast = { drawIntoCanvas { it.nativeCanvas.drawRoundRect(rect.left + dx, rect.top + drop, rect.right + dx, rect.bottom + drop, c, c, paint) } }
+        if (!outside) return cast()
         hole.reset()
         hole.addRoundRect(RoundRect(rect, CornerRadius(c)))
-        clipPath(hole, ClipOp.Difference) {
-            drawIntoCanvas { it.nativeCanvas.drawRoundRect(rect.left + dx, rect.top + drop, rect.right + dx, rect.bottom + drop, c, c, paint) }
-        }
+        clipPath(hole, ClipOp.Difference) { cast() }
     }
 }
 
@@ -504,8 +505,10 @@ internal class LensPainter(private val graphics: GraphicsContext) {
         // Shadow physics, for drops lifted off what they sit on: the drop hovers `h` above it, higher
         // as it lifts. Its shadow falls away from the light (SpecularLight, so it follows the phone's
         // tilt) and a little down, by that height; its penumbra widens with the height, and the same
-        // light spread over the wider area makes it fainter. Only outside the drop: under clear glass
-        // a shadow would grey it.
+        // light spread over the wider area makes it fainter. It shows through the drop too (iOS's lifted
+        // slider knob darkens towards its bottom), but not as a solid patch: the glass bends the light
+        // it lets through into the caustic, so seen through it the shadow is a ring around that,
+        // deepest at the bottom where it falls (see the record below).
         val la = Math.toRadians(SpecularLight.angle.toDouble())
         val lx = cos(la).toFloat()
         val ly = sin(la).toFloat()
@@ -515,12 +518,9 @@ internal class LensPainter(private val graphics: GraphicsContext) {
         val body = kotlin.math.sqrt(r.width * r.height)
         val h = body * 0.13f * a
         val fall = Offset(-lx * h * 0.6f, -ly * h * 0.3f + h * 0.5f)
-        if (lifted && h > 0.5f) {
-            val blur = 2.dp.toPx() + h * 1.4f
-            val k = a / (1f + h / (body * 0.25f))
-            val color = if (dark) Color.Black.copy(alpha = 0.5f * k) else Color(0xFF0B1220).copy(alpha = 0.2f * k)
-            with(SoftShadow) { draw(r, r.minDimension / 2, color, blur, drop = fall.y, dx = fall.x) }
-        }
+        val shadowBlur = 2.dp.toPx() + h * 1.4f
+        val shadow = (a / (1f + h / (body * 0.25f))).let { k -> if (dark) Color.Black.copy(alpha = 0.5f * k) else Color(0xFF0B1220).copy(alpha = 0.2f * k) }
+        if (lifted && h > 0.5f) with(SoftShadow) { draw(r, r.minDimension / 2, shadow, shadowBlur, drop = fall.y, dx = fall.x) }
         val rim = r.minDimension * style.rim
         // Room for the rim to look past the far edge.
         val m = (r.minDimension * style.rim * (2f + abs(style.depth).coerceAtMost(4f) * 0.5f)).roundToInt() + 1
@@ -533,10 +533,28 @@ internal class LensPainter(private val graphics: GraphicsContext) {
         )
         drop.alpha = a
         drop.record(IntSize(r.width.roundToInt() + 2 * m, r.height.roundToInt() + 2 * m)) {
-            if (underlay.alpha > 0f) drawRect(underlay)
+            // In light mode a lifted knob shows the real surface through it: light cards are 32% white
+            // over the canvas, so the opaque card tone under it read as a solid white knob and hid its
+            // shadow. Where the element draws nothing, the card behind shows. Dark cards are close to
+            // their tone, and without it the drop lost its glassy body.
+            if (underlay.alpha > 0f && (dark || !lifted || backdrop != null)) drawRect(underlay)
             translate(m - r.left, m - r.top) {
                 if (backdrop != null) translate(shift.x, shift.y) { drawLayer(backdrop.layer) }
                 drawLayer(self)
+                // The shadow under the drop, seen through it: the same shadow as outside (so it runs on
+                // across the edge, bent by the rim), its middle cleared where the drop focuses the light.
+                if (lifted && h > 0.5f) {
+                    // The cleared part leans up: light comes in through the top of the drop (iOS's lifted
+                    // knob is bright up there), so the shadow shows mostly round the bottom.
+                    val c = r.center + Offset(fall.x, -fall.y * 0.4f)
+                    val clear = Brush.radialGradient(0f to Color.Black, 0.45f to Color.Black, 1f to Color.Transparent, center = c, radius = r.height * 0.5f)
+                    drawContext.canvas.saveLayer(r.inflate(m.toFloat()), Paint())
+                    with(SoftShadow) { draw(r, r.minDimension / 2, shadow, shadowBlur, drop = fall.y, dx = fall.x, outside = false) }
+                    withTransform({ scale(r.width / r.height * 0.82f, 0.95f, c) }) {
+                        drawCircle(clear, r.height * 0.5f, c, blendMode = BlendMode.DstOut)
+                    }
+                    drawContext.canvas.restore()
+                }
                 // The caustic: the drop focuses the light it lets through into a soft bright patch on
                 // the surface, inside the shadow's footprint (seen through the drop, so it's refracted too).
                 // It's the lens's own image, so it has the lens's shape (long while it's stretched) and moves
