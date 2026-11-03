@@ -248,7 +248,7 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
         if (d.shadow.alpha > 0f) {
             val path = Path().apply { addOutline(outline) }
             // Away from the page's light (it sways with the tilt, as the edge light does).
-            val fall = SpecularLight.cast(drop * 0.3f, d.shadowBlur * density * 0.35f, SpecularLight.content)
+            val fall = SpecularLight.cast(drop * 1.6f, SpecularLight.content)
             val shadow = path.asAndroidPath().let { android.graphics.Path(it).apply { offset(fall.x, fall.y) } }
             clipPath(path, ClipOp.Difference) { drawIntoCanvas { it.nativeCanvas.drawPath(shadow, shadowPaint) } }
         }
@@ -349,7 +349,7 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
                 // Light mode: a small soft shadow, as Apple's glass buttons on pale surfaces have (on a
                 // dark card one would only muddy the edge, so the rim does the work there).
                 if (!dark) {
-                    val fall = SpecularLight.cast(0.5.dp.toPx(), 2.dp.toPx())
+                    val fall = SpecularLight.cast(2.5.dp.toPx(), SpecularLight.angle)
                     with(SoftShadow) { draw(Rect(Offset.Zero, size), radius, Color(0xFF0B1220).copy(alpha = 0.1f), 6.dp.toPx(), fall.y, fall.x) }
                 }
                 drawOutline(outline, fill)
