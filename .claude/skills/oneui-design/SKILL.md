@@ -509,8 +509,10 @@ presses both) and round the 8-way D-pad. Haptic.Key on each new press; rumble pl
 touchpad header's round button and the tab-bar touchpad button's long-press menu (Touchpad / Keyboard / Game controller).
 Close and a settings gear sit side by side between the shoulders (never movable). The gear opens a glass card over
 a 45% scrim (taps outside close it): Profile chips (one per game, "+ New game", Rename / Delete), The PC sees
-(Xbox controller / DualSense), Triggers (Full at a touch / Analog: slide down), Gyro aim (Off / Always / Holding LT),
-then Gyro moves (Mouse / Right stick), speed slider 0.25–3×, Invert, and Edit layout. While it's open nothing is held.
+(Xbox / DualSense), Triggers (Full at a touch / Analog: slide down), Gyro aim (Off / Always / Holding LT),
+then Gyro moves (Mouse / Right stick), speed slider 0.25–3×, Invert, and Edit layout. Under Edit layout, a tip: a USB cable
+gives the least lag. Status line names the route plainly, "· cable" or "· Wi-Fi (a cable is smoother)": never claim
+Wi-Fi is low latency (user, 2026-11-03: it can't be promised). While it's open nothing is held.
 DualSense profile: outlined ✕ ○ □ △ (blue, red, pink, green), L1/L2/R1/R2, a blue guide. Analog triggers are slots
 54 dp taller than the capsule: depth down the slot = pressure (fill runs down, notches at quarters, at least 10%).
 Layout editor: every movable part dashed-outlined, the chosen one solid accent; drag moves, a second finger pinches

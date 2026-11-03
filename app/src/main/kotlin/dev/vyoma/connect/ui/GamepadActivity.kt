@@ -218,7 +218,12 @@ class GamepadActivity : ComponentActivity() {
                 val status = when {
                     plugin == null -> "Needs Vyoma's companion running on the PC"
                     error != null -> error
-                    else -> "$padName on ${pcName ?: "the PC"}" + (when (route) { GamepadRoute.USB -> " · wired"; GamepadRoute.WIFI -> " · low latency"; null -> "" }) +
+                    else -> "$padName on ${pcName ?: "the PC"}" + (when (route) {
+                        GamepadRoute.USB -> " · cable"
+                        // Wi-Fi can be fine or stutter: say so, and what's smoother.
+                        GamepadRoute.WIFI -> " · Wi-Fi (a cable is smoother)"
+                        null -> ""
+                    }) +
                         (if (all.size > 1) " · ${profile.name}" else "")
                 }
                 GamepadScreen(
@@ -909,6 +914,11 @@ private fun SettingsPanel(
                     )
                 }
                 PillButton("Edit layout", onEditLayout, modifier = Modifier.fillMaxWidth())
+                Text(
+                    "Tip: for the least lag, plug the phone into the PC with a USB cable. Over Wi-Fi the controller can stutter when the network is busy.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 if (!gyroAvailable) Text("This phone has no gyroscope.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
