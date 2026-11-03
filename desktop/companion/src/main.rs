@@ -19,6 +19,7 @@ mod screenshot;
 mod stats;
 mod tether;
 mod usb;
+mod wallpaper;
 mod xfer;
 
 use std::collections::{HashMap, HashSet};
@@ -139,8 +140,8 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end"],
-            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done"],
+            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request"],
+            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
         }),
@@ -279,6 +280,16 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                     t.abort();
                     info!("{name}: screen cast stopped");
                 }
+            }
+            "vyoma.wallpaper.request" => {
+                let sender = link.sender.clone();
+                tokio::spawn(async move {
+                    let reply = match wallpaper::colors().await {
+                        Ok(c) => json!({ "cols": wallpaper::COLS, "rows": wallpaper::ROWS, "colors": c }),
+                        Err(e) => json!({ "error": format!("{e:#}") }),
+                    };
+                    let _ = sender.send(&packet("vyoma.wallpaper", reply)).await;
+                });
             }
             "vyoma.handoff.request" => {
                 let reply = match &shared.media {

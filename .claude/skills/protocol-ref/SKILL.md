@@ -132,4 +132,9 @@ body fields before implementing one.
   decodes with MediaCodec (`KEY_LOW_LATENCY`) into a TextureView and shows only the newest of a burst.
   `vyoma.screen.stop` (or closing the payload) ends it; a new request replaces a running cast.
   `VYOMA_SCREEN_TEST=1` on the companion casts a moving test pattern, no portal (safe to screenshot).
+- `vyoma.wallpaper.request` → `vyoma.wallpaper {cols, rows, colors:[[r,g,b], ...]}` (row-major, top-left first) or
+  `{error}`. The companion reads Plasma's wallpaper (`Image=` under `[Wallpaper][org.kde.image][General]` in
+  `plasma-org.kde.plasma.desktop-appletsrc`; a package resolves to its largest image; unset = Next) and has ffmpeg
+  average it to 4x4. The phone asks on link and on plugin start and caches the last grid ("pc_wallpaper" in the ui
+  prefs) so the background is right before the PC connects.
 

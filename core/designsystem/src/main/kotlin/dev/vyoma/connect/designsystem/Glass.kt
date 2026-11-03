@@ -1,5 +1,9 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.ui.graphics.asAndroidBitmap
+
+import androidx.compose.ui.modifier.modifierLocalProvider
+
 import android.annotation.SuppressLint
 import android.graphics.RuntimeShader
 import android.os.Build
@@ -285,7 +289,12 @@ fun Modifier.glassCard(shape: Shape, fill: Color? = null, lit: Boolean = true): 
             onDrawBehind { with(painter) { paint(outline, edge, half, size.height, size.width) } }
         }
         .clip(shape)
+        // What's pressed inside lights the card, not just itself (see pressScale).
+        .then(InCardProvider)
 }
+
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+private val InCardProvider = Modifier.modifierLocalProvider(InGlassCard) { true }
 
 /**
  * A card's inner light (band and rolled edge, as [glassCard] draws them) laid over its content
@@ -397,10 +406,12 @@ fun Modifier.aurora(): Modifier = composed {
     val accent = MaterialTheme.colorScheme.primary
     if (!AppCanvas.glow) return@composed background(base)
     val strength = if (isDarkUi) 0.16f else 0.20f
+    val wallpaper = AppCanvas.wallpaper.takeIf { AppCanvas.useWallpaper }
+    val dark = isDarkUi
     drawWithCache {
         val w = (size.width / AURORA_SCALE).roundToInt().coerceAtLeast(1)
         val h = (size.height / AURORA_SCALE).roundToInt().coerceAtLeast(1)
-        val bitmap = AuroraCache.get(w, h, base, accent, strength)
+        val bitmap = if (wallpaper != null) AuroraCache.wallpaper(w, h, base, wallpaper, dark) else AuroraCache.get(w, h, base, accent, strength)
         val dst = IntSize(size.width.roundToInt(), size.height.roundToInt())
         onDrawBehind { drawImage(bitmap, dstSize = dst, filterQuality = FilterQuality.Low) }
     }
@@ -419,6 +430,35 @@ private object AuroraCache {
         override fun hashCode() = ((w * 31 + h) * 31 + base.hashCode()) * 31 + accent.hashCode() + strength.hashCode()
     }
     private val entries = LinkedHashMap<Key, ImageBitmap>(8, 0.75f, true)
+    private val walls = LinkedHashMap<List<Any>, ImageBitmap>(4, 0.75f, true)
+
+    /**
+     * The PC's wallpaper as the canvas: its colour grid stretched smoothly over the page (bilinear,
+     * so it's the wallpaper's light, heavily blurred), toned down so text stays legible (dark: a deep
+     * shade, richer colour; light: a pale wash over the canvas grey) and fading into the plain canvas
+     * towards the bottom, where the controls sit, as the accent glow does.
+     */
+    fun wallpaper(w: Int, h: Int, base: Color, wall: CanvasWallpaper, dark: Boolean): ImageBitmap {
+        val key = listOf(w, h, base, wall, dark)
+        walls[key]?.let { return it }
+        val grid = ImageBitmap(wall.cols, wall.rows)
+        val toned = IntArray(wall.colors.size) { i ->
+            val c = Color(0xFF000000.toInt() or wall.colors[i])
+            val rich = c.toned(saturation = 1.25f)
+            (if (dark) lerp(base, rich, 0.42f) else lerp(base, rich, 0.32f)).toArgb()
+        }
+        grid.asAndroidBitmap().setPixels(toned, 0, wall.cols, 0, 0, wall.cols, wall.rows)
+        val small = Size(w.toFloat(), h.toFloat())
+        val bitmap = ImageBitmap(w, h)
+        CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, Canvas(bitmap), small) {
+            drawRect(base)
+            drawImage(grid, srcSize = IntSize(wall.cols, wall.rows), dstSize = IntSize(w, h), filterQuality = FilterQuality.Low)
+            drawRect(Brush.verticalGradient(0.35f to Color.Transparent, 1f to base.copy(alpha = if (dark) 0.85f else 0.7f)))
+        }
+        walls[key] = bitmap
+        if (walls.size > 4) walls.remove(walls.keys.first())
+        return bitmap
+    }
 
     fun get(w: Int, h: Int, base: Color, accent: Color, strength: Float): ImageBitmap {
         val key = Key(w, h, base, accent, strength)
@@ -448,6 +488,16 @@ private object AuroraCache {
 /** The canvas's accent glows ([aurora]); the user can turn them off. Changes apply on recomposition. */
 object AppCanvas {
     var glow by mutableStateOf(true)
+    /** The PC's wallpaper colours (from its companion), the last ones seen; null before any. */
+    var wallpaper by mutableStateOf<CanvasWallpaper?>(null)
+    /** The user's choice: the glow takes [wallpaper]'s colours instead of the accent's. */
+    var useWallpaper by mutableStateOf(true)
+}
+
+/** A desktop wallpaper as a [cols] x [rows] grid of 0xRRGGBB colours, row-major from the top left. */
+class CanvasWallpaper(val cols: Int, val rows: Int, val colors: IntArray) {
+    override fun equals(other: Any?) = other is CanvasWallpaper && other.cols == cols && other.rows == rows && other.colors.contentEquals(colors)
+    override fun hashCode() = (cols * 31 + rows) * 31 + colors.contentHashCode()
 }
 
 /** What chrome blurs: one recorded display list of the content underneath. */

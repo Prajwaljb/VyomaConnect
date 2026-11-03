@@ -1,5 +1,7 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.ui.layout.boundsInRoot
+
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.runtime.withFrameNanos
 import kotlinx.coroutines.Job
@@ -207,7 +209,16 @@ fun CollapsingHeaderScaffold(
     // The title is one piece of text that travels: it rests in the hero, and as the page scrolls it
     // rises and shrinks into the bar, where a bubble of glass forms around it like water.
     // One style everywhere: a device name read smaller on its details page than on Home.
-    val heroStyle = MaterialTheme.typography.displayMedium
+    // A long title (a rule's name) shrinks to fit one line, as iOS large titles do, rather than being
+    // cut short; its copy in the bar then reads in full (it's the hero text scaled down, so a cut made
+    // at hero size showed there too).
+    val baseHero = MaterialTheme.typography.displayMedium
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val titleRoom = with(density) { (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp - 48.dp).roundToPx() }
+    val heroStyle = remember(title, titleRoom, baseHero) {
+        val w = measurer.measure(title, baseHero, maxLines = 1, softWrap = false).size.width
+        if (w <= titleRoom) baseHero else baseHero.copy(fontSize = baseHero.fontSize * (titleRoom * 0.98f / w).coerceAtLeast(0.6f))
+    }
     val shrink = MaterialTheme.typography.titleMedium.fontSize.value / heroStyle.fontSize.value
     val statusTop = WindowInsets.statusBars.getTop(density)
     val anchor = remember { CoordinatesHolder() }
@@ -519,12 +530,19 @@ fun ListRow(
         bounce.animateTo(1f, VyomaMotion.jelly())
     }
     val quiet = Modifier.graphicsLayer { alpha = 1f - 0.5f * rest; compositingStrategy = CompositingStrategy.ModulateAlpha }
+    // Where the row is, so a dialog it opens grows out of it (see MenuController.anchor).
+    val menus = LocalMenu.current
+    val placed = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
     Column(modifier) {
         Row(
             Modifier
                 .fillMaxWidth()
+                .onPlaced { placed[0] = it }
                 .then(if (!enabled) Modifier.graphicsLayer { alpha = 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha } else Modifier)
-                .then(if (onClick != null && enabled) Modifier.pressable(haptic = haptic, onClick = onClick) else Modifier)
+                .then(if (onClick != null && enabled) Modifier.pressable(haptic = haptic, onClick = {
+                    placed[0]?.takeIf { it.isAttached }?.let { menus.anchor(it.boundsInRoot()) }
+                    onClick()
+                }) else Modifier)
                 .padding(horizontal = horizontalPadding, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1138,7 +1156,7 @@ fun GlassDialog(
         }
     }
     if (host.hosted) {
-        val entry = remember { HostedDialog() }
+        val entry = remember { HostedDialog(from = host.takeAnchor()) }
         // The latest content and dismiss, every composition (the dialog's state lives here).
         SideEffect {
             entry.card = body

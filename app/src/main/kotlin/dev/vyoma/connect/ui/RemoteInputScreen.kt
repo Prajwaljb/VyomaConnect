@@ -108,6 +108,12 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.vyoma.connect.designsystem.pressable
+import dev.vyoma.connect.designsystem.LocalStatus
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import dev.vyoma.connect.designsystem.MenuItem
+import dev.vyoma.connect.designsystem.LocalMenu
 import dev.vyoma.connect.designsystem.pressScale
 import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.perform
@@ -129,7 +135,8 @@ import kotlinx.coroutines.launch
  * The phone as a precision touchpad and keyboard.
  *
  * One finger moves (with acceleration), tap clicks, two-finger tap right-clicks, three-finger
- * tap middle-clicks, two fingers scroll, and press-and-hold starts a drag. Motion is batched
+ * tap middle-clicks, two fingers scroll or pinch to zoom, three fingers swipe for the desktop's
+ * overview, desktop and virtual desktops (see [DesktopKind]), and press-and-hold starts a drag. Motion is batched
  * into one packet per ~8 ms so a 120 Hz screen doesn't flood the link.
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -217,23 +224,32 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
         // Light pools under the finger and flows after it (eased toward it each frame), lighting the
         // dots it passes. Drawn only while touched or fading: nothing runs at rest.
         val accent = MaterialTheme.colorScheme.primary
-        var finger by remember { mutableStateOf(Offset.Unspecified) }
+        // One pool of light per finger: each flows after its own finger and fades when it lifts.
+        val fingers = remember { HashMap<Long, Offset>() }
+        val pools = remember { HashMap<Long, LightPool>() }
         var touching by remember { mutableStateOf(false) }
-        var flow by remember { mutableStateOf(Offset.Unspecified) }
-        var glow by remember { mutableFloatStateOf(0f) }
+        var frame by remember { mutableIntStateOf(0) }
         LaunchedEffect(touching) {
             var last = withFrameNanos { it }
-            while (touching || glow > 0.01f) {
+            while (touching || pools.isNotEmpty()) {
                 withFrameNanos { now ->
                     val dt = ((now - last) / 1e9f).coerceIn(0f, 0.05f)
                     last = now
-                    val f = finger
-                    if (f.isSpecified) flow = if (flow.isSpecified) flow + (f - flow) * (1f - exp(-dt * 14f)) else f
-                    glow += ((if (touching) 1f else 0f) - glow) * (1f - exp(-dt * if (touching) 16f else 5f))
+                    for ((id, at) in fingers) pools.getOrPut(id) { LightPool(at) }
+                    val gone = ArrayList<Long>()
+                    for ((id, pool) in pools) {
+                        val f = fingers[id]
+                        if (f != null) pool.at += (f - pool.at) * (1f - exp(-dt * 14f))
+                        pool.glow += ((if (f != null) 1f else 0f) - pool.glow) * (1f - exp(-dt * if (f != null) 16f else 5f))
+                        if (f == null && pool.glow < 0.01f) gone += id
+                    }
+                    gone.forEach { pools.remove(it) }
+                    frame++
                 }
             }
-            glow = 0f
         }
+        val status = LocalStatus.current
+        val kind = remember { mutableStateOf(vm.desktopKind()) }
         Box(
             Modifier
                 .weight(1f)
@@ -246,13 +262,21 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                         try {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             val start = down.uptimeMillis
-                            finger = down.position
-                            if (glow < 0.05f) flow = down.position
+                            fingers.clear()
+                            fingers[down.id.value] = down.position
                             touching = true
                             var maxPointers = 1
                             var travelled = 0f
                             var dragging = false
                             var ended = false
+                            // Two fingers: scroll or pinch, decided by whichever moves first, then kept.
+                            var twoMode = 0 // 0 undecided, 1 scroll, 2 pinch
+                            var spreadBase = -1f
+                            // Three or more: one swipe per gesture, its direction from the fingers' travel.
+                            var swipe = Offset.Zero
+                            var swiped = false
+                            val pinchSlop = 28.dp.toPx()
+                            val swipeReach = 56.dp.toPx()
                             while (!ended) {
                                 val event = withTimeoutOrNull(if (!dragging && travelled < slop && maxPointers == 1) 420L else Long.MAX_VALUE) { awaitPointerEvent() }
                                 if (event == null) {
@@ -265,7 +289,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                                     continue
                                 }
                                 val pressed = event.changes.filter { it.pressed }
-                                pressed.firstOrNull()?.let { finger = it.position }
+                                event.changes.forEach { c -> if (c.pressed) fingers[c.id.value] = c.position else fingers.remove(c.id.value) }
                                 maxPointers = maxOf(maxPointers, pressed.size)
                                 if (pressed.size == 1 && maxPointers == 1 || dragging && pressed.isNotEmpty()) {
                                     val d = pressed.first().positionChange()
@@ -274,22 +298,56 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                                         val a = accelerate(d)
                                         synchronized(motion) { motion[0] += a.x; motion[1] += a.y }
                                     }
-                                } else if (pressed.size >= 2) {
+                                } else if (pressed.size == 2 && maxPointers == 2) {
+                                    val d = pressed.map { it.positionChange() }.reduce { acc, o -> acc + o } / 2f
+                                    travelled += hypot(d.x, d.y)
+                                    val spread = (pressed[0].position - pressed[1].position).getDistance()
+                                    if (spreadBase < 0f) spreadBase = (pressed[0].previousPosition - pressed[1].previousPosition).getDistance()
+                                    if (twoMode == 0) {
+                                        if (abs(spread - spreadBase) > pinchSlop) twoMode = 2 else if (travelled > slop) twoMode = 1
+                                    }
+                                    if (twoMode == 1) synchronized(motion) { motion[2] += d.x * SCROLL_SCALE; motion[3] += d.y * SCROLL_SCALE }
+                                    if (twoMode == 2 && spreadBase > 0f) {
+                                        // A zoom step per quarter more (or less) spread, like a ratchet.
+                                        val ratio = spread / spreadBase
+                                        if (ratio > 1.25f || ratio < 0.8f) {
+                                            val zoomIn = ratio > 1f
+                                            spreadBase = spread
+                                            haptics.perform(Haptic.Detent)
+                                            val k = kind.value
+                                            act { k.zoom(this, zoomIn) }
+                                        }
+                                    }
+                                } else if (pressed.size >= 3) {
                                     val d = pressed.map { it.positionChange() }.reduce { acc, o -> acc + o } / pressed.size.toFloat()
                                     travelled += hypot(d.x, d.y)
-                                    if (travelled > slop) synchronized(motion) { motion[2] += d.x * SCROLL_SCALE; motion[3] += d.y * SCROLL_SCALE }
+                                    swipe += d
+                                    if (!swiped && swipe.getDistance() > swipeReach) {
+                                        swiped = true
+                                        haptics.perform(Haptic.Edge)
+                                        val k = kind.value
+                                        val label = when {
+                                            abs(swipe.y) > abs(swipe.x) && swipe.y < 0f -> { act { k.overview(this) }; k.overviewName() }
+                                            abs(swipe.y) > abs(swipe.x) -> { act { k.desktop(this) }; k.desktopName() }
+                                            // The desktops follow the fingers: swiping left brings the next one in from the right.
+                                            swipe.x < 0f -> { act { k.switchDesktop(this, right = true) }; "Next desktop" }
+                                            else -> { act { k.switchDesktop(this, right = false) }; "Previous desktop" }
+                                        }
+                                        status.show(label, haptic = false)
+                                    }
                                 }
                                 event.changes.forEach { it.consume() }
                                 ended = event.changes.none { it.pressed }
                                 if (ended) {
                                     touching = false
+                                    fingers.clear()
                                     val duration = event.changes.first().uptimeMillis - start
                                     when {
                                         dragging -> {
                                             haptics.perform(Haptic.Detent)
                                             act { release() }
                                         }
-                                        travelled < slop && duration < 260 -> {
+                                        travelled < slop && duration < 260 && twoMode != 2 && !swiped -> {
                                             haptics.perform(Haptic.Tap)
                                             when (maxPointers) {
                                                 1 -> act { click() }
@@ -303,19 +361,20 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                         } finally {
                             // A gesture taken away (the page closing) ends the glow too.
                             touching = false
+                            fingers.clear()
                         }
                     }
                 },
         ) {
             Canvas(Modifier.fillMaxSize().clip(SmoothCornerShape(32.dp))) {
                 val step = 28.dp.toPx()
-                val g = glow
-                val at = flow
+                frame // redraws each frame the light moves
                 val reach = 110.dp.toPx()
-                if (g > 0.01f && at.isSpecified) {
+                val lights = pools.values.filter { it.glow > 0.01f }
+                for (l in lights) {
                     drawCircle(
-                        Brush.radialGradient(listOf(accent.copy(alpha = 0.22f * g), accent.copy(alpha = 0.07f * g), Color.Transparent), at, reach),
-                        radius = reach, center = at,
+                        Brush.radialGradient(listOf(accent.copy(alpha = 0.22f * l.glow), accent.copy(alpha = 0.07f * l.glow), Color.Transparent), l.at, reach),
+                        radius = reach, center = l.at,
                     )
                 }
                 var y = step
@@ -324,7 +383,8 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                     while (x < size.width) {
                         val c = Offset(x, y)
                         // Dots near the light catch it: brighter and a touch bigger.
-                        val lit = if (g > 0.01f && at.isSpecified) (1f - (c - at).getDistance() / reach).coerceIn(0f, 1f) * g else 0f
+                        var lit = 0f
+                        for (l in lights) lit = maxOf(lit, (1f - (c - l.at).getDistance() / reach).coerceIn(0f, 1f) * l.glow)
                         if (lit > 0f) drawCircle(accent.copy(alpha = 0.06f + 0.5f * lit), radius = 1.6f + 1.4f * lit, center = c)
                         else drawCircle(dots, radius = 1.6f, center = c)
                         x += step
@@ -335,13 +395,34 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             if (pad == null) {
                 Text("Connect a PC to use the touchpad", Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
-                Text(
-                    "Tap to click · two fingers to scroll or right-click · hold to drag",
-                    Modifier.align(Alignment.BottomCenter).padding(16.dp),
-                    // Balanced lines, centred: no lone "drag" on a line of its own.
-                    style = MaterialTheme.typography.labelSmall.copy(lineBreak = LineBreak.Heading, textAlign = TextAlign.Center),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                )
+                Column(Modifier.align(Alignment.BottomCenter).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        "Tap to click · two fingers to scroll, pinch or right-click · three to swipe between desktops, up for ${kind.value.overviewName().lowercase()} · hold to drag",
+                        // Balanced lines, centred: no lone "drag" on a line of its own.
+                        style = MaterialTheme.typography.labelSmall.copy(lineBreak = LineBreak.Heading, textAlign = TextAlign.Center),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    )
+                    // Which desktop's shortcuts the gestures send.
+                    val menus = LocalMenu.current
+                    var pill by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
+                    Text(
+                        "Gestures for ${kind.value.label}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(top = 6.dp)
+                            .onGloballyPositioned { pill = it.boundsInRoot() }
+                            .pressable(onClick = {
+                                menus.show(pill, DesktopKind.entries.map { k ->
+                                    MenuItem(k.label, icon = if (k == kind.value) Icons.Rounded.Check else null) {
+                                        kind.value = k
+                                        vm.setDesktopKind(k)
+                                    }
+                                }, title = "Gestures for")
+                            })
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                }
             }
         }
 
@@ -674,6 +755,9 @@ private val KEY_HEIGHT = 48.dp
 /** Held arrows and backspace switch from characters to whole words after ~1 s of repeats. */
 private const val WORD_AFTER = 14
 private const val SCROLL_SCALE = 0.35f
+
+/** Light pooled under one finger on the touchpad. */
+private class LightPool(var at: Offset, var glow: Float = 0f)
 
 /** Gentle pointer acceleration: slow strokes stay precise, flicks cross the screen. */
 private fun accelerate(d: Offset): Offset {
