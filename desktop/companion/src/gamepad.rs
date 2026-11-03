@@ -18,6 +18,10 @@
 //! as one [DATAGRAM_LEN]-byte datagram, big-endian: "VYG1", sid u32, seq u32, b u32, lx ly rx ry i16,
 //! lt rt u8, mx my i32, kind u8 (0 xbox, 1 dualsense), then HMAC-SHA256 of all that cut to 16 bytes.
 //! The link keeps carrying the once-a-second state, so a lost datagram heals within a second.
+//!
+//! Wired: with the phone plugged in, usb.rs reverses its tcp:1866 to [WIRED_ADDR] here, and the
+//! phone sends the same signed frames down that TCP stream instead (no Wi-Fi stalls). The first
+//! frame's key picks which controller it belongs to.
 
 use std::collections::HashMap;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -29,7 +33,8 @@ use ring::hmac;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::{Value, json};
 use tokio::io::unix::AsyncFd;
-use tokio::net::UdpSocket;
+use tokio::io::AsyncReadExt;
+use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -520,10 +525,54 @@ impl Drop for Mouse {
     }
 }
 
-/// The UDP side channel: where states come in, and the key they're signed with.
+/// The UDP side channel: where states come in, and the key they're signed with; also where the
+/// wired stream's states for this controller arrive.
 struct Fast {
     socket: UdpSocket,
     key: hmac::Key,
+    wired: mpsc::Receiver<State>,
+    id: u64,
+}
+
+const WIRED_ADDR: (&str, u16) = ("127.0.0.1", 1766);
+
+/// Controllers open for a wired stream: their key, and where its states go.
+static WIRED: std::sync::Mutex<Vec<(u64, hmac::Key, mpsc::Sender<State>)>> = std::sync::Mutex::new(Vec::new());
+static NEXT_WIRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+impl Drop for Fast {
+    fn drop(&mut self) {
+        WIRED.lock().unwrap().retain(|(id, _, _)| *id != self.id);
+    }
+}
+
+/// Takes wired controller streams (phones plugged in, through usb.rs's adb reverse).
+pub async fn serve_wired() {
+    let listener = match TcpListener::bind(WIRED_ADDR).await {
+        Ok(l) => l,
+        Err(e) => return warn!("no wired controller channel: {e}"),
+    };
+    loop {
+        let Ok((mut stream, _)) = listener.accept().await else { continue };
+        let _ = stream.set_nodelay(true);
+        tokio::spawn(async move {
+            let mut buf = [0u8; DATAGRAM_LEN];
+            if stream.read_exact(&mut buf).await.is_err() {
+                return;
+            }
+            let found = WIRED.lock().unwrap().iter().find_map(|(_, k, tx)| State::from_datagram(&buf, k).map(|s| (s, k.clone(), tx.clone())));
+            let Some((first, key, tx)) = found else { return };
+            if tx.send(first).await.is_err() {
+                return;
+            }
+            while stream.read_exact(&mut buf).await.is_ok() {
+                let Some(s) = State::from_datagram(&buf, &key) else { return };
+                if tx.send(s).await.is_err() {
+                    return;
+                }
+            }
+        });
+    }
 }
 
 impl Fast {
@@ -536,7 +585,10 @@ impl Fast {
                     let mut raw = [0u8; 32];
                     SystemRandom::new().fill(&mut raw).map_err(|_| anyhow::anyhow!("no randomness"))?;
                     let key = hmac::Key::new(hmac::HMAC_SHA256, &raw);
-                    return Ok((Fast { socket, key }, port, base64::engine::general_purpose::STANDARD.encode(raw)));
+                    let (tx, wired) = mpsc::channel(256);
+                    let id = NEXT_WIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    WIRED.lock().unwrap().push((id, key.clone(), tx));
+                    return Ok((Fast { socket, key, wired, id }, port, base64::engine::general_purpose::STANDARD.encode(raw)));
                 }
                 Err(e) => last = Some(e),
             }
@@ -544,13 +596,17 @@ impl Fast {
         Err(last.map(anyhow::Error::from).unwrap_or_else(|| anyhow::anyhow!("no port")))
     }
 
-    async fn next(&self) -> State {
+    /// The next state from either side channel, and whether it came over the cable.
+    async fn next(&mut self) -> (State, bool) {
         let mut buf = [0u8; 64];
         loop {
-            if let Ok(n) = self.socket.recv(&mut buf).await
-                && let Some(s) = State::from_datagram(&buf[..n], &self.key)
-            {
-                return s;
+            tokio::select! {
+                got = self.socket.recv(&mut buf) => {
+                    if let Ok(n) = got && let Some(s) = State::from_datagram(&buf[..n], &self.key) {
+                        return (s, false);
+                    }
+                }
+                Some(s) = self.wired.recv() => return (s, true),
             }
         }
     }
@@ -589,6 +645,7 @@ pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String)
     // The gyro mouse's totals last seen (a fresh stream starts its own from anywhere).
     let mut moved: Option<(u32, i32, i32)> = None;
     let mut over_udp = false;
+    let mut over_usb = false;
     loop {
         let rumble = async {
             match pad.as_mut() {
@@ -597,7 +654,7 @@ pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String)
             }
         };
         let datagram = async {
-            match fast.as_ref() {
+            match fast.as_mut() {
                 Some(f) => f.next().await,
                 None => std::future::pending().await,
             }
@@ -612,8 +669,11 @@ pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String)
                     return;
                 }
             },
-            s = datagram => {
-                if !over_udp {
+            (s, wired) = datagram => {
+                if wired && !over_usb {
+                    over_usb = true;
+                    info!("{name}: controller input arriving over the USB cable");
+                } else if !wired && !over_udp {
                     over_udp = true;
                     info!("{name}: controller input arriving over UDP");
                 }

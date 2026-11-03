@@ -73,6 +73,7 @@ async fn main() -> Result<()> {
     let shared = Arc::new(Shared { host, me, connected: Mutex::default(), seen: Mutex::default(), media, away: Arc::default() });
 
     tokio::spawn(usb::watch());
+    tokio::spawn(gamepad::serve_wired());
     tokio::spawn(watch_tether(shared.clone()));
 
     let mdns = mdns_sd::ServiceDaemon::new()?;
@@ -159,11 +160,14 @@ const TETHER_BACKOFF: Duration = Duration::from_secs(30);
 /// Phones tethered over USB (see tether.rs): dialled when a trusted phone isn't linked yet. The
 /// link is the same as over Wi-Fi, so everything works with no USB debugging.
 async fn watch_tether(shared: Arc<Shared>) {
-    let next_try: Arc<Mutex<HashMap<IpAddr, Instant>>> = Arc::default();
+    let next_try: Arc<Mutex<HashMap<SocketAddr, Instant>>> = Arc::default();
     loop {
         tokio::time::sleep(TETHER_POLL).await;
-        for (ip, via) in tether::phones() {
-            if next_try.lock().unwrap().get(&ip).is_some_and(|t| Instant::now() < *t) {
+        let mut candidates: Vec<(SocketAddr, tether::Via)> =
+            tether::phones().into_iter().map(|(ip, via)| (SocketAddr::new(ip, PHONE_PORT), via)).collect();
+        candidates.extend(usb::cable_ports().into_iter().map(|p| (SocketAddr::from(([127, 0, 0, 1], p)), tether::Via::Cable)));
+        for (addr, via) in candidates {
+            if next_try.lock().unwrap().get(&addr).is_some_and(|t| Instant::now() < *t) {
                 continue;
             }
             let connected = shared.connected.lock().unwrap().clone();
@@ -171,10 +175,9 @@ async fn watch_tether(shared: Arc<Shared>) {
             if free.is_empty() {
                 continue;
             }
-            next_try.lock().unwrap().insert(ip, Instant::now() + TETHER_BACKOFF);
+            next_try.lock().unwrap().insert(addr, Instant::now() + TETHER_BACKOFF);
             let (shared, next_try) = (shared.clone(), next_try.clone());
             tokio::spawn(async move {
-                let addr = SocketAddr::new(ip, PHONE_PORT);
                 match link::connect_trusted(addr, &shared.me, &identity_packet(&shared), &free).await {
                     Ok((id, link)) => {
                         // A Wi-Fi dial may have won meanwhile: then this one just closes.
@@ -182,17 +185,22 @@ async fn watch_tether(shared: Arc<Shared>) {
                             return;
                         }
                         match via {
-                            tether::Via::Usb => info!("{id}: found over USB tethering at {ip}"),
-                            tether::Via::Hotspot => info!("{id}: found as this PC's hotspot at {ip}"),
+                            tether::Via::Usb => info!("{id}: found over USB tethering at {}", addr.ip()),
+                            tether::Via::Hotspot => info!("{id}: found as this PC's hotspot at {}", addr.ip()),
+                            tether::Via::Cable => info!("{id}: reached over the USB cable"),
                         }
-                        shared.seen.lock().unwrap().insert(id.clone(), addr);
-                        next_try.lock().unwrap().remove(&ip);
+                        // Not remembered for mDNS-style redials: an adb port is only good while plugged in.
+                        if via != tether::Via::Cable {
+                            shared.seen.lock().unwrap().insert(id.clone(), addr);
+                        }
+                        next_try.lock().unwrap().remove(&addr);
                         let _ = run(&shared, &id, addr, &free[&id], link).await.inspect_err(|e| warn!("{id}: {e:#}"));
                         shared.connected.lock().unwrap().remove(&id);
                     }
-                    // A router (most Wi-Fi gateways) refuses: not worth a line every 30 s.
-                    Err(e) if via == tether::Via::Hotspot => tracing::debug!("gateway {ip}: {e:#}"),
-                    Err(e) => info!("tethered {ip}: {e:#}"),
+                    // A router (most Wi-Fi gateways) refuses, and a cable may lead to a phone this PC
+                    // doesn't trust (an emulator): not worth a line every 30 s.
+                    Err(e) if via != tether::Via::Usb => tracing::debug!("{via:?} {addr}: {e:#}"),
+                    Err(e) => info!("tethered {}: {e:#}", addr.ip()),
                 }
             });
         }

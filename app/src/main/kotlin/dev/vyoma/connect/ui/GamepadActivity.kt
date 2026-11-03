@@ -114,6 +114,7 @@ import dev.vyoma.connect.gamepad.PadProfiles
 import dev.vyoma.connect.gamepad.Place
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.GamepadButton
+import dev.vyoma.connect.protocol.plugin.builtin.GamepadRoute
 import dev.vyoma.connect.protocol.plugin.builtin.GamepadState
 import dev.vyoma.connect.protocol.plugin.builtin.PadKind
 import dev.vyoma.connect.protocol.plugin.builtin.Rumble
@@ -209,7 +210,7 @@ class GamepadActivity : ComponentActivity() {
                 val plugin = linked?.first
                 val pcName = linked?.second
                 val error = plugin?.gamepadError?.collectAsStateWithLifecycle()?.value
-                val fast = plugin?.gamepadFast?.collectAsStateWithLifecycle()?.value == true
+                val route = plugin?.gamepadRoute?.collectAsStateWithLifecycle()?.value
                 val all by profiles.all.collectAsStateWithLifecycle()
                 val currentId by profiles.currentId.collectAsStateWithLifecycle()
                 val profile = all.firstOrNull { it.id == currentId } ?: all.first()
@@ -217,7 +218,7 @@ class GamepadActivity : ComponentActivity() {
                 val status = when {
                     plugin == null -> "Needs Vyoma's companion running on the PC"
                     error != null -> error
-                    else -> "$padName on ${pcName ?: "the PC"}" + (if (fast) " · low latency" else "") +
+                    else -> "$padName on ${pcName ?: "the PC"}" + (when (route) { GamepadRoute.USB -> " · wired"; GamepadRoute.WIFI -> " · low latency"; null -> "" }) +
                         (if (all.size > 1) " · ${profile.name}" else "")
                 }
                 GamepadScreen(

@@ -150,10 +150,14 @@ body fields before implementing one.
   51-byte datagram, big-endian: "VYG1", sid, seq, b (u32), lx ly rx ry (i16), lt rt (u8), mx my (i32), kind (u8:
   0 xbox, 1 dualsense), HMAC-SHA256 of those 35 bytes cut to 16. It repeats the latest every 100 ms (a lost one
   heals fast) and still sends the link state once a second. The companion logs "controller input arriving over
-  UDP" on the first good datagram. GamepadActivity follows the current companion link (a relink restarts the stream).
+  UDP" on the first good datagram. Wired: usb.rs reverses phone tcp:1866 → companion 127.0.0.1:1766; the phone
+  tries that first (and each second while on UDP) and writes the same 51-byte frames down the TCP stream; the first
+  frame's key picks the controller. Measured with continuous motion: Wi-Fi (2.4 GHz, busy) 33 gaps >60 ms / 25 s,
+  max 242 ms; after PC Wi-Fi power save off (user's NM connection, powersave=2) 5, max 242; cable 1, max 87. GamepadActivity follows the current companion link (a relink restarts the stream).
 - Finding the phone without mDNS (tether.rs, polled every 5 s while a trusted phone is unlinked): USB tethering
   (rndis/cdc gateway or neighbour) and any Wi-Fi gateway, i.e. the PC on the phone's hotspot (verified 2026-11-03,
-  during a power cut); both dialled with `connect_trusted` (only kdeconnectd-trusted certs), gateway refusals at debug.
+  during a power cut) and the cable (usb.rs `adb forward tcp:0 tcp:1716` per plugged phone, so the companion links
+  with Wi-Fi off); all dialled with `connect_trusted` (only kdeconnectd-trusted certs), gateway refusals at debug.
 - `vyoma.wallpaper.request` → `vyoma.wallpaper {cols, rows, colors:[[r,g,b], ...]}` (row-major, top-left first) or
   `{error}`. The companion reads Plasma's wallpaper (`Image=` under `[Wallpaper][org.kde.image][General]` in
   `plasma-org.kde.plasma.desktop-appletsrc`; a package resolves to its largest image; unset = Next) and has ffmpeg
