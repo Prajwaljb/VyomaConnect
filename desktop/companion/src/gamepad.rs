@@ -666,6 +666,8 @@ pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String)
                     if pad.take().is_some() {
                         info!("{name}: controller disconnected");
                     }
+                    // A phone switched to USB accessory mode for this gets its USB back.
+                    crate::accessory::release();
                     return;
                 }
             },

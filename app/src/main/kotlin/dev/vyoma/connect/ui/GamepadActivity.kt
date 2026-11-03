@@ -112,6 +112,7 @@ import dev.vyoma.connect.gamepad.PadControl
 import dev.vyoma.connect.gamepad.PadProfile
 import dev.vyoma.connect.gamepad.PadProfiles
 import dev.vyoma.connect.gamepad.Place
+import dev.vyoma.connect.gamepad.UsbAccessoryLink
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.GamepadButton
 import dev.vyoma.connect.protocol.plugin.builtin.GamepadRoute
@@ -151,6 +152,12 @@ class GamepadActivity : ComponentActivity() {
     private val profiles by lazy { PadProfiles(applicationContext) }
     private val gyro by lazy {
         GyroAim(this, rotation = { display?.rotation ?: Surface.ROTATION_90 }, onMove = ::recompute)
+    }
+    /** The USB cable without USB debugging, for the plugin (accessory mode, see UsbAccessoryLink). */
+    private val cable = object : CompanionPlugin.CableChannel {
+        override fun plugged() = UsbAccessoryLink.cablePlugged(applicationContext)
+        override fun open() = UsbAccessoryLink.output(applicationContext)
+        override fun close() = UsbAccessoryLink.close()
     }
     private val vibrator by lazy { (getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator }
 
@@ -196,6 +203,7 @@ class GamepadActivity : ComponentActivity() {
                 // Streams to whichever companion link is up, moving over when it's replaced.
                 companion.collectLatest { c ->
                     val p = c?.first ?: return@collectLatest
+                    p.cable = cable
                     coroutineScope {
                         launch { p.rumble.collect(::rumble) }
                         p.streamGamepad(state)

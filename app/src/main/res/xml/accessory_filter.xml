@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The PC companion switches the phone into USB accessory mode as this (desktop/companion/src/accessory.rs). -->
+<resources>
+    <usb-accessory manufacturer="Vyoma" model="Companion" />
+</resources>
