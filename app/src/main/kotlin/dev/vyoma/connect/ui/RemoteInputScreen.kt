@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import androidx.compose.ui.platform.LocalContext
 
 import androidx.compose.material.icons.rounded.SportsEsports
@@ -150,6 +151,11 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
     val target = devices.firstOrNull { it.identity.deviceId == deviceId && it.isReachable && it.isPaired }
         ?: devices.firstOrNull { it.isPaired && it.isReachable && !it.isCompanion }
     val pad: MousePadPlugin? = remember(target?.plugins) { target?.let { vm.device(it.identity.deviceId)?.plugin(MousePadPlugin.ID) } }
+    // The PC's companion, for desktop gestures that know where the PC is.
+    val companionDevice = devices.firstOrNull { it.identity.companionOf == target?.identity?.deviceId && it.isReachable && it.isPaired }
+    val companionPlugin: CompanionPlugin? = remember(companionDevice?.plugins) { companionDevice?.let { vm.device(it.identity.deviceId)?.plugin(CompanionPlugin.ID) } }
+    // Where the three-finger ladder is, when only the phone keeps track (no companion, or not Plasma).
+    var desktopView by remember { mutableStateOf(DesktopView.WINDOWS) }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
 
@@ -339,14 +345,27 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                                         swiped = true
                                         haptics.perform(Haptic.Edge)
                                         val k = kind.value
-                                        val label = when {
-                                            abs(swipe.y) > abs(swipe.x) && swipe.y < 0f -> { act { k.overview(this) }; k.overviewName() }
-                                            abs(swipe.y) > abs(swipe.x) -> { act { k.desktop(this) }; k.desktopName() }
+                                        if (abs(swipe.y) > abs(swipe.x)) {
+                                            // Up and down step along the desktop's ladder (desktop, windows,
+                                            // overview, grid), one level per swipe, as its own gestures do.
+                                            val up = swipe.y < 0f
+                                            val companion = companionPlugin
+                                            scope.launch {
+                                                val where = if (k == DesktopKind.PLASMA && companion != null) {
+                                                    // The companion asks KWin where it is, so it's right even after
+                                                    // something changed on the PC itself.
+                                                    companion.desktopStep(up).getOrNull()?.let(DesktopView::of)
+                                                } else null
+                                                val view = where ?: pad?.let { k.step(it, up, desktopView) } ?: desktopView
+                                                desktopView = view
+                                                status.show(k.viewName(view), haptic = false)
+                                            }
+                                        } else {
                                             // The desktops follow the fingers: swiping left brings the next one in from the right.
-                                            swipe.x < 0f -> { act { k.switchDesktop(this, right = true) }; "Next desktop" }
-                                            else -> { act { k.switchDesktop(this, right = false) }; "Previous desktop" }
+                                            val next = swipe.x < 0f
+                                            act { k.switchDesktop(this, right = next) }
+                                            status.show(if (next) "Next desktop" else "Previous desktop", haptic = false)
                                         }
-                                        status.show(label, haptic = false)
                                     }
                                 }
                                 event.changes.forEach { it.consume() }
@@ -410,7 +429,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             } else {
                 Column(Modifier.align(Alignment.BottomCenter).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        "Tap to click · two fingers to scroll, pinch or right-click · three to swipe between desktops, up for ${kind.value.overviewName().lowercase()} · hold to drag",
+                        "Tap to click · two fingers to scroll, pinch or right-click · three up or down for windows, desktop and ${kind.value.overviewName().lowercase()}, sideways between desktops · hold to drag",
                         // Balanced lines, centred: no lone "drag" on a line of its own.
                         style = MaterialTheme.typography.labelSmall.copy(lineBreak = LineBreak.Heading, textAlign = TextAlign.Center),
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),

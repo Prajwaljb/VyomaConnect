@@ -614,6 +614,22 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         }
     }
 
+    @Volatile private var pendingStep: CompletableDeferred<NetworkPacket>? = null
+
+    /**
+     * One three-finger step on a Plasma desktop (up: desktop → windows → Overview → Grid, down back),
+     * decided by the companion from where KWin actually is. Returns where it ended up
+     * ("desktop", "windows", "overview", "grid").
+     */
+    suspend fun desktopStep(up: Boolean): Result<String> {
+        val reply = CompletableDeferred<NetworkPacket>()
+        pendingStep = reply
+        if (!ctx.send(packet(DESKTOP_STEP) { put("up", up) })) return Result.failure(IllegalStateException("The PC isn't connected"))
+        val p = withTimeoutOrNull(STEP_TIMEOUT_MS) { reply.await() } ?: return Result.failure(IllegalStateException("The PC didn't answer"))
+        p.string("error")?.let { return Result.failure(IllegalStateException(it)) }
+        return Result.success(p.string("view") ?: "windows")
+    }
+
     private fun receiveRumble(packet: NetworkPacket) {
         packet.string("error")?.let { _gamepadError.value = it; return }
         _rumble.tryEmit(Rumble(packet.int("strong") ?: 0, packet.int("weak") ?: 0, packet.int("ms") ?: 0))
@@ -621,6 +637,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
 
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         if (packet.type == GAMEPAD_RUMBLE) receiveRumble(packet)
+        if (packet.type == DESKTOP_STEPPED) pendingStep?.also { pendingStep = null }?.complete(packet)
         if (packet.type == SCREENSHOT) screenshot.receive(packet)
         if (packet.type == CAMERA) photo.receive(packet)
         if (packet.type == HANDOFF) receiveHandoff(packet)
@@ -683,6 +700,9 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val GAMEPAD_CLOSE = "vyoma.gamepad.close"
         const val GAMEPAD_RUMBLE = "vyoma.gamepad.rumble"
         private const val GAMEPAD_HEARTBEAT_MS = 1_000L
+        const val DESKTOP_STEP = "vyoma.desktop.step"
+        const val DESKTOP_STEPPED = "vyoma.desktop.stepped"
+        private const val STEP_TIMEOUT_MS = 3_000L
         /** The phone's walk-away rules, set by the app; every companion gets them on link and on change. */
         val away = kotlinx.coroutines.flow.MutableStateFlow(AwayRules())
         private const val SET_INTERVAL_MS = 60L
@@ -702,8 +722,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, GAMEPAD_RUMBLE),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE),
+            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, GAMEPAD_RUMBLE, DESKTOP_STEPPED),
+            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP),
         ) { CompanionPlugin(it, sink) }
     }
 }

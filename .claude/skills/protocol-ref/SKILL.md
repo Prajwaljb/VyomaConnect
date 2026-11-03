@@ -143,5 +143,11 @@ body fields before implementing one.
   `{error}`. The companion reads Plasma's wallpaper (`Image=` under `[Wallpaper][org.kde.image][General]` in
   `plasma-org.kde.plasma.desktop-appletsrc`; a package resolves to its largest image; unset = Next) and has ffmpeg
   average it to 4x4. The phone asks on link and on plugin start and caches the last grid ("pc_wallpaper" in the ui
-  prefs) so the background is right before the PC connects.
+  prefs) so the background is right before the PC connects. The companion also pushes `vyoma.wallpaper` unasked
+  when it changes (polls the wallpaper path, image mtime and appletsrc mtime every 3 s, sends 400 ms after a change).
+- `vyoma.desktop.step {up}` → `vyoma.desktop.stepped {view: desktop|windows|overview|grid}` or `{error}`: the
+  touchpad's vertical three-finger swipe on Plasma, one rung of desktop ↔ windows ↔ Overview ↔ Grid (desktop.rs).
+  It reads KWin first (`/Effects activeEffects` has "overview"; `/KWin showingDesktop`), then invokes kglobalaccel
+  shortcuts ("Overview" steps Grid → Overview → closed, "Grid View", "Show Desktop" toggles). KWin's
+  `showDesktop(bool)` does nothing on Plasma 6 Wayland. Without the companion the phone keeps its own ladder guess.
 

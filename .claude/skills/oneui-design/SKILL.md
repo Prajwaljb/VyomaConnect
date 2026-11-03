@@ -210,8 +210,11 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 ## Theme (core/designsystem)
 - Type: bundled Inter variable (`res/font/inter.ttf`, OFL in `core/designsystem/licenses`): display optical size
   for title/headline/display styles, text cut below; tight negative tracking on large sizes; `tnum` for live numbers.
-- `VyomaTheme(ThemeSettings)`: palettes `DYNAMIC` (wallpaper accent, neutral surfaces), `OCEAN`, `GRAPHITE`, `EMBER`,
-  `MINT`, `SAND`; DarkMode SYSTEM/LIGHT/DARK (dark = true black).
+- `VyomaTheme(ThemeSettings)`: palettes `PC` (default, user 2026-11-03: the accent from the PC's wallpaper,
+  `CanvasWallpaper.accent(dark)`: its most vivid colour (score s·(1−|l−0.5|·1.4)), saturated to ~0.72, lightness 0.7
+  dark / 0.47 light; Material You until the PC has sent one), `PHONE` (phone wallpaper, was DYNAMIC; a stored
+  "DYNAMIC" falls back to PC), `OCEAN`, `GRAPHITE`, `EMBER`, `MINT`, `SAND`. Swatches shrink to leave 8 dp gaps
+  (`min(44 dp, share − 8 dp)`); PC's swatch is a sweep of its accent and wallpaper colours; DarkMode SYSTEM/LIGHT/DARK (dark = true black).
 - Lighter glass: `GlassQuality.lite` (set by the app from Settings > Lighter glass, or by `FrameBudget` when the
   median scrolling frame takes ≥2.2x the refresh interval twice running). `glassChrome` then draws a 92% frosted
   fill + edge instead of blur/refraction (read in the draw phase, so it switches live); gauges jump, no glide.
@@ -489,7 +492,8 @@ until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played ou
 - The hero title shrinks to fit the width (down to 0.6 of displayMedium) instead of being cut: a long rule name
   ("Headphones take over") was truncated at hero size.
 - Touchpad: a light pool per finger. 2 fingers scroll, or pinch past 28 dp = zoom one step (Ctrl +/-) per 1.25x.
-  3+ fingers swipe 56 dp, once: up overview, down desktop, sideways switch desktop, sent as the chosen desktop's own
+  3+ fingers swipe 56 dp, once: up/down one rung of desktop ↔ windows ↔ overview (↔ grid on Plasma), like Plasma's
+  own touchpad gestures (with the companion KWin's real state decides the rung: `vyoma.desktop.step`), sideways switch desktop, sent as the chosen desktop's own
   shortcuts (`DesktopKind`: Plasma, GNOME, Windows, macOS; picker under the pad). Status pill + edge haptic name it.
 - Background from the PC's wallpaper (Settings › PC wallpaper colours, on by default, needs the companion):
   `AppCanvas.wallpaper`, a 4x4 colour grid stretched bilinearly, each colour 1.25x saturated then mixed toward the

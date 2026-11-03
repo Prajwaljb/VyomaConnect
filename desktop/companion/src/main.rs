@@ -7,6 +7,7 @@
 
 mod away;
 mod camera;
+mod desktop;
 mod files;
 mod gamepad;
 mod identity;
@@ -141,8 +142,8 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.gamepad.state", "vyoma.gamepad.close"],
-            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.gamepad.rumble"],
+            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.gamepad.state", "vyoma.gamepad.close", "vyoma.desktop.step"],
+            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.gamepad.rumble", "vyoma.desktop.stepped"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
         }),
@@ -227,6 +228,8 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
     let mut file_tasks = tokio::task::JoinSet::new();
     // The phone as a controller: its pad lives while states keep coming (see gamepad.rs).
     let mut pad: Option<(tokio::sync::mpsc::Sender<gamepad::Input>, tokio::task::JoinHandle<()>)> = None;
+    // A new wallpaper reaches the phone's background without waiting for it to ask.
+    let wall_task = tokio::spawn(watch_wallpaper(link.sender.clone()));
     let result = loop {
         let Some(p) = link.receiver.next().await? else { break Ok(()) };
         while file_tasks.try_join_next().is_some() {}
@@ -305,6 +308,19 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                     let _ = tx.try_send(gamepad::Input::State(s));
                 }
             }
+            "vyoma.desktop.step" => {
+                let (sender, up, name) = (link.sender.clone(), p["body"]["up"].as_bool().unwrap_or(true), name.clone());
+                tokio::spawn(async move {
+                    let reply = match desktop::step(up).await {
+                        Ok(view) => json!({ "view": view }),
+                        Err(e) => {
+                            warn!("{name}: desktop gesture failed: {e:#}");
+                            json!({ "error": format!("{e:#}") })
+                        }
+                    };
+                    let _ = sender.send(&packet("vyoma.desktop.stepped", reply)).await;
+                });
+            }
             "vyoma.gamepad.close" => {
                 if let Some((tx, _)) = &pad {
                     let _ = tx.try_send(gamepad::Input::Close);
@@ -376,6 +392,7 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
             _ => {}
         }
     };
+    wall_task.abort();
     // Dropping the pad lets go of every button.
     if let Some((_, t)) = pad {
         t.abort();
@@ -388,6 +405,29 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
     }
     info!("{name}: link closed");
     result
+}
+
+/// Sends the wallpaper's colours whenever it changes (checked every few seconds; the phone asks for
+/// the current one itself when it connects).
+async fn watch_wallpaper(sender: Sender) {
+    let mut last = wallpaper::signature();
+    let mut tick = tokio::time::interval(Duration::from_secs(3));
+    loop {
+        tick.tick().await;
+        let now = wallpaper::signature();
+        if now == last {
+            continue;
+        }
+        last = now;
+        // Plasma writes the setting a moment before it's done switching; give it a breath.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        if let Ok(c) = wallpaper::colors().await {
+            info!("wallpaper changed: sending its colours");
+            if sender.send(&packet("vyoma.wallpaper", json!({ "cols": wallpaper::COLS, "rows": wallpaper::ROWS, "colors": c }))).await.is_err() {
+                return;
+            }
+        }
+    }
 }
 
 /// Whether the PC runs from a charger (mains or a USB-C power source); None with no such supply (a desktop).
