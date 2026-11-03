@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.FilterQuality
@@ -509,11 +510,14 @@ internal class LensPainter(private val graphics: GraphicsContext) {
         val lx = cos(la).toFloat()
         val ly = sin(la).toFloat()
         val lifted = style.depth < 0f
-        val h = r.minDimension * 0.16f * a
+        // From the lens's area, which stays steady while it stretches and squashes as it's dragged
+        // (its short side swings, and the shadow and caustic jumped with it).
+        val body = kotlin.math.sqrt(r.width * r.height)
+        val h = body * 0.13f * a
         val fall = Offset(-lx * h * 0.6f, -ly * h * 0.3f + h * 0.5f)
         if (lifted && h > 0.5f) {
             val blur = 2.dp.toPx() + h * 1.4f
-            val k = a / (1f + h / (r.minDimension * 0.3f))
+            val k = a / (1f + h / (body * 0.25f))
             val color = if (dark) Color.Black.copy(alpha = 0.5f * k) else Color(0xFF0B1220).copy(alpha = 0.2f * k)
             with(SoftShadow) { draw(r, r.minDimension / 2, color, blur, drop = fall.y, dx = fall.x) }
         }
@@ -535,13 +539,16 @@ internal class LensPainter(private val graphics: GraphicsContext) {
                 drawLayer(self)
                 // The caustic: the drop focuses the light it lets through into a soft bright patch on
                 // the surface, inside the shadow's footprint (seen through the drop, so it's refracted too).
+                // It's the lens's own image, so it has the lens's shape (long while it's stretched) and moves
+                // rigidly with it. Its area follows the lens's, which stretching keeps, so its brightness holds.
                 if (lifted && h > 0.5f) {
-                    val at = r.center + fall * 1.4f
-                    val rr = r.minDimension * 0.42f
-                    drawCircle(
-                        Brush.radialGradient(listOf(Color.White.copy(alpha = (if (dark) 0.09f else 0.22f) * a), Color.Transparent), at, rr),
-                        rr, at,
-                    )
+                    val at = r.center + fall
+                    val rx = r.width * 0.36f
+                    val ry = r.height * 0.36f
+                    val peak = (if (dark) 0.09f else 0.22f) * a
+                    withTransform({ scale(rx / ry, 1f, at) }) {
+                        drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = peak), Color.Transparent), at, ry), ry, at)
+                    }
                 }
             }
         }
