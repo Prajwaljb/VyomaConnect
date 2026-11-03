@@ -608,6 +608,18 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     val gamepadRoute: StateFlow<GamepadRoute?> = _gamepadRoute.asStateFlow()
 
     /**
+     * The phone's USB cable without USB debugging (Android's accessory mode, set by the app): whether
+     * it's plugged into a computer, the accessory's stream once the companion has switched it on, and
+     * a way to drop that stream (failed, or the controller closed).
+     */
+    interface CableChannel {
+        fun plugged(): Boolean
+        fun open(): java.io.OutputStream?
+        fun close()
+    }
+    @Volatile var cable: CableChannel? = null
+
+    /**
      * Sends [states] to the PC's virtual pad for as long as this runs: every change at once (the flow
      * conflates, so a slow link only ever carries the newest), and the current one each second, which
      * keeps the pad alive (the PC lets go of everything after 4 s of silence). Ending it closes the pad.
@@ -625,7 +637,9 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         var seq = 0
         var used: UdpOffer? = null
         var socket: java.net.DatagramSocket? = null
-        var wired: java.net.Socket? = null
+        var wiredSocket: java.net.Socket? = null
+        var wired: java.io.OutputStream? = null
+        var lastAsk = 0L
         var mac: javax.crypto.Mac? = null
         var lastLink = 0L
         fun route() {
@@ -635,20 +649,38 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                 else -> null
             }
         }
-        /** Moves to the cable if it's plugged in (and the PC listens there). */
-        fun tryWired() {
+        fun dropWired() {
+            if (wiredSocket != null) runCatching { wiredSocket?.close() } else cable?.close()
+            wiredSocket = null
+            wired = null
+        }
+        /**
+         * Moves to the cable if it's plugged in: adb's reverse (USB debugging on), else the USB
+         * accessory; with neither, asks the companion to switch the phone into accessory mode.
+         */
+        suspend fun tryWired() {
             if (wired != null || used == null) return
-            wired = runCatching {
+            wiredSocket = runCatching {
                 java.net.Socket().apply {
                     tcpNoDelay = true
                     connect(java.net.InetSocketAddress(java.net.InetAddress.getLoopbackAddress(), GAMEPAD_WIRED_PORT), 300)
                 }
             }.getOrNull()
+            wired = wiredSocket?.getOutputStream() ?: cable?.open()
             if (wired != null) {
                 socket?.close()
                 socket = null
-                VLog.i(TAG, "controller over the USB cable")
+                VLog.i(TAG, "controller over the USB cable" + if (wiredSocket == null) " (accessory)" else "")
                 route()
+                if (wiredSocket != null) return
+            }
+            // No adb channel: the companion switches the phone to accessory mode, or (already switched)
+            // starts reading it. Writes nobody reads fail after a moment and the ask comes again.
+            val now = System.nanoTime() / 1_000_000
+            if ((wired != null || cable?.plugged() == true) && now - lastAsk > ACCESSORY_ASK_MS) {
+                lastAsk = now
+                VLog.i(TAG, "asking the PC for USB accessory mode")
+                ctx.send(packet(USB_ACCESSORY) { put("open", wired != null) })
             }
         }
         try {
@@ -658,7 +690,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                 if (offer !== used) {
                     used = offer
                     socket?.close(); socket = null
-                    runCatching { wired?.close() }; wired = null
+                    dropWired()
                     mac = offer?.let { o -> javax.crypto.Mac.getInstance("HmacSHA256").apply { init(javax.crypto.spec.SecretKeySpec(o.key, "HmacSHA256")) } }
                     tryWired()
                     if (wired == null) {
@@ -672,11 +704,10 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                 val frame = if (used != null) gamepadDatagram(current, sid, seq, mac!!) else null
                 var fast = false
                 wired?.let { w ->
-                    fast = runCatching { w.getOutputStream().apply { write(frame!!); flush() } }.isSuccess
+                    fast = runCatching { w.write(frame!!); w.flush() }.isSuccess
                     if (!fast) {
                         // Unplugged (or the PC went): back to Wi-Fi.
-                        runCatching { w.close() }
-                        wired = null
+                        dropWired()
                         socket = used?.let { ctx.device.datagramTo(it.port) }
                         VLog.i(TAG, "controller cable gone; " + if (socket != null) "over UDP" else "over the link")
                         route()
@@ -686,7 +717,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                     fast = runCatching { s.send(java.net.DatagramPacket(frame!!, GAMEPAD_DATAGRAM)) }.isSuccess
                 }
                 if (!fast || now - lastLink >= GAMEPAD_HEARTBEAT_MS) {
-                    if (fast) tryWired()
+                    tryWired()
                     lastLink = now
                     ctx.send(packet(GAMEPAD_STATE) {
                         put("b", current.buttons)
@@ -704,7 +735,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
             }
         } finally {
             socket?.close()
-            runCatching { wired?.close() }
+            dropWired()
             gamepadOffer.value = null
             _gamepadRoute.value = null
             withContext(kotlinx.coroutines.NonCancellable) { ctx.send(packet(GAMEPAD_CLOSE)) }
@@ -820,6 +851,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private const val GAMEPAD_REPEAT_MS = 100L
         /** The phone's end of the companion's adb reverse for the wired controller; must match usb.rs WIRED. */
         const val GAMEPAD_WIRED_PORT = 1866
+        const val USB_ACCESSORY = "vyoma.usb.accessory"
+        private const val ACCESSORY_ASK_MS = 15_000L
         private const val GAMEPAD_BODY = 35
         private const val GAMEPAD_DATAGRAM = 51
         const val DESKTOP_STEP = "vyoma.desktop.step"
@@ -845,7 +878,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
             incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP),
+            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, USB_ACCESSORY),
         ) { CompanionPlugin(it, sink) }
     }
 }

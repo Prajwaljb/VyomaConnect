@@ -154,6 +154,16 @@ body fields before implementing one.
   tries that first (and each second while on UDP) and writes the same 51-byte frames down the TCP stream; the first
   frame's key picks the controller. Measured with continuous motion: Wi-Fi (2.4 GHz, busy) 33 gaps >60 ms / 25 s,
   max 242 ms; after PC Wi-Fi power save off (user's NM connection, powersave=2) 5, max 242; cable 1, max 87. GamepadActivity follows the current companion link (a relink restarts the stream).
+  Cable without USB debugging (Android Open Accessory, accessory.rs + app gamepad/UsbAccessoryLink.kt): if the
+  1866 socket fails, the phone writes the same frames to an open "Vyoma"/"Companion" USB accessory; if it has none and
+  USB_STATE says a computer is plugged in, it sends `vyoma.usb.accessory {open: bool}` (at most every 15 s). The
+  companion switches every AOA-speaking non-hub device (GET_PROTOCOL 51, strings 52, START 53) to 18d1:2d00/2d01,
+  retries open() up to 3 s (udev's ACL lags), claims interface 0 and pipes bulk-in reads to 127.0.0.1:1766.
+  `open:false` while already an accessory = the app lost its permission (reinstall): reset and switch again so
+  Android re-attaches it (dialog once, "Always" sticks). NEVER reset on controller close: on the S24 FE a reset while
+  the app held the accessory wedged the phone's USB (error -71) until replugged; it stays an accessory until unplugged.
+  Phone writes go through a newest-frame writer thread; a write pending > 500 ms fails over to Wi-Fi. Access without
+  debugging: desktop/companion/udev/70-vyoma-usb.rules (sudo, once). Verified 2026-11-03: switch ~2 s, A/B/X/Y arrive.
 - Finding the phone without mDNS (tether.rs, polled every 5 s while a trusted phone is unlinked): USB tethering
   (rndis/cdc gateway or neighbour) and any Wi-Fi gateway, i.e. the PC on the phone's hotspot (verified 2026-11-03,
   during a power cut) and the cable (usb.rs `adb forward tcp:0 tcp:1716` per plugged phone, so the companion links

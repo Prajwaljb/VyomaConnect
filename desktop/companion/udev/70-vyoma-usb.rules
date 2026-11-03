@@ -1,0 +1,10 @@
+# Lets the logged-in user's Vyoma companion use an Android phone over USB without USB debugging:
+# switch it into accessory mode (AOA) for the game controller, then read the accessory.
+# Install once:  sudo install -Dm644 70-vyoma-usb.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+#
+# Phones in accessory mode (Google's AOA IDs, whatever the phone's maker).
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="18d1", ATTR{idProduct}=="2d0[0-5]", TAG+="uaccess"
+# Phones before the switch, by maker: Google, Samsung, OnePlus, Xiaomi, Motorola, OPPO/realme, vivo,
+# Sony, LG, Huawei/Honor, HMD/Nokia, ZTE/nubia, HTC, Fairphone, Nothing (not makers of
+# keyboards and mice too, like Lenovo or ASUS: they would get raw access as well).
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="18d1|04e8|2a70|2717|22b8|22d9|2d95|0fce|1004|12d1|339b|2e04|19d2|0bb4|2ae5|2970", TAG+="uaccess"

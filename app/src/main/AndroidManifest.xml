@@ -100,6 +100,22 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:screenOrientation="sensorLandscape" />
 
+        <!-- The PC companion's USB accessory (the game controller over a cable without USB debugging):
+             Android opens this for it, it hands the accessory over and closes. -->
+        <activity
+            android:name=".gamepad.AccessoryActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@style/Theme.Vyoma.Invisible">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED"
+                android:resource="@xml/accessory_filter" />
+        </activity>
+
         <activity
             android:name=".ui.FindMyPhoneActivity"
             android:screenOrientation="portrait"

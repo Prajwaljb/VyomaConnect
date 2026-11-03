@@ -9,6 +9,7 @@ mod away;
 mod camera;
 mod desktop;
 mod files;
+mod accessory;
 mod gamepad;
 mod identity;
 mod kde;
@@ -143,7 +144,7 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.gamepad.state", "vyoma.gamepad.close", "vyoma.desktop.step"],
+            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.gamepad.state", "vyoma.gamepad.close", "vyoma.desktop.step", "vyoma.usb.accessory"],
             "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.gamepad.rumble", "vyoma.gamepad.udp", "vyoma.desktop.stepped"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
@@ -320,6 +321,18 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                     // Full means the PC is behind; the next state carries everything anyway.
                     let _ = tx.try_send(gamepad::Input::State(s));
                 }
+            }
+            "vyoma.usb.accessory" => {
+                // The phone's controller is on a cable without USB debugging: accessory mode.
+                let name = name.clone();
+                // "open": false means the phone couldn't open an accessory it already sees (its permission
+                // went with a reinstall): switch it again so Android hands the accessory over afresh.
+                let reswitch = !p["body"]["open"].as_bool().unwrap_or(false);
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) = accessory::start(reswitch) {
+                        warn!("{name}: controller over the cable: {e:#}");
+                    }
+                });
             }
             "vyoma.desktop.step" => {
                 let (sender, up, name) = (link.sender.clone(), p["body"]["up"].as_bool().unwrap_or(true), name.clone());
