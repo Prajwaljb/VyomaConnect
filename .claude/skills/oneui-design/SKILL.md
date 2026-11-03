@@ -513,7 +513,7 @@ a 45% scrim (taps outside close it): Profile chips (one per game, "+ New game", 
 then Gyro moves (Mouse / Right stick), speed slider 0.25–3×, Invert, and Edit layout. Under Edit layout, a tip: a USB cable
 gives the least lag. Status line names the route plainly, "· cable" or "· Wi-Fi (a cable is smoother)": never claim
 Wi-Fi is low latency (user, 2026-11-03: it can't be promised). While it's open nothing is held.
-DualSense profile: outlined ✕ ○ □ △ (blue, red, pink, green), L1/L2/R1/R2, a blue guide. Analog triggers are slots
+DualSense profile: outlined ✕ ○ □ △ (blue, red, pink, green), L1/L2/R1/R2, a blue guide. Its usual shape is a DualSense's: D-pad high on the left, both sticks low and level (Xbox swaps D-pad and left stick); moved controls keep their saved places. Analog triggers are slots
 54 dp taller than the capsule: depth down the slot = pressure (fill runs down, notches at quarters, at least 10%).
 Layout editor: every movable part dashed-outlined, the chosen one solid accent; drag moves, a second finger pinches
 (0.6–1.6×); a glass bar at the top (Reset, − size% +, Cancel, Done) and a hint under it; Back cancels. Places are
