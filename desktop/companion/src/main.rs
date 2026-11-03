@@ -143,7 +143,7 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceType": "desktop",
             "protocolVersion": 8,
             "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.gamepad.state", "vyoma.gamepad.close", "vyoma.desktop.step"],
-            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.gamepad.rumble", "vyoma.desktop.stepped"],
+            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.gamepad.rumble", "vyoma.gamepad.udp", "vyoma.desktop.stepped"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
         }),

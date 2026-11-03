@@ -132,13 +132,24 @@ body fields before implementing one.
   decodes with MediaCodec (`KEY_LOW_LATENCY`) into a TextureView and shows only the newest of a burst.
   `vyoma.screen.stop` (or closing the payload) ends it; a new request replaces a running cast.
   `VYOMA_SCREEN_TEST=1` on the companion casts a moving test pattern, no portal (safe to screenshot).
-- `vyoma.gamepad.state {b, lx, ly, rx, ry, lt, rt}` (phone → companion): the phone's controller. `b` bitmask in
-  `GamepadButton` order (A B X Y LB RB Back Start Guide LS RS Up Down Left Right), sticks -32768..32767 y down,
-  triggers 0..255. Sent on every change over the normal link (TCP_NODELAY both ends, so it works over the USB
-  tunnel too) and resent each second; the companion's first one creates a uinput Xbox 360 pad (045e:028e,
-  gamepad.rs, raw ioctls, user needs /dev/uinput access: input group/ACL), removed on `vyoma.gamepad.close`, 4 s of
-  silence or link loss (every button released first). `vyoma.gamepad.rumble {strong, weak, ms}` (companion → phone)
-  from the game's FF_RUMBLE effects, or `{error}` when the pad can't be made.
+- `vyoma.gamepad.state {b, lx, ly, rx, ry, lt, rt, kind, mx, my, sid, seq}` (phone → companion): the phone's
+  controller. `b` bitmask in `GamepadButton` order (A B X Y LB RB Back Start Guide LS RS Up Down Left Right), sticks
+  -32768..32767 y down, triggers 0..255, `kind` "xbox"|"dualsense", `mx`/`my` running totals (wrapping i32) of
+  gyro-mouse pixels (the companion moves a separate uinput REL mouse by the difference, made on first motion),
+  `sid` random per stream + `seq` counting (older ones dropped; a new sid takes over). Sent on every change over the
+  normal link (TCP_NODELAY both ends, so it works over the USB tunnel too) and resent each second; the companion's
+  first one creates a uinput pad (gamepad.rs, raw ioctls, user needs /dev/uinput access: input group/ACL): Xbox 360
+  045e:028e as xpad, or DualSense 054c:0ce6 version 0x8111 as hid-playstation over USB (sticks 0..255, triangle =
+  BTN_NORTH 0x133, square = BTN_WEST 0x134, BTN_TL2/TR2 with the triggers; SDL3 reads it as "PS5 Controller",
+  checked with a C probe). A different `kind` replaces the pad. Removed on `vyoma.gamepad.close`, 4 s of silence or
+  link loss (every button released first). `vyoma.gamepad.rumble {strong, weak, ms}` (companion → phone) from the
+  game's FF_RUMBLE effects, or `{error}` when the pad can't be made. SDL takes a trigger's first value as its rest.
+- `vyoma.gamepad.udp {port, key}` (companion → phone, once the pad is up): a UDP port in 1750..1764 (inside the
+  KDE Connect firewall range, UDP 1714..1764) and a base64 32-byte key. The phone (if it reaches the PC over a
+  network, not the USB tunnel: `Device.datagramTo`, routed like payloads past a VPN) then sends each state as a
+  51-byte datagram, big-endian: "VYG1", sid, seq, b (u32), lx ly rx ry (i16), lt rt (u8), mx my (i32), kind (u8:
+  0 xbox, 1 dualsense), HMAC-SHA256 of those 35 bytes cut to 16. It repeats the latest every 100 ms (a lost one
+  heals fast) and still sends the link state once a second.
 - `vyoma.wallpaper.request` → `vyoma.wallpaper {cols, rows, colors:[[r,g,b], ...]}` (row-major, top-left first) or
   `{error}`. The companion reads Plasma's wallpaper (`Image=` under `[Wallpaper][org.kde.image][General]` in
   `plasma-org.kde.plasma.desktop-appletsrc`; a package resolves to its largest image; unset = Next) and has ffmpeg

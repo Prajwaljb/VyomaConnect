@@ -59,8 +59,9 @@ data class PcStats(
 )
 
 /**
- * The phone's game controller as the PC's virtual Xbox 360 pad sees it: [buttons] a bitmask of
- * [GamepadButton]s, sticks -32768..32767 (y down), triggers 0..255.
+ * The phone's game controller as the PC's virtual pad sees it: [buttons] a bitmask of
+ * [GamepadButton]s, sticks -32768..32767 (y down), triggers 0..255, [kind] the pad the PC makes,
+ * [mx]/[my] running totals of the gyro mouse's pixels (wrapping; the PC moves by the difference).
  */
 data class GamepadState(
     val buttons: Int = 0,
@@ -70,7 +71,13 @@ data class GamepadState(
     val ry: Int = 0,
     val lt: Int = 0,
     val rt: Int = 0,
+    val kind: PadKind = PadKind.XBOX,
+    val mx: Int = 0,
+    val my: Int = 0,
 )
+
+/** The pad games on the PC see. */
+enum class PadKind(val wire: String) { XBOX("xbox"), DUALSENSE("dualsense") }
 
 /** Bits of [GamepadState.buttons]; the companion's gamepad.rs uses the same order. */
 enum class GamepadButton { A, B, X, Y, LB, RB, BACK, START, GUIDE, LS, RS, UP, DOWN, LEFT, RIGHT;
@@ -590,28 +597,75 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     /** Why the PC couldn't make the virtual pad (no access to /dev/uinput), once it says so. */
     val gamepadError: StateFlow<String?> = _gamepadError.asStateFlow()
 
+    /** The PC's offer of a UDP port and key for the controller (see [streamGamepad]). */
+    private class UdpOffer(val port: Int, val key: ByteArray)
+    private val gamepadOffer = MutableStateFlow<UdpOffer?>(null)
+    private val _gamepadFast = MutableStateFlow(false)
+    /** Whether the controller is going over UDP (Wi-Fi with a companion that offers it) rather than the link. */
+    val gamepadFast: StateFlow<Boolean> = _gamepadFast.asStateFlow()
+
     /**
      * Sends [states] to the PC's virtual pad for as long as this runs: every change at once (the flow
      * conflates, so a slow link only ever carries the newest), and the current one each second, which
      * keeps the pad alive (the PC lets go of everything after 4 s of silence). Ending it closes the pad.
+     *
+     * Once the PC offers UDP (and it's reached over a network, not the USB tunnel), changes go as
+     * signed datagrams instead, repeated every [GAMEPAD_REPEAT_MS] so a lost one heals fast; the link
+     * still carries the once-a-second state. Every state is numbered so the PC drops older ones.
      */
-    suspend fun streamGamepad(states: StateFlow<GamepadState>) {
+    suspend fun streamGamepad(states: StateFlow<GamepadState>) = withContext(Dispatchers.IO) {
         _gamepadError.value = null
+        val sid = java.security.SecureRandom().nextInt()
+        var seq = 0
+        var used: UdpOffer? = null
+        var socket: java.net.DatagramSocket? = null
+        var mac: javax.crypto.Mac? = null
+        var lastLink = 0L
         try {
             var current = states.value
             while (true) {
-                ctx.send(packet(GAMEPAD_STATE) {
-                    put("b", current.buttons)
-                    put("lx", current.lx); put("ly", current.ly)
-                    put("rx", current.rx); put("ry", current.ry)
-                    put("lt", current.lt); put("rt", current.rt)
-                })
+                val offer = gamepadOffer.value
+                if (offer !== used) {
+                    used = offer
+                    socket?.close()
+                    socket = offer?.let { ctx.device.datagramTo(it.port) }
+                    mac = offer?.let { o -> javax.crypto.Mac.getInstance("HmacSHA256").apply { init(javax.crypto.spec.SecretKeySpec(o.key, "HmacSHA256")) } }
+                    _gamepadFast.value = socket != null
+                    if (socket != null) VLog.i(TAG, "controller over UDP to port ${offer?.port}")
+                }
+                seq++
+                val now = System.nanoTime() / 1_000_000
+                val fast = socket?.let { s ->
+                    runCatching { s.send(java.net.DatagramPacket(gamepadDatagram(current, sid, seq, mac!!), GAMEPAD_DATAGRAM)) }.isSuccess
+                } ?: false
+                if (!fast || now - lastLink >= GAMEPAD_HEARTBEAT_MS) {
+                    lastLink = now
+                    ctx.send(packet(GAMEPAD_STATE) {
+                        put("b", current.buttons)
+                        put("lx", current.lx); put("ly", current.ly)
+                        put("rx", current.rx); put("ry", current.ry)
+                        put("lt", current.lt); put("rt", current.rt)
+                        put("kind", current.kind.wire)
+                        put("mx", current.mx); put("my", current.my)
+                        put("sid", sid.toLong() and 0xFFFFFFFFL); put("seq", seq.toLong() and 0xFFFFFFFFL)
+                    })
+                }
                 val sent = current
-                current = withTimeoutOrNull(GAMEPAD_HEARTBEAT_MS) { states.first { it != sent } } ?: sent
+                val wait = if (fast) GAMEPAD_REPEAT_MS else GAMEPAD_HEARTBEAT_MS
+                current = withTimeoutOrNull(wait) { states.first { it != sent } } ?: sent
             }
         } finally {
+            socket?.close()
+            gamepadOffer.value = null
+            _gamepadFast.value = false
             withContext(kotlinx.coroutines.NonCancellable) { ctx.send(packet(GAMEPAD_CLOSE)) }
         }
+    }
+
+    private fun receiveGamepadOffer(packet: NetworkPacket) {
+        val port = packet.int("port") ?: return
+        val key = packet.string("key")?.let { runCatching { java.util.Base64.getDecoder().decode(it) }.getOrNull() } ?: return
+        if (port in 1..65535 && key.size >= 16) gamepadOffer.value = UdpOffer(port, key)
     }
 
     @Volatile private var pendingStep: CompletableDeferred<NetworkPacket>? = null
@@ -630,6 +684,18 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         return Result.success(p.string("view") ?: "windows")
     }
 
+    /** One UDP state, laid out as the companion's gamepad.rs reads it. */
+    private fun gamepadDatagram(s: GamepadState, sid: Int, seq: Int, mac: javax.crypto.Mac): ByteArray {
+        val b = java.nio.ByteBuffer.allocate(GAMEPAD_DATAGRAM)
+        b.put("VYG1".toByteArray()).putInt(sid).putInt(seq).putInt(s.buttons)
+        for (v in intArrayOf(s.lx, s.ly, s.rx, s.ry)) b.putShort(v.coerceIn(-32768, 32767).toShort())
+        b.put(s.lt.coerceIn(0, 255).toByte()).put(s.rt.coerceIn(0, 255).toByte())
+        b.putInt(s.mx).putInt(s.my).put(if (s.kind == PadKind.DUALSENSE) 1 else 0)
+        val body = b.array().copyOf(GAMEPAD_BODY)
+        b.put(mac.doFinal(body), 0, GAMEPAD_DATAGRAM - GAMEPAD_BODY)
+        return b.array()
+    }
+
     private fun receiveRumble(packet: NetworkPacket) {
         packet.string("error")?.let { _gamepadError.value = it; return }
         _rumble.tryEmit(Rumble(packet.int("strong") ?: 0, packet.int("weak") ?: 0, packet.int("ms") ?: 0))
@@ -637,6 +703,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
 
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         if (packet.type == GAMEPAD_RUMBLE) receiveRumble(packet)
+        if (packet.type == GAMEPAD_UDP) receiveGamepadOffer(packet)
         if (packet.type == DESKTOP_STEPPED) pendingStep?.also { pendingStep = null }?.complete(packet)
         if (packet.type == SCREENSHOT) screenshot.receive(packet)
         if (packet.type == CAMERA) photo.receive(packet)
@@ -699,7 +766,11 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val GAMEPAD_STATE = "vyoma.gamepad.state"
         const val GAMEPAD_CLOSE = "vyoma.gamepad.close"
         const val GAMEPAD_RUMBLE = "vyoma.gamepad.rumble"
+        const val GAMEPAD_UDP = "vyoma.gamepad.udp"
         private const val GAMEPAD_HEARTBEAT_MS = 1_000L
+        private const val GAMEPAD_REPEAT_MS = 100L
+        private const val GAMEPAD_BODY = 35
+        private const val GAMEPAD_DATAGRAM = 51
         const val DESKTOP_STEP = "vyoma.desktop.step"
         const val DESKTOP_STEPPED = "vyoma.desktop.stepped"
         private const val STEP_TIMEOUT_MS = 3_000L
@@ -722,7 +793,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, GAMEPAD_RUMBLE, DESKTOP_STEPPED),
+            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED),
             outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP),
         ) { CompanionPlugin(it, sink) }
     }
