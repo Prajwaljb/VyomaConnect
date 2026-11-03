@@ -273,7 +273,6 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
 
     // The pill in bar coordinates: resting it sits inside the padding; lifted it outgrows the bar.
     val pad = with(density) { 4.dp.toPx() }
-    val overflow = with(density) { 7.dp.toPx() }
     fun DrawScope.pill(): Rect {
         val l = left.value
         val w = right.value - l
@@ -285,8 +284,10 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
         // stops, wobbling through round. At rest it's unchanged.
         val sq = squash * up.coerceIn(0f, 1f)
         val shrink = 1f - 0.45f * sq.coerceAtLeast(0f)
-        val h = (rest + (2 * overflow + 2 * pad) * up) * (1f - 0.14f * stretch) / (1f + sq) * shrink
-        val ww = (w + 2 * overflow * up.coerceAtLeast(0f) * 1.6f + rest * 0.06f * up.coerceAtMost(0f)) * (1f + 0.4f * sq) * shrink
+        // Lifted, the drop is the tab grown 1.14x each way (iOS Music: 178 over a 156 bar, 240 over a 210 tab).
+        val grow = 1f + 0.14f * up.coerceAtLeast(0f)
+        val h = (rest + 2 * pad * up.coerceAtLeast(0f)) * grow * (1f - 0.14f * stretch) / (1f + sq) * shrink
+        val ww = (w * grow + rest * 0.06f * up.coerceAtMost(0f)) * (1f + 0.4f * sq) * shrink
         val cx = pad + l + w / 2
         return Rect(Offset(cx - ww / 2, (size.height - h) / 2), Size(ww, h))
     }
@@ -304,7 +305,7 @@ private fun TabBar(tab: Tab, onTab: (Tab) -> Unit, backdrop: Backdrop) {
             // never the bar's rendered glass (its rim, shrunk inside the drop, was a second border). The bar
             // seen through the drop shrinks (iOS Music: its edges show inset inside the drop, what's beyond
             // them as bands), so the drop reads as a lens held above it, not a magnifier on it.
-            .liquidLens(backdrop, strength = { lift.value }, zoom = { 1f - 0.14f * lift.value.coerceIn(0f, 1f) }, style = LensStyle.Lift, over = barTint, rect = { pill() })
+            .liquidLens(backdrop, strength = { lift.value }, zoom = { 1f - 0.1f * lift.value.coerceIn(0f, 1f) }, style = LensStyle.Lift, over = barTint, blur = 2.5.dp, rect = { pill() })
             .drawBehind {
                 // The resting pill is gone early in the lift: magnified inside the growing drop, its
                 // grey read as a white haze (where drops can be drawn).

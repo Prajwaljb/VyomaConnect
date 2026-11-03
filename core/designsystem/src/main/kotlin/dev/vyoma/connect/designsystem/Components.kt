@@ -879,7 +879,7 @@ fun SegmentedControl(options: List<String>, selected: Int, onSelect: (Int) -> Un
             .fillMaxWidth()
             .height(40.dp)
             // As the tab drop: the track shrinks behind it.
-            .liquidLens(null, strength = { lift.value }, zoom = { 1f - 0.14f * lift.value.coerceIn(0f, 1f) }, underlay = card, style = LensStyle.Lift, rect = { thumbRect() })
+            .liquidLens(null, strength = { lift.value }, zoom = { 1f - 0.1f * lift.value.coerceIn(0f, 1f) }, underlay = card, style = LensStyle.Lift, rect = { thumbRect() })
             .background(MaterialTheme.colorScheme.onSurface.copy(alpha = if (dark) 0.12f else 0.07f), CircleShape)
             .drawBehind {
                 if (left.value < 0f) return@drawBehind
