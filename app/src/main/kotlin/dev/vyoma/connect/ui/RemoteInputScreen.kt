@@ -27,6 +27,7 @@ import dev.vyoma.connect.designsystem.OrbState
 import dev.vyoma.connect.designsystem.ConnectionOrb
 import androidx.compose.material3.Surface
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -113,7 +114,6 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.vyoma.connect.designsystem.pressable
-import dev.vyoma.connect.designsystem.LocalStatus
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -206,6 +206,15 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
         pad?.let { scope.launch { it.block() } }
     }
     fun typing(block: suspend MousePadPlugin.() -> Unit) { pad?.let { scope.launch { it.block() } } }
+    // What a gesture just did ("Overview", "Next desktop"): shown for a moment in the header, in
+    // place of the PC's name, instead of a toast over the pad (user 2026-11-04).
+    var gestureNote by remember { mutableStateOf<String?>(null) }
+    var noteJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    fun note(text: String) {
+        gestureNote = text
+        noteJob?.cancel()
+        noteJob = scope.launch { delay(1_400); gestureNote = null }
+    }
 
     // Surface, not a bare background: it supplies onBackground as the content color for the bar.
     Surface(Modifier.fillMaxSize().aurora(), color = Color.Transparent, contentColor = MaterialTheme.colorScheme.onBackground) { Column(
@@ -222,9 +231,22 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             Column(Modifier.weight(1f)) {
                 // Named for how it was opened: the Keyboard tile shouldn't land on a screen called Touchpad.
                 Text(if (startWithKeyboard) "Keyboard" else "Touchpad", style = MaterialTheme.typography.titleLarge)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ConnectionOrb(if (target != null) OrbState.CONNECTED else OrbState.OFFLINE, size = 7.dp)
-                    Text(target?.identity?.deviceName ?: "No PC connected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                androidx.compose.animation.AnimatedContent(
+                    gestureNote,
+                    transitionSpec = {
+                        (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(160)) togetherWith
+                            androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(160)))
+                    },
+                    label = "subtitle",
+                ) { shown ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (shown != null) {
+                            Text(shown, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                        } else {
+                            ConnectionOrb(if (target != null) OrbState.CONNECTED else OrbState.OFFLINE, size = 7.dp)
+                            Text(target?.identity?.deviceName ?: "No PC connected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
             }
             // The phone as a game controller: the other way to drive the PC by hand (needs the companion).
@@ -267,7 +289,6 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                 }
             }
         }
-        val status = LocalStatus.current
         val kind = remember { mutableStateOf(vm.desktopKind()) }
         Box(
             Modifier
@@ -358,13 +379,13 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                                                 } else null
                                                 val view = where ?: pad?.let { k.step(it, up, desktopView) } ?: desktopView
                                                 desktopView = view
-                                                status.show(k.viewName(view), haptic = false)
+                                                note(k.viewName(view))
                                             }
                                         } else {
                                             // The desktops follow the fingers: swiping left brings the next one in from the right.
                                             val next = swipe.x < 0f
                                             act { k.switchDesktop(this, right = next) }
-                                            status.show(if (next) "Next desktop" else "Previous desktop", haptic = false)
+                                            note(if (next) "Next desktop" else "Previous desktop")
                                         }
                                     }
                                 }

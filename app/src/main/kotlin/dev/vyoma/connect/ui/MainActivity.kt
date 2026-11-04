@@ -275,7 +275,6 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                     // At the root, back on another tab goes Home first, like One UI apps.
                     backToHome = backStack.size == 1,
                     onTouchpad = { backStack.add(Screen.Touchpad(null, keyboard = false)) },
-                    onKeyboard = { backStack.add(Screen.Touchpad(null, keyboard = true)) },
                     onGamepad = { GamepadActivity.open(context, null) },
                 ) { t ->
                     when (t) {
