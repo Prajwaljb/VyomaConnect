@@ -86,12 +86,18 @@ object PhoneWebcam {
     val status: StateFlow<Status> = _status.asStateFlow()
     private var job: Job? = null
 
+    /** Which camera and whether the mic is on: the running stream follows these without restarting. */
+    private val front = MutableStateFlow(true)
+    private val micOn = MutableStateFlow(true)
+
     fun start(context: Context, options: Options) {
         val app = context.applicationContext as android.app.Application
         stop(app)
+        front.value = options.front
+        micOn.value = options.mic
         _status.value = Status(on = true, options = options)
         LinkService.mediaInUse(app, camera = true, mic = options.mic)
-        job = (app as android.app.Application).container.appScope.launch { follow(app, options) }
+        job = app.container.appScope.launch { follow(app, options.hd) }
     }
 
     fun stop(context: Context) {
@@ -101,13 +107,25 @@ object PhoneWebcam {
         _status.value = _status.value.copy(on = false, camera = false, mic = false)
     }
 
-    /** Changes cameras / mic / quality: a restart, as the PC sees a new stream either way. */
+    /**
+     * Switching cameras or the mic happens inside the running stream: the PC's camera device stays
+     * open, so the app watching it never sees it go (a restart made calls drop the camera, user
+     * 2026-11-04). Only a new quality restarts, as the picture's size changes.
+     */
     fun change(context: Context, options: Options) {
-        if (_status.value.on) start(context, options) else _status.value = _status.value.copy(options = options, error = null)
+        val was = _status.value
+        if (was.on && options.hd != was.options.hd) return start(context, options)
+        _status.value = was.copy(options = options, error = null)
+        if (!was.on) return
+        front.value = options.front
+        if (micOn.value != options.mic) {
+            micOn.value = options.mic
+            LinkService.mediaInUse(context.applicationContext, camera = true, mic = options.mic)
+        }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    private suspend fun follow(app: Context, options: Options) {
+    private suspend fun follow(app: Context, hd: Boolean) {
         val hub = (app as android.app.Application).container.hub.filterNotNull().first()
         hub.devices.flatMapLatest { all ->
             val each = all.values.map { d ->
@@ -128,7 +146,7 @@ object PhoneWebcam {
             while (true) {
                 plugin.resetWebcam()
                 try {
-                    session(app, plugin, options)
+                    session(app, plugin, hd)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -146,49 +164,81 @@ object PhoneWebcam {
         }
     }
 
-    /** One stream to the PC: camera (and mic) open until the PC hangs up or this is cancelled. */
-    private suspend fun session(app: Context, plugin: CompanionPlugin, options: Options) = coroutineScope {
-        val cameras = app.getSystemService(CameraManager::class.java)
-        val id = cameras.cameraIdList.firstOrNull {
+    private fun cameraFor(cameras: CameraManager, wantFront: Boolean): String =
+        cameras.cameraIdList.firstOrNull {
             cameras.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) ==
-                (if (options.front) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK)
+                (if (wantFront) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK)
         } ?: cameras.cameraIdList.first()
+
+    /** The clockwise turn that makes [id]'s frames upright with the phone held at [held]. */
+    private fun upright(cameras: CameraManager, id: String, held: Int): Int {
         val chars = cameras.getCameraCharacteristics(id)
-        val front = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
         val sensor = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
-        val size = pickSize(chars, if (options.hd) Size(1920, 1080) else Size(1280, 720))
+        val isFront = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+        return if (isFront) (sensor - held + 360) % 360 else (sensor + held) % 360
+    }
+
+    /**
+     * One stream to the PC until it hangs up or this is cancelled. One encoder and one payload for
+     * its whole life; the camera feeding the encoder ([front]) and the mic ([micOn]) come and go
+     * inside it.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun session(app: Context, plugin: CompanionPlugin, hd: Boolean) = coroutineScope {
+        val cameras = app.getSystemService(CameraManager::class.java)
+        // A size both cameras give an encoder, so switching never changes it.
+        val want = if (hd) Size(1920, 1080) else Size(1280, 720)
+        val size = listOf(true, false).map { pickSize(cameras.getCameraCharacteristics(cameraFor(cameras, it)), want) }.minBy { it.width }
         val video = LiveStream(VIDEO_BACKLOG)
-        val encoder = Encoder(size, if (options.hd) 8_000_000 else 4_000_000, video)
-        val turns = Turns(app) { held -> if (front) (sensor - held + 360) % 360 else (sensor + held) % 360 }
-        var camera: CameraDevice? = null
-        val pcm = if (options.mic) LiveStream(MIC_BACKLOG) else null
-        val mic = pcm?.let { Mic(app, it) }
+        val encoder = Encoder(size, if (hd) 8_000_000 else 4_000_000, video)
+        val turns = Turns(app)
         try {
-            camera = open(cameras, id, encoder.handler)
-            capture(camera, encoder.surface, encoder.handler)
             launch {
                 plugin.webcam.collect { s -> _status.value = _status.value.copy(camera = s.camera, mic = s.mic) }
             }
+            // The camera in use: closed and the other opened on a switch, into the same encoder.
             launch {
-                turns.rotation.collect { r ->
-                    plugin.turnWebcam(r)
-                    encoder.sync()
+                front.collectLatest { f ->
+                    val id = cameraFor(cameras, f)
+                    val camera = open(cameras, id, encoder.handler)
+                    try {
+                        capture(camera, encoder.surface, encoder.handler)
+                        VLog.i(TAG, "camera ${if (f) "front" else "back"} ${size.width}x${size.height}")
+                        kotlinx.coroutines.awaitCancellation()
+                    } finally {
+                        camera.close()
+                    }
                 }
             }
-            pcm?.let { stream ->
-                mic!!.start()
-                launch { plugin.sendMic(RATE, 1, stream) }
+            // The turn the PC applies follows both the phone and the camera; only real changes go out.
+            launch {
+                combine(turns.held, front) { held, f -> upright(cameras, cameraFor(cameras, f), held) }
+                    .distinctUntilChanged()
+                    .collect { r ->
+                        plugin.turnWebcam(r)
+                        encoder.sync()
+                    }
             }
-            VLog.i(TAG, "camera ${if (front) "front" else "back"} ${size.width}x${size.height} to the PC")
-            plugin.sendWebcam(size.width, size.height, turns.rotation.value, video)
+            launch {
+                micOn.collectLatest { on ->
+                    if (!on) return@collectLatest
+                    val pcm = LiveStream(MIC_BACKLOG)
+                    val mic = Mic(app, pcm)
+                    try {
+                        mic.start()
+                        plugin.sendMic(RATE, 1, pcm)
+                    } finally {
+                        mic.close()
+                        pcm.close()
+                    }
+                }
+            }
+            plugin.sendWebcam(size.width, size.height, upright(cameras, cameraFor(cameras, front.value), turns.held.value), video)
         } finally {
             turns.close()
-            mic?.close()
-            pcm?.close()
             video.close()
-            runCatching { camera?.close() }
-            encoder.close()
             this.coroutineContext.cancelChildren()
+            encoder.close()
         }
     }
 
@@ -338,25 +388,22 @@ object PhoneWebcam {
         }
     }
 
-    /**
-     * How the phone is held, snapped to 90° steps (with some give, so it doesn't flicker at 45°),
-     * as the clockwise turn [upright] gives for it. Lying flat keeps the last one.
-     */
-    private class Turns(context: Context, private val upright: (Int) -> Int) {
-        val rotation = MutableStateFlow(upright(0))
-        private var held = -1
+    /** How the phone is held, snapped to 90° steps with some give (no flicker at 45°); flat keeps the last. */
+    private class Turns(context: Context) {
+        val held = MutableStateFlow(0)
+        private var last = -1
         private val listener = object : OrientationEventListener(context) {
             override fun onOrientationChanged(o: Int) {
                 if (o == ORIENTATION_UNKNOWN) return
                 val snapped = ((o + 45) / 90 * 90) % 360
-                if (held >= 0 && snapped != held) {
+                if (last >= 0 && snapped != last) {
                     // Only past 30° into the new quarter.
                     val off = ((o - snapped + 540) % 360) - 180
                     if (kotlin.math.abs(off) > 30) return
                 }
-                if (snapped != held) {
-                    held = snapped
-                    rotation.value = upright(snapped)
+                if (snapped != last) {
+                    last = snapped
+                    held.value = snapped
                 }
             }
         }.also { if (it.canDetectOrientation()) it.enable() }

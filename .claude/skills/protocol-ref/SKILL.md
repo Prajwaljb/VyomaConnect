@@ -177,6 +177,10 @@ body fields before implementing one.
   O_NONBLOCK + F_SETPIPE_SZ 4096 and 10 ms writes dropped when full (blocking queued 1.5 s of lag, measured);
   stale modules removed on start. Either stream silent 4 s = phone gone. Payloads ride the USB forward when the
   cable is in. Verified: 30 fps at 720p (front), audio at real-time rate, background with the screen off.
+  Camera/mic switches stay inside the stream (one encoder + payload; the camera feeding the encoder is swapped,
+  the mic payload comes and goes; size = one both cameras give): a restart made the PC device vanish and call apps
+  dropped the camera (user). Measured: a front/back switch is a <1 s freeze, the reader never disconnects.
+  Only a quality change restarts.
  (tether.rs, polled every 5 s while a trusted phone is unlinked): USB tethering
   (rndis/cdc gateway or neighbour) and any Wi-Fi gateway, i.e. the PC on the phone's hotspot (verified 2026-11-03,
   during a power cut) and the cable (usb.rs `adb forward tcp:0 tcp:1716` per plugged phone, so the companion links
