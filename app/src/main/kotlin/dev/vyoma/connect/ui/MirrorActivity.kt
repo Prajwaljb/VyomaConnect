@@ -1,8 +1,10 @@
 package dev.vyoma.connect.ui
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Mouse
 import androidx.compose.material3.Icon
@@ -55,9 +58,19 @@ class MirrorActivity : ComponentActivity() {
         control.value = MirrorAccessibility.enabled(this)
     }
 
+    private val prefs by lazy { getSharedPreferences("mirror", MODE_PRIVATE) }
+
+    private fun granted(p: String) = checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
+
+    private fun setSound(on: Boolean) {
+        prefs.edit().putBoolean("sound", on).apply()
+        PhoneMirror.sound.value = on
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        PhoneMirror.sound.value = prefs.getBoolean("sound", true)
         setContent {
             val theme by application.container.settings.theme.collectAsStateWithLifecycle(ThemeSettings())
             val status by PhoneMirror.status.collectAsStateWithLifecycle()
@@ -65,6 +78,16 @@ class MirrorActivity : ComponentActivity() {
             val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
                 val data = r.data
                 if (r.resultCode == Activity.RESULT_OK && data != null) LinkService.mirror(this, r.resultCode, data)
+            }
+            val sound by PhoneMirror.sound.collectAsStateWithLifecycle()
+            // Sound needs the record-audio permission (Android counts capturing playback as recording).
+            val askAudio = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+                if (!ok) setSound(false)
+                if (!status.on) consent.launch(PhoneMirror.consentIntent(this))
+            }
+            fun start() {
+                if (sound && !granted(Manifest.permission.RECORD_AUDIO)) askAudio.launch(Manifest.permission.RECORD_AUDIO)
+                else consent.launch(PhoneMirror.consentIntent(this))
             }
             fun openAccessibility() = startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             VyomaTheme(theme) {
@@ -79,7 +102,7 @@ class MirrorActivity : ComponentActivity() {
                                 if (status.on) "Stop" else "Show on the PC",
                                 onClick = {
                                     if (status.on) PhoneMirror.stop(this@MirrorActivity)
-                                    else consent.launch(PhoneMirror.consentIntent(this@MirrorActivity))
+                                    else start()
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                                 prominent = !status.on,
@@ -92,6 +115,24 @@ class MirrorActivity : ComponentActivity() {
                             SectionCard(Modifier.padding(top = 8.dp)) {
                                 ListRow(title = "Couldn't show the screen", subtitle = err, icon = Icons.Rounded.ErrorOutline, iconTint = MaterialTheme.colorScheme.error)
                             }
+                        }
+                    }
+                    item(key = "sound-label") { SectionLabel("Sound") }
+                    item(key = "sound") {
+                        SectionCard(Modifier.padding(top = 8.dp)) {
+                            fun toggle(on: Boolean) {
+                                if (on && !granted(Manifest.permission.RECORD_AUDIO)) {
+                                    setSound(true)
+                                    askAudio.launch(Manifest.permission.RECORD_AUDIO)
+                                } else setSound(on)
+                            }
+                            ListRow(
+                                title = "Play the phone's sound on the PC",
+                                subtitle = "Videos, music and games; calls and apps that block recording stay on the phone",
+                                icon = Icons.AutoMirrored.Rounded.VolumeUp,
+                                trailing = { VyomaSwitch(sound, { toggle(it) }, contentDescription = "Phone sound on the PC") },
+                                onClick = { toggle(!sound) },
+                            )
                         }
                     }
                     item(key = "control-label") { SectionLabel("Control") }
@@ -111,7 +152,8 @@ class MirrorActivity : ComponentActivity() {
                     item(key = "tip") {
                         Text(
                             "In the PC's window, click to tap and drag to swipe; the wheel scrolls. Typing goes into the " +
-                                "field you tapped. Right-click or Esc is Back, middle-click is Home. Close the window to stop.",
+                                "field you tapped, and Ctrl+V pastes the PC's clipboard there. Right-click or Esc is Back, middle-click " +
+                                "is Home. Close the window to stop.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),

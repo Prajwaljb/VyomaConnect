@@ -44,6 +44,17 @@ import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.perform
 import dev.vyoma.connect.designsystem.pressable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.material.icons.rounded.Mouse
+import androidx.compose.material.icons.rounded.TouchApp
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import kotlinx.coroutines.channels.Channel
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -116,8 +127,18 @@ class PcScreenActivity : ComponentActivity() {
     sealed interface Phase {
         data object Connecting : Phase
         /** [showing]: the first picture is on screen (until then the view stays dark). */
-        data class Live(val width: Int, val height: Int, val showing: Boolean = false) : Phase
+        /** [control]: the PC lets touches work its pointer. */
+        data class Live(val width: Int, val height: Int, val showing: Boolean = false, val control: Boolean = false) : Phase
         data class Failed(val reason: String) : Phase
+    }
+
+    /**
+     * Touches the moment the screen senses them, not batched to the next frame: up to a frame
+     * (4-8 ms) sooner for touch control, as games do.
+     */
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        window.decorView.requestUnbufferedDispatch(android.view.InputDevice.SOURCE_TOUCHSCREEN)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -174,7 +195,7 @@ class PcScreenActivity : ComponentActivity() {
             plugin.openScreen().fold(
                 onSuccess = { stream ->
                     pending = stream
-                    phase.value = Phase.Live(stream.width, stream.height)
+                    phase.value = Phase.Live(stream.width, stream.height, control = stream.control)
                     play()
                 },
                 onFailure = { phase.value = Phase.Failed(it.message ?: "Couldn't show the PC's screen") },
@@ -189,7 +210,7 @@ class PcScreenActivity : ComponentActivity() {
         pending = null
         decoder = ScreenDecoder(
             stream.video, target,
-            onSize = { w, h -> phase.value = Phase.Live(w, h) },
+            onSize = { w, h -> phase.value = Phase.Live(w, h, control = stream.control) },
             onFirstFrame = { (phase.value as? Phase.Live)?.let { phase.value = it.copy(showing = true) } },
             onEnd = { error ->
                 runOnUiThread {
@@ -250,34 +271,159 @@ private fun ScreenView(
     val videoAlpha by animateFloatAsState(if (live?.showing == true) 1f else 0f, tween(260), label = "video")
     // The video is recorded as the backdrop the controls' liquid glass bends and blurs.
     val backdrop = rememberBackdrop()
+    var controlling by remember { mutableStateOf(false) }
+    var hint by remember { mutableIntStateOf(0) }
+    val ratio = live?.takeIf { it.width > 0 && it.height > 0 }?.let { it.width.toFloat() / it.height } ?: (16f / 9f)
+    // Touches go out in order, one after another.
+    val outbox = remember { Channel<Touch>(Channel.UNLIMITED) }
+    val canControl = live?.control == true
+    LaunchedEffect(plugin, canControl) {
+        val p = plugin ?: return@LaunchedEffect
+        // Touches go as a live stream (over the cable when it's in); packets on the link if the
+        // stream isn't up.
+        var stream: dev.vyoma.connect.webcam.LiveStream? = null
+        if (canControl) {
+            val s = dev.vyoma.connect.webcam.LiveStream(64 * 1024)
+            stream = s
+            launch(kotlinx.coroutines.Dispatchers.IO) {
+                try { p.screenTouches(s) } finally { if (stream === s) stream = null; s.close() }
+            }
+        }
+        suspend fun deliver(t: Touch) {
+            val line = java.util.Locale.ROOT.let { l ->
+                "{\"kind\":\"${t.kind}\",\"x\":${"%.5f".format(l, t.x)},\"y\":${"%.5f".format(l, t.y)},\"dx\":${"%.2f".format(l, t.dx)},\"dy\":${"%.2f".format(l, t.dy)}}\n"
+            }
+            if (stream?.offer(line.toByteArray()) != true) p.screenInput(t.kind, t.x, t.y, t.dx, t.dy)
+        }
+        try {
+            for (first in outbox) {
+                var t = first
+                // Behind? Only the newest of a run of moves matters.
+                while (t.kind == "move") {
+                    val next = outbox.tryReceive().getOrNull() ?: break
+                    if (next.kind == "move") { t = next; continue }
+                    deliver(t)
+                    t = next
+                    break
+                }
+                deliver(t)
+            }
+        } finally {
+            stream?.close()
+        }
+    }
+    val haptics = LocalHapticFeedback.current
+    fun zoomBy(centroid: Offset, delta: Offset, factor: Float, width: Int, height: Int) {
+        val before = zoom.value
+        val next = (before * factor).coerceIn(1f, 5f)
+        val centre = Offset(width / 2f, height / 2f)
+        // Zoom about the fingers, then follow them; never drift off the picture.
+        val o = pan.value + (centroid - centre - pan.value) * (1 - next / before) + delta
+        scope.launch { zoom.snapTo(next); pan.snapTo(bounded(o, next, width, height)) }
+    }
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = { chrome = !chrome },
-                    onDoubleTap = { at ->
-                        val centre = Offset(size.width / 2f, size.height / 2f)
-                        val (z, o) = if (zoom.value > 1.01f) 1f to Offset.Zero else 2.5f to bounded((centre - at) * 1.5f, 2.5f, size.width, size.height)
-                        scope.launch { zoom.animateTo(z, ZOOM_SPRING) }
-                        scope.launch { pan.animateTo(o, spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow)) }
+            .then(
+                if (controlling) Modifier.pointerInput(ratio) {
+                    // Where a touch is on the PC's screen (0..1 inside the picture), through the letterbox, zoom and pan.
+                    fun onPcRaw(at: Offset): Offset {
+                        val w = size.width.toFloat(); val h = size.height.toFloat()
+                        val (vw, vh) = if (w / h > ratio) h * ratio to h else w to w / ratio
+                        val z = zoom.value
+                        val left = w / 2 + pan.value.x - vw * z / 2
+                        val top = h / 2 + pan.value.y - vh * z / 2
+                        return Offset((at.x - left) / (vw * z), (at.y - top) / (vh * z))
+                    }
+                    fun onPc(at: Offset): Offset = onPcRaw(at).let { Offset(it.x.coerceIn(0f, 1f), it.y.coerceIn(0f, 1f)) }
+                    /** On the black bars beside the picture, not the PC's screen. */
+                    fun outside(at: Offset): Boolean = onPcRaw(at).let { it.x < 0f || it.x > 1f || it.y < 0f || it.y > 1f }
+                    fun send(kind: String, at: Offset) = onPc(at).let { outbox.trySend(Touch(kind, it.x, it.y)) }
+                    awaitEachGesture {
+                        val first = awaitFirstDown(requireUnconsumed = false)
+                        val start = first.position
+                        // Touches on the bars are the viewer's own: a tap there shows the buttons.
+                        val onBars = outside(start)
+                        var dragging = false
+                        var multi = false
+                        var moved = false
+                        var scrolled = false
+                        var last = start
+                        // Held still: a right-click, at once (the finger may stay down).
+                        val press = scope.launch {
+                            delay(LONG_PRESS_MS)
+                            if (onBars) return@launch
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            send("right", start)
+                        }
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val down = event.changes.filter { it.pressed }
+                            if (down.isEmpty()) break
+                            if (down.size >= 2 && !dragging) {
+                                multi = true
+                                press.cancel()
+                            }
+                            if (multi) {
+                                val factor = event.calculateZoom()
+                                val shift = event.calculatePan()
+                                if (shift.getDistance() > 0.5f || kotlin.math.abs(factor - 1f) > 0.002f) moved = true
+                                if (zoom.value > 1.01f || kotlin.math.abs(factor - 1f) > 0.01f) {
+                                    zoomBy(event.calculateCentroid(), shift, factor, size.width, size.height)
+                                } else if (shift.getDistance() > 0f) {
+                                    // Two fingers at 1x: the PC scrolls with them (content follows the fingers).
+                                    val (vw, vh) = size.width.toFloat().let { w -> val h = size.height.toFloat(); if (w / h > ratio) h * ratio to h else w to w / ratio }
+                                    val pcW = live?.width?.toFloat() ?: vw
+                                    val pcH = live?.height?.toFloat() ?: vh
+                                    scrolled = true
+                                    val c = onPc(event.calculateCentroid())
+                                    outbox.trySend(Touch("scroll", c.x, c.y, -shift.x / vw * pcW, -shift.y / vh * pcH))
+                                }
+                                event.changes.forEach { it.consume() }
+                            } else {
+                                val at = down.first().position
+                                if (!onBars && !dragging && !press.isCompleted && (at - start).getDistance() > viewConfiguration.touchSlop) {
+                                    dragging = true
+                                    press.cancel()
+                                    send("down", start)
+                                }
+                                if (dragging && at != last) send("move", at)
+                                last = at
+                                down.first().consume()
+                            }
+                        }
+                        val rightClicked = press.isCompleted && !press.isCancelled
+                        press.cancel()
+                        when {
+                            multi -> {
+                                if (scrolled) outbox.trySend(Touch("scrollend"))
+                                // A quick two-finger tap shows the buttons.
+                                if (!moved && last == start) chrome = !chrome
+                            }
+                            dragging -> send("up", last)
+                            onBars -> if ((last - start).getDistance() < viewConfiguration.touchSlop) chrome = !chrome
+                            !rightClicked -> send("click", start)
+                        }
+                    }
+                } else Modifier
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { chrome = !chrome },
+                            onDoubleTap = { at ->
+                                val centre = Offset(size.width / 2f, size.height / 2f)
+                                val (z, o) = if (zoom.value > 1.01f) 1f to Offset.Zero else 2.5f to bounded((centre - at) * 1.5f, 2.5f, size.width, size.height)
+                                scope.launch { zoom.animateTo(z, ZOOM_SPRING) }
+                                scope.launch { pan.animateTo(o, spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow)) }
+                            },
+                        )
+                    }
+                    .pointerInput(Unit) {
+                        detectTransformGestures { centroid, delta, factor, _ -> zoomBy(centroid, delta, factor, size.width, size.height) }
                     },
-                )
-            }
-            .pointerInput(Unit) {
-                detectTransformGestures { centroid, delta, factor, _ ->
-                    val before = zoom.value
-                    val next = (before * factor).coerceIn(1f, 5f)
-                    val centre = Offset(size.width / 2f, size.height / 2f)
-                    // Zoom about the fingers, then follow them; never drift off the picture.
-                    val o = pan.value + (centroid - centre - pan.value) * (1 - next / before) + delta
-                    scope.launch { zoom.snapTo(next); pan.snapTo(bounded(o, next, size.width, size.height)) }
-                }
-            },
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        val ratio = live?.takeIf { it.width > 0 && it.height > 0 }?.let { it.width.toFloat() / it.height } ?: (16f / 9f)
         // TextureView, not SurfaceView: it scales and pans with the zoom like any other view, and it can
         // be recorded for the glass (a SurfaceView bypasses the app's drawing and would leave it bending black).
         Box(Modifier.fillMaxSize().backdropSource(backdrop), contentAlignment = Alignment.Center) { AndroidView(
@@ -348,6 +494,32 @@ private fun ScreenView(
                     if (live?.showing == true) RateReadout(backdrop, stats)
                 }
             }
+            // How touch control works, for a few seconds after turning it on.
+            var hintShown by remember { mutableStateOf(false) }
+            LaunchedEffect(hint) {
+                if (hint == 0) return@LaunchedEffect
+                hintShown = true
+                delay(5_000)
+                hintShown = false
+            }
+            AnimatedVisibility(
+                hintShown && controlling,
+                enter = fadeIn(tween(180)),
+                exit = fadeOut(tween(220)),
+                modifier = Modifier.align(Alignment.BottomCenter),
+            ) {
+                Text(
+                    "Tap to click · hold to right-click · drag to drag · two fingers scroll or zoom · tap the black bars for the buttons",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center,
+                    style = androidx.compose.ui.text.TextStyle(shadow = GLYPH_SHADOW),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                )
+            }
             if (plugin != null && live?.showing == true) {
                 // Top right, level with Close: the corners hold the controls, the middle the picture.
                 AnimatedVisibility(
@@ -356,7 +528,19 @@ private fun ScreenView(
                     exit = fadeOut(tween(160)) + slideOutVertically(tween(200)) { -it / 2 },
                     modifier = Modifier.align(Alignment.TopEnd),
                 ) {
-                    ScreenshotButton(backdrop, plugin, onFlash = { flash++ })
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (live.control) {
+                            GlassButton(
+                                backdrop, if (controlling) "Stop controlling" else "Control the PC",
+                                if (controlling) Icons.Rounded.TouchApp else Icons.Rounded.Mouse,
+                                onClick = {
+                                    controlling = !controlling
+                                    if (controlling) hint++
+                                },
+                            )
+                        }
+                        ScreenshotButton(backdrop, plugin, onFlash = { flash++ })
+                    }
                 }
             }
         }
@@ -374,6 +558,12 @@ private val GLYPH_SHADOW = androidx.compose.ui.graphics.Shadow(Color.Black.copy(
 
 private val CHROME_SPRING = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntOffset.VisibilityThreshold)
 private val ZOOM_SPRING = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = 0.001f)
+
+/** One touch for the PC's pointer (see [CompanionPlugin.screenInput]). */
+private class Touch(val kind: String, val x: Float = 0f, val y: Float = 0f, val dx: Float = 0f, val dy: Float = 0f)
+
+/** Held this long without moving: a right-click. */
+private const val LONG_PRESS_MS = 450L
 
 /** Keeps a zoomed picture covering its frame: no panning past its edges. */
 private fun bounded(o: Offset, scale: Float, width: Int, height: Int): Offset {

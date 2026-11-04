@@ -23,6 +23,10 @@ use crate::payload;
 const PORTAL: &str = "org.freedesktop.portal.Desktop";
 const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
 const SCREENCAST: &str = "org.freedesktop.portal.ScreenCast";
+const REMOTE: &str = "org.freedesktop.portal.RemoteDesktop";
+/// Linux input button codes (BTN_LEFT, BTN_RIGHT).
+const BTN_LEFT: i32 = 0x110;
+const BTN_RIGHT: i32 = 0x111;
 /// The phone's screen is about 1080 px tall in landscape: more than 1920 wide is wasted bits.
 const MAX_WIDTH: i32 = 1920;
 const BITRATE_KBPS: u32 = 8000;
@@ -42,7 +46,7 @@ const STAMP_MAGIC: &[u8; 4] = b"VYTS";
 
 /// Casts until the phone hangs up (or the stream fails). Failures before streaming starts reach the
 /// phone as an error packet, so it never waits on a spinner.
-pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str) -> Result<()> {
+pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, inputs: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>) -> Result<()> {
     // VYOMA_SCREEN_TEST=1 casts a moving test pattern instead, with no portal: for checking the
     // phone's viewer (and screenshotting it) without anything private on the screen.
     let test = std::env::var_os("VYOMA_SCREEN_TEST").is_some();
@@ -54,6 +58,7 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str) -
         }
     };
     let (w, h) = cast.as_ref().and_then(|c| c.size).map(fit).unwrap_or((MAX_WIDTH, MAX_WIDTH * 9 / 16));
+    let control = cast.as_ref().and_then(|c| Some(Pointer { conn: c.conn.clone(), session: c.control.clone()?, node: c.node, size: c.size? }));
     let (conn, mut gst) = match cast {
         Some(Cast { conn, node, fd, .. }) => (Some(conn), encoder(&format!("pipewiresrc fd=0 path={node} do-timestamp=true keepalive-time=1000"), Some(fd), w, h)?),
         None => (None, encoder(&format!("videotestsrc is-live=true pattern=smpte horizontal-speed=4 ! capsfilter caps=video/x-raw,width={w},height={h},framerate={MAX_FPS}/1"), None, w, h)?),
@@ -71,8 +76,13 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str) -
     let stamping = tokio::spawn(stamp(encoded, relay));
     let mut errors = gst.stderr.take().context("encoder has no error output")?;
     info!("{name}: casting the screen at {w}x{h}");
-    let announce = link::packet("vyoma.screen", json!({ "codec": "h264", "framing": "avc4", "width": w, "height": h }));
+    let announce = link::packet("vyoma.screen", json!({ "codec": "h264", "framing": "avc4", "width": w, "height": h, "control": control.is_some() }));
+    // The phone's touches, as the pointer on this screen, while the cast runs.
+    let touching = control.map(|p| tokio::spawn(p.follow(inputs)));
     let result = payload::offer_stream(sender, me, pinned, announce, video).await;
+    if let Some(t) = touching {
+        t.abort();
+    }
     let _ = gst.kill().await;
     stamping.abort();
     if let Err(e) = &result {
@@ -148,15 +158,174 @@ fn encoder(source: &str, fd: Option<zvariant::OwnedFd>, w: i32, h: i32) -> Resul
         .context("GStreamer (gst-launch-1.0) isn't installed")
 }
 
+/// Touches from the phone's view of this screen (`vyoma.screen.input`), performed through the
+/// remote-desktop session: x, y are 0..1 across the picture. Kinds: "click" and "right" (a tap,
+/// a long press), "down" / "move" / "up" (a drag with the left button), "scroll" (dx, dy in
+/// pixels of smooth scrolling) and "scrollend".
+struct Pointer {
+    conn: Connection,
+    session: OwnedObjectPath,
+    node: u32,
+    size: (i32, i32),
+}
+
+impl Pointer {
+    async fn follow(self, mut inputs: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>) {
+        while let Some(mut i) = inputs.recv().await {
+            // Behind? Only the newest of a run of moves matters.
+            while i["kind"] == "move" {
+                match inputs.try_recv() {
+                    Ok(next) if next["kind"] == "move" => i = next,
+                    Ok(next) => {
+                        let _ = self.perform(&i).await;
+                        i = next;
+                        break;
+                    }
+                    Err(_) => break,
+                }
+            }
+            if let Err(e) = self.perform(&i).await {
+                tracing::debug!("pointer: {e:#}");
+            }
+        }
+    }
+
+    /// Sent without waiting for the portal's answer (each would cost a round trip through the
+    /// portal and KWin); the bus keeps them in order.
+    async fn call<B: serde::Serialize + zvariant::DynamicType>(&self, method: &str, body: &B) -> Result<()> {
+        let msg = zbus::message::Message::method_call(PORTAL_PATH, method)?
+            .destination(PORTAL)?
+            .interface(REMOTE)?
+            .with_flags(zbus::message::Flags::NoReplyExpected)?
+            .build(body)?;
+        self.conn.send(&msg).await?;
+        Ok(())
+    }
+
+    async fn to(&self, i: &serde_json::Value) -> Result<()> {
+        let x = i["x"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0) * self.size.0 as f64;
+        let y = i["y"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0) * self.size.1 as f64;
+        self.call("NotifyPointerMotionAbsolute", &(&self.session, opts([]), self.node, x, y)).await
+    }
+
+    async fn button(&self, button: i32, down: bool) -> Result<()> {
+        self.call("NotifyPointerButton", &(&self.session, opts([]), button, down as u32)).await
+    }
+
+    async fn perform(&self, i: &serde_json::Value) -> Result<()> {
+        match i["kind"].as_str().unwrap_or("") {
+            "click" | "right" => {
+                let b = if i["kind"] == "right" { BTN_RIGHT } else { BTN_LEFT };
+                self.to(i).await?;
+                self.button(b, true).await?;
+                self.button(b, false).await
+            }
+            "down" => {
+                self.to(i).await?;
+                self.button(BTN_LEFT, true).await
+            }
+            "move" => self.to(i).await,
+            "up" => {
+                self.to(i).await?;
+                self.button(BTN_LEFT, false).await
+            }
+            "scroll" => {
+                self.to(i).await?;
+                let (dx, dy) = (i["dx"].as_f64().unwrap_or(0.0), i["dy"].as_f64().unwrap_or(0.0));
+                self.call("NotifyPointerAxis", &(&self.session, opts([]), dx, dy)).await
+            }
+            "scrollend" => self.call("NotifyPointerAxis", &(&self.session, opts([("finish", Value::Bool(true))]), 0.0f64, 0.0f64)).await,
+            _ => Ok(()),
+        }
+    }
+}
+
 struct Cast {
     conn: Connection,
     node: u32,
     fd: zvariant::OwnedFd,
     size: Option<(i32, i32)>,
+    /// A remote-desktop session: the phone's touches can work the pointer on this screen.
+    control: Option<OwnedObjectPath>,
 }
 
 impl Cast {
+    /// Remote desktop first (the screen plus the pointer, for touch control); plain screen sharing
+    /// if the portal can't, so watching still works. Cancelling on the PC cancels both.
     async fn start() -> Result<Cast> {
+        match Self::remote().await {
+            Ok(c) => Ok(c),
+            Err(e) if format!("{e:#}").contains("cancelled") => Err(e),
+            Err(e) => {
+                warn!("no remote control ({e:#}); sharing the screen to watch only");
+                Self::watch().await
+            }
+        }
+    }
+
+    /// RemoteDesktop with its ScreenCast: Plasma asks once (screen, and allowing control), then the
+    /// restore token reopens it. The pointer is moved in the stream's own coordinates.
+    async fn remote() -> Result<Cast> {
+        let conn = Connection::session().await.context("no session bus")?;
+        let portal = Portal::new(&conn)?;
+        let created = portal
+            .request_on(REMOTE, "CreateSession", |t| (opts([("handle_token", t.to_string().into()), ("session_handle_token", "vyomarc".into())]),))
+            .await?;
+        let session: OwnedObjectPath = created
+            .get("session_handle")
+            .and_then(|v| String::try_from(v.try_clone().ok()?).ok())
+            .and_then(|s| OwnedObjectPath::try_from(s).ok())
+            .context("the portal made no session")?;
+        let token = std::fs::read_to_string(remote_token_path()).ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        let s = session.clone();
+        portal
+            .request_on(REMOTE, "SelectDevices", move |t| {
+                let mut o = opts([
+                    ("handle_token", t.to_string().into()),
+                    ("types", Value::U32(1 | 2)), // keyboard, pointer
+                    ("persist_mode", Value::U32(2)),
+                ]);
+                if let Some(tok) = &token {
+                    o.insert("restore_token", tok.clone().into());
+                }
+                (s.clone(), o)
+            })
+            .await?;
+        let cursors: u32 = portal.property("AvailableCursorModes").await.unwrap_or(1);
+        let s = session.clone();
+        portal
+            .request("SelectSources", move |t| {
+                (
+                    s.clone(),
+                    opts([
+                        ("handle_token", t.to_string().into()),
+                        ("types", Value::U32(1)),
+                        ("multiple", Value::Bool(false)),
+                        ("cursor_mode", Value::U32(if cursors & 2 != 0 { 2 } else { 1 })),
+                    ]),
+                )
+            })
+            .await?;
+        let s = session.clone();
+        let started = portal.request_on(REMOTE, "Start", move |t| (s.clone(), "", opts([("handle_token", t.to_string().into())]))).await?;
+        if let Some(tok) = started.get("restore_token").and_then(|v| String::try_from(v.try_clone().ok()?).ok()) {
+            let _ = std::fs::write(remote_token_path(), tok);
+        }
+        let devices: u32 = started.get("devices").and_then(|v| u32::try_from(v.try_clone().ok()?).ok()).unwrap_or(0);
+        let streams: Vec<(u32, HashMap<String, OwnedValue>)> =
+            started.get("streams").context("no screen was shared")?.try_clone()?.try_into().context("unexpected stream list")?;
+        let (node, props) = streams.into_iter().next().context("no screen was shared")?;
+        let size = props.get("size").and_then(|v| <(i32, i32)>::try_from(v.try_clone().ok()?).ok());
+        let reply = conn
+            .call_method(Some(PORTAL), PORTAL_PATH, Some(SCREENCAST), "OpenPipeWireRemote", &(&session, opts([])))
+            .await
+            .context("the portal wouldn't open the stream")?;
+        let fd: zvariant::OwnedFd = reply.body().deserialize()?;
+        let control = (devices & 2 != 0).then_some(session);
+        Ok(Cast { conn, node, fd, size, control })
+    }
+
+    async fn watch() -> Result<Cast> {
         let conn = Connection::session().await.context("no session bus")?;
         let portal = Portal::new(&conn)?;
 
@@ -203,12 +372,16 @@ impl Cast {
             .await
             .context("the portal wouldn't open the stream")?;
         let fd: zvariant::OwnedFd = reply.body().deserialize()?;
-        Ok(Cast { conn, node, fd, size })
+        Ok(Cast { conn, node, fd, size, control: None })
     }
 }
 
 fn opts<const N: usize>(entries: [(&'static str, Value<'static>); N]) -> HashMap<&'static str, Value<'static>> {
     entries.into_iter().collect()
+}
+
+fn remote_token_path() -> std::path::PathBuf {
+    crate::identity::dir().join("remotedesktop-token")
 }
 
 fn token_path() -> std::path::PathBuf {
@@ -229,9 +402,13 @@ impl<'a> Portal<'a> {
     }
 
     async fn property<T: TryFrom<OwnedValue>>(&self, name: &str) -> Option<T> {
+        self.property_of(SCREENCAST, name).await
+    }
+
+    async fn property_of<T: TryFrom<OwnedValue>>(&self, iface: &str, name: &str) -> Option<T> {
         let reply = self
             .conn
-            .call_method(Some(PORTAL), PORTAL_PATH, Some("org.freedesktop.DBus.Properties"), "Get", &(SCREENCAST, name))
+            .call_method(Some(PORTAL), PORTAL_PATH, Some("org.freedesktop.DBus.Properties"), "Get", &(iface, name))
             .await
             .ok()?;
         let v: OwnedValue = reply.body().deserialize().ok()?;
@@ -242,12 +419,19 @@ impl<'a> Portal<'a> {
     where
         B: serde::Serialize + zvariant::DynamicType,
     {
+        self.request_on(SCREENCAST, method, body).await
+    }
+
+    async fn request_on<B>(&self, iface: &str, method: &str, body: impl FnOnce(&str) -> B) -> Result<HashMap<String, OwnedValue>>
+    where
+        B: serde::Serialize + zvariant::DynamicType,
+    {
         let token = format!("vyoma{}", std::process::id() ^ rand_u32());
         let path = format!("{PORTAL_PATH}/request/{}/{token}", self.sender);
         // Listen before calling, or a fast answer is missed.
         let rule = MatchRule::builder().msg_type(zbus::message::Type::Signal).interface("org.freedesktop.portal.Request")?.member("Response")?.path(path.as_str())?.build();
         let mut responses = MessageStream::for_match_rule(rule, self.conn, Some(1)).await?;
-        self.conn.call_method(Some(PORTAL), PORTAL_PATH, Some(SCREENCAST), method, &body(&token)).await.with_context(|| format!("the screen-sharing portal refused {method}"))?;
+        self.conn.call_method(Some(PORTAL), PORTAL_PATH, Some(iface), method, &body(&token)).await.with_context(|| format!("the screen-sharing portal refused {method}"))?;
         let msg = responses.next().await.context("the portal went away")??;
         let (code, results): (u32, HashMap<String, OwnedValue>) = msg.body().deserialize()?;
         match code {

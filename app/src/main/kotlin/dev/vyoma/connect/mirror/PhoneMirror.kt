@@ -61,6 +61,19 @@ object PhoneMirror {
     /** ~0.5 s at the bitrate: more waiting is dropped (skips to the next keyframe), not delayed. */
     private const val BACKLOG = 512 * 1024
 
+    private const val RATE = 48_000
+    /** 100 ms of stereo sound: more waiting is dropped (the PC plays a touch slower), not delayed. */
+    private const val SOUND_BACKLOG = RATE * 4 / 10
+
+    /** The phone's sound plays on the PC too; the running mirror follows it. */
+    val sound = MutableStateFlow(true)
+
+    /** The phone's sound is going to the PC right now: its speaker is silenced and the volume keys work the PC. */
+    @Volatile var soundOnPc = false
+        private set
+    /** The companion the mirror is streaming to (for copies and volume keys). */
+    @Volatile private var current: CompanionPlugin? = null
+
     private val _status = MutableStateFlow(Status())
     val status: StateFlow<Status> = _status.asStateFlow()
     private var job: Job? = null
@@ -80,6 +93,7 @@ object PhoneMirror {
     fun begin(service: Context, code: Int, data: Intent) {
         val app = service.applicationContext as android.app.Application
         stop(app, keepForeground = true)
+        Speaker(app).restore()
         val p = runCatching { app.getSystemService(MediaProjectionManager::class.java).getMediaProjection(code, data) }
             .onFailure { VLog.w(TAG, "no projection: ${it.message}") }.getOrNull()
         if (p == null) {
@@ -162,6 +176,7 @@ object PhoneMirror {
     private suspend fun session(app: Context, plugin: CompanionPlugin): Unit = coroutineScope {
         val vd = display ?: return@coroutineScope
         val video = LiveStream(BACKLOG)
+        current = plugin
         var size = pictureSize(realSize(app))
         var encoder = H264Encoder(size.width, size.height, BITRATE, FPS, video, "mirror-encoder")
         vd.resize(size.width, size.height, app.resources.displayMetrics.densityDpi)
@@ -187,14 +202,104 @@ object PhoneMirror {
                     vd.surface = encoder.surface
                 }
             }
+            launch { sound.collectLatest { on -> if (on) playOnPc(app, plugin) } }
             VLog.i(TAG, "mirroring ${size.width}x${size.height}")
             plugin.sendMirror(size.width, size.height, video)
         } finally {
-            vd.surface = null
+            if (current === plugin) current = null
+            // Stop may have released the display already.
+            runCatching { vd.surface = null }
             encoder.close()
             video.close()
             coroutineContext[Job]?.children?.forEach { it.cancel() }
         }
+    }
+
+    /**
+     * What the phone plays (media, games, anything that allows capture) to the PC, through the same
+     * screen-sharing grant, until cancelled. Apps that opt out of capture, and calls, stay silent;
+     * the phone keeps playing too (Android doesn't let an app take its sound away).
+     */
+    @android.annotation.SuppressLint("MissingPermission")
+    private suspend fun playOnPc(app: Context, plugin: CompanionPlugin) {
+        val p = projection ?: return
+        if (app.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        val config = android.media.AudioPlaybackCaptureConfiguration.Builder(p)
+            .addMatchingUsage(android.media.AudioAttributes.USAGE_MEDIA)
+            .addMatchingUsage(android.media.AudioAttributes.USAGE_GAME)
+            .addMatchingUsage(android.media.AudioAttributes.USAGE_UNKNOWN)
+            .build()
+        val format = android.media.AudioFormat.Builder()
+            .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+            .setSampleRate(RATE)
+            .setChannelMask(android.media.AudioFormat.CHANNEL_IN_STEREO)
+            .build()
+        val record = runCatching {
+            android.media.AudioRecord.Builder().setAudioPlaybackCaptureConfig(config).setAudioFormat(format)
+                .setBufferSizeInBytes(RATE * 4 / 5).build()
+        }.onFailure { VLog.w(TAG, "no sound capture: ${it.message}") }.getOrNull() ?: return
+        val pcm = LiveStream(SOUND_BACKLOG)
+        val speaker = Speaker(app)
+        val running = java.util.concurrent.atomic.AtomicBoolean(true)
+        val reader = Thread({
+            val chunk = ByteArray(RATE / 100 * 4) // 10 ms
+            while (running.get()) {
+                val n = record.read(chunk, 0, chunk.size)
+                if (n > 0) pcm.offer(chunk.copyOf(n)) else if (n < 0) break
+            }
+        }, "mirror-sound")
+        try {
+            record.startRecording()
+            reader.start()
+            speaker.silence()
+            soundOnPc = true
+            plugin.sendMirrorAudio(RATE, 2, pcm)
+        } finally {
+            soundOnPc = false
+            speaker.restore()
+            running.set(false)
+            pcm.close()
+            reader.join(200)
+            runCatching { record.stop() }
+            record.release()
+        }
+    }
+
+    /**
+     * The phone's media volume, down to nothing while its sound plays on the PC (the capture is taken
+     * before the volume, so the PC still gets it all) and back after. The level to restore is saved,
+     * so a crash meanwhile doesn't leave the phone silent: [begin] puts it back.
+     */
+    private class Speaker(context: Context) {
+        private val audio = context.getSystemService(android.media.AudioManager::class.java)
+        private val prefs = context.getSharedPreferences("mirror", Context.MODE_PRIVATE)
+
+        fun silence() {
+            val was = audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+            if (!prefs.contains(RESTORE)) prefs.edit().putInt(RESTORE, was).apply()
+            runCatching { audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, 0, 0) }
+        }
+
+        fun restore() {
+            val was = prefs.getInt(RESTORE, -1)
+            if (was < 0) return
+            runCatching { audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, was, 0) }
+            prefs.edit().remove(RESTORE).apply()
+        }
+
+        companion object { const val RESTORE = "restoreVolume" }
+    }
+
+    /** From [MirrorAccessibility]: a volume key while the sound is on the PC. */
+    fun volumeKey(context: Context, up: Boolean) {
+        val plugin = current ?: return
+        (context.applicationContext as android.app.Application).container.appScope.launch { plugin.mirrorVolume(up) }
+    }
+
+    /** From [MirrorControl]: text copied in the mirror, onto the PC's clipboard. */
+    fun copyToPc(context: Context, text: String) {
+        val plugin = current ?: return
+        (context.applicationContext as android.app.Application).container.appScope.launch { plugin.mirrorCopy(text) }
     }
 
     @Suppress("DEPRECATION")
