@@ -311,8 +311,9 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                 let (sender, shared, pinned, name) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone());
                 let (touches, inputs) = tokio::sync::mpsc::unbounded_channel();
                 screen_input = Some(touches);
+                let fps = screen::fps_for(p["body"]["maxFps"].as_u64());
                 screen_task = Some(tokio::spawn(async move {
-                    if let Err(e) = screen::stream(&sender, &shared.me, &pinned, &name, inputs).await {
+                    if let Err(e) = screen::stream(&sender, &shared.me, &pinned, &name, fps, inputs).await {
                         warn!("{name}: screen cast failed: {e:#}");
                     }
                 }));

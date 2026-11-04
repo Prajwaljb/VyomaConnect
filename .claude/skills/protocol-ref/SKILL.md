@@ -120,7 +120,7 @@ body fields before implementing one.
   `payloadTransferInfo` when the PC's cable tunnel is up; the companion tries 127.0.0.1:usbPort first (cert-pinned,
   so another plugged-in phone is refused) — ~70 MB/s vs this home's 2.4 GHz Wi-Fi at <1 MB/s.
   Measured here: parallel streams didn't help on lossy Wi-Fi (4 streams 0.53 MB/s vs 1 stream 0.88), so none.
-- `vyoma.screen.request` → `vyoma.screen {codec:"h264", framing:"avc4", width, height}` + an open-ended payload
+- `vyoma.screen.request {maxFps?}` (the most frames a second the phone shows and decodes; PC caps at 120, 60 if absent) → `vyoma.screen {codec:"h264", framing:"avc4", width, height}` + an open-ended payload
   (`payloadSize` -1), or `{error}`. The companion casts one monitor via the ScreenCast portal (persist_mode 2; restore
   token in `~/.config/vyoma-companion/screencast-token`, so Plasma asks once), asks KWin for ≤60 fps (`max-framerate`
   caps; videorate can't cap the variable-rate capture), encodes with `vah264enc` (VBR 8 Mbps, no B-frames, one slice,

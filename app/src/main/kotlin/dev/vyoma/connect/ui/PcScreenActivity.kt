@@ -206,7 +206,7 @@ class PcScreenActivity : ComponentActivity() {
         if (decoder != null || pending != null) return
         phase.value = Phase.Connecting
         lifecycleScope.launch {
-            plugin.openScreen().fold(
+            plugin.openScreen(ScreenDecoder.maxFps(display)).fold(
                 onSuccess = { stream ->
                     pending = stream
                     phase.value = Phase.Live(stream.width, stream.height, control = stream.control)
