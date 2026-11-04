@@ -51,6 +51,8 @@ object PhoneMirror {
         /** The PC's window shows the phone. */
         val open: Boolean = false,
         val error: String? = null,
+        /** When sharing began (the Live Update's timer). */
+        val since: Long = 0,
     )
 
     private const val TAG = "Mirror"
@@ -118,7 +120,7 @@ object PhoneMirror {
             stop(app)
             return
         }
-        _status.value = Status(on = true)
+        _status.value = Status(on = true, since = System.currentTimeMillis())
         job = app.container.appScope.launch { follow(app) }
     }
 

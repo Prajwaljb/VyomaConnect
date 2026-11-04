@@ -77,6 +77,8 @@ object PhoneWebcam {
         val torchable: Boolean = false,
         /** The picture's shape as the preview shows it: encoded size (landscape). */
         val size: Size? = null,
+        /** When the camera turned on (the Live Update's timer). */
+        val since: Long = 0,
     )
 
     private const val TAG = "Webcam"
@@ -120,7 +122,7 @@ object PhoneWebcam {
         stop(app)
         front.value = options.front
         micOn.value = options.mic
-        _status.value = Status(on = true, options = options)
+        _status.value = Status(on = true, options = options, since = System.currentTimeMillis())
         LinkService.mediaInUse(app, camera = true, mic = options.mic)
         job = app.container.appScope.launch { follow(app, options.hd) }
     }

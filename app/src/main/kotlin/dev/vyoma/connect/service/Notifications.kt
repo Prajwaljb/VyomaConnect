@@ -28,6 +28,8 @@ object Notifications {
     private const val TRANSFER_ID = 3
     private const val RING_ID = 4
     private const val CH_SERVICE = "service"
+    /** The service notification while the screen or camera is shared: a Live Update (MIN can't be one). */
+    private const val CH_LIVE = "sharing"
     private const val CH_PAIRING = "pairing"
     private const val CH_EVENTS = "events"
     private const val CH_RULES = "rules"
@@ -42,6 +44,10 @@ object Notifications {
             listOf(
                 NotificationChannel(CH_SERVICE, "Connection status", NotificationManager.IMPORTANCE_MIN).apply {
                     description = "Quiet ongoing notification that keeps devices connected"
+                    setShowBadge(false)
+                },
+                NotificationChannel(CH_LIVE, "Screen and camera sharing", NotificationManager.IMPORTANCE_LOW).apply {
+                    description = "Shows while your PC sees this phone's screen or camera, with Stop"
                     setShowBadge(false)
                 },
                 NotificationChannel(CH_PAIRING, "Pairing requests", NotificationManager.IMPORTANCE_HIGH),
@@ -75,13 +81,30 @@ object Notifications {
             else -> "Connected to ${connected.size} devices"
             }
         }
-        return NotificationCompat.Builder(context, CH_SERVICE)
+        val sharing = mirror.on || webcam.on
+        return NotificationCompat.Builder(context, if (sharing) CH_LIVE else CH_SERVICE)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentIntent(openApp(context))
             .setOngoing(true)
             .setSilent(true)
-            .setShowWhen(false)
+            .setShowWhen(sharing)
+            .apply {
+                if (!sharing) return@apply
+                // A Live Update (One UI's Now Bar and status chip) with how long it's been shared.
+                val since = listOf(mirror.since, webcam.since).filter { it > 0 }.minOrNull() ?: System.currentTimeMillis()
+                setWhen(since)
+                setUsesChronometer(true)
+                setContentText(
+                    when {
+                        mirror.on && !mirror.open -> "Waiting for the PC to open it"
+                        webcam.on && !mirror.on && !webcam.camera && !webcam.mic -> "Ready when an app on the PC uses it"
+                        else -> "Live on your PC"
+                    },
+                )
+                setShortCriticalText(if (mirror.on) "Screen" else "Camera")
+                setRequestPromotedOngoing(true)
+            }
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setCategory(Notification.CATEGORY_SERVICE)
             .apply {
