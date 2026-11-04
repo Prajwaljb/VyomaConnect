@@ -155,7 +155,7 @@ class MainActivity : ComponentActivity() {
 private fun PermissionGate(onReady: () -> Unit) {
     val permissions = remember {
         buildList {
-            add(Manifest.permission.POST_NOTIFICATIONS)
+            if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
             if (Build.VERSION.SDK_INT >= 37) add("android.permission.ACCESS_LOCAL_NETWORK")
         }.toTypedArray()
     }

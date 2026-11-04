@@ -54,7 +54,8 @@ import dev.vyoma.connect.service.LinkService
 
 /** What finding the PC needs: local network access (Android 17+) and our notification for the link. */
 private val corePermissions = buildList {
-    add(Manifest.permission.POST_NOTIFICATIONS)
+    // Android 13+: on 12 there's no such permission and asking is always "denied".
+    if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
     if (Build.VERSION.SDK_INT >= 37) add("android.permission.ACCESS_LOCAL_NETWORK")
 }.toTypedArray()
 

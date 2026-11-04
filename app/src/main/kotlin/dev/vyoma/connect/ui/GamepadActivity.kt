@@ -167,7 +167,7 @@ class GamepadActivity : ComponentActivity() {
      */
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        window.decorView.requestUnbufferedDispatch(android.view.InputDevice.SOURCE_TOUCHSCREEN)
+        window.decorView.requestUnbufferedDispatch(android.view.InputDevice.SOURCE_CLASS_POINTER)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
