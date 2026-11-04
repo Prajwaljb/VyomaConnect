@@ -3,7 +3,6 @@ package dev.vyoma.connect.ui
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.material.icons.rounded.SportsEsports
-import androidx.compose.material.icons.rounded.Keyboard
 import dev.vyoma.connect.designsystem.liquidPress
 import dev.vyoma.connect.designsystem.MenuItem
 import dev.vyoma.connect.designsystem.LocalMenu
@@ -114,7 +113,7 @@ private val ItemWidth = 82.dp
 @Composable
 fun TabsRoot(
     tab: Tab, onTab: (Tab) -> Unit, backToHome: Boolean, onTouchpad: () -> Unit,
-    onKeyboard: () -> Unit = {}, onGamepad: () -> Unit = {},
+    onGamepad: () -> Unit = {},
     content: @Composable (Tab) -> Unit,
 ) {
     val backdrop = rememberBackdrop()
@@ -210,7 +209,7 @@ fun TabsRoot(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TabBar(tab, onTab, backdrop)
-            // Held: the other ways to drive the PC by hand.
+            // Tapped: the touchpad (its keyboard is a button inside). Held: the game controller.
             val menus = LocalMenu.current
             var bounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
             Box(
@@ -220,8 +219,6 @@ fun TabsRoot(
                         pressedScale = 1f, onLongClickLabel = "More",
                         onLongClick = {
                             menus.show(bounds, listOf(
-                                MenuItem("Touchpad", Icons.Rounded.TouchApp, onClick = onTouchpad),
-                                MenuItem("Keyboard", Icons.Rounded.Keyboard, onClick = onKeyboard),
                                 MenuItem("Game controller", Icons.Rounded.SportsEsports, onClick = onGamepad),
                             ), fromRadius = BarHeight / 2)
                         },

@@ -11,6 +11,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.Crossfade
 import androidx.compose.material.icons.rounded.Screenshot
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -552,11 +553,11 @@ private fun ScreenView(
         Box(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 16.dp, vertical = 12.dp)) {
             AnimatedVisibility(
                 shown,
-                enter = fadeIn(tween(180)) + slideInVertically(CHROME_SPRING) { -it / 2 },
-                exit = fadeOut(tween(160)) + slideOutVertically(tween(200)) { -it / 2 },
+                enter = slideInVertically(CHROME_SPRING) { -it / 2 },
+                exit = slideOutVertically(tween(200)) { -it / 2 },
                 modifier = Modifier.align(Alignment.TopStart),
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.chromeFade(this), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     GlassButton(backdrop, "Close", Icons.Rounded.Close, onClick = onClose)
                     if (live?.showing == true) RateReadout(backdrop, stats)
                 }
@@ -591,11 +592,11 @@ private fun ScreenView(
                 // Top right, level with Close: the corners hold the controls, the middle the picture.
                 AnimatedVisibility(
                     shown,
-                    enter = fadeIn(tween(180)) + slideInVertically(CHROME_SPRING) { -it / 2 },
-                    exit = fadeOut(tween(160)) + slideOutVertically(tween(200)) { -it / 2 },
+                    enter = slideInVertically(CHROME_SPRING) { -it / 2 },
+                    exit = slideOutVertically(tween(200)) { -it / 2 },
                     modifier = Modifier.align(Alignment.TopEnd),
                 ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.chromeFade(this), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (live.control) {
                             GlassButton(backdrop, if (typing) "Hide the keyboard" else "Type on the PC", Icons.Rounded.Keyboard, onClick = { typing = !typing })
                             GlassButton(
@@ -725,6 +726,23 @@ private fun bounded(o: Offset, scale: Float, width: Int, height: Int): Offset {
     val maxX = width * (scale - 1) / 2
     val maxY = height * (scale - 1) / 2
     return Offset(o.x.coerceIn(-maxX, maxX), o.y.coerceIn(-maxY, maxY))
+}
+
+/**
+ * The buttons' fade, applied to each thing drawn rather than through an offscreen layer: a faded
+ * layer is cut to its bounds, which hid the glass's shadow (drawn outside them) until the fade
+ * ended and it popped in (user 2026-11-04).
+ */
+@Composable
+private fun Modifier.chromeFade(scope: androidx.compose.animation.AnimatedVisibilityScope): Modifier {
+    val alpha by scope.transition.animateFloat(
+        transitionSpec = { if (targetState == androidx.compose.animation.EnterExitState.Visible) tween(180) else tween(160) },
+        label = "chrome",
+    ) { if (it == androidx.compose.animation.EnterExitState.Visible) 1f else 0f }
+    return graphicsLayer {
+        this.alpha = alpha
+        compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
+    }
 }
 
 /** A round liquid-glass button over the video, like the tab bar's touchpad button. */
