@@ -648,12 +648,13 @@ fun Modifier.glassChrome(
                 ?: size.minDimension / 2).coerceAtMost(size.minDimension / 2) + grow
             blurred.renderEffect = lens.effect(
                 gs * q, (m - inflate) * q, radius = (corner + inflate) * q, bevel = rim * q, refract = depth * q, zoom = 1f,
-                // Clear in dark mode; light mode keeps more milk so dark labels stay legible over photos.
-                disperse = LensStyle.Chrome.disperse, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.92f),
+                // No tint (user, 2026-11-05: "dont want tint at all"; Apple's tinted glass is an
+                // option, not the default): what's behind keeps its own colour. A caller's tint
+                // (the PC screen's frost over video) still applies.
+                disperse = LensStyle.Chrome.disperse, tint = tint?.let { it.copy(alpha = it.alpha * if (dark) 0.5f else 0.92f) } ?: Color.Transparent,
                 spec = 0.15f + 0.2f * p.coerceIn(0f, 1f), shade = if (dark) 0f else 0.1f, blur = r * q,
-                // Apple's glass in the references: what's behind keeps (and deepens) its colour, and the
-                // bevel glows.
-                vibrance = 1.7f, gloss = if (dark) 0.22f else 0.3f,
+                // No colour boost either: it turned the pale canvas under the title's bubble blue.
+                vibrance = 1f, gloss = if (dark) 0.22f else 0.3f,
             )
             val o = m + grow
             blurred.record(IntSize(((g.width + 2 * m) * q).roundToInt(), ((g.height + 2 * m) * q).roundToInt())) {
