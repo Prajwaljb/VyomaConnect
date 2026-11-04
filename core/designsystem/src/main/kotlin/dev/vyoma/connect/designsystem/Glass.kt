@@ -365,7 +365,7 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
                 with(glow) { draw(outline, band, bandWidth, light, corner = smooth, exponent = if (smooth != null) SmoothCornerShape.EXPONENT else 2f) }
                 val ex = if (smooth != null && (outline !is Outline.Rounded)) SmoothCornerShape.EXPONENT else 2f
                 with(RimLight) { stroke(outline, lit, rimBase, stroke.width, size, radius, ex, light) }
-                with(RimShadow) { stroke(outline, size, radius, stroke.width, if (base != null) 0.25f else if (dark) 0.45f else 0.3f, ex, light) }
+                with(RimShadow) { stroke(outline, size, radius, stroke.width, if (base != null) 0.25f else if (dark) 0.15f else 0.3f, ex, light) }
             }
         }
         .clip(shape)
@@ -693,8 +693,10 @@ fun Modifier.glassChrome(
                 style = Stroke(1.dp.toPx()),
             )
             // Where the edge faces sideways, a dark hairline over the faint light there (see RimShadow).
+            // Faint in the dark: over a near-black page a stronger one went darker than the page and the
+            // circle looked cut away at its sides (user, 2026-11-05).
             translate(-grow, -grow) {
-                with(RimShadow) { stroke(Outline.Rounded(RoundRect(Rect(Offset.Zero, g), CornerRadius(corner))), g, corner, 1.dp.toPx(), if (dark) 0.55f else 0.4f) }
+                with(RimShadow) { stroke(Outline.Rounded(RoundRect(Rect(Offset.Zero, g), CornerRadius(corner))), g, corner, 1.dp.toPx(), if (dark) 0.12f else 0.4f) }
             }
         }
         .then(if (edge && lens == null) Modifier.border(0.75.dp, edgeBrush, shape) else Modifier)
