@@ -648,7 +648,9 @@ internal class LensPainter(private val graphics: GraphicsContext) {
             with(RimShadow) {
                 stroke(
                     Outline.Rounded(RoundRect(Rect(Offset.Zero, edge.size), CornerRadius(edge.minDimension / 2))),
-                    edge.size, edge.minDimension / 2, 1.dp.toPx(), (if (dark) 0.4f else 0.25f) * a,
+                    // Faint in the dark, as the bars' glass: stronger went darker than what's behind and the
+                    // drop looked cut at its ends (user, 2026-11-05).
+                    edge.size, edge.minDimension / 2, 1.dp.toPx(), (if (dark) 0.15f else 0.25f) * a,
                 )
             }
         }
