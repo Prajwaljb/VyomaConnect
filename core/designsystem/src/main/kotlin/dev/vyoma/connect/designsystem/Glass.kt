@@ -212,7 +212,7 @@ private val DarkDepth = GlassDepth(
     // Content is a thinner pane than the floating chrome: half the chrome-like band, no rolled edge,
     // so the bars read as a layer above the cards (with the same edge, on black they didn't).
     band = Color.White.copy(alpha = 0.15f),
-    rimDark = 0.4f,
+    rimDark = 0.5f,
 )
 private val LightDepth = GlassDepth(
     // See-through, so the canvas's tint shows in the card (0.72 read as solid white blocks).
@@ -221,7 +221,7 @@ private val LightDepth = GlassDepth(
     rimLit = Color.White, rimBase = Color(0xFF1A2B4C).copy(alpha = 0.06f),
     shadow = Color(0xFF1A2B4C).copy(alpha = 0.05f), shadowBlur = 14f, shadowDrop = 3f,
     band = Color.White.copy(alpha = 0.35f),
-    rimDark = 0.18f,
+    rimDark = 0.35f,
 )
 
 /** The current theme's [GlassDepth]. */
@@ -365,7 +365,7 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
                 with(glow) { draw(outline, band, bandWidth, light, corner = smooth, exponent = if (smooth != null) SmoothCornerShape.EXPONENT else 2f) }
                 val ex = if (smooth != null && (outline !is Outline.Rounded)) SmoothCornerShape.EXPONENT else 2f
                 with(RimLight) { stroke(outline, lit, rimBase, stroke.width, size, radius, ex, light) }
-                with(RimShadow) { stroke(outline, size, radius, stroke.width, if (base != null) 0.2f else if (dark) 0.35f else 0.15f, ex, light) }
+                with(RimShadow) { stroke(outline, size, radius, stroke.width, if (base != null) 0.25f else if (dark) 0.45f else 0.3f, ex, light) }
             }
         }
         .clip(shape)
@@ -694,7 +694,7 @@ fun Modifier.glassChrome(
             )
             // Where the edge faces sideways, a dark hairline over the faint light there (see RimShadow).
             translate(-grow, -grow) {
-                with(RimShadow) { stroke(Outline.Rounded(RoundRect(Rect(Offset.Zero, g), CornerRadius(corner))), g, corner, 1.dp.toPx(), if (dark) 0.45f else 0.2f) }
+                with(RimShadow) { stroke(Outline.Rounded(RoundRect(Rect(Offset.Zero, g), CornerRadius(corner))), g, corner, 1.dp.toPx(), if (dark) 0.55f else 0.4f) }
             }
         }
         .then(if (edge && lens == null) Modifier.border(0.75.dp, edgeBrush, shape) else Modifier)

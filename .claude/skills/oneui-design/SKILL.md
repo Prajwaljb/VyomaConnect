@@ -89,12 +89,16 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Light: `SpecularLight.angle` (Light.kt) is where the light is on screen (270° = straight up, centred, at rest: the user's call; tilt sways it up to ±55°, soft limit, gain 2.2: ~10° of turn reaches straight up; the user found ±35° could never bring it to the centre), driven by the
   gravity sensor only while the UI is started (`TrackSpecularLight` in `VyomaTheme`), smoothed, 1.5° dead band. Every
   specular edge uses it: `specularRim(...)` (chrome stroke, raised controls) and the AGSL `light` uniform (lens rims).
-- Dark sides (2026-11-05, second try, user-approved approach): the original rim stays exactly as is; `RimShadow`
-  adds a separate thin (1 dp) black stroke OVER it, gated tightly to where the edge faces side-on (Apple's round
-  buttons: full at 3/9 o'clock, ~⅓ at 15° away, ~0 by 45°; 0.6·s³⁰ + 0.4·s⁶). Strength: cards 0.4 dark / 0.18
-  light, raised 0.35 / 0.15 (filled 0.2), chrome 0.45 / 0.2, knobs 0.3 / 0.14. Rejected first try: darkening built
-  into the light stroke as (1 − light), which spread over whole corners and read as a dark border; also rejected:
-  Apple-fitted corner fall-off and a rolled rim profile. On true black the dark can't show: correct.
+- Dark sides (2026-11-05, user-approved approach): the original rim stays exactly as is; `RimShadow` adds a separate
+  thin (1 dp) black stroke OVER it where the edge faces side-on to the light. Physics (from the samples): at the
+  silhouette the glass is seen at grazing angle, so little of what's behind gets through and what's reflected
+  there is the dim surroundings, not the light: the edge darkens what's behind it, in its own colour (so it can't
+  show on black). Facing the light (top, and bottom by internal reflection) the reflected light wins instead.
+  Measured: light spans ~±50° round top/bottom, dark ~±30° round side-on, barely overlapping; dark falls 1, .66,
+  .5, .23, .1 every 10° from side-on (`s^10`); depth 25–55% over bright backgrounds, 1–2 px wide. Strength: cards
+  0.5 dark / 0.35 light, raised 0.45 / 0.3 (filled 0.25), chrome 0.55 / 0.4, knobs 0.4 / 0.25. It follows the tilt
+  light. Rejected: dark built into the light stroke as (1 − light) (spread over whole corners: a dark border), an
+  Apple-fitted corner fall-off, a rolled rim profile.
 - Rims follow Apple's iOS 26 glass (user's reference shots): a broad highlight facing the light plus one ~80% as bright
   opposite (`specularRim(opposite = 0.8f)`), and `InnerGlow` (one per element), a soft band of light a few dp deep just inside the
   edge (cards 8 dp at `GlassDepth.band`, chrome ≤4 dp at 52% white in dark, raised ≤4 dp; t³ falloff, k^1.6 towards
