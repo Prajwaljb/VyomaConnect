@@ -45,6 +45,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -588,12 +589,16 @@ private fun GamepadScreen(
             } else {
                 Modifier.pointerInput(layout, enabled) {
                     val grips = HashMap<PointerId, Pair<Grip, Int>>()
+                    // Sticks let go of, gliding back to centre like a real stick's spring (dropping to
+                    // centre in one frame jerked the game's camera, user 2026-11-04). Keyed by side.
+                    val returning = HashMap<Boolean, Grip.Stick>()
+                    var returner: kotlinx.coroutines.Job? = null
                     var pulses = 0
                     var sent = GamepadState()
                     fun publish() {
                         var bits = pulses
-                        var left: Grip.Stick? = null
-                        var right: Grip.Stick? = null
+                        var left: Grip.Stick? = returning[true]
+                        var right: Grip.Stick? = returning[false]
                         var lt = 0
                         var rt = 0
                         for ((g, b) in grips.values) {
@@ -621,6 +626,25 @@ private fun GamepadScreen(
                             if (enabled) onTouch(next)
                         }
                     }
+                    fun springBack(g: Grip.Stick) {
+                        returning[g.left] = g
+                        if (returner?.isActive == true) return
+                        returner = scope.launch {
+                            var last = withFrameNanos { it }
+                            while (returning.isNotEmpty()) {
+                                val now = withFrameNanos { it }
+                                val dt = (now - last) / 1e9f
+                                last = now
+                                if (showSettings || !enabled) { returning.clear(); break }
+                                val k = kotlin.math.exp(-dt / STICK_RETURN_TAU)
+                                returning.entries.removeAll { (left, st) ->
+                                    st.knob = st.origin + (st.knob - st.origin) * k
+                                    (st.knob - st.origin).getDistance() < (if (left) layout.leftR else layout.rightR) * 0.02f
+                                }
+                                publish()
+                            }
+                        }
+                    }
                     fun grab(p: Offset, at: Long): Pair<Grip, Int> = with(layout) {
                         fun inCapsule(r: Rect) = r.inflate(6 * u).contains(p)
                         when {
@@ -643,6 +667,7 @@ private fun GamepadScreen(
                                     if (left) p.x.coerceIn(r, w / 2 - r) else p.x.coerceIn(w / 2 + r, w - r),
                                     p.y.coerceIn(minOf(lt.bottom, rt.bottom) + r, h - r),
                                 )
+                                returning.remove(left)
                                 Grip.Stick(left, o, at, p) to 0
                             }
                         }
@@ -692,7 +717,7 @@ private fun GamepadScreen(
                                                     pulses = pulses and bit.inv()
                                                     publish()
                                                 }
-                                            }
+                                            } else springBack(g)
                                             else -> Unit
                                         }
                                     }
@@ -1142,6 +1167,12 @@ private fun DrawScope.dpad(l: PadLayout, bits: Int, alpha: Float) {
         drawPath(path, arrow)
     }
 }
+
+/**
+ * How fast a released stick springs back: exponential, so ~120 ms to centre, quick at first and
+ * settling softly, like a real stick's spring rather than a jump.
+ */
+private const val STICK_RETURN_TAU = 0.035f
 
 /** A stick: its base where the thumb landed (resting at home, faint), the knob under the thumb. */
 private fun DrawScope.stick(origin: Offset, knob: Offset, stickR: Float, knobR: Float, active: Boolean, clicked: Boolean, tint: Color, alpha: Float) {
