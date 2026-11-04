@@ -398,10 +398,10 @@ half4 main(float2 xy) {
 
 /**
  * How a lens bends: the rim as a share of the lens's short side, and the slab's depth in rims.
- * [milk] is the white mixed into the glass in dark and light themes.
+ * [milk] is white mixed into the glass in dark and light themes: none (the user wants no tint).
  */
 @Immutable
-class LensStyle(val rim: Float, val depth: Float, val disperse: Float, val milk: Pair<Float, Float> = 0.05f to 0.12f) {
+class LensStyle(val rim: Float, val depth: Float, val disperse: Float, val milk: Pair<Float, Float> = 0f to 0f) {
     companion object {
         /** Bars and buttons (chrome): water-like, the rim shows what's across the element. */
         val Chrome = LensStyle(rim = 0.2f, depth = 6f, disperse = 0.04f)
@@ -416,7 +416,7 @@ class LensStyle(val rim: Float, val depth: Float, val disperse: Float, val milk:
          *  inward, the rim replayed the track or bar as mirrored stripes. Crystal clear: any milk
          *  read as a dirty white haze as it grew. (Apple's ringed drop optics were tried and
          *  rejected: a thick double border with a rainbow edge.) */
-        val Lift = LensStyle(rim = 0.22f, depth = -1.1f, disperse = 0.03f, milk = 0f to 0.02f)
+        val Lift = LensStyle(rim = 0.22f, depth = -1.1f, disperse = 0.03f)
     }
 }
 
@@ -715,8 +715,8 @@ half4 main(float2 p) {
             col.b = content.eval(clamp(at - k, lo, hi)).b;
         }
     }
-    // Vibrancy: Apple's glass deepens the colour of what's behind it (under macOS/iOS Control Center
-    // tiles a flower's saturation goes 0.25 -> ~0.47, a blue sky 0.82 -> 0.93), never greys it.
+    // Vibrancy (an option Apple offers, off here: the user wants no tint, 2026-11-05): 1 leaves
+    // the colour of what's behind exactly as it is.
     half lum = dot(col.rgb, half3(0.2126, 0.7152, 0.0722));
     col.rgb = clamp(mix(half3(lum), col.rgb, half(vibrance)), half3(0.0), half3(col.a));
     col.rgb = mix(col.rgb, half3(tint.rgb) * col.a, half(tint.a));
