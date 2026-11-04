@@ -959,8 +959,11 @@ private fun SettingsPanel(
                         Section("Gyro moves") {
                             SegmentedControl(GyroTarget.entries.map { it.label }, profile.gyroTarget.ordinal, { i -> onSave(profile.copy(gyroTarget = GyroTarget.entries[i])) })
                             Text(
-                                if (profile.gyroTarget == GyroTarget.MOUSE) "Most PC games aim with the mouse, and take it alongside the controller."
-                                else "For games that only take a controller.",
+                                // Mouse plus controller made one game's camera jump back whenever a stick was let go:
+                                // it switched between the two by whichever moved last (user 2026-11-04).
+                                if (profile.gyroTarget == GyroTarget.MOUSE) "Most precise, for games that take a mouse alongside the controller. " +
+                                    "If the view jumps when you let go of a stick, the game is switching between the two: use Right stick for it."
+                                else "For games that only take a controller, or that switch between mouse and controller.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
