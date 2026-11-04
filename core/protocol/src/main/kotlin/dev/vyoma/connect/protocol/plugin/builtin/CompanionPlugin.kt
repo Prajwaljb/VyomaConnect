@@ -748,6 +748,42 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         if (port in 1..65535 && key.size >= 16) gamepadOffer.value = UdpOffer(port, key)
     }
 
+    /** What the PC says about the phone's camera and microphone (see [sendWebcam]). */
+    data class WebcamState(val camera: Boolean = false, val mic: Boolean = false, val error: String? = null)
+    private val _webcam = MutableStateFlow(WebcamState())
+    val webcam: StateFlow<WebcamState> = _webcam.asStateFlow()
+
+    fun resetWebcam() { _webcam.value = WebcamState() }
+
+    /**
+     * The phone's camera as the PC's webcam: [video] is live H.264 (Annex-B), w x h as encoded,
+     * [rotate] the clockwise turn that makes it upright. Suspends until the stream ends; false if the
+     * PC never took it.
+     */
+    suspend fun sendWebcam(w: Int, h: Int, rotate: Int, video: java.io.InputStream): Boolean =
+        ctx.device.sendWithPayload(
+            packet(WEBCAM) { put("w", w); put("h", h); put("rotate", rotate) },
+            PayloadSource(-1) { video }, timeoutMs = WEBCAM_ACCEPT_MS,
+        )
+
+    /** The phone's microphone as a PC input: [pcm] is live s16le audio. Suspends until it ends. */
+    suspend fun sendMic(rate: Int, channels: Int, pcm: java.io.InputStream): Boolean =
+        ctx.device.sendWithPayload(
+            packet(WEBCAM_MIC) { put("rate", rate); put("channels", channels) },
+            PayloadSource(-1) { pcm }, timeoutMs = WEBCAM_ACCEPT_MS,
+        )
+
+    /** The phone was turned (or switched cameras): the PC turns the picture without a restart. */
+    suspend fun turnWebcam(rotate: Int) = ctx.send(packet(WEBCAM_TURN) { put("rotate", rotate) })
+
+    private fun receiveWebcam(packet: NetworkPacket) {
+        val error = packet.string("error")
+        _webcam.value = _webcam.value.let { s ->
+            if (error != null) s.copy(error = error)
+            else s.copy(camera = packet.bool("camera") ?: s.camera, mic = packet.bool("mic") ?: s.mic, error = null)
+        }
+    }
+
     @Volatile private var pendingStep: CompletableDeferred<NetworkPacket>? = null
 
     /**
@@ -783,6 +819,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
 
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         if (packet.type == GAMEPAD_RUMBLE) receiveRumble(packet)
+        if (packet.type == WEBCAM_STATE) receiveWebcam(packet)
         if (packet.type == GAMEPAD_UDP) receiveGamepadOffer(packet)
         if (packet.type == DESKTOP_STEPPED) pendingStep?.also { pendingStep = null }?.complete(packet)
         if (packet.type == SCREENSHOT) screenshot.receive(packet)
@@ -852,6 +889,11 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         /** The phone's end of the companion's adb reverse for the wired controller; must match usb.rs WIRED. */
         const val GAMEPAD_WIRED_PORT = 1866
         const val USB_ACCESSORY = "vyoma.usb.accessory"
+        const val WEBCAM = "vyoma.webcam"
+        const val WEBCAM_MIC = "vyoma.webcam.mic"
+        const val WEBCAM_TURN = "vyoma.webcam.turn"
+        const val WEBCAM_STATE = "vyoma.webcam.state"
+        private const val WEBCAM_ACCEPT_MS = 15_000
         private const val ACCESSORY_ASK_MS = 15_000L
         private const val GAMEPAD_BODY = 35
         private const val GAMEPAD_DATAGRAM = 51
@@ -877,8 +919,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, USB_ACCESSORY),
+            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED, WEBCAM_STATE),
+            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, USB_ACCESSORY, WEBCAM, WEBCAM_MIC, WEBCAM_TURN),
         ) { CompanionPlugin(it, sink) }
     }
 }

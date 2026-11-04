@@ -164,7 +164,20 @@ body fields before implementing one.
   the app held the accessory wedged the phone's USB (error -71) until replugged; it stays an accessory until unplugged.
   Phone writes go through a newest-frame writer thread; a write pending > 500 ms fails over to Wi-Fi. Access without
   debugging: desktop/companion/udev/70-vyoma-usb.rules (sudo, once). Verified 2026-11-03: switch ~2 s, A/B/X/Y arrive.
-- Finding the phone without mDNS (tether.rs, polled every 5 s while a trusted phone is unlinked): USB tethering
+- Phone as the PC's webcam/mic (app webcam/PhoneWebcam.kt, companion webcam.rs, 2026-11-04): phone → PC
+  `vyoma.webcam {w, h, rotate}` + live payload (payloadSize -1) of H.264 Annex-B (MediaCodec surface encoder,
+  30 fps, 4/8 Mbit/s, I-frame 2 s, SPS/PPS before every keyframe, repeat-previous 100 ms); `vyoma.webcam.mic
+  {rate, channels}` + live s16le PCM (VOICE_COMMUNICATION, 48 kHz mono, 10 ms reads); `vyoma.webcam.turn {rotate}`
+  (clockwise degrees: back (sensor+held)%360, front (sensor-held+360)%360, held from OrientationEventListener
+  snapped with 30 deg give). PC → phone `vyoma.webcam.state {camera|mic: true}` or `{error}` (error = stop and show).
+  Companion: v4l2loopback labelled "Vyoma Phone Camera" (desktop/companion/webcam/, sudo once, video_nr=20,
+  exclusive_caps=1), opened once per stream with VIDIOC_S_FMT YUYV; `gst-launch-1.0 fdsrc ! h264parse ! vah264dec !
+  vapostproc video-direction=.. add-borders=true ! YUY2 wxh ! fdsink` (no caps filter before h264parse: it failed
+  "caps unfixed"); a turn restarts only gst. Mic: pactl module-pipe-source "Vyoma Phone Mic" through a FIFO,
+  O_NONBLOCK + F_SETPIPE_SZ 4096 and 10 ms writes dropped when full (blocking queued 1.5 s of lag, measured);
+  stale modules removed on start. Either stream silent 4 s = phone gone. Payloads ride the USB forward when the
+  cable is in. Verified: 30 fps at 720p (front), audio at real-time rate, background with the screen off.
+ (tether.rs, polled every 5 s while a trusted phone is unlinked): USB tethering
   (rndis/cdc gateway or neighbour) and any Wi-Fi gateway, i.e. the PC on the phone's hotspot (verified 2026-11-03,
   during a power cut) and the cable (usb.rs `adb forward tcp:0 tcp:1716` per plugged phone, so the companion links
   with Wi-Fi off); all dialled with `connect_trusted` (only kdeconnectd-trusted certs), gateway refusals at debug.

@@ -159,6 +159,7 @@ import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.PhotoCamera
+import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.NoPhotography
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.UploadFile
@@ -392,9 +393,14 @@ fun PcDashboard(
                 ) { PcScreenActivity.open(context, id) }
                 else Control(Icons.Rounded.Sensors, "Ping", SystemColor.CYAN) { vm.ping(id); status.show("Pinged: look for it on the PC") },
                 if (shots != null) {
-                    if (cameraOk) Control(Icons.Rounded.PhotoCamera, "Camera", SystemColor.ORANGE) { vm.capture(shots.photo) }
-                    else Control(Icons.Rounded.NoPhotography, "Camera", SystemColor.ORANGE, unavailable = true) {
-                        status.show("Camera unavailable: the laptop's lid is closed", icon = Icons.Rounded.NoPhotography, failure = true)
+                    // Held: the phone's own camera as the PC's webcam (handy exactly when the lid is shut).
+                    val webcam = MenuItem("Phone as webcam", Icons.Rounded.Videocam) { WebcamActivity.open(context) }
+                    if (cameraOk) Control(
+                        Icons.Rounded.PhotoCamera, "Camera", SystemColor.ORANGE,
+                        menu = listOf(MenuItem("Take a laptop photo", Icons.Rounded.PhotoCamera) { vm.capture(shots.photo) }, webcam),
+                    ) { vm.capture(shots.photo) }
+                    else Control(Icons.Rounded.NoPhotography, "Camera", SystemColor.ORANGE, unavailable = true, menu = listOf(webcam)) {
+                        status.show("The laptop's lid is closed. Hold for the phone as webcam", icon = Icons.Rounded.NoPhotography, failure = true)
                     }
                 }
                 else Control(Icons.Rounded.TouchApp, "Touchpad", SystemColor.ORANGE, opens = true, onClick = onTouchpad),
