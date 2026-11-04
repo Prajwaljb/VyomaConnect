@@ -383,7 +383,7 @@ half4 main(float2 xy) {
 
 
 /**
- * The dark hairline where a glass edge faces sideways, away from the light: Apple's glass darkens
+ * The dark hairline where a glass edge faces sideways on the screen: Apple's glass darkens
  * what shows through its silhouette there (light crosses more glass at the rim), in that thing's own
  * colour, so the outline stays crisp where the light doesn't reach. Measured on the user's
  * references (2026-11-05): the dock's sides, a pill's ends over blue and sand, macOS Control
@@ -427,14 +427,20 @@ float2 edgeNormal(float2 p, float2 c, float radius, float exponent) {
 
 half4 main(float2 xy) {
     float2 c = size * 0.5;
-    float f = dot(edgeNormal(xy - c, c, radius, exponent), light);
-    // How side-on this bit of edge is (1 = facing straight across the light).
-    float s = sqrt(max(1.0 - f * f, 0.0));
-    // Tight at side-on: measured round macOS Control Center's pill ends and the Display bar's
-    // corners (2026-11-05), the darkening falls 1, .66, .5, .23, .1 every 10° from side-on; s^10
-    // gives 1, .86, .54, .24, .07. The light (top and bottom, to ~50° off) and this hardly overlap.
+    float2 n = edgeNormal(xy - c, c, radius, exponent);
+    // The dark doesn't follow the light (user, 2026-11-05): it's the view through the edge at a
+    // grazing angle, set by the shape and where you look from, so it stays on the element's sides
+    // (s = how sideways this bit of edge faces on the screen). Tight there: measured round macOS
+    // Control Center's pill ends and the Display bar's corners, it falls 1, .66, .5, .23, .1 every
+    // 10° from side-on; s^10 gives 1, .86, .54, .24, .07.
+    float s = abs(n.x);
     float s2 = s * s; float s4 = s2 * s2;
     float k = s4 * s4 * s2;
+    // Where the tilted light swings onto a side it covers the dark there (the reflection outshines
+    // it), with the rim light's own spread.
+    float f = dot(n, light);
+    float lit = clamp(pow(max(f, 0.0), 3.5) + 0.8 * pow(max(-f, 0.0), 3.5), 0.0, 1.0);
+    k *= 1.0 - lit;
     // Black over the glass's edge darkens what shows there in its own colour.
     return half4(0.0, 0.0, 0.0, half(strength * k));
 }
