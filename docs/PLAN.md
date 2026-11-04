@@ -136,8 +136,8 @@ desktop/companion/     Rust daemon (Phase 2)
   Transport: UDP state snapshots with AEAD (ChaCha20-Poly1305, session key from TLS), <10 ms on LAN/USB.
 - **Phone mirroring + control from PC** (MediaProjection + HW encode; control via accessibility gestures).
 - **Phone as PC webcam/mic (done 2026-11-04):** Camera2 → H.264 → companion → v4l2loopback "Vyoma Phone
-  Camera"; mic → PipeWire source "Vyoma Phone Mic". Not yet: on-phone preview, zoom/torch, a Stop action in the
-  notification, real call apps tested.
+  Camera"; mic → PipeWire source "Vyoma Phone Mic". Preview, zoom (incl. ultra-wide), torch and a notification
+  Stop are in. Not yet: tried in real call apps.
 - **Bluetooth fallback transport** for notifications/clipboard when Wi-Fi is absent.
 
 ---

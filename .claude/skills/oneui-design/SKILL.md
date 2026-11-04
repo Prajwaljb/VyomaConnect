@@ -515,7 +515,10 @@ Phone as webcam (WebcamActivity, from the Camera tile's long-press "Phone as web
 shut): CollapsingHeaderScaffold, subtitle is the state in a few words ("Off", "Live on <PC> · camera and mic",
 "Waiting for Vyoma's companion on the PC"); one big Start/Stop PillButton (Stop not prominent); Camera card (Which
 camera Front/Back, Quality 720p/1080p, each a ListRow then a full-width SegmentedControl, no dividers touching the
-segments); Microphone card (switch row). No on-phone preview (the PC app shows the picture). The PC's setup error
+segments); Microphone card (switch row). Portrait-locked. While live: a 9:16 preview (SurfaceView, 56% wide, 28 dp
+rounded via clipToOutline) under Stop, then a card with Zoom (log-scale LiquidSlider, "1.0× · below 1× is the
+ultra-wide" when the camera has one) and Torch (back camera). Never screenshot it while live (it shows the user's
+camera). The service notification becomes "Camera and mic on <PC>" with a "Stop camera" action. The PC's setup error
 shows in a card with the sudo commands in monospace.
 54 dp taller than the capsule: depth down the slot = pressure (fill runs down, notches at quarters, at least 10%).
 Layout editor: every movable part dashed-outlined, the chosen one solid accent; drag moves, a second finger pinches
