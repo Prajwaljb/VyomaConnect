@@ -247,11 +247,7 @@ half4 main(float2 xy) {
     float2 n = edgeNormal(p, c, radius, exponent);
     float f = dot(n, light);
     // Spreads along the edge but gathers towards where it faces the light, so the lit corners stand out.
-    // The sides keep ~40%: Apple's edge facing away is a dark hairline with a soft lit curve just
-    // inside it (a pill's end over blue: 116 then 185, 194, 189 … vs 238 on top), which is what
-    // makes it read as rounded rather than outlined.
     float k = lobe(f) + opposite * lobe(-f);
-    k = k + 0.4 * (1.0 - min(k, 1.0));
     float a = float(color.a) * band * k;
     // The rolled edge: how steeply the surface falls away here, steepest at the rim and flat
     // inside, with a shallow dip the other way past the roll (the liquid S of a thick drop).
@@ -373,17 +369,8 @@ internal object RimLight {
         val b = if (dark > 0f) Color.Transparent else base
         shader.setFloatUniform("base", b.red, b.green, b.blue, b.alpha)
         shader.setFloatUniform("dark", dark)
-        shader.setFloatUniform("width", width)
-        // Not a line: a profile across the edge, brightest at it and rolling off inward over a few
-        // widths (Apple's top edge: 202, 238, 235, 233, 230, 225, 218 … into the glass, no gap).
-        // A flat stroke with a band behind it read as a border (user, 2026-11-05). Drawn as a wide
-        // stroke so only pixels near the edge run the shader; its outer edge stays where the old
-        // stroke's was (half a width past the outline).
-        drawOutline(outline, ShaderBrush(shader), alpha = alpha, style = Stroke(width * (1f + 2f * RIM_REACH)))
+        drawOutline(outline, ShaderBrush(shader), alpha = alpha, style = Stroke(width))
     }
-
-    /** How far in (in widths) the rim's light rolls off. */
-    private const val RIM_REACH = 5.5f
 
     private const val AGSL = """
 uniform float2 size;
@@ -394,7 +381,6 @@ uniform float opposite;
 uniform half4 lit;
 uniform half4 base;
 uniform float dark;
-uniform float width;
 
 // The outward normal of a rounded rect (half-size c) whose corners are superellipse quarters of
 // extent `radius` and exponent `exponent` (2 = circular).
@@ -418,43 +404,19 @@ float lobe(float c) {
     return 0.6 * c4 * c4 + 0.4 * c;
 }
 
-// Signed distance to the rounded rect (negative inside), superellipse corners as InnerGlow's.
-float edgeDistance(float2 p, float2 c, float radius, float exponent) {
-    float r = max(radius, 0.001);
-    float2 q = abs(p) - c + r;
-    if (q.x > 0.0 && q.y > 0.0) {
-        float2 a = q / r;
-        float2 an = pow(a, float2(exponent));
-        float s = pow(an.x + an.y, 1.0 / exponent);
-        float2 g = pow(a, float2(exponent - 1.0)) / pow(s, exponent - 1.0);
-        return (s - 1.0) * r / max(length(g), 0.5);
-    }
-    return max(q.x, q.y) - r;
-}
-
 half4 main(float2 xy) {
     float2 c = size * 0.5;
-    float w = max(width, 0.5);
-    // The visible edge is half a width past the outline (where the old stroke's outside was).
-    float dd = edgeDistance(xy - c, c, radius, exponent) - 0.5 * w;
-    float cover = clamp(0.5 - dd, 0.0, 1.0);
-    if (cover <= 0.0) return half4(0.0);
-    float x = max(-dd, 0.0) / w;
     float2 n = edgeNormal(xy - c, c, radius, exponent);
     float f = dot(n, light);
+    // As the band: broad and soft, gathered towards the light and the far side.
     float k = clamp(lobe(f) + opposite * lobe(-f), 0.0, 1.0);
-    // Light rolling over a rounded edge: bright at it, a quick fall then a long soft one (the
-    // brightest point and the glow behind it are one surface, not a line and a band).
-    float roll = (0.45 * exp(-x / 0.7) + 0.55 * exp(-x / 2.5)) * (1.0 - smoothstep(3.5, 5.5, x));
-    float L = float(lit.a) * k * roll;
-    float B = float(base.a) * (1.0 - k) * roll;
-    // Dark only at the silhouette (a hairline, the grazing edge) and only where it turns away: none
-    // until ~45° round a corner, half by 60°, full by 70° (Apple's Display bar).
-    float D = dark * smoothstep(0.72, 1.0, sqrt(max(1.0 - f * f, 0.0))) * exp(-x / 0.6);
-    float a = min(L + B, 1.0);
-    half3 rgb = lit.rgb * half(L) + base.rgb * half(B);
-    half outA = half(a + D * (1.0 - a));
-    return half4(rgb, outA) * half(cover);
+    // Light (and the base) added over a darkening that fades where the light takes over.
+    half3 rgb = lit.rgb * lit.a * half(k) + base.rgb * base.a * half(1.0 - k);
+    half a = lit.a * half(k) + base.a * half(1.0 - k);
+    // Dark only where the edge turns away: none until ~45° round a corner, half by 60°, full by
+    // 70° (the same Display bar), so a corner shows both its light's tail and the dark.
+    half d = half(dark * smoothstep(0.72, 1.0, sqrt(max(1.0 - f * f, 0.0))));
+    return half4(rgb, a + d * (1.0 - a));
 }
 """
 }
@@ -804,16 +766,15 @@ half4 main(float2 p) {
     // which the rim stroke draws over this).
     float g = gloss * t * t * (0.1 + 0.9 * face0);
     col.rgb += (half3(col.a) - col.rgb) * half(g);
+    // A thin specular rim, brightest where it faces the light and its opposite.
+    float rim = 1.0 - smoothstep(0.0, 1.8, -d);
     // Lit by the same facing as the inner band and the rim stroke: the edge's true normal, so a
     // pill's straight top is lit end to end and the light slides round its ends as on Apple's.
     float f = dot(n, light);
     float facing = lobe(f) + 0.8 * lobe(-f);
-    // Only the bevel's soft lift: the edge's own light comes from RimLight's profile (a 1.8 px
-    // line here stacked a second border on the chrome).
-    float light = t * t * t * 0.12 * facing;
+    float light = (rim + t * t * t * 0.12) * facing;
     col.rgb += half3(light * spec) * col.a;
     // On light backgrounds a highlight alone vanishes: a faint shaded underside gives the edge.
-    float rim = 1.0 - smoothstep(0.0, 1.8, -d);
     col.rgb -= half3(rim * shade * (0.4 + 0.6 * max(n.y, 0.0))) * col.a;
     return col * half(clamp(0.5 - d, 0.0, 1.0));
 }

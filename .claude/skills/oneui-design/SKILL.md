@@ -103,11 +103,6 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   old position-based facing dimmed a pill's straight top near its ends). The dark edge starts ~45°, half by 60°,
   full by 70° (`smoothstep(0.72, 1, sinθ)`), so a corner shows the light's tail and the dark together. A single
   power (`c^1.6`) lit corners evenly and read flat.
-- The rim is a PROFILE, never a flat stroke (user, 2026-11-05: "too 2d, like a border"). Apple's top edge across:
-  202, 238, 235, 233, 230, 225, 218 … into the glass, no gap; a side: dark 116 hairline then 185, 194, 189 inside.
-  RimLight draws a wide stroke whose shader rolls the light off inward (0.45·e^(-x/0.7) + 0.55·e^(-x/2.5), x in
-  widths, gone by 5.5) with the dark only as a hairline at the silhouette (e^(-x/0.6)); InnerGlow keeps 40% on the
-  sides; the lens has no line of its own. A bright line with a drop behind it = a border.
 - Rims follow Apple's iOS 26 glass (user's reference shots): a broad highlight facing the light plus one ~80% as bright
   opposite (`specularRim(opposite = 0.8f)`), and `InnerGlow` (one per element), a soft band of light a few dp deep just inside the
   edge (cards 8 dp at `GlassDepth.band`, chrome ≤4 dp at 52% white in dark, raised ≤4 dp; t³ falloff, k^1.6 towards
