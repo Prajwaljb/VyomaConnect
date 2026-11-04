@@ -209,18 +209,6 @@ float2 edgeNormal(float2 p, float2 c, float radius, float exponent) {
     return q.x > q.y ? float2(sg.x, 0.0) : float2(0.0, sg.y);
 }
 
-// How much light an edge facing the light by `c` (its cosine) catches. Measured on Apple's glass
-// (macOS Control Center's Display bar, 2026-11-05): from the straight top round a corner it falls
-// 1, .78, .55, .38, .28, .26, .12, .03, 0 every 10°: quickly over the first half, then a thin tail
-// to ~70°. A sharp lobe plus a broad one fits within a few percent (a single power lit corners
-// evenly and read flat).
-float lobe(float c) {
-    c = max(c, 0.0);
-    float c2 = c * c;
-    float c4 = c2 * c2;
-    return 0.6 * c4 * c4 + 0.4 * c;
-}
-
 half4 main(float2 xy) {
     float2 c = size * 0.5;
     float2 p = xy - c;
@@ -247,7 +235,7 @@ half4 main(float2 xy) {
     float2 n = edgeNormal(p, c, radius, exponent);
     float f = dot(n, light);
     // Spreads along the edge but gathers towards where it faces the light, so the lit corners stand out.
-    float k = lobe(f) + opposite * lobe(-f);
+    float k = pow(max(f, 0.0), 1.6) + opposite * pow(max(-f, 0.0), 1.6);
     float a = float(color.a) * band * k;
     // The rolled edge: how steeply the surface falls away here, steepest at the rim and flat
     // inside, with a shallow dip the other way past the roll (the liquid S of a thick drop).
@@ -340,20 +328,10 @@ internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float =
 internal object RimLight {
     private val shader by lazy(LazyThreadSafetyMode.NONE) { @SuppressLint("NewApi") RuntimeShader(AGSL) }
 
-    /**
-     * Strokes [outline] (sized [area], corners of extent [corner] and [exponent]) [width] wide.
-     *
-     * [dark] is how much the edge darkens what's under it where the light doesn't reach, as Apple's
-     * glass does (2026-11-05, measured on the user's references: the dock's and a pill's sides, a
-     * button's whole rim over a flower): light crosses more glass at the rim, so what shows through
-     * there comes out darker in its own colour. The light is added over that, so a lit edge is bright
-     * and an unlit one dark, and the corners turn from one to the other. With [dark], [base] is only
-     * the fallback's (below Android 13), where the sweep can't darken.
-     */
+    /** Strokes [outline] (sized [area], corners of extent [corner] and [exponent]) [width] wide. */
     fun DrawScope.stroke(
         outline: Outline, lit: Color, base: Color, width: Float, area: Size, corner: Float?,
         exponent: Float = 2f, light: Float = SpecularLight.angle, opposite: Float = 0.8f, alpha: Float = 1f,
-        dark: Float = 0f,
     ) {
         if (!liquidGlassSupported || corner == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             drawOutline(outline, specularRim(lit, base, Offset(area.width / 2, area.height / 2), light, opposite, area), alpha = alpha, style = Stroke(width))
@@ -366,9 +344,7 @@ internal object RimLight {
         shader.setFloatUniform("light", cos(a).toFloat(), sin(a).toFloat())
         shader.setFloatUniform("opposite", opposite)
         shader.setFloatUniform("lit", lit.red, lit.green, lit.blue, lit.alpha)
-        val b = if (dark > 0f) Color.Transparent else base
-        shader.setFloatUniform("base", b.red, b.green, b.blue, b.alpha)
-        shader.setFloatUniform("dark", dark)
+        shader.setFloatUniform("base", base.red, base.green, base.blue, base.alpha)
         drawOutline(outline, ShaderBrush(shader), alpha = alpha, style = Stroke(width))
     }
 
@@ -380,7 +356,6 @@ uniform float2 light;
 uniform float opposite;
 uniform half4 lit;
 uniform half4 base;
-uniform float dark;
 
 // The outward normal of a rounded rect (half-size c) whose corners are superellipse quarters of
 // extent `radius` and exponent `exponent` (2 = circular).
@@ -392,31 +367,14 @@ float2 edgeNormal(float2 p, float2 c, float radius, float exponent) {
     return q.x > q.y ? float2(sg.x, 0.0) : float2(0.0, sg.y);
 }
 
-// How much light an edge facing the light by `c` (its cosine) catches. Measured on Apple's glass
-// (macOS Control Center's Display bar, 2026-11-05): from the straight top round a corner it falls
-// 1, .78, .55, .38, .28, .26, .12, .03, 0 every 10°: quickly over the first half, then a thin tail
-// to ~70°. A sharp lobe plus a broad one fits within a few percent (a single power lit corners
-// evenly and read flat).
-float lobe(float c) {
-    c = max(c, 0.0);
-    float c2 = c * c;
-    float c4 = c2 * c2;
-    return 0.6 * c4 * c4 + 0.4 * c;
-}
-
 half4 main(float2 xy) {
     float2 c = size * 0.5;
     float2 n = edgeNormal(xy - c, c, radius, exponent);
     float f = dot(n, light);
     // As the band: broad and soft, gathered towards the light and the far side.
-    float k = clamp(lobe(f) + opposite * lobe(-f), 0.0, 1.0);
-    // Light (and the base) added over a darkening that fades where the light takes over.
-    half3 rgb = lit.rgb * lit.a * half(k) + base.rgb * base.a * half(1.0 - k);
-    half a = lit.a * half(k) + base.a * half(1.0 - k);
-    // Dark only where the edge turns away: none until ~45° round a corner, half by 60°, full by
-    // 70° (the same Display bar), so a corner shows both its light's tail and the dark.
-    half d = half(dark * smoothstep(0.72, 1.0, sqrt(max(1.0 - f * f, 0.0))));
-    return half4(rgb, a + d * (1.0 - a));
+    float k = clamp(pow(max(f, 0.0), 1.6) + opposite * pow(max(-f, 0.0), 1.6), 0.0, 1.0);
+    half4 col = mix(base, lit, half(k));
+    return half4(col.rgb * col.a, col.a);
 }
 """
 }
@@ -424,10 +382,10 @@ half4 main(float2 xy) {
 
 /**
  * How a lens bends: the rim as a share of the lens's short side, and the slab's depth in rims.
- * [milk] is white mixed into the glass in dark and light themes: none (the user wants no tint).
+ * [milk] is the white mixed into the glass in dark and light themes.
  */
 @Immutable
-class LensStyle(val rim: Float, val depth: Float, val disperse: Float, val milk: Pair<Float, Float> = 0f to 0f) {
+class LensStyle(val rim: Float, val depth: Float, val disperse: Float, val milk: Pair<Float, Float> = 0.05f to 0.12f) {
     companion object {
         /** Bars and buttons (chrome): water-like, the rim shows what's across the element. */
         val Chrome = LensStyle(rim = 0.2f, depth = 6f, disperse = 0.04f)
@@ -442,7 +400,7 @@ class LensStyle(val rim: Float, val depth: Float, val disperse: Float, val milk:
          *  inward, the rim replayed the track or bar as mirrored stripes. Crystal clear: any milk
          *  read as a dirty white haze as it grew. (Apple's ringed drop optics were tried and
          *  rejected: a thick double border with a rainbow edge.) */
-        val Lift = LensStyle(rim = 0.22f, depth = -1.1f, disperse = 0.03f)
+        val Lift = LensStyle(rim = 0.22f, depth = -1.1f, disperse = 0.03f, milk = 0f to 0.02f)
     }
 }
 
@@ -574,7 +532,7 @@ internal class LensPainter(private val graphics: GraphicsContext) {
             // Quantized so a frost animation rebuilds the shader a few dozen times, not every frame.
             tint = Color.White.copy(alpha = androidx.compose.ui.util.lerp(if (dark) style.milk.first else style.milk.second, 0.97f, (frost * 32).roundToInt() / 32f)),
             spec = if (dark) 0.55f else 0.9f,
-            shade = 0f, blur = 0f, // the rim stroke darkens the unlit edge
+            shade = if (dark) 0f else 0.12f, blur = 0f,
         )
         drop.alpha = a
         drop.record(IntSize(r.width.roundToInt() + 2 * m, r.height.roundToInt() + 2 * m)) {
@@ -616,7 +574,7 @@ internal class LensPainter(private val graphics: GraphicsContext) {
                     Outline.Rounded(RoundRect(Rect(Offset.Zero, edge.size), CornerRadius(edge.minDimension / 2))),
                     Color.White.copy(alpha = if (dark) 0.6f else 1f),
                     if (dark) Color.White.copy(alpha = 0.1f) else Color(0xFF1A2B4C).copy(alpha = 0.14f),
-                    1.dp.toPx(), edge.size, edge.minDimension / 2, alpha = a, dark = if (dark) 0.35f else 0.15f,
+                    1.dp.toPx(), edge.size, edge.minDimension / 2, alpha = a,
                 )
             }
         }
@@ -701,18 +659,6 @@ uniform float vibrance;
 uniform float gloss;
 uniform float drop;
 
-// How much light an edge facing the light by `c` (its cosine) catches. Measured on Apple's glass
-// (macOS Control Center's Display bar, 2026-11-05): from the straight top round a corner it falls
-// 1, .78, .55, .38, .28, .26, .12, .03, 0 every 10°: quickly over the first half, then a thin tail
-// to ~70°. A sharp lobe plus a broad one fits within a few percent (a single power lit corners
-// evenly and read flat).
-float lobe(float c) {
-    c = max(c, 0.0);
-    float c2 = c * c;
-    float c4 = c2 * c2;
-    return 0.6 * c4 * c4 + 0.4 * c;
-}
-
 half4 main(float2 p) {
     float2 c = size * 0.5;
     float2 rel = p - margin - c;
@@ -753,26 +699,25 @@ half4 main(float2 p) {
             col.b = content.eval(clamp(at - k, lo, hi)).b;
         }
     }
-    // Vibrancy (an option Apple offers, off here: the user wants no tint, 2026-11-05): 1 leaves
-    // the colour of what's behind exactly as it is.
+    // Vibrancy: Apple's glass deepens the colour of what's behind it (under macOS/iOS Control Center
+    // tiles a flower's saturation goes 0.25 -> ~0.47, a blue sky 0.82 -> 0.93), never greys it.
     half lum = dot(col.rgb, half3(0.2126, 0.7152, 0.0722));
     col.rgb = clamp(mix(half3(lum), col.rgb, half(vibrance)), half3(0.0), half3(col.a));
     col.rgb = mix(col.rgb, half3(tint.rgb) * col.a, half(tint.a));
     // The gloss: what's under the bevel glows, brightest where the edge faces the light and its
     // opposite (iOS 26 tiles over blue: the rim reads as a brighter, still saturated blue).
-    float f0 = dot(n, light);
-    float face0 = lobe(f0) + 0.8 * lobe(-f0);
-    // Only a trace where the edge faces away: Apple's sides carry no light (a dark edge instead,
-    // which the rim stroke draws over this).
-    float g = gloss * t * t * (0.1 + 0.9 * face0);
+    float f0 = dot(normalize(rel / max(c, float2(1.0)) + 1e-4), light);
+    float face0 = pow(max(f0, 0.0), 1.6) + 0.8 * pow(max(-f0, 0.0), 1.6);
+    float g = gloss * t * t * (0.3 + 0.7 * face0);
     col.rgb += (half3(col.a) - col.rgb) * half(g);
     // A thin specular rim, brightest where it faces the light and its opposite.
     float rim = 1.0 - smoothstep(0.0, 1.8, -d);
-    // Lit by the same facing as the inner band and the rim stroke: the edge's true normal, so a
-    // pill's straight top is lit end to end and the light slides round its ends as on Apple's.
-    float f = dot(n, light);
-    float facing = lobe(f) + 0.8 * lobe(-f);
-    float light = (rim + t * t * t * 0.12) * facing;
+    // Lit by the same facing as the inner band and the rim stroke (the shape's normalised position,
+    // not its true normal), so bars and cards catch the light alike.
+    float f = dot(normalize(rel / max(c, float2(1.0)) + 1e-4), light);
+    // As the band: full facing the light, 0.8 on the far side, gathered towards both.
+    float facing = pow(max(f, 0.0), 1.6) + 0.8 * pow(max(-f, 0.0), 1.6);
+    float light = rim * (0.25 + 0.75 * facing) + t * t * t * 0.12;
     col.rgb += half3(light * spec) * col.a;
     // On light backgrounds a highlight alone vanishes: a faint shaded underside gives the edge.
     col.rgb -= half3(rim * shade * (0.4 + 0.6 * max(n.y, 0.0))) * col.a;
