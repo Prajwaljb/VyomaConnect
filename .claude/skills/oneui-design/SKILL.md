@@ -89,6 +89,14 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Light: `SpecularLight.angle` (Light.kt) is where the light is on screen (270° = straight up, centred, at rest: the user's call; tilt sways it up to ±55°, soft limit, gain 2.2: ~10° of turn reaches straight up; the user found ±35° could never bring it to the centre), driven by the
   gravity sensor only while the UI is started (`TrackSpecularLight` in `VyomaTheme`), smoothed, 1.5° dead band. Every
   specular edge uses it: `specularRim(...)` (chrome stroke, raised controls) and the AGSL `light` uniform (lens rims).
+- Dark edges (user + references, 2026-11-05): where an edge doesn't face the light it DARKENS what's under it in
+  its own colour (light crosses more glass at the rim: the dock's sides, a pill's ends over sand/blue, a pause
+  button's whole rim over a flower), and the light is added over that, so lit edges are bright, unlit ones dark,
+  and corners turn from one to the other. `RimLight.stroke(dark = …)`: cards 0.45 dark / 0.16 light, raised 0.4 /
+  0.14 (filled 0.22), chrome 0.5 / 0.2, knobs 0.35 / 0.15. Chrome uses RimLight too now (the sweep is only the
+  pre-13 fallback). The lens shader adds light only by facing (no all-round floor); no bottom-only "shade".
+  On true black the dark can't show (nothing to darken): that's correct, not a bug. Test with Lighter glass
+  OFF (emulators turn it on, and then chrome isn't the lens at all).
 - Rims follow Apple's iOS 26 glass (user's reference shots): a broad highlight facing the light plus one ~80% as bright
   opposite (`specularRim(opposite = 0.8f)`), and `InnerGlow` (one per element), a soft band of light a few dp deep just inside the
   edge (cards 8 dp at `GlassDepth.band`, chrome ≤4 dp at 52% white in dark, raised ≤4 dp; t³ falloff, k^1.6 towards

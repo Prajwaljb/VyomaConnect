@@ -196,6 +196,8 @@ class GlassDepth internal constructor(
     val band: Color = Color.Transparent,
     /** The rolled edge's shaded side (see [InnerGlow]); transparent for none. */
     val shade: Color = Color.Transparent,
+    /** How much the unlit edge darkens what's under it (see [RimLight.stroke]). */
+    val rimDark: Float = 0f,
 )
 
 // Dark is true black (AMOLED): glass glows instead of casting shadows.
@@ -210,6 +212,7 @@ private val DarkDepth = GlassDepth(
     // Content is a thinner pane than the floating chrome: half the chrome-like band, no rolled edge,
     // so the bars read as a layer above the cards (with the same edge, on black they didn't).
     band = Color.White.copy(alpha = 0.15f),
+    rimDark = 0.45f,
 )
 private val LightDepth = GlassDepth(
     // See-through, so the canvas's tint shows in the card (0.72 read as solid white blocks).
@@ -218,6 +221,7 @@ private val LightDepth = GlassDepth(
     rimLit = Color.White, rimBase = Color(0xFF1A2B4C).copy(alpha = 0.06f),
     shadow = Color(0xFF1A2B4C).copy(alpha = 0.05f), shadowBlur = 14f, shadowDrop = 3f,
     band = Color.White.copy(alpha = 0.35f),
+    rimDark = 0.16f,
 )
 
 /** The current theme's [GlassDepth]. */
@@ -269,7 +273,7 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
         translate(inset, inset) {
             val area = Size(width - 2 * inset, height - 2 * inset)
             val r = corner ?: (edge as? Outline.Rounded)?.roundRect?.takeIf { it.isSimple }?.topLeftCornerRadius?.x ?: (edge as? Outline.Rectangle)?.let { 0f }
-            with(RimLight) { stroke(edge, d.rimLit, d.rimBase, stroke, area, r, if (corner != null) SmoothCornerShape.EXPONENT else 2f, light) }
+            with(RimLight) { stroke(edge, d.rimLit, d.rimBase, stroke, area, r, if (corner != null) SmoothCornerShape.EXPONENT else 2f, light, dark = d.rimDark) }
         }
     }
 }
@@ -339,7 +343,7 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
                 else -> Color(0xFF1A2B4C).copy(alpha = 0.06f)
             }
             val stroke = Stroke(0.9.dp.toPx())
-            val center = Offset(size.width / 2, size.height / 2)
+            val rimDark = if (base != null) 0.22f else if (dark) 0.4f else 0.14f
             val glow = InnerGlow()
             val band = Color.White.copy(alpha = if (base != null) 0.18f else if (dark) 0.34f else 0.6f)
             val bandWidth = (size.minDimension * 0.12f).coerceAtMost((if (size.minDimension < 64.dp.toPx()) 3 else 4).dp.toPx())
@@ -357,7 +361,7 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
                 val light = SpecularLight.angle
                 // No rolled shading here: on small round controls it turned them into plastic balls.
                 with(glow) { draw(outline, band, bandWidth, light, corner = smooth, exponent = if (smooth != null) SmoothCornerShape.EXPONENT else 2f) }
-                with(RimLight) { stroke(outline, lit, rimBase, stroke.width, size, radius, if (smooth != null && (outline !is Outline.Rounded)) SmoothCornerShape.EXPONENT else 2f, light) }
+                with(RimLight) { stroke(outline, lit, rimBase, stroke.width, size, radius, if (smooth != null && (outline !is Outline.Rounded)) SmoothCornerShape.EXPONENT else 2f, light, dark = rimDark) }
             }
         }
         .clip(shape)
@@ -650,7 +654,8 @@ fun Modifier.glassChrome(
                 gs * q, (m - inflate) * q, radius = (corner + inflate) * q, bevel = rim * q, refract = depth * q, zoom = 1f,
                 // Clear in dark mode; light mode keeps more milk so dark labels stay legible over photos.
                 disperse = LensStyle.Chrome.disperse, tint = fill.copy(alpha = fill.alpha * if (dark) 0.5f else 0.92f),
-                spec = 0.15f + 0.2f * p.coerceIn(0f, 1f), shade = if (dark) 0f else 0.1f, blur = r * q,
+                // No shaded underside: the rim stroke darkens wherever the light doesn't reach instead.
+                spec = 0.15f + 0.2f * p.coerceIn(0f, 1f), shade = 0f, blur = r * q,
                 // Apple's glass in the references: what's behind keeps (and deepens) its colour, and the
                 // bevel glows.
                 vibrance = 1.7f, gloss = if (dark) 0.22f else 0.3f,
@@ -672,17 +677,18 @@ fun Modifier.glassChrome(
             }
             // The highlight: brightest where it faces the light and its opposite; it follows the tilt.
             val pr = p.coerceIn(0f, 1f)
-            drawPath(
-                edgePath,
-                // On a light page a white highlight alone vanishes: the rest of the edge is a soft dark hairline.
-                specularRim(
-                    Color.White.copy(alpha = (if (dark) 0.55f else 1f) * (0.75f + 0.25f * pr) + 0.25f * pr),
-                    if (dark) Color.White.copy(alpha = 0.08f) else Color(0xFF1A2B4C).copy(alpha = 0.12f),
-                    center,
-                    size = g,
-                ),
-                style = Stroke(1.dp.toPx()),
-            )
+            // Lit by which way each bit of the edge faces, dark where the light doesn't reach (what's
+            // seen through the rim, darkened in its own colour, as on Apple's glass).
+            translate(-grow, -grow) {
+                with(RimLight) {
+                    stroke(
+                        Outline.Rounded(RoundRect(Rect(Offset.Zero, g), CornerRadius(corner))),
+                        Color.White.copy(alpha = (if (dark) 0.55f else 1f) * (0.75f + 0.25f * pr) + 0.25f * pr),
+                        if (dark) Color.White.copy(alpha = 0.08f) else Color(0xFF1A2B4C).copy(alpha = 0.12f),
+                        1.dp.toPx(), g, corner, dark = if (dark) 0.5f else 0.2f,
+                    )
+                }
+            }
         }
         .then(if (edge && lens == null) Modifier.border(0.75.dp, edgeBrush, shape) else Modifier)
 }
