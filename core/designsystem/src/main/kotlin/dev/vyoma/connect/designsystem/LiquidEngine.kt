@@ -328,10 +328,20 @@ internal fun specularRim(lit: Color, base: Color, center: Offset, light: Float =
 internal object RimLight {
     private val shader by lazy(LazyThreadSafetyMode.NONE) { @SuppressLint("NewApi") RuntimeShader(AGSL) }
 
-    /** Strokes [outline] (sized [area], corners of extent [corner] and [exponent]) [width] wide. */
+    /**
+     * Strokes [outline] (sized [area], corners of extent [corner] and [exponent]) [width] wide.
+     *
+     * [dark] is how much the edge darkens what's under it where the light doesn't reach, as Apple's
+     * glass does (2026-11-05, measured on the user's references: the dock's and a pill's sides, a
+     * button's whole rim over a flower): light crosses more glass at the rim, so what shows through
+     * there comes out darker in its own colour. The light is added over that, so a lit edge is bright
+     * and an unlit one dark, and the corners turn from one to the other. With [dark], [base] is only
+     * the fallback's (below Android 13), where the sweep can't darken.
+     */
     fun DrawScope.stroke(
         outline: Outline, lit: Color, base: Color, width: Float, area: Size, corner: Float?,
         exponent: Float = 2f, light: Float = SpecularLight.angle, opposite: Float = 0.8f, alpha: Float = 1f,
+        dark: Float = 0f,
     ) {
         if (!liquidGlassSupported || corner == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             drawOutline(outline, specularRim(lit, base, Offset(area.width / 2, area.height / 2), light, opposite, area), alpha = alpha, style = Stroke(width))
@@ -344,7 +354,9 @@ internal object RimLight {
         shader.setFloatUniform("light", cos(a).toFloat(), sin(a).toFloat())
         shader.setFloatUniform("opposite", opposite)
         shader.setFloatUniform("lit", lit.red, lit.green, lit.blue, lit.alpha)
-        shader.setFloatUniform("base", base.red, base.green, base.blue, base.alpha)
+        val b = if (dark > 0f) Color.Transparent else base
+        shader.setFloatUniform("base", b.red, b.green, b.blue, b.alpha)
+        shader.setFloatUniform("dark", dark)
         drawOutline(outline, ShaderBrush(shader), alpha = alpha, style = Stroke(width))
     }
 
@@ -356,6 +368,7 @@ uniform float2 light;
 uniform float opposite;
 uniform half4 lit;
 uniform half4 base;
+uniform float dark;
 
 // The outward normal of a rounded rect (half-size c) whose corners are superellipse quarters of
 // extent `radius` and exponent `exponent` (2 = circular).
@@ -373,8 +386,11 @@ half4 main(float2 xy) {
     float f = dot(n, light);
     // As the band: broad and soft, gathered towards the light and the far side.
     float k = clamp(pow(max(f, 0.0), 1.6) + opposite * pow(max(-f, 0.0), 1.6), 0.0, 1.0);
-    half4 col = mix(base, lit, half(k));
-    return half4(col.rgb * col.a, col.a);
+    // Light (and the base) added over a darkening that fades where the light takes over.
+    half3 rgb = lit.rgb * lit.a * half(k) + base.rgb * base.a * half(1.0 - k);
+    half a = lit.a * half(k) + base.a * half(1.0 - k);
+    half d = half(dark * (1.0 - k));
+    return half4(rgb, a + d * (1.0 - a));
 }
 """
 }
@@ -532,7 +548,7 @@ internal class LensPainter(private val graphics: GraphicsContext) {
             // Quantized so a frost animation rebuilds the shader a few dozen times, not every frame.
             tint = Color.White.copy(alpha = androidx.compose.ui.util.lerp(if (dark) style.milk.first else style.milk.second, 0.97f, (frost * 32).roundToInt() / 32f)),
             spec = if (dark) 0.55f else 0.9f,
-            shade = if (dark) 0f else 0.12f, blur = 0f,
+            shade = 0f, blur = 0f, // the rim stroke darkens the unlit edge
         )
         drop.alpha = a
         drop.record(IntSize(r.width.roundToInt() + 2 * m, r.height.roundToInt() + 2 * m)) {
@@ -574,7 +590,7 @@ internal class LensPainter(private val graphics: GraphicsContext) {
                     Outline.Rounded(RoundRect(Rect(Offset.Zero, edge.size), CornerRadius(edge.minDimension / 2))),
                     Color.White.copy(alpha = if (dark) 0.6f else 1f),
                     if (dark) Color.White.copy(alpha = 0.1f) else Color(0xFF1A2B4C).copy(alpha = 0.14f),
-                    1.dp.toPx(), edge.size, edge.minDimension / 2, alpha = a,
+                    1.dp.toPx(), edge.size, edge.minDimension / 2, alpha = a, dark = if (dark) 0.35f else 0.15f,
                 )
             }
         }
@@ -708,7 +724,9 @@ half4 main(float2 p) {
     // opposite (iOS 26 tiles over blue: the rim reads as a brighter, still saturated blue).
     float f0 = dot(normalize(rel / max(c, float2(1.0)) + 1e-4), light);
     float face0 = pow(max(f0, 0.0), 1.6) + 0.8 * pow(max(-f0, 0.0), 1.6);
-    float g = gloss * t * t * (0.3 + 0.7 * face0);
+    // Only a trace where the edge faces away: Apple's sides carry no light (a dark edge instead,
+    // which the rim stroke draws over this).
+    float g = gloss * t * t * (0.1 + 0.9 * face0);
     col.rgb += (half3(col.a) - col.rgb) * half(g);
     // A thin specular rim, brightest where it faces the light and its opposite.
     float rim = 1.0 - smoothstep(0.0, 1.8, -d);
@@ -717,7 +735,7 @@ half4 main(float2 p) {
     float f = dot(normalize(rel / max(c, float2(1.0)) + 1e-4), light);
     // As the band: full facing the light, 0.8 on the far side, gathered towards both.
     float facing = pow(max(f, 0.0), 1.6) + 0.8 * pow(max(-f, 0.0), 1.6);
-    float light = rim * (0.25 + 0.75 * facing) + t * t * t * 0.12;
+    float light = (rim + t * t * t * 0.12) * facing;
     col.rgb += half3(light * spec) * col.a;
     // On light backgrounds a highlight alone vanishes: a faint shaded underside gives the edge.
     col.rgb -= half3(rim * shade * (0.4 + 0.6 * max(n.y, 0.0))) * col.a;
