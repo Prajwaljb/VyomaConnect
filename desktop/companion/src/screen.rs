@@ -37,8 +37,19 @@ const CPB_KBITS: u32 = 600;
 /// The longest gap the encoder allows between keyframes. TCP never loses one, so they're only
 /// needed to start; every one is a burst, so as few as possible.
 const KEYFRAME_FRAMES: u32 = 1024;
-/// Half the phone's 120 Hz: its screen always keeps up, so frames never queue on the way.
-const MAX_FPS: u32 = 60;
+/// The most frames a second the cast sends: the phone asks for what its screen and decoder keep up
+/// with (`maxFps`), up to this. KWin's cap delays changes, not just thins them: at 60 a typed letter
+/// reached the encoder ~30 ms later than uncapped (typing_reaches_the_encoder, 2026-11-04), so the
+/// higher the better while the phone keeps up.
+const MAX_FPS: u32 = 120;
+/// For a phone that doesn't say (an older Vyoma), and the least any phone gets.
+const DEFAULT_FPS: u32 = 60;
+const MIN_FPS: u32 = 30;
+
+/// The rate a phone asked for, within what the cast allows.
+pub fn fps_for(asked: Option<u64>) -> u32 {
+    asked.map_or(DEFAULT_FPS, |f| (f.min(MAX_FPS as u64) as u32).max(MIN_FPS))
+}
 const RELAY_BYTES: usize = 16 * 1024;
 /// The encoder's output pipe (64 KiB by default, most of a second when the picture is still).
 const PIPE_BYTES: libc::c_int = 16 * 1024;
@@ -46,7 +57,7 @@ const STAMP_MAGIC: &[u8; 4] = b"VYTS";
 
 /// Casts until the phone hangs up (or the stream fails). Failures before streaming starts reach the
 /// phone as an error packet, so it never waits on a spinner.
-pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, inputs: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>) -> Result<()> {
+pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, fps: u32, inputs: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>) -> Result<()> {
     // VYOMA_SCREEN_TEST=1 casts a moving test pattern instead, with no portal: for checking the
     // phone's viewer (and screenshotting it) without anything private on the screen.
     let test = std::env::var_os("VYOMA_SCREEN_TEST").is_some();
@@ -60,8 +71,8 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, i
     let (w, h) = cast.as_ref().and_then(|c| c.size).map(fit).unwrap_or((MAX_WIDTH, MAX_WIDTH * 9 / 16));
     let control = cast.as_ref().and_then(|c| Some(Pointer { conn: c.conn.clone(), session: c.control.clone()?, node: c.node, size: c.size? }));
     let (conn, mut gst) = match cast {
-        Some(Cast { conn, node, fd, .. }) => (Some(conn), encoder(&format!("pipewiresrc fd=0 path={node} do-timestamp=true keepalive-time=1000"), Some(fd), w, h)?),
-        None => (None, encoder(&format!("videotestsrc is-live=true pattern=smpte horizontal-speed=4 ! capsfilter caps=video/x-raw,width={w},height={h},framerate={MAX_FPS}/1"), None, w, h)?),
+        Some(Cast { conn, node, fd, .. }) => (Some(conn), encoder(&format!("pipewiresrc fd=0 path={node} do-timestamp=true keepalive-time=1000"), Some(fd), w, h, fps)?),
+        None => (None, encoder(&format!("videotestsrc is-live=true pattern=smpte horizontal-speed=4 ! capsfilter caps=video/x-raw,width={w},height={h},framerate={fps}/1"), None, w, h, fps)?),
     };
     let encoded = gst.stdout.take().context("encoder has no output")?;
     {
@@ -130,16 +141,18 @@ fn fit((w, h): (i32, i32)) -> (i32, i32) {
     (w & !1, h & !1)
 }
 
-fn encoder(source: &str, fd: Option<zvariant::OwnedFd>, w: i32, h: i32) -> Result<tokio::process::Child> {
+fn encoder(source: &str, fd: Option<zvariant::OwnedFd>, w: i32, h: i32, fps: u32) -> Result<tokio::process::Child> {
     // Latency first. The capture has a variable frame rate (KWin sends one per change, up to the
-    // monitor's 200 Hz); `max-framerate` asks KWin itself to send no more than [MAX_FPS] (videorate
+    // monitor's 200 Hz); `max-framerate` asks KWin itself to send no more than `fps` (videorate
     // can't cap it: the capture's timestamps let it through at ~100). At most one frame waits
     // before the encoder, no B-frames, the fastest preset, a small buffer and rare keyframes so
     // no frame is a burst, and length-prefixed output ("avc"), one picture per write, so
     // the phone can show each frame the moment it lands.
+    // VYOMA_SCREEN_CAPS: other caps after the capture, for latency experiments.
+    let caps = std::env::var("VYOMA_SCREEN_CAPS").unwrap_or_else(|_| format!("video/x-raw(ANY),max-framerate={fps}/1"));
     let pipeline = format!(
         "{source} \
-         ! video/x-raw(ANY),max-framerate={MAX_FPS}/1 \
+         ! {caps} \
          ! queue max-size-buffers=1 leaky=downstream \
          ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h} \
          ! vah264enc rate-control=vbr bitrate={BITRATE_KBPS} cpb-size={CPB_KBITS} key-int-max={KEYFRAME_FRAMES} b-frames=0 num-slices=1 target-usage=7 \
@@ -562,6 +575,54 @@ fn rand_u32() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// How long a typed letter takes to come out of the encoder as a frame: types single letters
+    /// into KWrite (as [types_into_a_test_window]) while casting, and prints each delay.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn typing_reaches_the_encoder() {
+        let file = std::env::var("VYOMA_TYPE_FILE").expect("VYOMA_TYPE_FILE");
+        let focus = std::env::var("VYOMA_FOCUS").expect("VYOMA_FOCUS");
+        std::fs::write(&file, "").unwrap();
+        let cast = Cast::remote().await.expect("remote desktop session");
+        let p = Pointer { conn: cast.conn.clone(), session: cast.control.clone().expect("keyboard allowed"), node: cast.node, size: cast.size.unwrap() };
+        let (w, h) = fit(cast.size.unwrap());
+        let mut editor = std::process::Command::new("kwrite").arg(&file).spawn().unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let said = String::from_utf8_lossy(&std::process::Command::new(&focus).output().unwrap().stdout).to_string();
+        if !said.contains("VYOMA_ACTIVE:test") {
+            let _ = editor.kill();
+            panic!("the test window didn't get focus; typed nothing");
+        }
+        let mut gst = encoder(&format!("pipewiresrc fd=0 path={} do-timestamp=true keepalive-time=1000", cast.node), Some(cast.fd), w, h, MAX_FPS).unwrap();
+        let mut out = gst.stdout.take().unwrap();
+        let frames = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(std::time::Instant, usize)>::new()));
+        let seen = frames.clone();
+        tokio::spawn(async move {
+            let mut nal = Vec::new();
+            loop {
+                let Ok(size) = out.read_u32().await else { return };
+                nal.resize(size as usize, 0);
+                if out.read_exact(&mut nal).await.is_err() { return }
+                if matches!(nal[0] & 0x1f, 1 | 5) { seen.lock().unwrap().push((std::time::Instant::now(), nal.len())); }
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let mut delays = Vec::new();
+        for i in 0..16u64 {
+            tokio::time::sleep(std::time::Duration::from_millis(600 + i * 37)).await;
+            let t0 = std::time::Instant::now();
+            p.type_char((b'a' + i as u8) as char).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+            let around: Vec<(i64, usize)> = frames.lock().unwrap().iter()
+                .map(|(t, n)| (if *t >= *&t0 { t.duration_since(t0).as_millis() as i64 } else { -(t0.duration_since(*t).as_millis() as i64) }, *n))
+                .filter(|(d, _)| (-60..300).contains(d)).collect();
+            delays.push(around);
+        }
+        let _ = editor.kill();
+        let _ = gst.kill().await;
+        for d in &delays { println!("frames around a letter, ms: {d:?}"); }
+    }
 
     #[test]
     fn characters_press_the_keys_that_type_them() {

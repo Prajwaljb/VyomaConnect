@@ -198,9 +198,30 @@ class ScreenDecoder(
         }
     }
 
-    private companion object {
-        const val TAG = "ScreenDecoder"
-        const val LOG_EVERY_NS = 5_000_000_000L
+    companion object {
+        private const val TAG = "ScreenDecoder"
+        private const val LOG_EVERY_NS = 5_000_000_000L
+
+        /**
+         * The most frames a second worth asking the PC for: the screen's top refresh rate, and no
+         * more than this phone's hardware H.264 decoder manages at 1080p (its measured rate where the
+         * maker lists one). More would only queue up and lag; fewer makes typed letters show later.
+         */
+        fun maxFps(display: android.view.Display?): Int {
+            val screen = display?.supportedModes?.maxOfOrNull { it.refreshRate }?.toInt() ?: 60
+            val decoder = runCatching {
+                android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos
+                    .filter { !it.isEncoder && it.isHardwareAccelerated && MediaFormat.MIMETYPE_VIDEO_AVC in it.supportedTypes }
+                    .mapNotNull { info ->
+                        val video = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities ?: return@mapNotNull null
+                        if (!video.isSizeSupported(1920, 1080)) return@mapNotNull null
+                        // Measured (performance points) if listed, else what it claims.
+                        (video.getAchievableFrameRatesFor(1920, 1080)?.upper ?: video.getSupportedFrameRatesFor(1920, 1080).upper).toInt()
+                    }
+                    .maxOrNull()
+            }.getOrNull() ?: 60
+            return minOf(screen, decoder).coerceIn(30, 120).also { VLog.i(TAG, "asking for $it fps (screen $screen Hz, decoder $decoder)") }
+        }
     }
 }
 

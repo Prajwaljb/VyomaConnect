@@ -569,12 +569,13 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
 
     /**
      * Starts a live cast of the PC's screen. The first time, Plasma asks on the PC which screen to
-     * share, so this waits up to a minute for the answer.
+     * share, so this waits up to a minute for the answer. [maxFps]: the most frames a second this
+     * phone shows and decodes (the PC sends up to 120, 60 if not told).
      */
-    suspend fun openScreen(): Result<ScreenStream> {
+    suspend fun openScreen(maxFps: Int? = null): Result<ScreenStream> {
         val reply = CompletableDeferred<NetworkPacket>()
         pendingScreen = reply
-        if (!ctx.send(packet(SCREEN_REQUEST))) return Result.failure(IllegalStateException("The PC isn't reachable"))
+        if (!ctx.send(packet(SCREEN_REQUEST) { maxFps?.let { put("maxFps", it) } })) return Result.failure(IllegalStateException("The PC isn't reachable"))
         val answer = withTimeoutOrNull(SCREEN_TIMEOUT_MS) { reply.await() }
             ?: return Result.failure(IllegalStateException("The PC didn't answer. Is screen sharing waiting for you there?"))
         answer.string("error")?.let { return Result.failure(IllegalStateException(it)) }
