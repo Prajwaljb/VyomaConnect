@@ -15,4 +15,7 @@
     <string name="sc_touchpad">Touchpad</string>
     <string name="sc_clipboard">Send clipboard</string>
     <string name="sc_files">Send files</string>
+    <string name="mirror_control_label">Vyoma PC control</string>
+    <string name="mirror_control_summary">Lets your PC\'s mouse and keyboard use this phone while its screen is shown there</string>
+    <string name="mirror_control_description">While you show this phone\'s screen on your PC with Vyoma, this lets clicks, drags, scrolling and typing in the PC\'s window reach the phone. It acts only on what that window sends, only while the screen is being shown, and reads nothing else.</string>
 </resources>

@@ -64,7 +64,10 @@ object Notifications {
     fun service(context: Context, connected: List<DeviceState>): Notification {
         // While the phone is the PC's webcam, that's what matters: say so, and offer Stop.
         val webcam = dev.vyoma.connect.webcam.PhoneWebcam.status.value
+        val mirror = dev.vyoma.connect.mirror.PhoneMirror.status.value
         val title = when {
+            mirror.on && webcam.on -> "Screen and camera on ${mirror.pc ?: webcam.pc ?: "your PC"}"
+            mirror.on -> "Screen shown on ${mirror.pc ?: "your PC"}"
             webcam.on -> "Camera${if (webcam.options.mic) " and mic" else ""} on ${webcam.pc ?: "your PC"}"
             else -> when (connected.size) {
             0 -> "Looking for your PC"
@@ -82,13 +85,20 @@ object Notifications {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setCategory(Notification.CATEGORY_SERVICE)
             .apply {
+                if (mirror.on) {
+                    val stop = PendingIntent.getService(
+                        context, 8, Intent(context, LinkService::class.java).setAction(LinkService.ACTION_MIRROR_STOP),
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                    )
+                    addAction(0, "Stop sharing", stop)
+                }
                 if (webcam.on) {
                     val stop = PendingIntent.getService(
                         context, 7, Intent(context, LinkService::class.java).setAction(LinkService.ACTION_WEBCAM_STOP),
                         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
                     )
                     addAction(0, "Stop camera", stop)
-                } else if (connected.isNotEmpty()) {
+                } else if (connected.isNotEmpty() && !mirror.on) {
                     addAction(0, "Send clipboard", ClipboardActivity.pending(context))
                     addAction(0, "Send files", ShareActivity.pickFilesIntent(context))
                 }

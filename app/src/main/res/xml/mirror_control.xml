@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MirrorAccessibility: touches and typing from the PC's mirror window, nothing else. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/mirror_control_description"
+    android:summary="@string/mirror_control_summary"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:isAccessibilityTool="false"
+    android:notificationTimeout="100" />
