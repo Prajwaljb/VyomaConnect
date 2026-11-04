@@ -166,6 +166,11 @@ private suspend fun <T> closeOnCancel(server: ServerSocket, client: () -> Closea
     }
     try {
         block()
+    } catch (e: java.io.IOException) {
+        // Cancelling closes the sockets under the transfer, which then fails: that's the cancel,
+        // not an error (it reached the crash handler when a viewer closed, 2026-11-04).
+        if (coroutineContext[kotlinx.coroutines.Job]?.isCancelled == true) throw kotlinx.coroutines.CancellationException("cancelled").apply { initCause(e) }
+        throw e
     } finally {
         runCatching { server.close() }
         watchdog.cancel()

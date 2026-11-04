@@ -37,13 +37,26 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.perform
 import dev.vyoma.connect.designsystem.pressable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.material.icons.automirrored.rounded.Backspace
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.Keyboard
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.KeyboardHide
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
@@ -95,6 +108,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import dev.vyoma.connect.container
+import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.designsystem.DarkMode
 import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.ThemeSettings
@@ -272,6 +286,9 @@ private fun ScreenView(
     // The video is recorded as the backdrop the controls' liquid glass bends and blurs.
     val backdrop = rememberBackdrop()
     var controlling by remember { mutableStateOf(false) }
+    var typing by remember { mutableStateOf(false) }
+    // Ctrl and Alt, armed for the next key (tap again to disarm).
+    var mods by remember { mutableStateOf(emptySet<String>()) }
     var hint by remember { mutableIntStateOf(0) }
     val ratio = live?.takeIf { it.width > 0 && it.height > 0 }?.let { it.width.toFloat() / it.height } ?: (16f / 9f)
     // Touches go out in order, one after another.
@@ -286,14 +303,24 @@ private fun ScreenView(
             val s = dev.vyoma.connect.webcam.LiveStream(64 * 1024)
             stream = s
             launch(kotlinx.coroutines.Dispatchers.IO) {
-                try { p.screenTouches(s) } finally { if (stream === s) stream = null; s.close() }
+                try {
+                    p.screenTouches(s)
+                } catch (e: java.io.IOException) {
+                    VLog.w("PcScreen", "touch stream: ${e.message}") // packets carry on
+                } finally {
+                    if (stream === s) stream = null
+                    s.close()
+                }
             }
         }
         suspend fun deliver(t: Touch) {
-            val line = java.util.Locale.ROOT.let { l ->
-                "{\"kind\":\"${t.kind}\",\"x\":${"%.5f".format(l, t.x)},\"y\":${"%.5f".format(l, t.y)},\"dx\":${"%.2f".format(l, t.dx)},\"dy\":${"%.2f".format(l, t.dy)}}\n"
-            }
-            if (stream?.offer(line.toByteArray()) != true) p.screenInput(t.kind, t.x, t.y, t.dx, t.dy)
+            val line = org.json.JSONObject().apply {
+                put("kind", t.kind); put("x", t.x.toDouble()); put("y", t.y.toDouble()); put("dx", t.dx.toDouble()); put("dy", t.dy.toDouble())
+                t.text?.let { put("text", it) }
+                t.key?.let { put("key", it) }
+                if (t.mods.isNotEmpty()) put("mods", org.json.JSONArray(t.mods))
+            }.toString() + "\n"
+            if (stream?.offer(line.toByteArray()) != true) p.screenInput(t.kind, t.x, t.y, t.dx, t.dy, t.text, t.key, t.mods)
         }
         try {
             for (first in outbox) {
@@ -345,6 +372,8 @@ private fun ScreenView(
                         val start = first.position
                         // Touches on the bars are the viewer's own: a tap there shows the buttons.
                         val onBars = outside(start)
+                        // A button over the picture (the chrome, the keyboard's keys) took it: not for the PC.
+                        var byButton = first.isConsumed
                         var dragging = false
                         var multi = false
                         var moved = false
@@ -353,12 +382,13 @@ private fun ScreenView(
                         // Held still: a right-click, at once (the finger may stay down).
                         val press = scope.launch {
                             delay(LONG_PRESS_MS)
-                            if (onBars) return@launch
+                            if (onBars || byButton) return@launch
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             send("right", start)
                         }
                         while (true) {
                             val event = awaitPointerEvent()
+                            if (!dragging && !multi && event.changes.any { it.isConsumed }) byButton = true
                             val down = event.changes.filter { it.pressed }
                             if (down.isEmpty()) break
                             if (down.size >= 2 && !dragging) {
@@ -383,7 +413,7 @@ private fun ScreenView(
                                 event.changes.forEach { it.consume() }
                             } else {
                                 val at = down.first().position
-                                if (!onBars && !dragging && !press.isCompleted && (at - start).getDistance() > viewConfiguration.touchSlop) {
+                                if (!onBars && !byButton && !dragging && !press.isCompleted && (at - start).getDistance() > viewConfiguration.touchSlop) {
                                     dragging = true
                                     press.cancel()
                                     send("down", start)
@@ -396,6 +426,7 @@ private fun ScreenView(
                         val rightClicked = press.isCompleted && !press.isCancelled
                         press.cancel()
                         when {
+                            byButton && !dragging -> Unit
                             multi -> {
                                 if (scrolled) outbox.trySend(Touch("scrollend"))
                                 // A quick two-finger tap shows the buttons.
@@ -453,6 +484,42 @@ private fun ScreenView(
                     alpha = videoAlpha
                 },
         ) }
+
+        if (typing && live?.control == true) {
+            fun key(name: String) {
+                outbox.trySend(Touch("key", key = name, mods = mods.toList()))
+                mods = emptySet()
+            }
+            PcKeyboard(
+                onText = { text ->
+                    // An armed Ctrl/Alt makes a single character a shortcut (Ctrl+C), not typing.
+                    if (mods.isNotEmpty() && text.length == 1) key(text) else outbox.trySend(Touch("text", text = text))
+                },
+                onKey = ::key,
+                onClosed = { typing = false },
+            )
+            Box(Modifier.fillMaxSize().imePadding().safeDrawingPadding().padding(horizontal = 12.dp, vertical = 8.dp), contentAlignment = Alignment.BottomCenter) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    @Composable
+                    fun Key(label: String, onClick: () -> Unit, armed: Boolean = false, icon: ImageVector? = null) =
+                        GlassButton(backdrop, label, icon ?: Icons.Rounded.Keyboard, size = 44.dp, onClick = onClick, content = if (icon != null) null else ({
+                            Text(label, color = if (armed) Color(0xFF6FB6FF) else Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, style = androidx.compose.ui.text.TextStyle(shadow = GLYPH_SHADOW))
+                        }))
+                    Key("Esc", { key("Escape") })
+                    Key("Tab", { key("Tab") })
+                    for ((label, mod) in listOf("Ctrl" to "ctrl", "Alt" to "alt")) {
+                        Key(label, { mods = if (mod in mods) mods - mod else mods + mod }, armed = mod in mods)
+                    }
+                    Key("Super", { key("Super") }, icon = Icons.Rounded.Apps)
+                    Key("Left", { key("Left") }, icon = Icons.AutoMirrored.Rounded.KeyboardArrowLeft)
+                    Key("Up", { key("Up") }, icon = Icons.Rounded.KeyboardArrowUp)
+                    Key("Down", { key("Down") }, icon = Icons.Rounded.KeyboardArrowDown)
+                    Key("Right", { key("Right") }, icon = Icons.AutoMirrored.Rounded.KeyboardArrowRight)
+                    Key("Delete", { key("Delete") }, icon = Icons.AutoMirrored.Rounded.Backspace)
+                    Key("Hide the keyboard", { typing = false }, icon = Icons.Rounded.KeyboardHide)
+                }
+            }
+        }
 
         // Screenshot flash: a white veil that fades out, like the system screenshot.
         val veil = remember { Animatable(0f) }
@@ -530,6 +597,7 @@ private fun ScreenView(
                 ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (live.control) {
+                            GlassButton(backdrop, if (typing) "Hide the keyboard" else "Type on the PC", Icons.Rounded.Keyboard, onClick = { typing = !typing })
                             GlassButton(
                                 backdrop, if (controlling) "Stop controlling" else "Control the PC",
                                 if (controlling) Icons.Rounded.TouchApp else Icons.Rounded.Mouse,
@@ -559,8 +627,95 @@ private val GLYPH_SHADOW = androidx.compose.ui.graphics.Shadow(Color.Black.copy(
 private val CHROME_SPRING = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntOffset.VisibilityThreshold)
 private val ZOOM_SPRING = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = 0.001f)
 
+/** Past this much typed, the hidden field starts over (between keys, telling the keyboard). */
+private const val FIELD_MAX = 2_000
+
+/**
+ * The phone's keyboard, typing on the PC: an invisible field the keyboard writes into. Each change
+ * is compared with the one before (deleted → Backspaces, added → typing); the field is never
+ * rewritten under the keyboard mid-edit (resetting it after every key made Gboard repeat letters,
+ * 2026-11-04). Backspace on the empty field comes as a key. Plain input (no suggestions), so every
+ * key goes at once; no full-screen landscape editor, so the PC stays in view.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PcKeyboard(onText: (String) -> Unit, onKey: (String) -> Unit, onClosed: () -> Unit) {
+    val ime = WindowInsets.isImeVisible
+    var shown by remember { mutableStateOf(false) }
+    // The keyboard swiped away with Back: done typing.
+    LaunchedEffect(ime) {
+        if (ime) shown = true else if (shown) onClosed()
+    }
+    // Closing from our own button: hide the keyboard through a view that's still attached.
+    val host = androidx.compose.ui.platform.LocalView.current
+    DisposableEffect(Unit) {
+        onDispose {
+            host.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java).hideSoftInputFromWindow(host.windowToken, 0)
+            androidx.core.view.ViewCompat.getWindowInsetsController(host)?.hide(androidx.core.view.WindowInsetsCompat.Type.ime())
+        }
+    }
+    AndroidView(
+        factory = { context ->
+            android.widget.EditText(context).apply {
+                inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
+                    android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI or android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN or
+                    android.view.inputmethod.EditorInfo.IME_ACTION_NONE
+                background = null
+                alpha = 0f
+                var before = ""
+                var clearing = false
+                addTextChangedListener(object : android.text.TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+                    override fun afterTextChanged(s: android.text.Editable) {
+                        val now = s.toString()
+                        if (clearing) { before = now; return }
+                        if (now == before) return
+                        val same = now.commonPrefixWith(before).length
+                        repeat(before.length - same) { onKey("BackSpace") }
+                        now.substring(same).takeIf { it.isNotEmpty() }?.let(onText)
+                        before = now
+                        if (now.length > FIELD_MAX) post {
+                            clearing = true
+                            text.clear()
+                            clearing = false
+                            context.getSystemService(android.view.inputmethod.InputMethodManager::class.java).restartInput(this@apply)
+                        }
+                    }
+                })
+                // Keys the keyboard sends as keys: Enter, and Backspace once the field is empty.
+                setOnKeyListener { _, code, event ->
+                    if (event.action != android.view.KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                    when (code) {
+                        android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> { onKey("Return"); true }
+                        android.view.KeyEvent.KEYCODE_DEL -> if (text.isEmpty()) { onKey("BackSpace"); true } else false
+                        android.view.KeyEvent.KEYCODE_FORWARD_DEL -> { onKey("Delete"); true }
+                        else -> false
+                    }
+                }
+                setOnEditorActionListener { _, _, _ -> onKey("Return"); true }
+                post {
+                    requestFocus()
+                    context.getSystemService(android.view.inputmethod.InputMethodManager::class.java).showSoftInput(this, 0)
+                }
+            }
+        },
+        modifier = Modifier.size(1.dp),
+    )
+}
+
 /** One touch for the PC's pointer (see [CompanionPlugin.screenInput]). */
-private class Touch(val kind: String, val x: Float = 0f, val y: Float = 0f, val dx: Float = 0f, val dy: Float = 0f)
+private class Touch(
+    val kind: String,
+    val x: Float = 0f,
+    val y: Float = 0f,
+    val dx: Float = 0f,
+    val dy: Float = 0f,
+    val text: String? = null,
+    val key: String? = null,
+    val mods: List<String> = emptyList(),
+)
 
 /** Held this long without moving: a right-click. */
 private const val LONG_PRESS_MS = 450L

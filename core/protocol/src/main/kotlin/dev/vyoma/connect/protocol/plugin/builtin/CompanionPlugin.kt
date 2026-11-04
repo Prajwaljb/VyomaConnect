@@ -590,8 +590,9 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
 
     /**
      * A touch on the PC's screen as the phone shows it: [x], [y] 0..1 across the picture. Kinds:
-     * "click", "right", "down" / "move" / "up" (a left-button drag), "scroll" ([dx], [dy] in pixels)
-     * and "scrollend".
+     * "click", "right", "down" / "move" / "up" (a left-button drag), "scroll" ([dx], [dy] in pixels),
+     * "scrollend"; and typing: "text" ([text]) and "key" ([key]: BackSpace, Return, Escape, Tab,
+     * Delete, Home, End, Left/Right/Up/Down, Super, or one character, with [mods] ctrl/alt/super/shift).
      */
     /**
      * Touches for the PC's pointer as a live stream instead of packets: one JSON line per touch, as
@@ -601,8 +602,13 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     suspend fun screenTouches(lines: java.io.InputStream): Boolean =
         ctx.device.sendWithPayload(packet(SCREEN_TOUCH), PayloadSource(-1) { lines }, timeoutMs = WEBCAM_ACCEPT_MS)
 
-    suspend fun screenInput(kind: String, x: Float = 0f, y: Float = 0f, dx: Float = 0f, dy: Float = 0f) =
-        ctx.send(packet(SCREEN_INPUT) { put("kind", kind); put("x", x); put("y", y); put("dx", dx); put("dy", dy) })
+    suspend fun screenInput(kind: String, x: Float = 0f, y: Float = 0f, dx: Float = 0f, dy: Float = 0f, text: String? = null, key: String? = null, mods: List<String> = emptyList()) =
+        ctx.send(packet(SCREEN_INPUT) {
+            put("kind", kind); put("x", x); put("y", y); put("dx", dx); put("dy", dy)
+            text?.let { put("text", it) }
+            key?.let { put("key", it) }
+            if (mods.isNotEmpty()) put("mods", kotlinx.serialization.json.JsonArray(mods.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+        })
 
     /** The PC's whole desktop. */
     val screenshot = Capture(SCREENSHOT_REQUEST, "PC screenshot")
