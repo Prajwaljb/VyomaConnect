@@ -196,6 +196,8 @@ class GlassDepth internal constructor(
     val band: Color = Color.Transparent,
     /** The rolled edge's shaded side (see [InnerGlow]); transparent for none. */
     val shade: Color = Color.Transparent,
+    /** The dark hairline where the edge faces sideways (see [RimShadow]). */
+    val rimDark: Float = 0f,
 )
 
 // Dark is true black (AMOLED): glass glows instead of casting shadows.
@@ -210,6 +212,7 @@ private val DarkDepth = GlassDepth(
     // Content is a thinner pane than the floating chrome: half the chrome-like band, no rolled edge,
     // so the bars read as a layer above the cards (with the same edge, on black they didn't).
     band = Color.White.copy(alpha = 0.15f),
+    rimDark = 0.4f,
 )
 private val LightDepth = GlassDepth(
     // See-through, so the canvas's tint shows in the card (0.72 read as solid white blocks).
@@ -218,6 +221,7 @@ private val LightDepth = GlassDepth(
     rimLit = Color.White, rimBase = Color(0xFF1A2B4C).copy(alpha = 0.06f),
     shadow = Color(0xFF1A2B4C).copy(alpha = 0.05f), shadowBlur = 14f, shadowDrop = 3f,
     band = Color.White.copy(alpha = 0.35f),
+    rimDark = 0.18f,
 )
 
 /** The current theme's [GlassDepth]. */
@@ -269,7 +273,9 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
         translate(inset, inset) {
             val area = Size(width - 2 * inset, height - 2 * inset)
             val r = corner ?: (edge as? Outline.Rounded)?.roundRect?.takeIf { it.isSimple }?.topLeftCornerRadius?.x ?: (edge as? Outline.Rectangle)?.let { 0f }
-            with(RimLight) { stroke(edge, d.rimLit, d.rimBase, stroke, area, r, if (corner != null) SmoothCornerShape.EXPONENT else 2f, light) }
+            val ex = if (corner != null) SmoothCornerShape.EXPONENT else 2f
+            with(RimLight) { stroke(edge, d.rimLit, d.rimBase, stroke, area, r, ex, light) }
+            with(RimShadow) { stroke(edge, area, r, stroke, d.rimDark, ex, light) }
         }
     }
 }
@@ -357,7 +363,9 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
                 val light = SpecularLight.angle
                 // No rolled shading here: on small round controls it turned them into plastic balls.
                 with(glow) { draw(outline, band, bandWidth, light, corner = smooth, exponent = if (smooth != null) SmoothCornerShape.EXPONENT else 2f) }
-                with(RimLight) { stroke(outline, lit, rimBase, stroke.width, size, radius, if (smooth != null && (outline !is Outline.Rounded)) SmoothCornerShape.EXPONENT else 2f, light) }
+                val ex = if (smooth != null && (outline !is Outline.Rounded)) SmoothCornerShape.EXPONENT else 2f
+                with(RimLight) { stroke(outline, lit, rimBase, stroke.width, size, radius, ex, light) }
+                with(RimShadow) { stroke(outline, size, radius, stroke.width, if (base != null) 0.2f else if (dark) 0.35f else 0.15f, ex, light) }
             }
         }
         .clip(shape)
@@ -684,6 +692,10 @@ fun Modifier.glassChrome(
                 ),
                 style = Stroke(1.dp.toPx()),
             )
+            // Where the edge faces sideways, a dark hairline over the faint light there (see RimShadow).
+            translate(-grow, -grow) {
+                with(RimShadow) { stroke(Outline.Rounded(RoundRect(Rect(Offset.Zero, g), CornerRadius(corner))), g, corner, 1.dp.toPx(), if (dark) 0.45f else 0.2f) }
+            }
         }
         .then(if (edge && lens == null) Modifier.border(0.75.dp, edgeBrush, shape) else Modifier)
 }

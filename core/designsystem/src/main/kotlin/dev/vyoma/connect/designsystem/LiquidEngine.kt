@@ -381,6 +381,65 @@ half4 main(float2 xy) {
 
 
 /**
+ * The dark hairline where a glass edge faces sideways, away from the light: Apple's glass darkens
+ * what shows through its silhouette there (light crosses more glass at the rim), in that thing's own
+ * colour, so the outline stays crisp where the light doesn't reach. Measured on the user's
+ * references (2026-11-05): the dock's sides, a pill's ends over blue and sand, macOS Control
+ * Center's round buttons, strongest exactly side-on (3 and 9 o'clock), about a third 15° away and
+ * almost gone by 45°. Its own thin stroke drawn OVER the rim (so it covers the rim's faint base light
+ * side-on, where there's none on Apple's; elsewhere it's ~0): a first try that built the dark into the
+ * light stroke spread it over whole corners and read as a dark border.
+ * Android 13+ only (a no-op below).
+ */
+internal object RimShadow {
+    private val shader by lazy(LazyThreadSafetyMode.NONE) { @SuppressLint("NewApi") RuntimeShader(AGSL) }
+
+    fun DrawScope.stroke(
+        outline: Outline, area: Size, corner: Float?, width: Float, strength: Float,
+        exponent: Float = 2f, light: Float = SpecularLight.angle,
+    ) {
+        if (strength <= 0f || !liquidGlassSupported || corner == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val a = Math.toRadians(light.toDouble())
+        shader.setFloatUniform("size", area.width, area.height)
+        shader.setFloatUniform("radius", corner.coerceAtMost(area.minDimension / 2))
+        shader.setFloatUniform("exponent", exponent)
+        shader.setFloatUniform("light", cos(a).toFloat(), sin(a).toFloat())
+        shader.setFloatUniform("strength", strength)
+        drawOutline(outline, ShaderBrush(shader), style = Stroke(width))
+    }
+
+    private const val AGSL = """
+uniform float2 size;
+uniform float radius;
+uniform float exponent;
+uniform float2 light;
+uniform float strength;
+
+float2 edgeNormal(float2 p, float2 c, float radius, float exponent) {
+    float2 sg = float2(p.x < 0.0 ? -1.0 : 1.0, p.y < 0.0 ? -1.0 : 1.0);
+    float r = max(radius, 0.001);
+    float2 q = abs(p) - c + r;
+    if (q.x > 0.0 && q.y > 0.0) return normalize(pow(q / r, float2(exponent - 1.0)) + 1e-5) * sg;
+    return q.x > q.y ? float2(sg.x, 0.0) : float2(0.0, sg.y);
+}
+
+half4 main(float2 xy) {
+    float2 c = size * 0.5;
+    float f = dot(edgeNormal(xy - c, c, radius, exponent), light);
+    // How side-on this bit of edge is (1 = facing straight across the light).
+    float s = sqrt(max(1.0 - f * f, 0.0));
+    float s2 = s * s; float s4 = s2 * s2; float s6 = s4 * s2;
+    float s30 = s6 * s6; s30 = s30 * s30 * s6;
+    // Tight at side-on, a short tail: ~.5 at 15° away, ~.2 at 30°, ~.05 at 45°.
+    float k = 0.6 * s30 + 0.4 * s6;
+    // Black over the glass's edge darkens what shows there in its own colour.
+    return half4(0.0, 0.0, 0.0, half(strength * k));
+}
+"""
+}
+
+
+/**
  * How a lens bends: the rim as a share of the lens's short side, and the slab's depth in rims.
  * [milk] is white mixed into the glass in dark and light themes: none (the user wants no tint).
  */
@@ -575,6 +634,12 @@ internal class LensPainter(private val graphics: GraphicsContext) {
                     Color.White.copy(alpha = if (dark) 0.6f else 1f),
                     if (dark) Color.White.copy(alpha = 0.1f) else Color(0xFF1A2B4C).copy(alpha = 0.14f),
                     1.dp.toPx(), edge.size, edge.minDimension / 2, alpha = a,
+                )
+            }
+            with(RimShadow) {
+                stroke(
+                    Outline.Rounded(RoundRect(Rect(Offset.Zero, edge.size), CornerRadius(edge.minDimension / 2))),
+                    edge.size, edge.minDimension / 2, 1.dp.toPx(), (if (dark) 0.3f else 0.14f) * a,
                 )
             }
         }
