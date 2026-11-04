@@ -600,7 +600,9 @@ mod live {
             panic!("the test window didn't get focus; typed nothing");
         }
         let text = std::env::var("VYOMA_TYPE_TEXT").unwrap_or_else(|_| "Hello, World! 123 abc".into());
+        let t0 = std::time::Instant::now();
         p.perform(&json!({ "kind": "text", "text": text })).await.unwrap();
+        println!("{} characters in {:?}", text.chars().count(), t0.elapsed());
         p.perform(&json!({ "kind": "key", "key": "s", "mods": ["ctrl"] })).await.unwrap();
         tokio::time::sleep(Duration::from_millis(1500)).await;
         let _ = editor.kill();

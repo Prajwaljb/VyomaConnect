@@ -67,11 +67,16 @@ async fn open(me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value) -> Re
     // Another plugged-in phone could sit behind it; the certificate check below sends that one away.
     if let Some(usb) = packet["payloadTransferInfo"]["usbPort"].as_u64() {
         match connect(me, pinned, IpAddr::from([127, 0, 0, 1]), usb as u16).await {
-            Ok(tls) => return Ok(Either::Usb(tls)),
-            Err(e) => tracing::debug!("payload over USB failed, using Wi-Fi: {e:#}"),
+            Ok(tls) => {
+                tracing::info!("payload on port {port} over USB");
+                return Ok(Either::Usb(tls));
+            }
+            Err(e) => tracing::info!("payload on port {port} over USB failed, using Wi-Fi: {e:#}"),
         }
     }
-    Ok(Either::Lan(connect(me, pinned, phone, port).await?))
+    let lan = connect(me, pinned, phone, port).await?;
+    tracing::info!("payload on port {port} over Wi-Fi");
+    Ok(Either::Lan(lan))
 }
 
 type Tls = tokio_rustls::client::TlsStream<TcpStream>;
