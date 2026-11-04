@@ -209,6 +209,18 @@ float2 edgeNormal(float2 p, float2 c, float radius, float exponent) {
     return q.x > q.y ? float2(sg.x, 0.0) : float2(0.0, sg.y);
 }
 
+// How much light an edge facing the light by `c` (its cosine) catches. Measured on Apple's glass
+// (macOS Control Center's Display bar, 2026-11-05): from the straight top round a corner it falls
+// 1, .78, .55, .38, .28, .26, .12, .03, 0 every 10°: quickly over the first half, then a thin tail
+// to ~70°. A sharp lobe plus a broad one fits within a few percent (a single power lit corners
+// evenly and read flat).
+float lobe(float c) {
+    c = max(c, 0.0);
+    float c2 = c * c;
+    float c4 = c2 * c2;
+    return 0.6 * c4 * c4 + 0.4 * c;
+}
+
 half4 main(float2 xy) {
     float2 c = size * 0.5;
     float2 p = xy - c;
@@ -235,7 +247,7 @@ half4 main(float2 xy) {
     float2 n = edgeNormal(p, c, radius, exponent);
     float f = dot(n, light);
     // Spreads along the edge but gathers towards where it faces the light, so the lit corners stand out.
-    float k = pow(max(f, 0.0), 1.6) + opposite * pow(max(-f, 0.0), 1.6);
+    float k = lobe(f) + opposite * lobe(-f);
     float a = float(color.a) * band * k;
     // The rolled edge: how steeply the surface falls away here, steepest at the rim and flat
     // inside, with a shallow dip the other way past the roll (the liquid S of a thick drop).
@@ -380,16 +392,30 @@ float2 edgeNormal(float2 p, float2 c, float radius, float exponent) {
     return q.x > q.y ? float2(sg.x, 0.0) : float2(0.0, sg.y);
 }
 
+// How much light an edge facing the light by `c` (its cosine) catches. Measured on Apple's glass
+// (macOS Control Center's Display bar, 2026-11-05): from the straight top round a corner it falls
+// 1, .78, .55, .38, .28, .26, .12, .03, 0 every 10°: quickly over the first half, then a thin tail
+// to ~70°. A sharp lobe plus a broad one fits within a few percent (a single power lit corners
+// evenly and read flat).
+float lobe(float c) {
+    c = max(c, 0.0);
+    float c2 = c * c;
+    float c4 = c2 * c2;
+    return 0.6 * c4 * c4 + 0.4 * c;
+}
+
 half4 main(float2 xy) {
     float2 c = size * 0.5;
     float2 n = edgeNormal(xy - c, c, radius, exponent);
     float f = dot(n, light);
     // As the band: broad and soft, gathered towards the light and the far side.
-    float k = clamp(pow(max(f, 0.0), 1.6) + opposite * pow(max(-f, 0.0), 1.6), 0.0, 1.0);
+    float k = clamp(lobe(f) + opposite * lobe(-f), 0.0, 1.0);
     // Light (and the base) added over a darkening that fades where the light takes over.
     half3 rgb = lit.rgb * lit.a * half(k) + base.rgb * base.a * half(1.0 - k);
     half a = lit.a * half(k) + base.a * half(1.0 - k);
-    half d = half(dark * (1.0 - k));
+    // Dark only where the edge turns away: none until ~45° round a corner, half by 60°, full by
+    // 70° (the same Display bar), so a corner shows both its light's tail and the dark.
+    half d = half(dark * smoothstep(0.72, 1.0, sqrt(max(1.0 - f * f, 0.0))));
     return half4(rgb, a + d * (1.0 - a));
 }
 """
@@ -675,6 +701,18 @@ uniform float vibrance;
 uniform float gloss;
 uniform float drop;
 
+// How much light an edge facing the light by `c` (its cosine) catches. Measured on Apple's glass
+// (macOS Control Center's Display bar, 2026-11-05): from the straight top round a corner it falls
+// 1, .78, .55, .38, .28, .26, .12, .03, 0 every 10°: quickly over the first half, then a thin tail
+// to ~70°. A sharp lobe plus a broad one fits within a few percent (a single power lit corners
+// evenly and read flat).
+float lobe(float c) {
+    c = max(c, 0.0);
+    float c2 = c * c;
+    float c4 = c2 * c2;
+    return 0.6 * c4 * c4 + 0.4 * c;
+}
+
 half4 main(float2 p) {
     float2 c = size * 0.5;
     float2 rel = p - margin - c;
@@ -722,19 +760,18 @@ half4 main(float2 p) {
     col.rgb = mix(col.rgb, half3(tint.rgb) * col.a, half(tint.a));
     // The gloss: what's under the bevel glows, brightest where the edge faces the light and its
     // opposite (iOS 26 tiles over blue: the rim reads as a brighter, still saturated blue).
-    float f0 = dot(normalize(rel / max(c, float2(1.0)) + 1e-4), light);
-    float face0 = pow(max(f0, 0.0), 1.6) + 0.8 * pow(max(-f0, 0.0), 1.6);
+    float f0 = dot(n, light);
+    float face0 = lobe(f0) + 0.8 * lobe(-f0);
     // Only a trace where the edge faces away: Apple's sides carry no light (a dark edge instead,
     // which the rim stroke draws over this).
     float g = gloss * t * t * (0.1 + 0.9 * face0);
     col.rgb += (half3(col.a) - col.rgb) * half(g);
     // A thin specular rim, brightest where it faces the light and its opposite.
     float rim = 1.0 - smoothstep(0.0, 1.8, -d);
-    // Lit by the same facing as the inner band and the rim stroke (the shape's normalised position,
-    // not its true normal), so bars and cards catch the light alike.
-    float f = dot(normalize(rel / max(c, float2(1.0)) + 1e-4), light);
-    // As the band: full facing the light, 0.8 on the far side, gathered towards both.
-    float facing = pow(max(f, 0.0), 1.6) + 0.8 * pow(max(-f, 0.0), 1.6);
+    // Lit by the same facing as the inner band and the rim stroke: the edge's true normal, so a
+    // pill's straight top is lit end to end and the light slides round its ends as on Apple's.
+    float f = dot(n, light);
+    float facing = lobe(f) + 0.8 * lobe(-f);
     float light = (rim + t * t * t * 0.12) * facing;
     col.rgb += half3(light * spec) * col.a;
     // On light backgrounds a highlight alone vanishes: a faint shaded underside gives the edge.
