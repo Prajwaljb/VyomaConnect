@@ -372,7 +372,9 @@ half4 main(float2 xy) {
     float2 n = edgeNormal(xy - c, c, radius, exponent);
     float f = dot(n, light);
     // As the band: broad and soft, gathered towards the light and the far side.
-    float k = clamp(pow(max(f, 0.0), 1.6) + opposite * pow(max(-f, 0.0), 1.6), 0.0, 1.0);
+    // Fades out by the middle of a corner, where Apple's hands over to the dark edge (at 1.6 it
+    // ran nearly to the straight side and the dark began right after: a hook, user 2026-11-05).
+    float k = clamp(pow(max(f, 0.0), 3.5) + opposite * pow(max(-f, 0.0), 3.5), 0.0, 1.0);
     half4 col = mix(base, lit, half(k));
     return half4(col.rgb * col.a, col.a);
 }
