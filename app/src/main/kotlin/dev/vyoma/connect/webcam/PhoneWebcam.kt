@@ -72,6 +72,11 @@ object PhoneWebcam {
         val mic: Boolean = false,
         val pc: String? = null,
         val error: String? = null,
+        /** The camera in use: how far it zooms (below 1 is its ultra-wide) and whether it has a torch. */
+        val zoomRange: ClosedFloatingPointRange<Float> = 1f..1f,
+        val torchable: Boolean = false,
+        /** The picture's shape as the preview shows it: encoded size (landscape). */
+        val size: Size? = null,
     )
 
     private const val TAG = "Webcam"
@@ -81,6 +86,8 @@ object PhoneWebcam {
     private const val VIDEO_BACKLOG = 256 * 1024
     /** 100 ms of mic audio. */
     private const val MIC_BACKLOG = RATE * 2 / 10
+    /** Past this a phone's zoom is digital mush. */
+    private const val MAX_ZOOM = 8f
 
     private val _status = MutableStateFlow(Status())
     val status: StateFlow<Status> = _status.asStateFlow()
@@ -89,6 +96,24 @@ object PhoneWebcam {
     /** Which camera and whether the mic is on: the running stream follows these without restarting. */
     private val front = MutableStateFlow(true)
     private val micOn = MutableStateFlow(true)
+    /** The screen's preview (null: closed); zoom and torch for the camera in use. */
+    private val preview = MutableStateFlow<Surface?>(null)
+    val zoom = MutableStateFlow(1f)
+    val torch = MutableStateFlow(false)
+    @Volatile private var capturing: CameraCaptureSession? = null
+
+    fun attachPreview(surface: Surface) { preview.value = surface }
+
+    /**
+     * The preview's surface is going: stop the camera drawing into it right now (from the surface
+     * callback, before it's freed), then the stream carries on without it.
+     */
+    fun detachPreview() {
+        if (preview.value == null) return
+        runCatching { capturing?.stopRepeating() }
+        runCatching { capturing?.abortCaptures() }
+        preview.value = null
+    }
 
     fun start(context: Context, options: Options) {
         val app = context.applicationContext as android.app.Application
@@ -196,15 +221,47 @@ object PhoneWebcam {
             launch {
                 plugin.webcam.collect { s -> _status.value = _status.value.copy(camera = s.camera, mic = s.mic) }
             }
-            // The camera in use: closed and the other opened on a switch, into the same encoder.
+            _status.value = _status.value.copy(size = size)
+            // The camera in use: closed and the other opened on a switch, into the same encoder. The
+            // preview (when the screen is open) joins the session; zoom and torch only change the request.
             launch {
                 front.collectLatest { f ->
                     val id = cameraFor(cameras, f)
+                    val chars = cameras.getCameraCharacteristics(id)
+                    val range = chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.let { it.lower..it.upper.coerceAtMost(MAX_ZOOM) } ?: 1f..1f
+                    val torchable = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                    zoom.value = 1f
+                    torch.value = false
+                    _status.value = _status.value.copy(zoomRange = range, torchable = torchable)
                     val camera = open(cameras, id, encoder.handler)
                     try {
-                        capture(camera, encoder.surface, encoder.handler)
                         VLog.i(TAG, "camera ${if (f) "front" else "back"} ${size.width}x${size.height}")
-                        kotlinx.coroutines.awaitCancellation()
+                        preview.collectLatest { shown ->
+                            val targets = listOfNotNull(encoder.surface, shown).toMutableList()
+                            // A camera that can't add the preview still streams without it.
+                            val session = runCatching { session(camera, targets, encoder.handler) }.getOrElse { e ->
+                                if (e is CancellationException || shown == null) throw e
+                                VLog.w(TAG, "no preview: ${e.message}")
+                                targets.retainAll { it !== shown }
+                                session(camera, targets, encoder.handler)
+                            }
+                            capturing = session
+                            try {
+                                combine(zoom, torch) { z, t -> z to t }.collect { (z, t) ->
+                                    val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                                        targets.forEach(::addTarget)
+                                        set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(FPS, FPS))
+                                        set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                                        set(CaptureRequest.CONTROL_ZOOM_RATIO, z.coerceIn(range))
+                                        if (torchable) set(CaptureRequest.FLASH_MODE, if (t) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
+                                    }.build()
+                                    runCatching { session.setRepeatingRequest(request, null, encoder.handler) }
+                                }
+                            } finally {
+                                capturing = null
+                                runCatching { session.close() }
+                            }
+                        }
                     } finally {
                         camera.close()
                     }
@@ -266,13 +323,13 @@ object PhoneWebcam {
         }, handler)
     }
 
-    private suspend fun capture(camera: CameraDevice, target: Surface, handler: Handler) {
-        val session = suspendCancellableCoroutine { k ->
+    private suspend fun session(camera: CameraDevice, targets: List<Surface>, handler: Handler): CameraCaptureSession =
+        suspendCancellableCoroutine { k ->
             camera.createCaptureSession(
                 SessionConfiguration(
-                    SessionConfiguration.SESSION_REGULAR, listOf(OutputConfiguration(target)), { handler.post(it) },
+                    SessionConfiguration.SESSION_REGULAR, targets.map(::OutputConfiguration), { handler.post(it) },
                     object : CameraCaptureSession.StateCallback() {
-                        override fun onConfigured(session: CameraCaptureSession) { if (k.isActive) k.resume(session) }
+                        override fun onConfigured(session: CameraCaptureSession) { if (k.isActive) k.resume(session) else session.close() }
                         override fun onConfigureFailed(session: CameraCaptureSession) {
                             if (k.isActive) k.resumeWithException(IllegalStateException("camera couldn't start"))
                         }
@@ -280,13 +337,6 @@ object PhoneWebcam {
                 ),
             )
         }
-        val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-            addTarget(target)
-            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(FPS, FPS))
-            set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-        }.build()
-        session.setRepeatingRequest(request, null, handler)
-    }
 
     /** The hardware H.264 encoder: camera frames in through [surface], Annex-B out to [out]. */
     private class Encoder(size: Size, bitrate: Int, private val out: LiveStream) {

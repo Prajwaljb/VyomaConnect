@@ -10,7 +10,21 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import android.graphics.Outline
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+import android.view.View
+import android.view.ViewOutlineProvider
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.material.icons.rounded.FlashlightOn
+import androidx.compose.material.icons.rounded.ZoomIn
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.viewinterop.AndroidView
+import dev.vyoma.connect.designsystem.LiquidSlider
+import kotlin.math.exp
+import kotlin.math.ln
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -101,6 +115,37 @@ class WebcamActivity : ComponentActivity() {
                             )
                         }
                     }
+                    if (status.on && status.size != null) {
+                        item(key = "preview") { Preview(status.size!!) }
+                        item(key = "zoom") {
+                            SectionCard(Modifier.padding(top = 8.dp)) {
+                                val range = status.zoomRange
+                                val zoom by PhoneWebcam.zoom.collectAsStateWithLifecycle()
+                                if (range.endInclusive > range.start) {
+                                    ListRow(title = "Zoom", subtitle = "%.1f×".format(zoom) + if (range.start < 1f) " · below 1× is the ultra-wide" else "", icon = Icons.Rounded.ZoomIn)
+                                    // Even steps feel even: the slider runs on the zoom's logarithm.
+                                    val lo = ln(range.start); val hi = ln(range.endInclusive)
+                                    LiquidSlider(
+                                        value = { ((ln(PhoneWebcam.zoom.value) - lo) / (hi - lo)).coerceIn(0f, 1f) },
+                                        onChange = { v -> PhoneWebcam.zoom.value = exp(lo + v * (hi - lo)) },
+                                        onDone = {},
+                                        fill = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 14.dp),
+                                    )
+                                }
+                                if (status.torchable) {
+                                    val torch by PhoneWebcam.torch.collectAsStateWithLifecycle()
+                                    ListRow(
+                                        title = "Torch",
+                                        subtitle = "Lights the room from the back of the phone",
+                                        icon = Icons.Rounded.FlashlightOn,
+                                        trailing = { VyomaSwitch(torch, { PhoneWebcam.torch.value = it }, contentDescription = "Torch") },
+                                        onClick = { PhoneWebcam.torch.value = !torch },
+                                    )
+                                }
+                            }
+                        }
+                    }
                     status.error?.let { err ->
                         item(key = "error") {
                             SectionCard(Modifier.padding(top = 8.dp)) {
@@ -173,6 +218,35 @@ private fun subtitle(s: PhoneWebcam.Status): String = when {
     s.pc == null -> "Waiting for Vyoma's companion on the PC"
     s.camera -> "Live on ${s.pc}" + (if (s.mic) " · camera and mic" else " · camera")
     else -> "Starting on ${s.pc}…"
+}
+
+/**
+ * What the camera sees, as the phone holds it (the PC turns the picture upright itself). A
+ * SurfaceView the camera draws into directly; the phone's screen is upright portrait here, so the
+ * landscape frames show turned, 9:16.
+ */
+@Composable
+private fun Preview(size: android.util.Size) {
+    Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+        AndroidView(
+            factory = { context ->
+                SurfaceView(context).apply {
+                    outlineProvider = object : ViewOutlineProvider() {
+                        override fun getOutline(view: View, outline: Outline) = outline.setRoundRect(0, 0, view.width, view.height, 28f * resources.displayMetrics.density)
+                    }
+                    clipToOutline = true
+                    holder.addCallback(object : SurfaceHolder.Callback {
+                        override fun surfaceCreated(h: SurfaceHolder) = h.setFixedSize(size.width, size.height)
+                        override fun surfaceChanged(h: SurfaceHolder, format: Int, w: Int, hgt: Int) {
+                            if (w == size.width && hgt == size.height) PhoneWebcam.attachPreview(h.surface)
+                        }
+                        override fun surfaceDestroyed(h: SurfaceHolder) = PhoneWebcam.detachPreview()
+                    })
+                }
+            },
+            modifier = Modifier.fillMaxWidth(0.56f).aspectRatio(size.height.toFloat() / size.width),
+        )
+    }
 }
 
 @Composable

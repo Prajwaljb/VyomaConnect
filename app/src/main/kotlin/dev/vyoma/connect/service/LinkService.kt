@@ -86,6 +86,7 @@ class LinkService : LifecycleService() {
             // The phone's camera/mic streaming to the PC (PhoneWebcam): Android lets a service use them
             // in the background only while it's in the foreground as such. Added from the screen that
             // starts it (in front), dropped again when it stops.
+            ACTION_WEBCAM_STOP -> dev.vyoma.connect.webcam.PhoneWebcam.stop(this)
             ACTION_MEDIA -> {
                 var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
                 if (intent.getBooleanExtra(EXTRA_CAMERA, false)) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
@@ -159,6 +160,11 @@ class LinkService : LifecycleService() {
                     lastConnected = connected
                     Notifications.updateService(this@LinkService, connected)
                 }
+        }
+        // The webcam's state is in the notification too (title, Stop).
+        lifecycleScope.launch {
+            dev.vyoma.connect.webcam.PhoneWebcam.status.map { Triple(it.on, it.pc, it.options.mic) }.distinctUntilChanged()
+                .collect { Notifications.updateService(this@LinkService, lastConnected) }
         }
         lifecycleScope.launch {
             hub.events.collect { event ->
@@ -323,6 +329,7 @@ class LinkService : LifecycleService() {
         const val ACTION_REFRESH = "dev.vyoma.connect.REFRESH"
         const val ACTION_SEND = "dev.vyoma.connect.SEND"
         const val ACTION_MEDIA = "dev.vyoma.connect.MEDIA"
+        const val ACTION_WEBCAM_STOP = "dev.vyoma.connect.WEBCAM_STOP"
         private const val EXTRA_CAMERA = "camera"
         private const val EXTRA_MIC = "mic"
 

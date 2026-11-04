@@ -62,10 +62,15 @@ object Notifications {
     }
 
     fun service(context: Context, connected: List<DeviceState>): Notification {
-        val title = when (connected.size) {
+        // While the phone is the PC's webcam, that's what matters: say so, and offer Stop.
+        val webcam = dev.vyoma.connect.webcam.PhoneWebcam.status.value
+        val title = when {
+            webcam.on -> "Camera${if (webcam.options.mic) " and mic" else ""} on ${webcam.pc ?: "your PC"}"
+            else -> when (connected.size) {
             0 -> "Looking for your PC"
             1 -> "Connected to ${connected.first().identity.deviceName}"
             else -> "Connected to ${connected.size} devices"
+            }
         }
         return NotificationCompat.Builder(context, CH_SERVICE)
             .setSmallIcon(R.drawable.ic_notification)
@@ -77,7 +82,13 @@ object Notifications {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setCategory(Notification.CATEGORY_SERVICE)
             .apply {
-                if (connected.isNotEmpty()) {
+                if (webcam.on) {
+                    val stop = PendingIntent.getService(
+                        context, 7, Intent(context, LinkService::class.java).setAction(LinkService.ACTION_WEBCAM_STOP),
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                    )
+                    addAction(0, "Stop camera", stop)
+                } else if (connected.isNotEmpty()) {
                     addAction(0, "Send clipboard", ClipboardActivity.pending(context))
                     addAction(0, "Send files", ShareActivity.pickFilesIntent(context))
                 }

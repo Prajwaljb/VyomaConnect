@@ -180,7 +180,9 @@ body fields before implementing one.
   Camera/mic switches stay inside the stream (one encoder + payload; the camera feeding the encoder is swapped,
   the mic payload comes and goes; size = one both cameras give): a restart made the PC device vanish and call apps
   dropped the camera (user). Measured: a front/back switch is a <1 s freeze, the reader never disconnects.
-  Only a quality change restarts.
+  Only a quality change restarts. The preview joins the capture session as a second target (rebuilt on
+  attach/detach; detach stops repeating synchronously from surfaceDestroyed); zoom (CONTROL_ZOOM_RATIO, capped 8x)
+  and torch only re-issue the repeating request.
  (tether.rs, polled every 5 s while a trusted phone is unlinked): USB tethering
   (rndis/cdc gateway or neighbour) and any Wi-Fi gateway, i.e. the PC on the phone's hotspot (verified 2026-11-03,
   during a power cut) and the cable (usb.rs `adb forward tcp:0 tcp:1716` per plugged phone, so the companion links
