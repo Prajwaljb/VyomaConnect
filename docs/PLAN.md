@@ -135,7 +135,9 @@ desktop/companion/     Rust daemon (Phase 2)
   drag-and-drop layout editor with per-game profiles. Inspired by Steam Input, Backbone and Moonlight.
   Transport: UDP state snapshots with AEAD (ChaCha20-Poly1305, session key from TLS), <10 ms on LAN/USB.
 - **Phone mirroring + control from PC** (MediaProjection + HW encode; control via accessibility gestures).
-- **Phone as PC webcam/mic** (Camera2 → companion → v4l2loopback; mic → PipeWire virtual source).
+- **Phone as PC webcam/mic (done 2026-11-04):** Camera2 → H.264 → companion → v4l2loopback "Vyoma Phone
+  Camera"; mic → PipeWire source "Vyoma Phone Mic". Not yet: on-phone preview, zoom/torch, a Stop action in the
+  notification, real call apps tested.
 - **Bluetooth fallback transport** for notifications/clipboard when Wi-Fi is absent.
 
 ---

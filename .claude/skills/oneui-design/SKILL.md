@@ -511,6 +511,12 @@ then Gyro moves (Mouse / Right stick), speed slider 0.25–3×, Invert, and Edit
 gives the least lag. Status line names the route plainly, "· cable" or "· Wi-Fi (a cable is smoother)": never claim
 Wi-Fi is low latency (user, 2026-11-03: it can't be promised). While it's open nothing is held.
 DualSense profile: outlined ✕ ○ □ △ (blue, red, pink, green), L1/L2/R1/R2, a blue guide. Its usual shape is a DualSense's: D-pad high on the left, both sticks low and level (Xbox swaps D-pad and left stick); moved controls keep their saved places. Analog triggers are slots
+Phone as webcam (WebcamActivity, from the Camera tile's long-press "Phone as webcam"; also offered when the lid is
+shut): CollapsingHeaderScaffold, subtitle is the state in a few words ("Off", "Live on <PC> · camera and mic",
+"Waiting for Vyoma's companion on the PC"); one big Start/Stop PillButton (Stop not prominent); Camera card (Which
+camera Front/Back, Quality 720p/1080p, each a ListRow then a full-width SegmentedControl, no dividers touching the
+segments); Microphone card (switch row). No on-phone preview (the PC app shows the picture). The PC's setup error
+shows in a card with the sudo commands in monospace.
 54 dp taller than the capsule: depth down the slot = pressure (fill runs down, notches at quarters, at least 10%).
 Layout editor: every movable part dashed-outlined, the chosen one solid accent; drag moves, a second finger pinches
 (0.6–1.6×); a glass bar at the top (Reset, − size% +, Cancel, Done) and a hint under it; Back cancels. Places are

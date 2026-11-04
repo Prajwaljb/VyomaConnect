@@ -51,17 +51,27 @@ async fn offer_sized(sender: &Sender, me: &Identity, pinned: &[u8], mut packet: 
 
 /// Opens the payload the phone announced in `packet`; reads end after `payloadSize` bytes.
 pub async fn fetch(me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value) -> Result<impl AsyncRead + Unpin + use<>> {
-    let port = packet["payloadTransferInfo"]["port"].as_u64().context("payload without a port")? as u16;
     let size = packet["payloadSize"].as_u64().context("payload without a size")?;
+    Ok(open(me, pinned, phone, packet).await?.take(size))
+}
+
+/// Opens a live payload the phone announced (`payloadSize` -1, the phone's camera): it runs until
+/// the phone hangs up.
+pub async fn fetch_stream(me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value) -> Result<impl AsyncRead + Unpin + use<>> {
+    open(me, pinned, phone, packet).await
+}
+
+async fn open(me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value) -> Result<Either> {
+    let port = packet["payloadTransferInfo"]["port"].as_u64().context("payload without a port")? as u16;
     // With the cable in, the phone also names its port's adb forward here: far quicker than Wi-Fi.
     // Another plugged-in phone could sit behind it; the certificate check below sends that one away.
     if let Some(usb) = packet["payloadTransferInfo"]["usbPort"].as_u64() {
         match connect(me, pinned, IpAddr::from([127, 0, 0, 1]), usb as u16).await {
-            Ok(tls) => return Ok(Either::Usb(tls).take(size)),
+            Ok(tls) => return Ok(Either::Usb(tls)),
             Err(e) => tracing::debug!("payload over USB failed, using Wi-Fi: {e:#}"),
         }
     }
-    Ok(Either::Lan(connect(me, pinned, phone, port).await?).take(size))
+    Ok(Either::Lan(connect(me, pinned, phone, port).await?))
 }
 
 type Tls = tokio_rustls::client::TlsStream<TcpStream>;

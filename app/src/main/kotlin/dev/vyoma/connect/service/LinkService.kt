@@ -56,6 +56,7 @@ class LinkService : LifecycleService() {
     private var mediaSession: PcMediaSession? = null
     private var mdns: MdnsDiscovery? = null
     private var usb: UsbLink? = null
+    private var lastConnected: List<dev.vyoma.connect.protocol.device.DeviceState> = emptyList()
 
     override fun onCreate() {
         super.onCreate()
@@ -82,6 +83,16 @@ class LinkService : LifecycleService() {
                 startPhoneMonitors() // permissions may have just been granted
             }
             ACTION_SEND -> handleSend(intent)
+            // The phone's camera/mic streaming to the PC (PhoneWebcam): Android lets a service use them
+            // in the background only while it's in the foreground as such. Added from the screen that
+            // starts it (in front), dropped again when it stops.
+            ACTION_MEDIA -> {
+                var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                if (intent.getBooleanExtra(EXTRA_CAMERA, false)) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                if (intent.getBooleanExtra(EXTRA_MIC, false)) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                runCatching { startForeground(Notifications.SERVICE_ID, Notifications.service(this, lastConnected), types) }
+                    .onFailure { VLog.w("LinkService", "camera/mic in the foreground refused: ${it.message}") }
+            }
         }
         return START_STICKY
     }
@@ -144,7 +155,10 @@ class LinkService : LifecycleService() {
         lifecycleScope.launch {
             connectedFlow
                 .distinctUntilChanged { a, b -> a.map(::summary) == b.map(::summary) }
-                .collect { connected -> Notifications.updateService(this@LinkService, connected) }
+                .collect { connected ->
+                    lastConnected = connected
+                    Notifications.updateService(this@LinkService, connected)
+                }
         }
         lifecycleScope.launch {
             hub.events.collect { event ->
@@ -308,6 +322,16 @@ class LinkService : LifecycleService() {
     companion object {
         const val ACTION_REFRESH = "dev.vyoma.connect.REFRESH"
         const val ACTION_SEND = "dev.vyoma.connect.SEND"
+        const val ACTION_MEDIA = "dev.vyoma.connect.MEDIA"
+        private const val EXTRA_CAMERA = "camera"
+        private const val EXTRA_MIC = "mic"
+
+        /** The phone's camera / mic are (no longer) streaming to the PC; see ACTION_MEDIA. */
+        fun mediaInUse(context: Context, camera: Boolean, mic: Boolean) {
+            val intent = Intent(context, LinkService::class.java).setAction(ACTION_MEDIA)
+                .putExtra(EXTRA_CAMERA, camera).putExtra(EXTRA_MIC, mic)
+            runCatching { context.startService(intent) }.onFailure { VLog.w("LinkService", "media: ${it.message}") }
+        }
         /** Off Wi-Fi this long, with nothing connected, before outdoor mode pauses (a lift, a tunnel). */
         private const val OUTDOOR_GRACE_MS = 60_000L
         /** With ACTION_SEND: the one URI is a folder tree to send whole. */
