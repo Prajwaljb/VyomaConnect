@@ -774,7 +774,14 @@ half4 main(float2 p) {
     // opposite (iOS 26 tiles over blue: the rim reads as a brighter, still saturated blue).
     float f0 = dot(normalize(rel / max(c, float2(1.0)) + 1e-4), light);
     float face0 = pow(max(f0, 0.0), 1.6) + 0.8 * pow(max(-f0, 0.0), 1.6);
-    float g = gloss * t * t * (0.3 + 0.7 * face0);
+    // Side-on to the light (the same tight band as RimShadow's dark hairline, s^10 of the true
+    // normal): no always-on light there. On Apple's round buttons the sides carry none, only the
+    // dark line; ours kept a light ring all round that read as a border on the phone (2026-11-05).
+    float fs = dot(n, light);
+    float sideS = sqrt(max(1.0 - fs * fs, 0.0));
+    float sideS2 = sideS * sideS; float sideS4 = sideS2 * sideS2;
+    float quiet = 1.0 - sideS4 * sideS4 * sideS2;
+    float g = gloss * t * t * (0.3 * quiet + 0.7 * face0);
     col.rgb += (half3(col.a) - col.rgb) * half(g);
     // A thin specular rim, brightest where it faces the light and its opposite.
     float rim = 1.0 - smoothstep(0.0, 1.8, -d);
@@ -783,7 +790,7 @@ half4 main(float2 p) {
     float f = dot(normalize(rel / max(c, float2(1.0)) + 1e-4), light);
     // As the band: full facing the light, 0.8 on the far side, gathered towards both.
     float facing = pow(max(f, 0.0), 1.6) + 0.8 * pow(max(-f, 0.0), 1.6);
-    float light = rim * (0.25 + 0.75 * facing) + t * t * t * 0.12;
+    float light = rim * (0.25 * quiet + 0.75 * facing) + t * t * t * 0.12 * quiet;
     col.rgb += half3(light * spec) * col.a;
     // On light backgrounds a highlight alone vanishes: a faint shaded underside gives the edge.
     col.rgb -= half3(rim * shade * (0.4 + 0.6 * max(n.y, 0.0))) * col.a;
