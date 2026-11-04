@@ -10,11 +10,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import android.graphics.Outline
-import android.view.SurfaceHolder
-import android.view.SurfaceView
-import android.view.View
-import android.view.ViewOutlineProvider
+import android.graphics.SurfaceTexture
+import android.view.TextureView
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
@@ -222,29 +221,33 @@ private fun subtitle(s: PhoneWebcam.Status): String = when {
 
 /**
  * What the camera sees, as the phone holds it (the PC turns the picture upright itself). A
- * SurfaceView the camera draws into directly; the phone's screen is upright portrait here, so the
- * landscape frames show turned, 9:16.
+ * TextureView: the camera's own transform turns its landscape frames for this portrait screen (and
+ * mirrors the front camera), and unlike a SurfaceView it clips to the rounded shape and scrolls with
+ * the list (a SurfaceView here showed a thin strip of picture, the rest black).
  */
 @Composable
 private fun Preview(size: android.util.Size) {
     Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
         AndroidView(
             factory = { context ->
-                SurfaceView(context).apply {
-                    outlineProvider = object : ViewOutlineProvider() {
-                        override fun getOutline(view: View, outline: Outline) = outline.setRoundRect(0, 0, view.width, view.height, 28f * resources.displayMetrics.density)
-                    }
-                    clipToOutline = true
-                    holder.addCallback(object : SurfaceHolder.Callback {
-                        override fun surfaceCreated(h: SurfaceHolder) = h.setFixedSize(size.width, size.height)
-                        override fun surfaceChanged(h: SurfaceHolder, format: Int, w: Int, hgt: Int) {
-                            if (w == size.width && hgt == size.height) PhoneWebcam.attachPreview(h.surface)
+                TextureView(context).apply {
+                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                        private var surface: android.view.Surface? = null
+                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                            st.setDefaultBufferSize(size.width, size.height)
+                            surface = android.view.Surface(st).also(PhoneWebcam::attachPreview)
                         }
-                        override fun surfaceDestroyed(h: SurfaceHolder) = PhoneWebcam.detachPreview()
-                    })
+                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                            PhoneWebcam.detachPreview()
+                            surface?.release()
+                            return true
+                        }
+                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                    }
                 }
             },
-            modifier = Modifier.fillMaxWidth(0.56f).aspectRatio(size.height.toFloat() / size.width),
+            modifier = Modifier.fillMaxWidth(0.56f).aspectRatio(size.height.toFloat() / size.width).clip(RoundedCornerShape(28.dp)),
         )
     }
 }
