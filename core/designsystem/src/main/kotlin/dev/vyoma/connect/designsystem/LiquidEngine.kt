@@ -428,10 +428,11 @@ half4 main(float2 xy) {
     float f = dot(edgeNormal(xy - c, c, radius, exponent), light);
     // How side-on this bit of edge is (1 = facing straight across the light).
     float s = sqrt(max(1.0 - f * f, 0.0));
-    float s2 = s * s; float s4 = s2 * s2; float s6 = s4 * s2;
-    float s30 = s6 * s6; s30 = s30 * s30 * s6;
-    // Tight at side-on, a short tail: ~.5 at 15° away, ~.2 at 30°, ~.05 at 45°.
-    float k = 0.6 * s30 + 0.4 * s6;
+    // Tight at side-on: measured round macOS Control Center's pill ends and the Display bar's
+    // corners (2026-11-05), the darkening falls 1, .66, .5, .23, .1 every 10° from side-on; s^10
+    // gives 1, .86, .54, .24, .07. The light (top and bottom, to ~50° off) and this hardly overlap.
+    float s2 = s * s; float s4 = s2 * s2;
+    float k = s4 * s4 * s2;
     // Black over the glass's edge darkens what shows there in its own colour.
     return half4(0.0, 0.0, 0.0, half(strength * k));
 }
@@ -639,7 +640,7 @@ internal class LensPainter(private val graphics: GraphicsContext) {
             with(RimShadow) {
                 stroke(
                     Outline.Rounded(RoundRect(Rect(Offset.Zero, edge.size), CornerRadius(edge.minDimension / 2))),
-                    edge.size, edge.minDimension / 2, 1.dp.toPx(), (if (dark) 0.3f else 0.14f) * a,
+                    edge.size, edge.minDimension / 2, 1.dp.toPx(), (if (dark) 0.4f else 0.25f) * a,
                 )
             }
         }
