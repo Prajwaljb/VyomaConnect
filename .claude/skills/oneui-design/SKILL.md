@@ -97,7 +97,9 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   Measured: light spans ~±50° round top/bottom, dark ~±30° round side-on, barely overlapping; dark falls 1, .66,
   .5, .23, .1 every 10° from side-on (`s^10`); depth 25–55% over bright backgrounds, 1–2 px wide. Strength: cards
   0.5 dark / 0.35 light, raised 0.45 / 0.3 (filled 0.25), chrome 0.55 / 0.4, knobs 0.4 / 0.25. It follows the tilt
-  light. Rejected: dark built into the light stroke as (1 − light) (spread over whole corners: a dark border), an
+  light. The lens's always-on light (its 0.25 rim floor and 0.3 gloss floor) is also off in that same side-on band
+  (`quiet`), else on the phone's near-black canvas the chrome kept a light ring all round = a border. Judge on the
+  real phone, not the emulator. Rejected: dark built into the light stroke as (1 − light) (spread over whole corners: a dark border), an
   Apple-fitted corner fall-off, a rolled rim profile.
 - Rims follow Apple's iOS 26 glass (user's reference shots): a broad highlight facing the light plus one ~80% as bright
   opposite (`specularRim(opposite = 0.8f)`), and `InnerGlow` (one per element), a soft band of light a few dp deep just inside the
