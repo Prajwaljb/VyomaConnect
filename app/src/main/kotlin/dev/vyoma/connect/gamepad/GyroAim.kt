@@ -33,6 +33,12 @@ class GyroAim(context: Context, private val rotation: () -> Int, private val onM
 
     var speed = 1f
     var invertY = false
+    /**
+     * Whether the gyro moves the mouse (else only the stick). The mouse totals stand still otherwise:
+     * they used to move whatever the target, so a game aimed with the stick still saw a mouse and
+     * flipped between the two, jerking the view (user 2026-11-05).
+     */
+    @Volatile var toMouse = true
     /** Whether readings count right now (the profile's mode and, for "Holding LT", the trigger). */
     var active = false
         set(v) {
@@ -107,7 +113,7 @@ class GyroAim(context: Context, private val rotation: () -> Int, private val onM
         val dx = restX.toInt()
         val dy = restY.toInt()
         restX -= dx; restY -= dy
-        mouseX += dx; mouseY += dy
+        if (toMouse) { mouseX += dx; mouseY += dy }
         // The stick: full at 120°/s (at speed 1), pushed past a game's usual dead zone once moving.
         stickX = push(yaw * speed / FULL_STICK_RAD_S)
         stickY = push(-pitch * speed / FULL_STICK_RAD_S)

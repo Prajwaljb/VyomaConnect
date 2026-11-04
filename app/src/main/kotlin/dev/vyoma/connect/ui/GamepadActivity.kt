@@ -266,6 +266,7 @@ class GamepadActivity : ComponentActivity() {
         val p = profiles.current()
         gyro.speed = p.gyroSpeed
         gyro.invertY = p.invertGyroY
+        gyro.toMouse = p.gyroTarget == GyroTarget.MOUSE
         if (p.gyro != GyroMode.OFF) {
             if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) gyro.start()
         } else gyro.stop()
