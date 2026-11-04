@@ -67,6 +67,7 @@ sealed interface Screen {
     data class Touchpad(val deviceId: String?, val keyboard: Boolean) : Screen
     data class Files(val pcId: String, val path: String = "") : Screen
     data object Automation : Screen
+    data object Notifications : Screen
     /** [ruleId] null: a new rule; "suggestion:key": a suggestion as a new rule. */
     data class RuleEditor(val ruleId: String?) : Screen
 }
@@ -185,6 +186,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
             Screen.Clipboard -> "Clipboard"
             Screen.Captures -> "Captures"
             Screen.Automation -> "Automation"
+            Screen.Notifications -> "Notifications"
             is Screen.RuleEditor -> "Rule"
         }
     }
@@ -293,7 +295,10 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                             onClipboard = { backStack.add(Screen.Clipboard) },
                             onCaptures = { backStack.add(Screen.Captures) },
                         )
-                        Tab.SETTINGS -> SettingsScreen(vm, onAutomation = { backStack.add(Screen.Automation) })
+                        Tab.SETTINGS -> SettingsScreen(
+                            vm, onAutomation = { backStack.add(Screen.Automation) },
+                            onNotifications = { backStack.add(Screen.Notifications) },
+                        )
                     }
                 }
                 is Screen.DeviceDetail -> DeviceScreen(vm, screen.id, onBack = pop)
@@ -312,6 +317,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                 )
                 Screen.Clipboard -> ClipboardScreen(vm, onBack = pop)
                 Screen.Captures -> CapturesScreen(onBack = pop)
+                Screen.Notifications -> NotificationAppsScreen(onBack = pop)
                 Screen.Automation -> AutomationScreen(vm, onBack = pop, onEdit = { backStack.add(Screen.RuleEditor(it)) })
                 is Screen.RuleEditor -> RuleEditorScreen(vm, screen.ruleId, onBack = pop)
             }

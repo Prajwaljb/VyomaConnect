@@ -89,6 +89,23 @@ object NotificationBridge : NotificationSource {
         if (seen.remove(key)) _events.tryEmit(NotificationEvent.Removed(key))
     }
 
+    /**
+     * [pkg]'s choice changed (see [NotificationFilters]): what the PC shows of it follows at once:
+     * gone when turned off, redrawn (quietly) when hidden or shown again.
+     */
+    fun refilter(context: Context, pkg: String) {
+        val l = listener ?: return
+        val mine = runCatching { l.activeNotifications }.getOrNull().orEmpty().filter { it.packageName == pkg }
+        for (sbn in mine) {
+            val wasShown = sbn.key in seen
+            val n = convert(l, sbn)
+            when {
+                n != null -> _events.tryEmit(NotificationEvent.Posted(n.copy(silent = true)))
+                wasShown && seen.remove(sbn.key) -> _events.tryEmit(NotificationEvent.Removed(sbn.key))
+            }
+        }
+    }
+
     override fun active(): List<PhoneNotification> {
         val l = listener ?: return emptyList()
         return runCatching { l.activeNotifications }.getOrNull().orEmpty().mapNotNull { convert(l, it) }
@@ -127,6 +144,16 @@ object NotificationBridge : NotificationSource {
         val text = (lastMessage(extras) ?: extras.getCharSequence(Notification.EXTRA_BIG_TEXT) ?: extras.getCharSequence(Notification.EXTRA_TEXT))?.toString().orEmpty()
         if (title.isBlank() && text.isBlank()) return null
 
+        // Android 11+ hides other packages from us; the notification carries its app's info.
+        val appInfo = if (Build.VERSION.SDK_INT >= 33) extras.getParcelable(EXTRA_APP_INFO, ApplicationInfo::class.java)
+        else @Suppress("DEPRECATION") extras.getParcelable(EXTRA_APP_INFO)
+        val appName = appLabel(context, sbn.packageName, appInfo)
+        val filters = NotificationFilters.load(context)
+        filters.posted(context, sbn.packageName, appName, sbn.postTime)
+        val mode = filters.mode(context, sbn.packageName)
+        if (mode == NotifMode.OFF) return null
+        val hidden = mode == NotifMode.PRIVATE
+
         val key = sbn.key
         var replyId: String? = null
         val plainActions = mutableListOf<Notification.Action>()
@@ -141,20 +168,19 @@ object NotificationBridge : NotificationSource {
         }
         actionsByKey[key] = plainActions
 
-        // Android 11+ hides other packages from us; the notification carries its app's info.
-        val appInfo = if (Build.VERSION.SDK_INT >= 33) extras.getParcelable(EXTRA_APP_INFO, ApplicationInfo::class.java)
-        else @Suppress("DEPRECATION") extras.getParcelable(EXTRA_APP_INFO)
         val icon = iconFor(context, sbn.packageName, appInfo)
         val update = !seen.add(key)
+        // Text hidden: the PC learns only that the app has something (no words, so no replies or
+        // actions either, whose labels can give it away).
         return PhoneNotification(
             id = key,
-            appName = appLabel(context, sbn.packageName, appInfo),
-            title = title,
-            text = text,
+            appName = appName,
+            title = if (hidden) appName else title,
+            text = if (hidden) "New notification" else text,
             time = sbn.postTime,
             clearable = sbn.isClearable,
-            actions = plainActions.map { it.title.toString() },
-            replyId = replyId,
+            actions = if (hidden) emptyList() else plainActions.map { it.title.toString() },
+            replyId = if (hidden) null else replyId,
             icon = icon?.first,
             iconHash = icon?.second,
             silent = update,

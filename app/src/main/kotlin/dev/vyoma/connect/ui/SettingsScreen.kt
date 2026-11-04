@@ -110,7 +110,7 @@ import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.pressable
 
 @Composable
-fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation: () -> Unit = {}) {
+fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation: () -> Unit = {}, onNotifications: () -> Unit = {}) {
     val theme by vm.theme.collectAsStateWithLifecycle()
     val name by vm.deviceName.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -268,12 +268,13 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
             SectionCard {
                 ListRow(
                     title = "Notifications on PC",
-                    subtitle = if (notifOn) "Reply and dismiss from your PC" else "Mirror them to your PC",
+                    subtitle = if (notifOn) "Choose which apps show, and what" else "Mirror them to your PC",
                     icon = Icons.Rounded.Notifications,
                     iconTint = SystemColor.RED.color,
                     showDivider = true,
                     trailing = { RowChevron(if (notifOn) "On" else "Off") },
-                    onClick = { runCatching { context.startActivity(NotificationBridge.settingsIntent(context)) } },
+                    // Off: straight to Android's switch; on: the per-app choices (access is on that page too).
+                    onClick = { if (notifOn) onNotifications() else runCatching { context.startActivity(NotificationBridge.settingsIntent(context)) } },
                 )
                 ListRow(
                     title = "Calls & messages on PC",
