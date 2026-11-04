@@ -39,7 +39,7 @@ internal fun companionLink(hub: DeviceHub): Flow<Pair<CompanionPlugin, String>?>
  * The hardware H.264 encoder: frames in through [surface] (a camera, a virtual display), Annex-B
  * out to [out]. Every keyframe carries SPS/PPS; when [out] is full it skips to the next keyframe.
  */
-internal class H264Encoder(width: Int, height: Int, bitrate: Int, fps: Int, private val out: LiveStream, name: String) {
+internal class H264Encoder(width: Int, height: Int, bitrate: Int, fps: Int, private val out: LiveStream, private val name: String) {
     private val thread = HandlerThread(name).also { it.start() }
     val handler = Handler(thread.looper)
     private val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
@@ -82,6 +82,7 @@ internal class H264Encoder(width: Int, height: Int, bitrate: Int, fps: Int, priv
                 else if (!dropping) {
                     // The link is behind: skip to the next keyframe instead of falling further back.
                     dropping = true
+                    VLog.i("H264Encoder", "$name: the link is behind, skipping to the next keyframe")
                     sync()
                 }
             }

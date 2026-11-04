@@ -181,6 +181,21 @@ body fields before implementing one.
   the height drag then 60 ms still (no fling); typing via ACTION_SET_TEXT + SET_SELECTION on the input focus, Enter
   via ACTION_IME_ENTER. LinkService adds FGS type mediaProjection (ACTION_MIRROR) before getMediaProjection.
   Verified by the user 2026-11-04 (typing with Shift, wheel, drag, close-to-stop).
+- Mirror extras (2026-11-04): `vyoma.mirror.audio {rate, channels}` + live s16le stereo 48 kHz (AudioPlaybackCapture
+  on the same projection: MEDIA/GAME/UNKNOWN; RECORD_AUDIO); PC plays with pacat behind a jitter buffer (10 ms
+  pieces, target 4 judged by the window's low point over 2 s, max 30; a hard 4 KiB drop-when-full pipe crackled).
+  While it plays the phone's media volume is 0 (restored after, saved in prefs "mirror"/restoreVolume) and the
+  accessibility key filter turns volume keys into `vyoma.mirror.volume {up}` (wpctl 5%, limit 1.0). Video is held
+  back by the default sink's PipeWire Latency (pw-dump, BT AAC ~190 ms) + 60 ms, but only while sound is audible
+  (1.5 s) and no input came in 2 s. Keys: Ctrl+V/Shift+Insert = "paste" (wl-paste → text), key kinds carry
+  ctrl/shift (word steps, selection, home/end), selectall/copy/cut; `vyoma.mirror.copy {text}` → wl-copy.
+- PC screen touch control (2026-11-04): the cast is a RemoteDesktop portal session (keyboard+pointer, its own
+  restore token remotedesktop-token; falls back to ScreenCast watch-only) and `vyoma.screen` says `control`.
+  Touches: `vyoma.screen.touch` live payload of JSON lines (rides the cable; Wi-Fi link spikes 50-280 ms made drags
+  stutter), else `vyoma.screen.input` packets: {kind click|right|down|move|up|scroll|scrollend, x, y 0..1, dx, dy px}
+  → NotifyPointerMotionAbsolute/Button/Axis sent NoReplyExpected; runs of moves collapse to the newest.
+  Phone: tap click, hold 450 ms right-click, drag = left drag, two fingers scroll at 1x (zoom/pan when zoomed),
+  tap on the black bars or two-finger tap shows the buttons. Gamepad + viewer use requestUnbufferedDispatch.
 - Phone as the PC's webcam/mic (app webcam/PhoneWebcam.kt, companion webcam.rs, 2026-11-04): phone → PC
   `vyoma.webcam {w, h, rotate}` + live payload (payloadSize -1) of H.264 Annex-B (MediaCodec surface encoder,
   30 fps, 4/8 Mbit/s, I-frame 2 s, SPS/PPS before every keyframe, repeat-previous 100 ms); `vyoma.webcam.mic

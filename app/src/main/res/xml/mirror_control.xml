@@ -5,6 +5,8 @@
     android:summary="@string/mirror_control_summary"
     android:accessibilityEventTypes="typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRequestFilterKeyEvents"
+    android:canRequestFilterKeyEvents="true"
     android:canPerformGestures="true"
     android:canRetrieveWindowContent="true"
     android:isAccessibilityTool="false"

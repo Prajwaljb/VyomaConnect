@@ -156,7 +156,7 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.gamepad.state", "vyoma.gamepad.close", "vyoma.desktop.step", "vyoma.usb.accessory", "vyoma.webcam", "vyoma.webcam.mic", "vyoma.webcam.turn", "vyoma.mirror"],
+            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.screen.input", "vyoma.screen.touch", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.gamepad.state", "vyoma.gamepad.close", "vyoma.desktop.step", "vyoma.usb.accessory", "vyoma.webcam", "vyoma.webcam.mic", "vyoma.webcam.turn", "vyoma.mirror", "vyoma.mirror.audio", "vyoma.mirror.copy", "vyoma.mirror.volume"],
             "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.gamepad.rumble", "vyoma.gamepad.udp", "vyoma.desktop.stepped", "vyoma.webcam.state", "vyoma.mirror.input", "vyoma.mirror.state"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
@@ -249,9 +249,13 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
     let mut shot_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut photo_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut screen_task: Option<tokio::task::JoinHandle<()>> = None;
+    // Touches from the phone's view of this screen, for the running cast.
+    let mut screen_input: Option<tokio::sync::mpsc::UnboundedSender<Value>> = None;
+    let mut touch_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut webcam_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut mic_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut mirror_task: Option<tokio::task::JoinHandle<()>> = None;
+    let mut sound_task: Option<tokio::task::JoinHandle<()>> = None;
     let (turn_tx, _) = tokio::sync::watch::channel(0u32);
     let pc = pc::worker(link.sender.clone(), name.clone());
     // Listings and downloads; dropping the set when the link closes cancels whatever is left.
@@ -305,8 +309,10 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                     t.abort();
                 }
                 let (sender, shared, pinned, name) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone());
+                let (touches, inputs) = tokio::sync::mpsc::unbounded_channel();
+                screen_input = Some(touches);
                 screen_task = Some(tokio::spawn(async move {
-                    if let Err(e) = screen::stream(&sender, &shared.me, &pinned, &name).await {
+                    if let Err(e) = screen::stream(&sender, &shared.me, &pinned, &name, inputs).await {
                         warn!("{name}: screen cast failed: {e:#}");
                     }
                 }));
@@ -336,6 +342,27 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                     }
                 }));
             }
+            "vyoma.mirror.copy" => {
+                if let Some(text) = p["body"]["text"].as_str() {
+                    let text = text.to_string();
+                    tokio::spawn(async move { mirror::copy(&text).await });
+                }
+            }
+            "vyoma.mirror.volume" => {
+                let up = p["body"]["up"].as_bool().unwrap_or(true);
+                tokio::spawn(mirror::volume(up));
+            }
+            "vyoma.mirror.audio" => {
+                if let Some(t) = sound_task.take() {
+                    t.abort();
+                }
+                let (shared, pinned, name, phone) = (shared.clone(), pinned.to_vec(), name.clone(), addr.ip());
+                sound_task = Some(tokio::spawn(async move {
+                    if let Err(e) = mirror::sound(&shared.me, &pinned, phone, &p, &name).await {
+                        warn!("{name}: phone sound: {e:#}");
+                    }
+                }));
+            }
             "vyoma.webcam.turn" => {
                 turn_tx.send_replace(p["body"]["rotate"].as_u64().unwrap_or(0) as u32);
             }
@@ -347,6 +374,33 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                 mic_task = Some(tokio::spawn(async move {
                     let _ = webcam::mic(&sender, &shared.me, &pinned, phone, &p, &name).await;
                 }));
+            }
+            "vyoma.screen.touch" => {
+                // The viewer's touches as a live stream (over the cable when it's in): one JSON line each.
+                if let Some(t) = touch_task.take() {
+                    t.abort();
+                }
+                if let Some(touches) = screen_input.clone() {
+                    let (shared, pinned, phone) = (shared.clone(), pinned.to_vec(), addr.ip());
+                    touch_task = Some(tokio::spawn(async move {
+                        use tokio::io::AsyncBufReadExt;
+                        let Ok(stream) = payload::fetch_stream(&shared.me, &pinned, phone, &p).await else { return };
+                        info!("touch control stream open");
+                        let mut lines = tokio::io::BufReader::new(stream).lines();
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            if let Ok(v) = serde_json::from_str::<Value>(&line)
+                                && touches.send(v).is_err()
+                            {
+                                break;
+                            }
+                        }
+                    }));
+                }
+            }
+            "vyoma.screen.input" => {
+                if let Some(t) = &screen_input {
+                    let _ = t.send(p["body"].clone());
+                }
             }
             "vyoma.screen.stop" => {
                 if let Some(t) = screen_task.take() {
@@ -473,14 +527,14 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
     };
     wall_task.abort();
     // The phone's camera and mic go with its link (the mic's PipeWire source is removed on drop).
-    for t in [webcam_task.take(), mic_task.take(), mirror_task.take()].into_iter().flatten() {
+    for t in [webcam_task.take(), mic_task.take(), mirror_task.take(), sound_task.take()].into_iter().flatten() {
         t.abort();
     }
     // Dropping the pad lets go of every button.
     if let Some((_, t)) = pad {
         t.abort();
     }
-    for t in [shot_task, photo_task, screen_task].into_iter().flatten() {
+    for t in [shot_task, photo_task, screen_task, touch_task].into_iter().flatten() {
         t.abort();
     }
     if let Some(t) = stats_task {

@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.view.KeyEvent
 import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -27,6 +28,18 @@ import kotlin.math.hypot
 class MirrorAccessibility : AccessibilityService() {
     override fun onServiceConnected() { instance = this }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+
+    /** While the phone's sound plays on the PC, its volume keys change the PC's volume (the speaker is silenced). */
+    override fun onKeyEvent(event: KeyEvent): Boolean {
+        if (!PhoneMirror.soundOnPc) return false
+        val up = when (event.keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP -> true
+            KeyEvent.KEYCODE_VOLUME_DOWN -> false
+            else -> return false
+        }
+        if (event.action == KeyEvent.ACTION_DOWN) PhoneMirror.volumeKey(this, up)
+        return true
+    }
     override fun onInterrupt() {}
     override fun onDestroy() {
         if (instance === this) instance = null
@@ -128,11 +141,13 @@ class MirrorControl(private val context: Context) {
             }
             "text" -> i.text?.let { type(svc, it) }
             "key" -> when (i.key) {
-                "backspace" -> erase(svc, forward = false)
-                "delete" -> erase(svc, forward = true)
+                "backspace" -> erase(svc, forward = false, word = i.ctrl)
+                "delete" -> erase(svc, forward = true, word = i.ctrl)
                 "enter" -> enter(svc)
-                "left" -> moveCursor(svc, -1)
-                "right" -> moveCursor(svc, 1)
+                "left", "right", "home", "end" -> moveCursor(svc, i.key, word = i.ctrl, select = i.shift)
+                "selectall" -> field(svc)?.let { n -> read(n).let { f -> select(n, 0, f.text.length) } }
+                "copy" -> copy(svc, cut = false)
+                "cut" -> copy(svc, cut = true)
             }
         }
     }
@@ -230,27 +245,34 @@ class MirrorControl(private val context: Context) {
     private fun field(svc: AccessibilityService): AccessibilityNodeInfo? =
         svc.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable }
 
-    private class Field(val text: String, val from: Int, val to: Int)
+    /**
+     * The field's text and selection: [anchor] stays put while Shift+arrows move [cursor]; [from] and
+     * [to] are the selection in order.
+     */
+    private class Field(val text: String, val anchor: Int, val cursor: Int) {
+        val from get() = minOf(anchor, cursor)
+        val to get() = maxOf(anchor, cursor)
+    }
 
     private fun read(node: AccessibilityNodeInfo): Field {
         val text = if (node.isShowingHintText) "" else node.text?.toString().orEmpty()
         var a = node.textSelectionStart
         var b = node.textSelectionEnd
         if (a < 0 || b < 0 || a > text.length || b > text.length) { a = text.length; b = text.length }
-        return Field(text, minOf(a, b), maxOf(a, b))
+        return Field(text, a, b)
     }
 
     private fun write(node: AccessibilityNodeInfo, text: String, cursor: Int) {
         node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         })
-        select(node, cursor)
+        select(node, cursor, cursor)
     }
 
-    private fun select(node: AccessibilityNodeInfo, at: Int) {
+    private fun select(node: AccessibilityNodeInfo, anchor: Int, cursor: Int) {
         node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
-            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, at)
-            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, at)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, anchor)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
         })
     }
 
@@ -260,28 +282,43 @@ class MirrorControl(private val context: Context) {
         write(node, f.text.substring(0, f.from) + typed + f.text.substring(f.to), f.from + typed.length)
     }
 
-    private fun erase(svc: AccessibilityService, forward: Boolean) {
+    private fun erase(svc: AccessibilityService, forward: Boolean, word: Boolean) {
         val node = field(svc) ?: return
         val f = read(node)
         val (a, b) = when {
             f.from != f.to -> f.from to f.to
-            forward && f.to < f.text.length -> f.from to f.text.offsetByCodePoints(f.to, 1)
-            !forward && f.from > 0 -> f.text.offsetByCodePoints(f.from, -1) to f.to
+            forward && f.to < f.text.length -> f.from to (if (word) nextWord(f.text, f.to) else f.text.offsetByCodePoints(f.to, 1))
+            !forward && f.from > 0 -> (if (word) prevWord(f.text, f.from) else f.text.offsetByCodePoints(f.from, -1)) to f.to
             else -> return
         }
         write(node, f.text.substring(0, a) + f.text.substring(b), a)
     }
 
-    private fun moveCursor(svc: AccessibilityService, by: Int) {
+    /** Arrows, Home and End; with [word] by words, with [select] growing the selection. */
+    private fun moveCursor(svc: AccessibilityService, key: String?, word: Boolean, select: Boolean) {
         val node = field(svc) ?: return
         val f = read(node)
-        val at = when {
-            f.from != f.to -> if (by < 0) f.from else f.to
-            by < 0 && f.from > 0 -> f.text.offsetByCodePoints(f.from, -1)
-            by > 0 && f.to < f.text.length -> f.text.offsetByCodePoints(f.to, 1)
+        val t = f.text
+        val c = f.cursor
+        val at = when (key) {
+            // Without Shift, an arrow on a selection lands on its edge.
+            "left" -> if (!select && f.from != f.to) f.from else if (c == 0) 0 else if (word) prevWord(t, c) else t.offsetByCodePoints(c, -1)
+            "right" -> if (!select && f.from != f.to) f.to else if (c == t.length) c else if (word) nextWord(t, c) else t.offsetByCodePoints(c, 1)
+            // Ctrl+Home/End: the whole field; else the line.
+            "home" -> if (word) 0 else t.lastIndexOf('\n', c - 1) + 1
+            "end" -> if (word) t.length else t.indexOf('\n', c).let { if (it < 0) t.length else it }
             else -> return
         }
-        select(node, at)
+        select(node, if (select) f.anchor else at, at)
+    }
+
+    /** Ctrl+C / Ctrl+X: the selection onto the PC's clipboard (and out of the field for a cut). */
+    private fun copy(svc: AccessibilityService, cut: Boolean) {
+        val node = field(svc) ?: return
+        val f = read(node)
+        if (f.from == f.to) return
+        PhoneMirror.copyToPc(context, f.text.substring(f.from, f.to))
+        if (cut) write(node, f.text.substring(0, f.from) + f.text.substring(f.to), f.from)
     }
 
     /** Enter: the field's own action (send, search, next) if it has one, else a new line. */
@@ -303,6 +340,24 @@ class MirrorControl(private val context: Context) {
         const val SCROLL_MS = 90L
         const val REST_MS = 60L
     }
+}
+
+private fun isWord(c: Char) = c.isLetterOrDigit() || c == '_'
+
+/** Where Ctrl+Left / Ctrl+Backspace goes from [i]: back over spaces, then over one word (or one other mark). */
+internal fun prevWord(t: String, i: Int): Int {
+    var j = i
+    while (j > 0 && t[j - 1].isWhitespace()) j--
+    if (j > 0 && isWord(t[j - 1])) { while (j > 0 && isWord(t[j - 1])) j-- } else if (j > 0) j--
+    return j
+}
+
+/** Where Ctrl+Right / Ctrl+Delete goes from [i]: over one word (or one other mark), then over spaces. */
+internal fun nextWord(t: String, i: Int): Int {
+    var j = i
+    if (j < t.length && isWord(t[j])) { while (j < t.length && isWord(t[j])) j++ } else if (j < t.length && !t[j].isWhitespace()) j++
+    while (j < t.length && t[j].isWhitespace()) j++
+    return j
 }
 
 /** The phone screen's size right now (it turns), for gestures. */

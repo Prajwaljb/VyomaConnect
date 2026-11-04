@@ -161,6 +161,15 @@ class GamepadActivity : ComponentActivity() {
     }
     private val vibrator by lazy { (getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator }
 
+    /**
+     * Touches the moment the screen senses them, not batched to the next frame: up to a frame
+     * (4-8 ms) sooner for the controller, as games do.
+     */
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        window.decorView.requestUnbufferedDispatch(android.view.InputDevice.SOURCE_TOUCHSCREEN)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
