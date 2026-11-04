@@ -96,7 +96,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   show on black). Facing the light (top, and bottom by internal reflection) the reflected light wins instead.
   Measured: light spans ~±50° round top/bottom, dark ~±30° round side-on, barely overlapping; dark falls 1, .66,
   .5, .23, .1 every 10° from side-on (`s^10`); depth 25–55% over bright backgrounds, 1–2 px wide. Strength: cards
-  0.5 dark / 0.35 light, raised 0.15 / 0.3 (filled 0.25), chrome 0.12 / 0.4, knobs 0.4 / 0.25 (dark-mode
+  0.5 dark / 0.35 light, raised 0.15 / 0.3 (filled 0.25), chrome 0.12 / 0.4, knobs 0.15 / 0.25 (dark-mode
   chrome/raised went darker than the page at 0.55/0.45 and circles looked cut, user 2026-11-05). It does NOT
   follow the light (user, 2026-11-05): fixed to the element's screen-sideways edges (|n.x|^10); the tilted
   light only covers it (k *= 1 − the rim light's profile). Card/raised rim light fades out mid-corner (f^3.5),
