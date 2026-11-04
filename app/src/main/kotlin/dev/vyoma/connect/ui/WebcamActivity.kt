@@ -38,6 +38,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -119,14 +122,16 @@ class WebcamActivity : ComponentActivity() {
                         item(key = "zoom") {
                             SectionCard(Modifier.padding(top = 8.dp)) {
                                 val range = status.zoomRange
-                                val zoom by PhoneWebcam.zoom.collectAsStateWithLifecycle()
                                 if (range.endInclusive > range.start) {
-                                    ListRow(title = "Zoom", subtitle = "%.1f×".format(zoom) + if (range.start < 1f) " · below 1× is the ultra-wide" else "", icon = Icons.Rounded.ZoomIn)
-                                    // Even steps feel even: the slider runs on the zoom's logarithm.
+                                    // Even steps feel even: the slider runs on the zoom's logarithm. Its
+                                    // position is Compose state, so the knob follows the finger every frame
+                                    // (read from the flow, it moved only when something else redrew).
                                     val lo = ln(range.start); val hi = ln(range.endInclusive)
+                                    var pos by remember(range) { mutableFloatStateOf(((ln(PhoneWebcam.zoom.value) - lo) / (hi - lo)).coerceIn(0f, 1f)) }
+                                    ListRow(title = "Zoom", subtitle = "%.1f×".format(exp(lo + pos * (hi - lo))) + if (range.start < 1f) " · below 1× is the ultra-wide" else "", icon = Icons.Rounded.ZoomIn)
                                     LiquidSlider(
-                                        value = { ((ln(PhoneWebcam.zoom.value) - lo) / (hi - lo)).coerceIn(0f, 1f) },
-                                        onChange = { v -> PhoneWebcam.zoom.value = exp(lo + v * (hi - lo)) },
+                                        value = { pos },
+                                        onChange = { v -> pos = v; PhoneWebcam.zoom.value = exp(lo + v * (hi - lo)) },
                                         onDone = {},
                                         fill = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 14.dp),

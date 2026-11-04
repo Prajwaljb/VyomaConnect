@@ -247,15 +247,18 @@ object PhoneWebcam {
                             }
                             capturing = session
                             try {
+                                val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                                    targets.forEach(::addTarget)
+                                    set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(FPS, FPS))
+                                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                                }
+                                // A dragged zoom slider changes many times a frame; the camera takes one
+                                // new request per frame at most (the latest), or it queues and lags.
                                 combine(zoom, torch) { z, t -> z to t }.collect { (z, t) ->
-                                    val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                                        targets.forEach(::addTarget)
-                                        set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(FPS, FPS))
-                                        set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                                        set(CaptureRequest.CONTROL_ZOOM_RATIO, z.coerceIn(range))
-                                        if (torchable) set(CaptureRequest.FLASH_MODE, if (t) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
-                                    }.build()
-                                    runCatching { session.setRepeatingRequest(request, null, encoder.handler) }
+                                    builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, z.coerceIn(range))
+                                    if (torchable) builder.set(CaptureRequest.FLASH_MODE, if (t) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
+                                    runCatching { session.setRepeatingRequest(builder.build(), null, encoder.handler) }
+                                    delay(1000L / FPS)
                                 }
                             } finally {
                                 capturing = null
