@@ -38,23 +38,35 @@ internal fun companionLink(hub: DeviceHub): Flow<Pair<CompanionPlugin, String>?>
 /**
  * The hardware H.264 encoder: frames in through [surface] (a camera, a virtual display), Annex-B
  * out to [out]. Every keyframe carries SPS/PPS; when [out] is full it skips to the next keyframe.
+ *
+ * The size and rate asked for are fitted to what this phone's encoder takes ([width], [height] say
+ * what it got): many encoders stop at 1088 lines, so a tall portrait screen is scaled down, and
+ * some can't do 60 fps at full size. Asking for more makes configure fail on those phones.
  */
 internal class H264Encoder(width: Int, height: Int, bitrate: Int, fps: Int, private val out: LiveStream, private val name: String) {
     private val thread = HandlerThread(name).also { it.start() }
     val handler = Handler(thread.looper)
     private val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
     val surface: Surface
+    val width: Int
+    val height: Int
     private var config: ByteArray? = null
     private var dropping = false
 
     init {
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+        val caps = runCatching { codec.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities }.getOrNull()
+        val (w, h) = caps?.let { fit(it, width, height) } ?: (width to height)
+        this.width = w
+        this.height = h
+        val rate = caps?.let { runCatching { it.getSupportedFrameRatesFor(w, h).upper.toInt() }.getOrNull() }?.coerceIn(15, fps) ?: fps
+        if (w != width || h != height || rate != fps) VLog.i("H264Encoder", "$name: ${width}x$height@$fps fitted to ${w}x$h@$rate for ${codec.name}")
+        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
-            setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+            setInteger(MediaFormat.KEY_FRAME_RATE, rate)
             // A 120 Hz screen doesn't make more frames than asked for.
-            setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.toFloat())
+            setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, rate.toFloat())
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
             setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
             setInteger(MediaFormat.KEY_LATENCY, 1)
@@ -92,6 +104,21 @@ internal class H264Encoder(width: Int, height: Int, bitrate: Int, fps: Int, priv
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         surface = codec.createInputSurface()
         codec.start()
+    }
+
+    private companion object {
+        /** The largest size at most [width]x[height], same shape, aligned, that the encoder takes. */
+        fun fit(caps: MediaCodecInfo.VideoCapabilities, width: Int, height: Int): Pair<Int, Int> {
+            fun align(v: Int, a: Int) = maxOf(a, v / a * a)
+            var scale = 1f
+            while (scale > 0.2f) {
+                val w = align((width * scale).toInt(), maxOf(2, caps.widthAlignment))
+                val h = align((height * scale).toInt(), maxOf(2, caps.heightAlignment))
+                if (caps.isSizeSupported(w, h)) return w to h
+                scale -= 0.05f
+            }
+            return width to height
+        }
     }
 
     fun sync() = runCatching { codec.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) }) }

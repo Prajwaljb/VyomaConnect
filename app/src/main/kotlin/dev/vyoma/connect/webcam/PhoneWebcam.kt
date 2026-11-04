@@ -283,7 +283,7 @@ object PhoneWebcam {
                     }
                 }
             }
-            plugin.sendWebcam(size.width, size.height, upright(cameras, cameraFor(cameras, front.value), turns.held.value), video)
+            plugin.sendWebcam(encoder.width, encoder.height, upright(cameras, cameraFor(cameras, front.value), turns.held.value), video)
         } finally {
             turns.close()
             video.close()

@@ -179,7 +179,7 @@ object PhoneMirror {
         current = plugin
         var size = pictureSize(realSize(app))
         var encoder = H264Encoder(size.width, size.height, BITRATE, FPS, video, "mirror-encoder")
-        vd.resize(size.width, size.height, app.resources.displayMetrics.densityDpi)
+        vd.resize(encoder.width, encoder.height, app.resources.displayMetrics.densityDpi)
         vd.surface = encoder.surface
         try {
             launch { plugin.mirror.collect { s -> _status.value = _status.value.copy(open = s.open) } }
@@ -198,13 +198,13 @@ object PhoneMirror {
                     encoder.close()
                     size = next
                     encoder = H264Encoder(size.width, size.height, BITRATE, FPS, video, "mirror-encoder")
-                    vd.resize(size.width, size.height, app.resources.displayMetrics.densityDpi)
+                    vd.resize(encoder.width, encoder.height, app.resources.displayMetrics.densityDpi)
                     vd.surface = encoder.surface
                 }
             }
             launch { sound.collectLatest { on -> if (on) playOnPc(app, plugin) } }
-            VLog.i(TAG, "mirroring ${size.width}x${size.height}")
-            plugin.sendMirror(size.width, size.height, video)
+            VLog.i(TAG, "mirroring ${encoder.width}x${encoder.height}")
+            plugin.sendMirror(encoder.width, encoder.height, video)
         } finally {
             if (current === plugin) current = null
             // Stop may have released the display already.

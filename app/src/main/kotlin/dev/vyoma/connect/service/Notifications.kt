@@ -149,7 +149,7 @@ object Notifications {
         } else {
             builder.setProgress(100, percent, total <= 0)
         }
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+        if (allowed(context)) {
             nm.notify(TRANSFER_ID, builder.build())
         }
     }
@@ -320,8 +320,15 @@ object Notifications {
         )
     }
 
+    /**
+     * Whether we may post. Android 12 has no notification permission (it came in 13): there it's
+     * always allowed, and asking for it is always "denied".
+     */
+    fun allowed(context: Context) = Build.VERSION.SDK_INT < 33 ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
     private fun notify(context: Context, id: Int, notification: Notification) {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        if (!allowed(context)) return
         context.getSystemService(NotificationManager::class.java).notify(id, notification)
     }
 }

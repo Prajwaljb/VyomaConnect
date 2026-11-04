@@ -121,8 +121,8 @@ class AccessoryActivity : Activity() {
     }
 
     private fun handle(intent: Intent?) {
-        @Suppress("DEPRECATION")
-        val accessory = intent?.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)
+        val accessory = if (android.os.Build.VERSION.SDK_INT >= 33) intent?.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)
+        else @Suppress("DEPRECATION") intent?.getParcelableExtra<UsbAccessory>(UsbManager.EXTRA_ACCESSORY)
         if (accessory != null) UsbAccessoryLink.attach(applicationContext, accessory)
     }
 }
