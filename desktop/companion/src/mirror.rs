@@ -445,41 +445,62 @@ unsafe extern "C" {
     fn xkb_keymap_key_get_syms_by_level(keymap: *mut libc::c_void, key: u32, layout: u32, level: u32, syms: *mut *const u32) -> libc::c_int;
 }
 
-/// Each key's plain keysym → its Shift keysym, in the desktop's first layout (Plasma's kxkbrc).
-/// GStreamer's X11 window names keys by their unshifted symbol ("1" for "!"), so Shift is ours to apply.
-fn shifted_map() -> &'static std::collections::HashMap<u32, u32> {
-    static MAP: std::sync::OnceLock<std::collections::HashMap<u32, u32>> = std::sync::OnceLock::new();
-    MAP.get_or_init(|| {
-        let mut map = std::collections::HashMap::new();
-        let layout = std::env::var("HOME")
+/// The desktop's first layout (Plasma's kxkbrc), read once: what each key types plain and with
+/// Shift.
+pub(crate) struct Layout {
+    /// Plain keysym → the same key's Shift keysym. GStreamer's X11 window names keys by their
+    /// unshifted symbol ("1" for "!"), so Shift is ours to apply.
+    pub shifted: std::collections::HashMap<u32, u32>,
+    /// Keysym → the key that types it (evdev code) and whether Shift is needed: typing on the PC
+    /// presses real keys (sending keysyms through the portal doubled letters, 2026-11-04).
+    pub keys: std::collections::HashMap<u32, (u32, bool)>,
+}
+
+pub(crate) fn layout() -> &'static Layout {
+    static LAYOUT: std::sync::OnceLock<Layout> = std::sync::OnceLock::new();
+    LAYOUT.get_or_init(|| {
+        let mut out = Layout { shifted: Default::default(), keys: Default::default() };
+        let name = std::env::var("HOME")
             .ok()
             .and_then(|h| std::fs::read_to_string(format!("{h}/.config/kxkbrc")).ok())
             .and_then(|c| c.lines().find_map(|l| l.strip_prefix("LayoutList=").map(|v| v.split(',').next().unwrap_or("us").trim().to_string())))
             .filter(|l| !l.is_empty())
             .unwrap_or_else(|| "us".into());
-        let Ok(layout) = std::ffi::CString::new(layout) else { return map };
+        let Ok(name) = std::ffi::CString::new(name) else { return out };
         unsafe {
             let ctx = xkb_context_new(0);
             if ctx.is_null() {
-                return map;
+                return out;
             }
-            let names = RuleNames { rules: std::ptr::null(), model: std::ptr::null(), layout: layout.as_ptr(), variant: std::ptr::null(), options: std::ptr::null() };
+            let names = RuleNames { rules: std::ptr::null(), model: std::ptr::null(), layout: name.as_ptr(), variant: std::ptr::null(), options: std::ptr::null() };
             let km = xkb_keymap_new_from_names(ctx, &names, 0);
             if km.is_null() {
-                return map;
+                return out;
             }
             for kc in xkb_keymap_min_keycode(km)..=xkb_keymap_max_keycode(km) {
                 let (mut plain, mut shift): (*const u32, *const u32) = (std::ptr::null(), std::ptr::null());
-                if xkb_keymap_key_get_syms_by_level(km, kc, 0, 0, &mut plain) == 1
-                    && xkb_keymap_key_get_syms_by_level(km, kc, 0, 1, &mut shift) == 1
-                {
-                    map.entry(*plain).or_insert(*shift);
+                let has_plain = xkb_keymap_key_get_syms_by_level(km, kc, 0, 0, &mut plain) == 1;
+                let has_shift = xkb_keymap_key_get_syms_by_level(km, kc, 0, 1, &mut shift) == 1;
+                // xkb keycodes are evdev's plus 8.
+                let evdev = kc.saturating_sub(8);
+                if has_plain {
+                    out.keys.entry(*plain).or_insert((evdev, false));
+                }
+                if has_shift {
+                    out.keys.entry(*shift).or_insert((evdev, true));
+                }
+                if has_plain && has_shift {
+                    out.shifted.entry(*plain).or_insert(*shift);
                 }
             }
-            // The keymap and context live as long as this process: one window.
+            // The keymap and context live as long as this process.
         }
-        map
+        out
     })
+}
+
+pub(crate) fn shifted_map() -> &'static std::collections::HashMap<u32, u32> {
+    &layout().shifted
 }
 
 /// The character an X keysym name types ("a", "comma", "eacute"), with Shift / Caps Lock applied.

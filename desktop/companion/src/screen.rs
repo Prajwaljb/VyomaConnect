@@ -190,9 +190,17 @@ impl Pointer {
         }
     }
 
-    /// Sent without waiting for the portal's answer (each would cost a round trip through the
-    /// portal and KWin); the bus keeps them in order.
+    /// Keys and buttons wait for the portal's answer, one after another: it handles calls
+    /// concurrently, so a release sent straight after its press could overtake it, be dropped, and
+    /// leave the key held and repeating (letters repeated, 2026-11-04).
     async fn call<B: serde::Serialize + zvariant::DynamicType>(&self, method: &str, body: &B) -> Result<()> {
+        self.conn.call_method(Some(PORTAL), PORTAL_PATH, Some(REMOTE), method, body).await?;
+        Ok(())
+    }
+
+    /// Moves and scrolls don't wait (each would cost a round trip through the portal and KWin):
+    /// one overtaking another changes nothing that the next one doesn't fix.
+    async fn call_fast<B: serde::Serialize + zvariant::DynamicType>(&self, method: &str, body: &B) -> Result<()> {
         let msg = zbus::message::Message::method_call(PORTAL_PATH, method)?
             .destination(PORTAL)?
             .interface(REMOTE)?
@@ -202,10 +210,47 @@ impl Pointer {
         Ok(())
     }
 
-    async fn to(&self, i: &serde_json::Value) -> Result<()> {
+    /// Moves the pointer; [wait] when a click follows, so the click can't land before the move.
+    async fn to(&self, i: &serde_json::Value, wait: bool) -> Result<()> {
         let x = i["x"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0) * self.size.0 as f64;
         let y = i["y"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0) * self.size.1 as f64;
-        self.call("NotifyPointerMotionAbsolute", &(&self.session, opts([]), self.node, x, y)).await
+        let body = (&self.session, opts([]), self.node, x, y);
+        if wait { self.call("NotifyPointerMotionAbsolute", &body).await } else { self.call_fast("NotifyPointerMotionAbsolute", &body).await }
+    }
+
+    /// One key, by its evdev code: real key presses, which the desktop handles like a keyboard's.
+    async fn key(&self, code: i32, down: bool) -> Result<()> {
+        self.call("NotifyKeyboardKeycode", &(&self.session, opts([]), code, down as u32)).await
+    }
+
+    async fn tap(&self, code: i32) -> Result<()> {
+        self.key(code, true).await?;
+        self.key(code, false).await
+    }
+
+    /// One typed character: the key that types it in the desktop's layout, with Shift if that's
+    /// how it's reached; a character no key types (emoji, other scripts) goes as a keysym.
+    async fn type_char(&self, c: char) -> Result<()> {
+        if c == '\n' {
+            return self.tap(KEY_ENTER).await;
+        }
+        let sym = char_keysym(c);
+        match crate::mirror::layout().keys.get(&(sym as u32)) {
+            Some(&(code, shift)) => {
+                if shift {
+                    self.key(KEY_LEFTSHIFT, true).await?;
+                }
+                self.tap(code as i32).await?;
+                if shift {
+                    self.key(KEY_LEFTSHIFT, false).await?;
+                }
+                Ok(())
+            }
+            None => {
+                self.call("NotifyKeyboardKeysym", &(&self.session, opts([]), sym, 1u32)).await?;
+                self.call("NotifyKeyboardKeysym", &(&self.session, opts([]), sym, 0u32)).await
+            }
+        }
     }
 
     async fn button(&self, button: i32, down: bool) -> Result<()> {
@@ -216,28 +261,96 @@ impl Pointer {
         match i["kind"].as_str().unwrap_or("") {
             "click" | "right" => {
                 let b = if i["kind"] == "right" { BTN_RIGHT } else { BTN_LEFT };
-                self.to(i).await?;
+                self.to(i, true).await?;
                 self.button(b, true).await?;
                 self.button(b, false).await
             }
             "down" => {
-                self.to(i).await?;
+                self.to(i, true).await?;
                 self.button(BTN_LEFT, true).await
             }
-            "move" => self.to(i).await,
+            "move" => self.to(i, false).await,
             "up" => {
-                self.to(i).await?;
+                self.to(i, true).await?;
                 self.button(BTN_LEFT, false).await
             }
             "scroll" => {
-                self.to(i).await?;
+                self.to(i, true).await?;
                 let (dx, dy) = (i["dx"].as_f64().unwrap_or(0.0), i["dy"].as_f64().unwrap_or(0.0));
-                self.call("NotifyPointerAxis", &(&self.session, opts([]), dx, dy)).await
+                self.call_fast("NotifyPointerAxis", &(&self.session, opts([]), dx, dy)).await
+            }
+            "text" => {
+                for c in i["text"].as_str().unwrap_or("").chars().take(4096) {
+                    self.type_char(c).await?;
+                }
+                Ok(())
+            }
+            "key" => {
+                let name = i["key"].as_str().unwrap_or("");
+                let Some(code) = keycode(name) else { return Ok(()) };
+                let mods: Vec<i32> = i["mods"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|m| match m.as_str()? {
+                        "ctrl" => Some(KEY_LEFTCTRL),
+                        "alt" => Some(KEY_LEFTALT),
+                        "super" => Some(KEY_LEFTMETA),
+                        "shift" => Some(KEY_LEFTSHIFT),
+                        _ => None,
+                    })
+                    .collect();
+                for m in &mods {
+                    self.key(*m, true).await?;
+                }
+                self.tap(code).await?;
+                for m in mods.iter().rev() {
+                    self.key(*m, false).await?;
+                }
+                Ok(())
             }
             "scrollend" => self.call("NotifyPointerAxis", &(&self.session, opts([("finish", Value::Bool(true))]), 0.0f64, 0.0f64)).await,
             _ => Ok(()),
         }
     }
+}
+
+/// evdev key codes (linux/input-event-codes.h).
+const KEY_LEFTSHIFT: i32 = 42;
+const KEY_LEFTCTRL: i32 = 29;
+const KEY_LEFTALT: i32 = 56;
+const KEY_LEFTMETA: i32 = 125;
+const KEY_ENTER: i32 = 28;
+
+/// The keysym that types [c]: Latin-1 is its own code, the rest Unicode's (0x0100_0000 + code).
+fn char_keysym(c: char) -> i32 {
+    let u = c as u32;
+    if (0x20..=0x7e).contains(&u) || (0xa0..=0xff).contains(&u) { u as i32 } else { (0x0100_0000 | u) as i32 }
+}
+
+/// The phone keyboard's named keys, and single characters for shortcuts (Ctrl+C presses C).
+fn keycode(name: &str) -> Option<i32> {
+    Some(match name {
+        "BackSpace" => 14,
+        "Tab" => 15,
+        "Return" => KEY_ENTER,
+        "Escape" => 1,
+        "Delete" => 111,
+        "Home" => 102,
+        "End" => 107,
+        "Left" => 105,
+        "Right" => 106,
+        "Up" => 103,
+        "Down" => 108,
+        "PageUp" => 104,
+        "PageDown" => 109,
+        "Super" => KEY_LEFTMETA,
+        one if one.chars().count() == 1 => {
+            let c = one.chars().next()?.to_ascii_lowercase();
+            crate::mirror::layout().keys.get(&(char_keysym(c) as u32))?.0 as i32
+        }
+        _ => return None,
+    })
 }
 
 struct Cast {
@@ -444,4 +557,53 @@ impl<'a> Portal<'a> {
 
 fn rand_u32() -> u32 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn characters_press_the_keys_that_type_them() {
+        let keys = &crate::mirror::layout().keys;
+        let key = |c: char| keys.get(&(char_keysym(c) as u32)).copied();
+        assert_eq!(key('h'), Some((35, false)));
+        assert_eq!(key('A'), Some((30, true)));
+        assert_eq!(key('!'), Some((2, true)));
+        assert_eq!(key(' '), Some((57, false)));
+        assert_eq!(keycode("c"), Some(46));
+        assert_eq!(keycode("Return"), Some(KEY_ENTER));
+    }
+}
+
+#[cfg(test)]
+mod live {
+    use super::*;
+    use std::time::Duration;
+
+    /// Types into a KWrite window on this PC through a real remote-desktop session and reads the
+    /// file back. Only types once KWin says the test window has focus (VYOMA_FOCUS: a script that
+    /// prints VYOMA_ACTIVE:test). Run by hand, with the PC left alone.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn types_into_a_test_window() {
+        let file = std::env::var("VYOMA_TYPE_FILE").expect("VYOMA_TYPE_FILE");
+        let focus = std::env::var("VYOMA_FOCUS").expect("VYOMA_FOCUS");
+        std::fs::write(&file, "").unwrap();
+        let cast = Cast::remote().await.expect("remote desktop session");
+        let p = Pointer { conn: cast.conn.clone(), session: cast.control.clone().expect("keyboard allowed"), node: cast.node, size: cast.size.unwrap() };
+        let mut editor = std::process::Command::new("kwrite").arg(&file).spawn().unwrap();
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let said = String::from_utf8_lossy(&std::process::Command::new(&focus).output().unwrap().stdout).to_string();
+        if !said.contains("VYOMA_ACTIVE:test") {
+            let _ = editor.kill();
+            panic!("the test window didn't get focus; typed nothing");
+        }
+        let text = std::env::var("VYOMA_TYPE_TEXT").unwrap_or_else(|_| "Hello, World! 123 abc".into());
+        p.perform(&json!({ "kind": "text", "text": text })).await.unwrap();
+        p.perform(&json!({ "kind": "key", "key": "s", "mods": ["ctrl"] })).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let _ = editor.kill();
+        println!("typed: {:?}", std::fs::read_to_string(&file).unwrap());
+    }
 }

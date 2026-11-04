@@ -387,13 +387,19 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                         let Ok(stream) = payload::fetch_stream(&shared.me, &pinned, phone, &p).await else { return };
                         info!("touch control stream open");
                         let mut lines = tokio::io::BufReader::new(stream).lines();
+                        let (mut chars, mut keys) = (0usize, 0usize);
                         while let Ok(Some(line)) = lines.next_line().await {
-                            if let Ok(v) = serde_json::from_str::<Value>(&line)
-                                && touches.send(v).is_err()
-                            {
+                            let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+                            match v["kind"].as_str() {
+                                Some("text") => chars += v["text"].as_str().map_or(0, |t| t.chars().count()),
+                                Some("key") => keys += 1,
+                                _ => {}
+                            }
+                            if touches.send(v).is_err() {
                                 break;
                             }
                         }
+                        info!("touch control stream closed ({chars} characters typed, {keys} keys)");
                     }));
                 }
             }
