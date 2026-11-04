@@ -97,6 +97,12 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   pre-13 fallback). The lens shader adds light only by facing (no all-round floor); no bottom-only "shade".
   On true black the dark can't show (nothing to darken): that's correct, not a bug. Test with Lighter glass
   OFF (emulators turn it on, and then chrome isn't the lens at all).
+- How light spreads round a corner (measured on macOS Control Center's Display bar, 2026-11-05): every 10° from
+  the straight edge it's 1, .78, .55, .38, .28, .26, .12, .03, 0: quick over the first half, a thin tail to ~70°.
+  AGSL `lobe(c) = 0.6·c⁸ + 0.4·c` (rim, inner band and lens all use it, with the TRUE edge normal; the lens's
+  old position-based facing dimmed a pill's straight top near its ends). The dark edge starts ~45°, half by 60°,
+  full by 70° (`smoothstep(0.72, 1, sinθ)`), so a corner shows the light's tail and the dark together. A single
+  power (`c^1.6`) lit corners evenly and read flat.
 - Rims follow Apple's iOS 26 glass (user's reference shots): a broad highlight facing the light plus one ~80% as bright
   opposite (`specularRim(opposite = 0.8f)`), and `InnerGlow` (one per element), a soft band of light a few dp deep just inside the
   edge (cards 8 dp at `GlassDepth.band`, chrome ≤4 dp at 52% white in dark, raised ≤4 dp; t³ falloff, k^1.6 towards
