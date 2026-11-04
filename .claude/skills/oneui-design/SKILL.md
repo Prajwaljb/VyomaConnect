@@ -103,7 +103,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   the lit sides; the user tuned these for contrast, not spread). Hairline-only rims read as dull grey slabs on true
   black; the band is what makes it glass. Cards and chrome also pass `shade`/`depth` (cards 16 dp, chrome ≤10 dp; kept
   subtle: the user found 0.6 shade "too 3dish"). Raised controls don't: small grey circles with it read as plastic
-  balls. The user wants the glass clear: dark fills ~0.05 white, light cards 0.32 white, chrome tint 0.42/0.38: the edge is shaded as a thick drop rolling over (brighter sloping towards the light, `GlassDepth.shade`
+  balls. The user wants the glass clear: dark fills ~0.05 white, light cards 0.32 white, chrome untinted (2026-11-05): the edge is shaded as a thick drop rolling over (brighter sloping towards the light, `GlassDepth.shade`
   sloping away, a shallow counter-curve past the roll), so flat sides read as 3D like the WWDC25 glass reference. Lite glass keeps the band. It must fade with
   no visible steps (stacked strokes showed rings): an AGSL distance-to-rounded-rect pass, many faint strokes below API 33.
   Read it only in draw lambdas, never in composition. A still phone renders ~0 frames; measured no jank cost.
@@ -450,7 +450,10 @@ until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played ou
 ## Apple Liquid Glass, from the references (LiquidGlassEx/, 2026-11-03)
 - NEVER grey glass. A grey tint (solved from one Music shot) was built and rejected ("did smtg weird"). Real Apple glass
   passes the background's colour through and DEEPENS it: under macOS/iOS Control Center tiles a flower's saturation goes
-  0.25 -> ~0.47, a blue 0.82 -> 0.93. Shader `vibrance` 1.7 on chrome. Tints stay the original clear ones.
+  0.25 -> ~0.47, a blue 0.82 -> 0.93. SUPERSEDED 2026-11-05: NO TINT AT ALL (user: "dont want tint at all ... even
+  for apple, its a optional toggle"). The 1.7 vibrance doubled the pale canvas's saturation and the title bubble read
+  blue. Chrome: `vibrance` 1, no fill tint (only a caller's explicit tint, e.g. the PC screen's FROST); lenses: no
+  milk. Lighter glass keeps its frosted fill (no blur there). Never add colour or haze inside the glass.
 - Gloss: the bevel glows (`gloss` 0.3 light / 0.22 dark): what's under the rim lifts towards white, most where the edge
   faces the light and opposite, so the rim reads as a brighter, still coloured band (iOS tiles over blue: bright cyan rim).
 - Blur: LOW on bars and buttons, content stays legible and the rim mirrors it (Safari's search pill shows the building's
