@@ -132,8 +132,8 @@ private class TiltListener(private val context: Context) : SensorEventListener {
     private companion object {
         const val SMOOTH = 0.2f
         const val WARMUP = 8
-        /** Livelier than the room's real up, so even small, ordinary handling visibly moves it. */
-        const val GAIN = 1.7f
+        /** Follows the room's real up one to one: at 1.7 ordinary handling swung it too much (user, 2026-11-05). */
+        const val GAIN = 1.0f
         /** How far the light can sway from rest, either way. */
         const val MAX_SWAY = 45f
     }

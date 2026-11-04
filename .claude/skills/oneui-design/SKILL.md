@@ -86,7 +86,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a plain
   even fill plus a 0.9 dp specular hairline that follows the phone's tilt (a FIXED painted rim read as fake; the user
   asked for it back once it moved like iOS 26); pass `color` for accent/tinted or for chips over artwork (dark translucent).
-- Light: `SpecularLight.angle` (Light.kt) is where the light is on screen (270° = straight up, centred, at rest: the user's call; tilt sways it up to ±55°, soft limit, gain 2.2: ~10° of turn reaches straight up; the user found ±35° could never bring it to the centre), driven by the
+- Light: `SpecularLight.angle` (Light.kt) is where the light is on screen (270° = straight up, centred, at rest: the user's call; tilt sways it up to ±45°, soft limit, gain 1.0 (1.7 was too sensitive, user 2026-11-05; 2.2 before); the user found ±35° could never bring it to the centre), driven by the
   gravity sensor only while the UI is started (`TrackSpecularLight` in `VyomaTheme`), smoothed, 1.5° dead band. Every
   specular edge uses it: `specularRim(...)` (chrome stroke, raised controls) and the AGSL `light` uniform (lens rims).
 - Dark sides (2026-11-05, user-approved approach): the original rim stays exactly as is; `RimShadow` adds a separate
