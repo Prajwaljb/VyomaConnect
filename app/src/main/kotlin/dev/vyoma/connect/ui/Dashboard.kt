@@ -72,6 +72,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.material.icons.rounded.MobileScreenShare
 import androidx.compose.material.icons.rounded.ScreenShare
 import dev.vyoma.connect.protocol.plugin.builtin.CaptureState
 import kotlin.math.abs
@@ -389,6 +390,7 @@ fun PcDashboard(
                     menu = listOf(
                         MenuItem("Watch the screen", Icons.Rounded.ScreenShare) { PcScreenActivity.open(context, id) },
                         MenuItem("Take a screenshot", Icons.Rounded.Screenshot) { vm.capture(shots.screenshot) },
+                        MenuItem("Show this phone on the PC", Icons.Rounded.MobileScreenShare) { MirrorActivity.open(context) },
                     ),
                 ) { PcScreenActivity.open(context, id) }
                 else Control(Icons.Rounded.Sensors, "Ping", SystemColor.CYAN) { vm.ping(id); status.show("Pinged: look for it on the PC") },

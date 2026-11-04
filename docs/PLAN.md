@@ -134,7 +134,9 @@ desktop/companion/     Rust daemon (Phase 2)
   haptics on press, PC rumble → phone vibrator (VibratorManager compositions), and a
   drag-and-drop layout editor with per-game profiles. Inspired by Steam Input, Backbone and Moonlight.
   Transport: UDP state snapshots with AEAD (ChaCha20-Poly1305, session key from TLS), <10 ms on LAN/USB.
-- **Phone mirroring + control from PC** (MediaProjection + HW encode; control via accessibility gestures).
+- **Phone mirroring + control from PC (done 2026-11-04):** MediaProjection → H.264 → a companion window
+  (GStreamer via XWayland); mouse, wheel and keyboard come back through a user-enabled accessibility service.
+  Not yet: phone audio to the PC, clipboard paste into the phone from the window.
 - **Phone as PC webcam/mic (done 2026-11-04):** Camera2 → H.264 → companion → v4l2loopback "Vyoma Phone
   Camera"; mic → PipeWire source "Vyoma Phone Mic". Preview, zoom (incl. ultra-wide), torch and a notification
   Stop are in. Not yet: tried in real call apps.

@@ -164,6 +164,23 @@ body fields before implementing one.
   the app held the accessory wedged the phone's USB (error -71) until replugged; it stays an accessory until unplugged.
   Phone writes go through a newest-frame writer thread; a write pending > 500 ms fails over to Wi-Fi. Access without
   debugging: desktop/companion/udev/70-vyoma-usb.rules (sudo, once). Verified 2026-11-03: switch ~2 s, A/B/X/Y arrive.
+- Phone mirroring + control from the PC (app mirror/, companion mirror.rs, 2026-11-04): phone → PC `vyoma.mirror
+  {w, h}` + live payload of H.264 Annex-B (MediaProjection, whole screen only via createConfigForDefaultDisplay on
+  34+; one VirtualDisplay AUTO_MIRROR per grant; long side <= 1920, multiples of 8, 60 fps, 8 Mbit/s; a turn makes a
+  new encoder and so a new SPS in the same stream). Shared H264Encoder + companionLink() in app webcam/H264Encoder.kt.
+  PC → phone `vyoma.mirror.state {open}` / `{error}` (open:false after open = the user closed the window: phone stops;
+  the payload can break first, so the phone waits 1.5 s for it) and `vyoma.mirror.input {kind, x, y (0..1 of the
+  picture), dx, dy, text, key}`: kinds down/move/up (left button), scroll, text, key (backspace/delete/enter/left/
+  right), back (right click, Esc, mouse back), home (middle click), recents. Companion runs itself as a child
+  (`--mirror-window`, GST_GL_WINDOW=x11 because GStreamer 1.28's Wayland windows have no keyboard): fdsrc ! h264parse
+  ! vah264dec ! vapostproc ! caps <= 85% of the smallest screen ! glimagesink; navigation events caught by a probe on
+  the capsfilter's src pad, JSON lines on stdout. X11 window quirks: keys come unshifted and without modifiers (track
+  Shift/Ctrl/Alt/Caps ourselves, shift via libxkbcommon's level 1 in kxkbrc's layout), the wheel is buttons 4-7,
+  closing is the error "Quit requested". Phone: MirrorAccessibility (user enables once) + MirrorControl: tap unless
+  past touch slop or held 300 ms, then a live stroke of continueStroke pieces sent one after another; wheel = 8% of
+  the height drag then 60 ms still (no fling); typing via ACTION_SET_TEXT + SET_SELECTION on the input focus, Enter
+  via ACTION_IME_ENTER. LinkService adds FGS type mediaProjection (ACTION_MIRROR) before getMediaProjection.
+  Verified by the user 2026-11-04 (typing with Shift, wheel, drag, close-to-stop).
 - Phone as the PC's webcam/mic (app webcam/PhoneWebcam.kt, companion webcam.rs, 2026-11-04): phone → PC
   `vyoma.webcam {w, h, rotate}` + live payload (payloadSize -1) of H.264 Annex-B (MediaCodec surface encoder,
   30 fps, 4/8 Mbit/s, I-frame 2 s, SPS/PPS before every keyframe, repeat-previous 100 ms); `vyoma.webcam.mic

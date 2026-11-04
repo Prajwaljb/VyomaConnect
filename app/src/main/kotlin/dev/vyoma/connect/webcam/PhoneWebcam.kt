@@ -149,19 +149,9 @@ object PhoneWebcam {
         }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun follow(app: Context, hd: Boolean) {
         val hub = (app as android.app.Application).container.hub.filterNotNull().first()
-        hub.devices.flatMapLatest { all ->
-            val each = all.values.map { d ->
-                d.state.map { st ->
-                    val pc = d.identity.companionOf ?: return@map null
-                    if (!st.isReachable) return@map null
-                    d.plugin<CompanionPlugin>(CompanionPlugin.ID)?.let { it to (all[pc]?.identity?.deviceName ?: "the PC") }
-                }
-            }
-            if (each.isEmpty()) flowOf(null) else combine(each) { found -> found.firstOrNull { it != null } }
-        }.distinctUntilChanged { a, b -> a?.first === b?.first }.collectLatest { c ->
+        companionLink(hub).collectLatest { c ->
             if (c == null) {
                 _status.value = _status.value.copy(camera = false, mic = false, pc = null, error = null)
                 return@collectLatest
@@ -215,7 +205,7 @@ object PhoneWebcam {
         val want = if (hd) Size(1920, 1080) else Size(1280, 720)
         val size = listOf(true, false).map { pickSize(cameras.getCameraCharacteristics(cameraFor(cameras, it)), want) }.minBy { it.width }
         val video = LiveStream(VIDEO_BACKLOG)
-        val encoder = Encoder(size, if (hd) 8_000_000 else 4_000_000, video)
+        val encoder = H264Encoder(size.width, size.height, if (hd) 8_000_000 else 4_000_000, FPS, video, "webcam-encoder")
         val turns = Turns(app)
         try {
             launch {
@@ -340,69 +330,6 @@ object PhoneWebcam {
                 ),
             )
         }
-
-    /** The hardware H.264 encoder: camera frames in through [surface], Annex-B out to [out]. */
-    private class Encoder(size: Size, bitrate: Int, private val out: LiveStream) {
-        private val thread = HandlerThread("webcam-encoder").also { it.start() }
-        val handler = Handler(thread.looper)
-        private val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-        val surface: Surface
-        private var config: ByteArray? = null
-        private var dropping = false
-
-        init {
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, size.width, size.height).apply {
-                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-                setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
-                setInteger(MediaFormat.KEY_FRAME_RATE, FPS)
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
-                setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-                setInteger(MediaFormat.KEY_LATENCY, 1)
-                setInteger(MediaFormat.KEY_PRIORITY, 0)
-                // A still scene still sends a frame now and then, so the PC's picture never stalls.
-                setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000)
-            }
-            codec.setCallback(object : MediaCodec.Callback() {
-                override fun onInputBufferAvailable(codec: MediaCodec, index: Int) {}
-                override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
-                    val buf = runCatching { codec.getOutputBuffer(index) }.getOrNull() ?: return
-                    val bytes = ByteArray(info.size)
-                    buf.position(info.offset)
-                    buf.get(bytes)
-                    runCatching { codec.releaseOutputBuffer(index, false) }
-                    if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-                        config = bytes
-                        return
-                    }
-                    val key = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
-                    if (dropping && !key) return
-                    // SPS/PPS before every keyframe: a decoder restarted on the PC picks up from it.
-                    val frame = if (key) (config ?: ByteArray(0)) + bytes else bytes
-                    if (out.offer(frame)) dropping = false
-                    else if (!dropping) {
-                        // The link is behind: skip to the next keyframe instead of falling further back.
-                        dropping = true
-                        sync()
-                    }
-                }
-                override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) { VLog.w(TAG, "encoder: ${e.message}"); out.close() }
-                override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {}
-            }, handler)
-            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            surface = codec.createInputSurface()
-            codec.start()
-        }
-
-        fun sync() = runCatching { codec.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) }) }
-
-        fun close() {
-            runCatching { codec.stop() }
-            runCatching { codec.release() }
-            surface.release()
-            thread.quitSafely()
-        }
-    }
 
     /** The mic, raw: 48 kHz mono 16-bit, with the phone's echo cancelling and noise suppression. */
     private class Mic(context: Context, private val out: LiveStream) {

@@ -784,6 +784,55 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         }
     }
 
+    /**
+     * One input from the PC's mirror window, in the picture's terms: [x], [y] are 0..1 across the
+     * picture. Kinds: "down", "move", "up" (the left button, a finger), "scroll" ([dx], [dy] in
+     * clicks, down positive), "text" ([text] typed), "key" ([key]: "backspace", "delete", "enter",
+     * "left", "right", "up", "down"), "back", "home", "recents".
+     */
+    data class MirrorInput(
+        val kind: String,
+        val x: Float = 0f,
+        val y: Float = 0f,
+        val dx: Float = 0f,
+        val dy: Float = 0f,
+        val text: String? = null,
+        val key: String? = null,
+    )
+    private val _mirrorInput = kotlinx.coroutines.flow.MutableSharedFlow<MirrorInput>(extraBufferCapacity = 512)
+    val mirrorInput: kotlinx.coroutines.flow.SharedFlow<MirrorInput> = _mirrorInput
+
+    /**
+     * What the PC says about the mirror: [open] while its window shows the phone; [closed] once that
+     * window was closed (the user stopping it); [error] why it can't.
+     */
+    data class MirrorState(val open: Boolean = false, val closed: Boolean = false, val error: String? = null)
+    private val _mirror = MutableStateFlow(MirrorState())
+    val mirror: StateFlow<MirrorState> = _mirror.asStateFlow()
+
+    fun resetMirror() { _mirror.value = MirrorState() }
+
+    /**
+     * The phone's screen in a window on the PC: [video] is live H.264 (Annex-B), w x h to start with
+     * (a turned phone sends a new size in-stream). Suspends until the stream ends.
+     */
+    suspend fun sendMirror(w: Int, h: Int, video: java.io.InputStream): Boolean =
+        ctx.device.sendWithPayload(
+            packet(MIRROR) { put("w", w); put("h", h) },
+            PayloadSource(-1) { video }, timeoutMs = WEBCAM_ACCEPT_MS,
+        )
+
+    private fun receiveMirrorInput(p: NetworkPacket) {
+        val kind = p.string("kind") ?: return
+        fun f(k: String) = p.double(k)?.toFloat() ?: 0f
+        _mirrorInput.tryEmit(MirrorInput(kind, f("x"), f("y"), f("dx"), f("dy"), p.string("text"), p.string("key")))
+    }
+
+    private fun receiveMirrorState(p: NetworkPacket) {
+        val open = p.bool("open") ?: false
+        _mirror.value = MirrorState(open = open, closed = !open && _mirror.value.open, error = p.string("error"))
+    }
+
     @Volatile private var pendingStep: CompletableDeferred<NetworkPacket>? = null
 
     /**
@@ -820,6 +869,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         if (packet.type == GAMEPAD_RUMBLE) receiveRumble(packet)
         if (packet.type == WEBCAM_STATE) receiveWebcam(packet)
+        if (packet.type == MIRROR_INPUT) receiveMirrorInput(packet)
+        if (packet.type == MIRROR_STATE) receiveMirrorState(packet)
         if (packet.type == GAMEPAD_UDP) receiveGamepadOffer(packet)
         if (packet.type == DESKTOP_STEPPED) pendingStep?.also { pendingStep = null }?.complete(packet)
         if (packet.type == SCREENSHOT) screenshot.receive(packet)
@@ -893,6 +944,9 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val WEBCAM_MIC = "vyoma.webcam.mic"
         const val WEBCAM_TURN = "vyoma.webcam.turn"
         const val WEBCAM_STATE = "vyoma.webcam.state"
+        const val MIRROR = "vyoma.mirror"
+        const val MIRROR_INPUT = "vyoma.mirror.input"
+        const val MIRROR_STATE = "vyoma.mirror.state"
         private const val WEBCAM_ACCEPT_MS = 15_000
         private const val ACCESSORY_ASK_MS = 15_000L
         private const val GAMEPAD_BODY = 35
@@ -919,8 +973,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED, WEBCAM_STATE),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, USB_ACCESSORY, WEBCAM, WEBCAM_MIC, WEBCAM_TURN),
+            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED, WEBCAM_STATE, MIRROR_INPUT, MIRROR_STATE),
+            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, USB_ACCESSORY, WEBCAM, WEBCAM_MIC, WEBCAM_TURN, MIRROR),
         ) { CompanionPlugin(it, sink) }
     }
 }

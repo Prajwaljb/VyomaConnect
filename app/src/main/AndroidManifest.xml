@@ -17,6 +17,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -99,6 +100,21 @@
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:screenOrientation="sensorLandscape" />
+
+        <activity
+            android:name=".ui.MirrorActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!-- Lets the PC's mouse and keyboard work the mirrored screen (switched on by the user). -->
+        <service
+            android:name=".mirror.MirrorAccessibility"
+            android:exported="true"
+            android:label="@string/mirror_control_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/mirror_control" />
+        </service>
 
         <activity
             android:name=".ui.WebcamActivity"
@@ -216,7 +232,7 @@
         <service
             android:name=".service.LinkService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|camera|microphone" />
+            android:foregroundServiceType="connectedDevice|camera|microphone|mediaProjection" />
 
         <receiver
             android:name=".service.PairActionReceiver"

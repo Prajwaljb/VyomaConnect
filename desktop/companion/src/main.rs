@@ -15,6 +15,7 @@ mod identity;
 mod kde;
 mod link;
 mod media;
+mod mirror;
 mod payload;
 mod pc;
 mod screen;
@@ -56,8 +57,17 @@ struct Shared {
     away: Arc<away::Away>,
 }
 
+fn main() -> Result<()> {
+    // The phone's screen window runs as a child process (see mirror.rs).
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some(mirror::WINDOW_ARG) {
+        return mirror::window(&args[2..]);
+    }
+    daemon()
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn daemon() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "vyoma_companion=info".into()))
         .init();
@@ -146,8 +156,8 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.gamepad.state", "vyoma.gamepad.close", "vyoma.desktop.step", "vyoma.usb.accessory", "vyoma.webcam", "vyoma.webcam.mic", "vyoma.webcam.turn"],
-            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.gamepad.rumble", "vyoma.gamepad.udp", "vyoma.desktop.stepped", "vyoma.webcam.state"],
+            "incomingCapabilities": ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.gamepad.state", "vyoma.gamepad.close", "vyoma.desktop.step", "vyoma.usb.accessory", "vyoma.webcam", "vyoma.webcam.mic", "vyoma.webcam.turn", "vyoma.mirror"],
+            "outgoingCapabilities": ["vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.gamepad.rumble", "vyoma.gamepad.udp", "vyoma.desktop.stepped", "vyoma.webcam.state", "vyoma.mirror.input", "vyoma.mirror.state"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
         }),
@@ -241,6 +251,7 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
     let mut screen_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut webcam_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut mic_task: Option<tokio::task::JoinHandle<()>> = None;
+    let mut mirror_task: Option<tokio::task::JoinHandle<()>> = None;
     let (turn_tx, _) = tokio::sync::watch::channel(0u32);
     let pc = pc::worker(link.sender.clone(), name.clone());
     // Listings and downloads; dropping the set when the link closes cancels whatever is left.
@@ -310,6 +321,18 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                 webcam_task = Some(tokio::spawn(async move {
                     if let Err(e) = webcam::camera(&sender, &shared.me, &pinned, phone, &p, turn, &name).await {
                         warn!("{name}: phone camera: {e:#}");
+                    }
+                }));
+            }
+            "vyoma.mirror" => {
+                // A new stream (the phone restarted it) replaces the window.
+                if let Some(t) = mirror_task.take() {
+                    t.abort();
+                }
+                let (sender, shared, pinned, name, phone) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone(), addr.ip());
+                mirror_task = Some(tokio::spawn(async move {
+                    if let Err(e) = mirror::show(&sender, &shared.me, &pinned, phone, &p, &name).await {
+                        warn!("{name}: mirror: {e:#}");
                     }
                 }));
             }
@@ -450,7 +473,7 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
     };
     wall_task.abort();
     // The phone's camera and mic go with its link (the mic's PipeWire source is removed on drop).
-    for t in [webcam_task.take(), mic_task.take()].into_iter().flatten() {
+    for t in [webcam_task.take(), mic_task.take(), mirror_task.take()].into_iter().flatten() {
         t.abort();
     }
     // Dropping the pad lets go of every button.

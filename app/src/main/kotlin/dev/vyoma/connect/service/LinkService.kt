@@ -75,6 +75,20 @@ class LinkService : LifecycleService() {
         lifecycleScope.launch { startHub() }
     }
 
+    // What the phone is streaming to the PC: each adds its foreground type (see ACTION_MEDIA).
+    private var mediaCamera = false
+    private var mediaMic = false
+    private var mediaProjection = false
+
+    private fun foregroundForMedia(): Boolean {
+        var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        if (mediaCamera) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+        if (mediaMic) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        if (mediaProjection) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        return runCatching { startForeground(Notifications.SERVICE_ID, Notifications.service(this, lastConnected), types) }
+            .onFailure { VLog.w("LinkService", "media in the foreground refused: ${it.message}") }.isSuccess
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
@@ -88,12 +102,22 @@ class LinkService : LifecycleService() {
             // starts it (in front), dropped again when it stops.
             ACTION_WEBCAM_STOP -> dev.vyoma.connect.webcam.PhoneWebcam.stop(this)
             ACTION_MEDIA -> {
-                var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-                if (intent.getBooleanExtra(EXTRA_CAMERA, false)) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-                if (intent.getBooleanExtra(EXTRA_MIC, false)) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                runCatching { startForeground(Notifications.SERVICE_ID, Notifications.service(this, lastConnected), types) }
-                    .onFailure { VLog.w("LinkService", "camera/mic in the foreground refused: ${it.message}") }
+                if (intent.hasExtra(EXTRA_CAMERA)) mediaCamera = intent.getBooleanExtra(EXTRA_CAMERA, false)
+                if (intent.hasExtra(EXTRA_MIC)) mediaMic = intent.getBooleanExtra(EXTRA_MIC, false)
+                if (intent.hasExtra(EXTRA_PROJECTION)) mediaProjection = intent.getBooleanExtra(EXTRA_PROJECTION, false)
+                foregroundForMedia()
             }
+            // The user allowed the screen to be shared: Android hands the grant over only to a service
+            // already in the foreground as mediaProjection.
+            ACTION_MIRROR -> {
+                val code = intent.getIntExtra(EXTRA_CODE, 0)
+                @Suppress("DEPRECATION")
+                val data = intent.getParcelableExtra<Intent>(EXTRA_DATA)
+                mediaProjection = true
+                if (data != null && foregroundForMedia()) dev.vyoma.connect.mirror.PhoneMirror.begin(this, code, data)
+                else mediaProjection = false
+            }
+            ACTION_MIRROR_STOP -> dev.vyoma.connect.mirror.PhoneMirror.stop(this)
         }
         return START_STICKY
     }
@@ -164,6 +188,10 @@ class LinkService : LifecycleService() {
         // The webcam's state is in the notification too (title, Stop).
         lifecycleScope.launch {
             dev.vyoma.connect.webcam.PhoneWebcam.status.map { Triple(it.on, it.pc, it.options.mic) }.distinctUntilChanged()
+                .collect { Notifications.updateService(this@LinkService, lastConnected) }
+        }
+        lifecycleScope.launch {
+            dev.vyoma.connect.mirror.PhoneMirror.status.map { it.on to it.pc }.distinctUntilChanged()
                 .collect { Notifications.updateService(this@LinkService, lastConnected) }
         }
         lifecycleScope.launch {
@@ -330,8 +358,26 @@ class LinkService : LifecycleService() {
         const val ACTION_SEND = "dev.vyoma.connect.SEND"
         const val ACTION_MEDIA = "dev.vyoma.connect.MEDIA"
         const val ACTION_WEBCAM_STOP = "dev.vyoma.connect.WEBCAM_STOP"
+        const val ACTION_MIRROR = "dev.vyoma.connect.MIRROR"
+        const val ACTION_MIRROR_STOP = "dev.vyoma.connect.MIRROR_STOP"
         private const val EXTRA_CAMERA = "camera"
         private const val EXTRA_MIC = "mic"
+        private const val EXTRA_PROJECTION = "projection"
+        private const val EXTRA_CODE = "code"
+        private const val EXTRA_DATA = "data"
+
+        /** The user allowed screen sharing ([code], [data] from the prompt): start mirroring to the PC. */
+        fun mirror(context: Context, code: Int, data: Intent) {
+            val intent = Intent(context, LinkService::class.java).setAction(ACTION_MIRROR)
+                .putExtra(EXTRA_CODE, code).putExtra(EXTRA_DATA, data)
+            runCatching { context.startService(intent) }.onFailure { VLog.w("LinkService", "mirror: ${it.message}") }
+        }
+
+        /** Mirroring ended: drop the mediaProjection foreground type. */
+        fun projecting(context: Context, on: Boolean) {
+            val intent = Intent(context, LinkService::class.java).setAction(ACTION_MEDIA).putExtra(EXTRA_PROJECTION, on)
+            runCatching { context.startService(intent) }.onFailure { VLog.w("LinkService", "projection: ${it.message}") }
+        }
 
         /** The phone's camera / mic are (no longer) streaming to the PC; see ACTION_MEDIA. */
         fun mediaInUse(context: Context, camera: Boolean, mic: Boolean) {

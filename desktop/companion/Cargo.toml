@@ -25,6 +25,8 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.29.0", features = ["v4"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
+gstreamer = { version = "0.25", features = ["v1_26"] }
+gstreamer-video = { version = "0.25", features = ["v1_26"] }
 
 [profile.release]
 lto = "thin"
