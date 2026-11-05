@@ -96,7 +96,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   show on black). Facing the light (top, and bottom by internal reflection) the reflected light wins instead.
   Measured: light spans ~±50° round top/bottom, dark ~±30° round side-on, barely overlapping; dark falls 1, .66,
   .5, .23, .1 every 10° from side-on (`s^10`); depth 25–55% over bright backgrounds, 1–2 px wide. Strength: cards
-  0.5 dark / 0.35 light, raised 0.45 / 0.3 (filled 0.25), chrome 0.55 / 0.4, knobs 0.4 / 0.25. It is drawn UNDER the
+  0.5 dark / 0.35 light, raised 0.45 / 0.3 (filled 0.25), chrome 0.55 / 0.2 (light 0.4 made a ~47% dark ring on the "i" button; Apple ~22%), knobs 0.4 / 0.25. It is drawn UNDER the
   element's own fill, band and highlights (cards/raised: before the fill; chrome: right over the lens output;
   drops: before RimLight), so it darkens only what shows through from behind: gone over a black page, visible
   over bright content. Apple (WWDC25 "Meet Liquid Glass": the glass adapts to what's behind it; their renders
