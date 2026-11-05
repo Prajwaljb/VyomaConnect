@@ -926,6 +926,12 @@ private fun SettingsPanel(
                     SegmentedControl(listOf("Xbox", "DualSense"), if (profile.kind == PadKind.DUALSENSE) 1 else 0, { i ->
                         onSave(profile.copy(kind = if (i == 1) PadKind.DUALSENSE else PadKind.XBOX))
                     })
+                    Text(
+                        if (profile.kind == PadKind.DUALSENSE) "Only for games with PlayStation support. Most others, including Lutris games, won't see it: use Xbox."
+                        else "Works with most games, including Lutris.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 Section("Triggers") {
                     SegmentedControl(listOf("Full press", "Analog"), if (profile.analogTriggers) 1 else 0, { i ->
