@@ -1,6 +1,8 @@
-//! Browse, fetch and upload the PC's files from the phone. Only the user's home folder is reachable:
-//! every path is resolved (`..` and symlinks included) and must still be inside it. Paths on the
-//! wire are relative to home ("" is home itself), so the phone never learns the absolute layout.
+//! Browse, fetch and upload the PC's files from the phone. Only the user's home folder is reachable,
+//! and nothing hidden in it: every path is resolved (`..` and symlinks included) and must still be
+//! inside home with no dot-named part, which keeps out `.ssh`, keys, and `.config/autostart` (a file
+//! put there would run at the next login). Paths on the wire are relative to home ("" is home
+//! itself), so the phone never learns the absolute layout.
 
 use std::net::IpAddr;
 use std::path::{Component, Path, PathBuf};
@@ -138,20 +140,64 @@ async fn read_dir(rel: &str) -> Result<(Vec<Value>, bool)> {
     Ok((json, truncated))
 }
 
-/// Home-relative path to a real path that is guaranteed to be inside home.
+/// Home-relative path to a real path that is guaranteed to be inside home and not hidden.
 async fn resolve(rel: &str) -> Result<PathBuf> {
-    let home = tokio::fs::canonicalize(home()?).await?;
+    resolve_in(&tokio::fs::canonicalize(home()?).await?, rel).await
+}
+
+async fn resolve_in(home: &Path, rel: &str) -> Result<PathBuf> {
     let rel = Path::new(rel);
     if rel.components().any(|c| !matches!(c, Component::Normal(_))) {
         bail!("not a path inside your home folder");
     }
+    if hidden(rel) {
+        bail!("hidden files and folders can't be reached from the phone");
+    }
     let real = tokio::fs::canonicalize(home.join(rel)).await.context("no such file or folder")?;
-    if !real.starts_with(&home) {
+    let Ok(inside) = real.strip_prefix(home) else {
         bail!("that's outside your home folder");
+    };
+    // A plain-named link can lead into a hidden folder.
+    if hidden(inside) {
+        bail!("hidden files and folders can't be reached from the phone");
     }
     Ok(real)
 }
 
+fn hidden(path: &Path) -> bool {
+    path.components().any(|c| c.as_os_str().as_encoded_bytes().starts_with(b"."))
+}
+
 fn home() -> Result<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from).context("HOME isn't set")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn only_plain_paths_inside_home_resolve() {
+        let root = std::env::temp_dir().join(format!("vyoma-files-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        std::fs::create_dir_all(home.join("Documents/.git")).unwrap();
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::create_dir_all(home.join(".config/autostart")).unwrap();
+        std::fs::write(home.join("Documents/a.txt"), "a").unwrap();
+        std::fs::write(home.join("Documents/.git/config"), "c").unwrap();
+        std::fs::write(home.join(".ssh/id_ed25519"), "k").unwrap();
+        std::fs::write(root.join("outside.txt"), "o").unwrap();
+        std::os::unix::fs::symlink(home.join(".ssh"), home.join("keys")).unwrap();
+        std::os::unix::fs::symlink(root.join("outside.txt"), home.join("out")).unwrap();
+        let home = std::fs::canonicalize(&home).unwrap();
+
+        for fine in ["", "Documents", "Documents/a.txt"] {
+            assert!(resolve_in(&home, fine).await.is_ok(), "{fine}");
+        }
+        for refused in [".ssh", ".ssh/id_ed25519", ".config/autostart", "Documents/.git/config", "Documents/./.git", "keys", "keys/id_ed25519", "out", "../outside.txt", "/etc/passwd", "Documents/../.ssh"] {
+            assert!(resolve_in(&home, refused).await.is_err(), "{refused}");
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

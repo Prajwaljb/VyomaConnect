@@ -9,6 +9,7 @@ import dev.vyoma.connect.protocol.crypto.TlsContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.IOException
@@ -67,6 +68,7 @@ class LanBackend(
     )
 
     private val payloads = LanPayloads(tls, config.tuneSocket, config.route)
+    private val handshakes = HandshakeGate(MAX_HANDSHAKES, MAX_HANDSHAKES_PER_ADDRESS)
 
     @Volatile var tcpPort: Int = -1
         private set
@@ -180,12 +182,15 @@ class LanBackend(
             if (identity.protocolVersion < DeviceIdentity.MIN_PROTOCOL_VERSION) continue
             if (config.isConnected(identity.deviceId)) continue
             val port = identity.tcpPort ?: continue
+            // Anyone can send these, so they don't get to aim us at any port or pile up our dials.
+            if (port !in PEER_PORTS || connecting.size >= MAX_DISCOVERY_DIALS) continue
             connectTo(datagram.address, port, identity)
         }
     }
 
     private suspend fun connectOutgoing(address: InetAddress, port: Int, peer: DeviceIdentity?, expectedId: String?, tunnel: TransportKind? = null) {
         val plain = Socket()
+        val deadline = handshakeDeadline(plain)
         try {
             config.route(plain, address)
             plain.connect(InetSocketAddress(address, port), CONNECT_TIMEOUT_MS)
@@ -200,11 +205,19 @@ class LanBackend(
             }
             // We opened the TCP connection, so we are the TLS server.
             val ssl = tls.wrap(plain, asServer = true)
-            finishHandshake(ssl, preTlsIdentity = peer, tunnel = tunnel)
+            finishHandshake(ssl, deadline, preTlsIdentity = peer, tunnel = tunnel)
         } catch (e: Exception) {
             runCatching { plain.close() }
             throw e
+        } finally {
+            deadline.cancel()
         }
+    }
+
+    /** The read timeout restarts with every byte, so a peer trickling them needs a limit on the whole. */
+    private fun handshakeDeadline(plain: Socket): Job = scope.launch {
+        delay(HANDSHAKE_DEADLINE_MS)
+        runCatching { plain.close() }
     }
 
     private suspend fun acceptLoop(server: ServerSocket) {
@@ -215,11 +228,23 @@ class LanBackend(
                 if (!server.isClosed) VLog.w(TAG, "accept failed", e)
                 break
             }
-            scope.launch(Dispatchers.IO) { acceptOn(plain, null) }
+            val from = plain.inetAddress
+            if (!handshakes.enter(from)) {
+                runCatching { plain.close() }
+                continue
+            }
+            scope.launch(Dispatchers.IO) {
+                try {
+                    acceptOn(plain, null)
+                } finally {
+                    handshakes.leave(from)
+                }
+            }
         }
     }
 
     private suspend fun acceptOn(plain: Socket, tunnel: TransportKind?) {
+        val deadline = handshakeDeadline(plain)
         try {
             config.tuneSocket(plain)
             plain.soTimeout = HANDSHAKE_TIMEOUT_MS
@@ -239,14 +264,16 @@ class LanBackend(
                 throw ProtocolException("already linked over a better transport")
             }
             val ssl = tls.wrap(plain, asServer = false)
-            finishHandshake(ssl, identity, tunnel)
+            finishHandshake(ssl, deadline, identity, tunnel)
         } catch (e: Exception) {
             VLog.d(TAG, "incoming from ${plain.inetAddress.hostAddress} rejected: ${e.message}")
             runCatching { plain.close() }
+        } finally {
+            deadline.cancel()
         }
     }
 
-    private suspend fun finishHandshake(ssl: SSLSocket, preTlsIdentity: DeviceIdentity?, tunnel: TransportKind? = null) {
+    private suspend fun finishHandshake(ssl: SSLSocket, deadline: Job, preTlsIdentity: DeviceIdentity?, tunnel: TransportKind? = null) {
         ssl.startHandshake()
         val peerCert = ssl.session.peerCertificates.first() as X509Certificate
         val certId = Certificates.commonName(peerCert)
@@ -275,6 +302,7 @@ class LanBackend(
             throw ProtocolException("Certificate CN '$certId' does not match device id '${identity.deviceId}'")
         }
         ssl.soTimeout = 0
+        deadline.cancel()
         VLog.i(TAG, "link up: ${identity.deviceName} (${identity.deviceId}) v${identity.protocolVersion} via ${ssl.inetAddress.hostAddress}")
         onLink(DeviceLink(identity, peerCert, tunnel ?: config.transportOf(ssl.localAddress, ssl.inetAddress), ssl, payloads.takeIf { tunnel == null }))
     }
@@ -300,6 +328,15 @@ class LanBackend(
         private const val TAG = "LanBackend"
         private const val CONNECT_TIMEOUT_MS = 5_000
         private const val HANDSHAKE_TIMEOUT_MS = 10_000
+        private const val HANDSHAKE_DEADLINE_MS = 20_000L
+        /**
+         * A handshake blocks a thread of Dispatchers.IO, which has 64 and also runs every link and
+         * transfer. Anyone can start one, so these stay well under that.
+         */
+        private const val MAX_HANDSHAKES = 24
+        private const val MAX_HANDSHAKES_PER_ADDRESS = 4
+        private const val MAX_DISCOVERY_DIALS = 16
+        private val PEER_PORTS = 1716..1764
 
         /**
          * Phone-side port for `adb reverse tcp:1765 tcp:1716`: the PC's KDE Connect reached over
@@ -315,5 +352,22 @@ class LanBackend(
             val name = runCatching { java.net.NetworkInterface.getByInetAddress(local)?.name }.getOrNull()
             return if (name != null && tetherInterface.matches(name)) TransportKind.USB else TransportKind.LAN
         }
+    }
+}
+
+/** Counts incoming handshakes in progress, in all and per address. */
+private class HandshakeGate(private val total: Int, private val perAddress: Int) {
+    private val running = HashMap<InetAddress, Int>()
+
+    @Synchronized fun enter(from: InetAddress): Boolean {
+        val mine = running[from] ?: 0
+        if (mine >= perAddress || running.values.sum() >= total) return false
+        running[from] = mine + 1
+        return true
+    }
+
+    @Synchronized fun leave(from: InetAddress) {
+        val left = (running[from] ?: return) - 1
+        if (left > 0) running[from] = left else running.remove(from)
     }
 }

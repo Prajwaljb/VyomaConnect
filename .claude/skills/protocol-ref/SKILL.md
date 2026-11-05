@@ -36,6 +36,9 @@ Peers mix up number and string types, so always use the lenient `NetworkPacket.s
 
 ## Pairing (Device)
 - Request: `kdeconnect.pair {pair:true, timestamp:<unix seconds>}`; accept: `{pair:true}`; reject/unpair: `{pair:false}`.
+- Requests from v8 peers must carry a timestamp within 30 min of ours, else `{pair:false}`: it goes into the code, so a free one lets a sender search for a matching code.
+- All live links of a device show one certificate (`Device.admits`), as ids are public: paired, only the pinned one; a pairing on screen, only the one whose code is shown; otherwise the newest replaces the others at once. Limit: when the phone asks, any `pair:true` from whoever holds that id completes it, so the user must see the PC really showed the prompt.
+- Anyone on the network: 24 handshakes at a time, 4 per address, 20 s each in all (`HandshakeGate`, Dispatchers.IO has 64 threads and runs every link); discovery dials only to 1716..1764, at most 16; 8 unpaired devices (`makeRoomForStranger`); 64 KiB per packet until paired.
 - 30 s timeout. Verification key = first 8 hex chars (uppercase) of SHA-256(larger SPKI ‖ smaller SPKI ‖ decimal timestamp),
   compared unsigned. This is verified against kdeconnectd over D-Bus.
 - Paired peer re-requests → we re-confirm with `pair:true`. Packets from unpaired peer → reply `pair:false` once.
@@ -78,12 +81,13 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
   while YouTube plays here appends the MediaSession position and pauses the phone (`Handoff.continueOnPc`).
 - `vyoma.files.list {path}` → `vyoma.files.listing {path, entries:[{name, dir, size, modified(ms)}], truncated, error?}`.
   `path` is relative to the PC user's home (`""` = home); `..`/absolute components are refused and the canonical
-  path (symlinks resolved) must stay inside home. Dotfiles hidden, folders first, max 5000 entries.
+  path (symlinks resolved) must stay inside home, with no dot-named part: hidden files can't be listed, fetched or written (`.config/autostart` would run code on the PC). Folders first, max 5000 entries.
 - `vyoma.files.get {path}` → `vyoma.files.file {path, name}` + payload, or `{path, error}`. Phone saves to
   Downloads/Vyoma via `ShareSink.createFile`, tracks it in `Transfers`, and opens it.
 - `vyoma.files.put {path(folder), name}` + payload (phone serves it; the companion connects as TLS client with its
   cert and pins the phone's) → `vyoma.files.saved {path, name, error?}`. Written as `.name.vyoma-part`, renamed when
   complete, never overwrites (`name (2).ext`). A refusal before connecting makes the phone stop waiting.
+- The companion rechecks `trusted_devices` every 5 s and ends a session once the phone is unpaired or its certificate changed.
 - `vyoma.pc.request` → `vyoma.pc {displays:[{id, label, internal, value 0..1}], apps:[{id, name, binary?, title?, volume, muted}]}`
   (`pc.rs`). Displays come from Plasma's `org.kde.ScreenBrightness` (panels and DDC monitors; ids are its D-Bus names,
   checked as `[A-Za-z0-9_]` since they become a path); apps are `pactl -f json list sink-inputs` minus event sounds,

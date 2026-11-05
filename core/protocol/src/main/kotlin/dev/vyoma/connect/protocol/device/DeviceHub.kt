@@ -225,6 +225,11 @@ class DeviceHub(
             link.close()
             return
         }
+        if (pinned == null && id !in _devices.value && !makeRoomForStranger()) {
+            VLog.w(TAG, "too many unpaired devices; refusing ${link.identity.deviceName}")
+            link.close()
+            return
+        }
         var device: Device? = null
         _devices.update { map ->
             if (map.containsKey(id)) {
@@ -251,8 +256,22 @@ class DeviceHub(
         device!!.addLink(link)
     }
 
+    /**
+     * Anyone on the network can show up with a new id, and each link holds a thread and a list entry.
+     * The offline go first, then whoever came first; one with a pairing on screen stays until it's answered.
+     */
+    private fun makeRoomForStranger(): Boolean {
+        val strangers = _devices.value.values.filter { !it.state.value.isPaired }
+        if (strangers.size < MAX_STRANGERS) return true
+        val leaving = strangers.filter { it.state.value.pairState == PairState.UNPAIRED }.minByOrNull { it.state.value.isReachable } ?: return false
+        leaving.disconnect()
+        _devices.update { it - leaving.id }
+        return true
+    }
+
     private companion object {
         const val TAG = "DeviceHub"
+        const val MAX_STRANGERS = 8
         const val DEFAULT_PORT = 1716
         const val CABLE_SETTLE_MS = 300L
         const val FRESH_CABLE_MS = 10_000L

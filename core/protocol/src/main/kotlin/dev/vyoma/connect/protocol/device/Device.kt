@@ -7,6 +7,7 @@ import dev.vyoma.connect.protocol.PacketTypes
 import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.protocol.crypto.Certificates
 import dev.vyoma.connect.protocol.link.DeviceLink
+import dev.vyoma.connect.protocol.link.MAX_PACKET_BYTES
 import dev.vyoma.connect.protocol.link.PayloadSource
 import dev.vyoma.connect.protocol.link.TransportKind
 import dev.vyoma.connect.protocol.packet
@@ -97,6 +98,8 @@ class Device internal constructor(
     val state: StateFlow<DeviceState> = _state.asStateFlow()
 
     private var pairingTimestamp: Long? = null
+    /** Whose code is on screen while a pairing is pending: the only certificate it can end up trusting. */
+    private var pairingCertificate: X509Certificate? = null
     private var pairTimeout: Job? = null
     private var pluginScope: CoroutineScope? = null
     private val plugins = mutableMapOf<String, Plugin>()
@@ -112,7 +115,30 @@ class Device internal constructor(
 
     // ---- links ----------------------------------------------------------------------------
 
+    /**
+     * All of a device's links show one certificate, so what the user checked while pairing is what
+     * gets pinned and obeyed. Device ids are public (they're broadcast), so anyone can dial us under
+     * this one with their own certificate.
+     */
+    private fun admits(link: DeviceLink): Boolean {
+        env.trustStore.get(id)?.let { return it.certificate == link.peerCertificate }
+        pairingCertificate?.let { return it == link.peerCertificate }
+        val current = links.firstOrNull { !it.isClosed }?.peerCertificate ?: return true
+        if (current != link.peerCertificate) {
+            // Nobody is trusted yet, so the newest wins as in any reconnect: refusing here would let
+            // a stranger hold a PC's id and keep the real one out.
+            links.forEach { it.close() }
+            links.clear()
+        }
+        return true
+    }
+
     internal suspend fun addLink(link: DeviceLink) = withContext(serial) {
+        if (!admits(link)) {
+            VLog.w(TAG, "$name: refused a link with a different certificate")
+            link.close()
+            return@withContext
+        }
         // A reconnect on the same transport means the old socket is dying or half-open. Close it after
         // a short grace period rather than at once: when both sides dial together the peer has often
         // just sent its first packets (battery, sinks) down the old one.
@@ -139,7 +165,9 @@ class Device internal constructor(
         }
         reloadPlugins()
         env.scope.launch {
-            link.receive { packet -> withContext(serial) { handle(packet, link) } }
+            link.receive(limit = { if (isPaired()) MAX_PACKET_BYTES else UNPAIRED_PACKET_BYTES }) { packet ->
+                withContext(serial) { handle(packet, link) }
+            }
             withContext(serial) { onLinkClosed(link) }
         }
     }
@@ -279,12 +307,28 @@ class Device internal constructor(
                     if (send(packet(PacketTypes.PAIR) { put("pair", true) })) becomePaired()
                     return
                 }
-                pairingTimestamp = packet.long("timestamp")
+                val timestamp = packet.long("timestamp")
+                if (!timestampAllowed(timestamp)) {
+                    VLog.w(TAG, "$name: refused a pairing request: its clock is off, or it gave no time")
+                    send(packet(PacketTypes.PAIR) { put("pair", false) })
+                    setPairState(PairState.UNPAIRED)
+                    return
+                }
+                pairingTimestamp = timestamp
                 setPairState(PairState.REQUESTED_BY_PEER)
                 armPairTimeout()
                 env.onPairRequest(this)
             }
         }
+    }
+
+    /**
+     * The time goes into the code the user compares. Left free, a sender could try timestamps until
+     * the 8 characters match what it needs. Protocol 7 has no timestamp at all.
+     */
+    private fun timestampAllowed(timestamp: Long?): Boolean {
+        if (timestamp == null) return _state.value.identity.protocolVersion < 8
+        return kotlin.math.abs(System.currentTimeMillis() / 1000 - timestamp) <= PAIR_CLOCK_SKEW_S
     }
 
     /** A pair request signed by the key of the PC this peer claims to belong to (see [CompanionProof]). */
@@ -299,7 +343,7 @@ class Device internal constructor(
     }
 
     private suspend fun becomePaired() {
-        val cert = links.firstOrNull()?.peerCertificate ?: return
+        val cert = pairingCertificate ?: links.firstOrNull()?.peerCertificate ?: return
         val identity = _state.value.identity
         val link = links.firstOrNull()
         env.trustStore.put(
@@ -319,8 +363,10 @@ class Device internal constructor(
     private fun setPairState(state: PairState) {
         pairTimeout?.cancel()
         if (state != PairState.REQUESTED_BY_PEER && state != PairState.REQUESTED_BY_US) pairingTimestamp = null
-        val key = if (state == PairState.REQUESTED_BY_US || state == PairState.REQUESTED_BY_PEER) {
-            links.firstOrNull()?.let { Certificates.verificationKey(env.localCertificate, it.peerCertificate, pairingTimestamp) }
+        val pending = state == PairState.REQUESTED_BY_US || state == PairState.REQUESTED_BY_PEER
+        pairingCertificate = if (pending) links.firstOrNull { !it.isClosed }?.peerCertificate else null
+        val key = if (pending) {
+            pairingCertificate?.let { Certificates.verificationKey(env.localCertificate, it, pairingTimestamp) }
         } else {
             null
         }
@@ -346,6 +392,8 @@ class Device internal constructor(
     private var warnedUnpaired = false
 
     private suspend fun handle(packet: NetworkPacket, link: DeviceLink) {
+        // Read just before a refused or replaced link was closed.
+        if (link.isClosed) return
         when {
             packet.type == PacketTypes.PAIR -> handlePair(packet)
             // v8 peers may resend identity; capabilities can change (plugins toggled on the desktop).
@@ -416,6 +464,9 @@ class Device internal constructor(
     private companion object {
         const val TAG = "Device"
         const val PAIR_TIMEOUT_MS = 30_000L
+        const val PAIR_CLOCK_SKEW_S = 1800L
+        /** Before pairing a peer has nothing to say that takes more; anyone can get this far. */
+        const val UNPAIRED_PACKET_BYTES = 64 * 1024
         const val LINGER_MS = 10_000L
         const val REPLACED_LINK_GRACE_MS = 2_000L
     }

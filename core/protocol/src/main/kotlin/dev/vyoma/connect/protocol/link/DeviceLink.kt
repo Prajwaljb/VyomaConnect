@@ -55,11 +55,11 @@ class DeviceLink internal constructor(
         }
     }
 
-    /** Blocks (on IO) reading packets until the link drops. */
-    suspend fun receive(onPacket: suspend (NetworkPacket) -> Unit) = withContext(Dispatchers.IO) {
+    /** Blocks (on IO) reading packets until the link drops. A packet over [limit] bytes drops it. */
+    suspend fun receive(limit: () -> Int = { MAX_PACKET_BYTES }, onPacket: suspend (NetworkPacket) -> Unit) = withContext(Dispatchers.IO) {
         try {
             while (!closed.get()) {
-                val line = input.readPacketLine() ?: break
+                val line = input.readPacketLine(limit()) ?: break
                 if (line.isBlank()) continue
                 val packet = try {
                     NetworkPacket.parse(line)
