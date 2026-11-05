@@ -64,6 +64,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import dev.vyoma.connect.platform.AppLock
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -274,6 +275,7 @@ private sealed interface Slot {
  */
 @Composable
 fun RuleEditorScreen(vm: AppViewModel, ruleId: String?, onBack: () -> Unit) {
+    val context = LocalContext.current
     val status = LocalStatus.current
     val original = remember(ruleId) { ruleId?.takeUnless { it.startsWith(SUGGESTION) }?.let(vm::rule) }
     // A suggestion opened from the list: a new rule, filled in.
@@ -426,8 +428,14 @@ fun RuleEditorScreen(vm: AppViewModel, ruleId: String?, onBack: () -> Unit) {
                     title = "Test now", subtitle = "Runs the actions once, right away",
                     icon = Icons.Rounded.PlayArrow, iconTint = SystemColor.GREEN.color,
                     onClick = {
-                        draft()?.let(vm::testRule)
-                        status.show("Running ${actions.size} ${if (actions.size == 1) "action" else "actions"}", haptic = false)
+                        draft()?.let { rule ->
+                            val run = {
+                                vm.testRule(rule)
+                                status.show("Running ${actions.size} ${if (actions.size == 1) "action" else "actions"}", haptic = false)
+                            }
+                            // Run by hand, so it asks as those actions do anywhere else.
+                            if (vm.ruleNeedsFingerprint(rule)) AppLock.askForCommand(context, "To test this rule", run) else run()
+                        }
                     },
                 )
             }
@@ -719,6 +727,7 @@ private fun TuneDialog(vm: AppViewModel, value: Any, onDismiss: () -> Unit, onDo
         }
         is Action.RunCommand -> {
             val commands = remember { vm.pcCommands() }
+            val context = LocalContext.current
             GlassDialog(
                 onDismissRequest = onDismiss,
                 title = { Text("Run a PC command") },
@@ -736,7 +745,11 @@ private fun TuneDialog(vm: AppViewModel, value: Any, onDismiss: () -> Unit, onDo
                                     showDivider = i < commands.lastIndex,
                                     haptic = Haptic.Select,
                                     trailing = if (cmd.key == value.key) ({ Icon(Icons.Rounded.Check, "Chosen") }) else null,
-                                    onClick = { onDone(Action.RunCommand(cmd.key, cmd.name)) },
+                                    onClick = {
+                                        // A rule runs unattended, so a command that asks for the fingerprint asks here instead.
+                                        val choose = { onDone(Action.RunCommand(cmd.key, cmd.name)) }
+                                        if (vm.pcCommandLocked(cmd.key)) AppLock.askForCommand(context, "To use ${cmd.name} in a rule", choose) else choose()
+                                    },
                                 )
                             }
                         }

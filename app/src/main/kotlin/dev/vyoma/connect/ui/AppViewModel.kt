@@ -1,6 +1,7 @@
 package dev.vyoma.connect.ui
 
 import dev.vyoma.connect.data.LiteGlass
+import dev.vyoma.connect.automation.Action
 import dev.vyoma.connect.automation.Rule
 import dev.vyoma.connect.automation.RunEntry
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
@@ -27,6 +28,7 @@ import dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.LockPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.MprisPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.PingPlugin
+import dev.vyoma.connect.platform.AppLock
 import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.SystemVolumePlugin
 import dev.vyoma.connect.service.LinkService
@@ -241,6 +243,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var ruleArrival: String? = null
     fun deleteRule(id: String) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.automation.store.delete(id) }
     fun setRuleEnabled(id: String, enabled: Boolean) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.automation.store.setEnabled(id, enabled) }
+    fun ruleNeedsFingerprint(rule: Rule) = rule.actions.any {
+        it == Action.PcScreenshot || it == Action.SleepPc || (it is Action.RunCommand && pcCommandLocked(it.key))
+    }
     fun testRule(rule: Rule) = viewModelScope.launch { container.automation.test(rule) }
 
     /** (address, name) of the phone's paired Bluetooth devices. The demo's are made up. */
@@ -256,6 +261,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** The connected PC's commands, for a "Run command" action. */
     fun pcCommands(): List<dev.vyoma.connect.protocol.plugin.builtin.RemoteCommand> =
         dev.vyoma.connect.service.Commands.primary(container)?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands?.value.orEmpty()
+    /** Whether the connected PC's command [key] asks for the fingerprint when run by hand. */
+    fun pcCommandLocked(key: String): Boolean = dev.vyoma.connect.service.Commands.primary(container)?.let {
+        AppLock.commandLocked(getApplication(), it.id, key)
+    } == true
     /** Whether a companion has ever paired (walk-away rules and some actions need it). */
     fun hasCompanion(): Boolean = container.hub.value?.devices?.value?.values?.any { it.state.value.isCompanion && it.state.value.isPaired } == true
 
