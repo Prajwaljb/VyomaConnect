@@ -43,7 +43,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   fill AND name when on ("Locked", "Muted"): the user wants the state in words (a judge suggested constant labels; rejected).
 - Layers (iOS 26 rule, judge-reviewed 2026-10-31): full liquid glass (lens, band, rolled edge, full tilt sway) only on the
   floating layer (header, title bubble, tab bar, touchpad button) and controls while held. Content cards are a thinner
-  pane: band 0.15 dark / 0.35 light, no rolled shade, highlights sway 40% (`SpecularLight.content`). Filled raised
+  pane: band 0.15 dark / 0.35 light, no rolled shade, highlights sway as much as chrome (`SpecularLight.content`; was 40%, felt dead). Filled raised
   controls: band 0.18, lit rim 0.35, band ≤3 dp under 64 dp. List IconBadges: edge 0.35/0.08 (hero glyph keeps 0.75).
 - Density: Clipboard (a pushed page now) puts history first (Send in the header, setup row at the end); Settings
   subtitles are one line; Appearance (accent + theme) and Effects (glow, lighter glass) are separate cards; commands
@@ -86,7 +86,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Anything pressable on a card (buttons, chips, keys, tiles, PillButton): `Modifier.glassRaised(shape, color?)`, a plain
   even fill plus a 0.9 dp specular hairline that follows the phone's tilt (a FIXED painted rim read as fake; the user
   asked for it back once it moved like iOS 26); pass `color` for accent/tinted or for chips over artwork (dark translucent).
-- Light: `SpecularLight.angle` (Light.kt) is where the light is on screen (270° = straight up, centred, at rest: the user's call; tilt sways it up to ±45°, soft limit, gain 1.0 (1.7 was too sensitive, user 2026-11-05; 2.2 before); the user found ±35° could never bring it to the centre), driven by the
+- Light: `SpecularLight.angle` (Light.kt) is where the light is on screen (270° = straight up, centred, at rest: the user's call; tilt sways it up to ±45°, soft limit, gain 0.7, cards the SAME as chrome (user 2026-11-05: 1.7 too lively on buttons, cards at 40% felt dead; one light for all); the user found ±35° could never bring it to the centre), driven by the
   gravity sensor only while the UI is started (`TrackSpecularLight` in `VyomaTheme`), smoothed, 1.5° dead band. Every
   specular edge uses it: `specularRim(...)` (chrome stroke, raised controls) and the AGSL `light` uniform (lens rims).
 - Dark sides (2026-11-05, user-approved approach): the original rim stays exactly as is; `RimShadow` adds a separate
@@ -96,8 +96,13 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   show on black). Facing the light (top, and bottom by internal reflection) the reflected light wins instead.
   Measured: light spans ~±50° round top/bottom, dark ~±30° round side-on, barely overlapping; dark falls 1, .66,
   .5, .23, .1 every 10° from side-on (`s^10`); depth 25–55% over bright backgrounds, 1–2 px wide. Strength: cards
-  0.5 dark / 0.35 light, raised 0.15 / 0.3 (filled 0.25), chrome 0.12 / 0.4, knobs 0.15 / 0.25 (dark-mode
-  chrome/raised went darker than the page at 0.55/0.45 and circles looked cut, user 2026-11-05). It does NOT
+  0.5 dark / 0.35 light, raised 0.45 / 0.3 (filled 0.25), chrome 0.55 / 0.4, knobs 0.4 / 0.25. It is drawn UNDER the
+  element's own fill, band and highlights (cards/raised: before the fill; chrome: right over the lens output;
+  drops: before RimLight), so it darkens only what shows through from behind: gone over a black page, visible
+  over bright content. Apple (WWDC25 "Meet Liquid Glass": the glass adapts to what's behind it; their renders
+  in LiquidGlassEx/Screenshot_*0919*, *0920* show the dark line only on an edge over light content, none over
+  blue sky). Drawn OVER the glass it was a fixed line on both sides at all times (user: "hardcoded", 2026-11-05),
+  and over black it went darker than the page so circles looked cut. It does NOT
   follow the light (user, 2026-11-05): fixed to the element's screen-sideways edges (|n.x|^10); the tilted
   light only covers it (k *= 1 − the rim light's profile). Card/raised rim light fades out mid-corner (f^3.5),
   leaving a neutral gap before the dark. The lens's always-on light (its 0.25 rim floor and 0.3 gloss floor) is also off in that same side-on band
