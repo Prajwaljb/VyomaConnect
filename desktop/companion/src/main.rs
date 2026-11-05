@@ -106,7 +106,13 @@ async fn daemon() -> Result<()> {
             if let mdns_sd::ServiceEvent::ServiceResolved(info) = event {
                 let Some(id) = info.get_property_val_str("id").map(str::to_string) else { continue };
                 let Some(ip) = pick_address(info.get_addresses_v4().into_iter().map(IpAddr::V4).collect()) else { continue };
-                s.seen.lock().unwrap().insert(id.clone(), SocketAddr::new(ip, info.get_port()));
+                {
+                    let mut seen = s.seen.lock().unwrap();
+                    if !may_remember(&seen, &id, || s.host.trusted_phones().contains_key(&id)) {
+                        continue;
+                    }
+                    seen.insert(id.clone(), SocketAddr::new(ip, info.get_port()));
+                }
                 dial(&s, &id);
             }
         }
@@ -157,6 +163,12 @@ fn dial_attempt(shared: &Arc<Shared>, id: &str, attempt: u32) {
     });
 }
 
+/// Phones are remembered before they're trusted, so one paired later gets dialled. But anyone on the
+/// network can advertise any number of ids, so that list stops growing once it's full.
+fn may_remember(seen: &HashMap<String, SocketAddr>, id: &str, trusted: impl FnOnce() -> bool) -> bool {
+    seen.len() < MAX_SEEN || seen.contains_key(id) || trusted()
+}
+
 fn identity_packet(shared: &Shared) -> Value {
     packet(
         "kdeconnect.identity",
@@ -173,6 +185,7 @@ fn identity_packet(shared: &Shared) -> Value {
     )
 }
 
+const MAX_SEEN: usize = 64;
 /// The port Vyoma listens on (KDE Connect's).
 const PHONE_PORT: u16 = 1716;
 const TETHER_POLL: Duration = Duration::from_secs(5);
@@ -717,6 +730,17 @@ async fn stream_stats(sender: Sender, lease: Arc<Mutex<Instant>>, media: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strangers_cant_grow_the_list_of_phones_forever() {
+        let addr = SocketAddr::from(([127, 0, 0, 1], 1716));
+        let mut seen: HashMap<String, SocketAddr> = (0..MAX_SEEN - 1).map(|i| (format!("stranger{i}"), addr)).collect();
+        assert!(may_remember(&seen, "new", || false));
+        seen.insert("new".to_string(), addr);
+        assert!(!may_remember(&seen, "another", || false));
+        assert!(may_remember(&seen, "new", || false), "a known one can change address");
+        assert!(may_remember(&seen, "paired", || true));
+    }
 
     #[test]
     fn a_session_lasts_only_as_long_as_its_pairing() {

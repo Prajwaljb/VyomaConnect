@@ -94,13 +94,28 @@ pub async fn connect(addr: SocketAddr, me: &Identity, identity: &Value, phone_id
     Ok(connect_trusted(addr, me, identity, &trusted).await?.1)
 }
 
+/// The copy of our identity that goes out in the clear, before anyone's proved who they are (for a
+/// tethered address, to whatever answers there). Peers take the real one from inside TLS, so this
+/// says only what starts the handshake, not this PC's name or what it can do.
+fn public_hello(identity: &Value) -> Value {
+    let mut hello = identity.clone();
+    let body = &mut hello["body"];
+    body["deviceName"] = "Vyoma companion".into();
+    body["incomingCapabilities"] = serde_json::json!([]);
+    body["outgoingCapabilities"] = serde_json::json!([]);
+    if let Some(body) = body.as_object_mut() {
+        body.remove("vyomaHost");
+    }
+    hello
+}
+
 /// Like [connect], to whichever of the [trusted] phones (id to certificate) answers at [addr];
 /// for an address found without knowing who's there (a USB tethering link).
 pub async fn connect_trusted(addr: SocketAddr, me: &Identity, identity: &Value, trusted: &HashMap<String, Vec<u8>>) -> Result<(String, Link)> {
     let mut tcp = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr)).await.context("connect timed out")??;
     tcp.set_nodelay(true)?;
     keepalive(&tcp);
-    let mut hello = serde_json::to_vec(identity)?;
+    let mut hello = serde_json::to_vec(&public_hello(identity))?;
     hello.push(b'\n');
     tcp.write_all(&hello).await?;
 
@@ -188,5 +203,28 @@ impl ServerCertVerifier for AnyServerCert {
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_clear_copy_of_the_identity_says_little() {
+        let full = packet(
+            "kdeconnect.identity",
+            serde_json::json!({
+                "deviceId": "abc", "deviceName": "my-pc companion", "deviceType": "desktop", "protocolVersion": 8,
+                "incomingCapabilities": ["vyoma.files.get"], "outgoingCapabilities": ["vyoma.stats"], "vyomaHost": "host-id",
+            }),
+        );
+        let hello = public_hello(&full);
+        assert_eq!(hello["body"]["deviceId"], "abc");
+        assert_eq!(hello["body"]["protocolVersion"], 8);
+        let text = hello.to_string();
+        for private in ["my-pc", "vyoma.files.get", "vyoma.stats", "host-id"] {
+            assert!(!text.contains(private), "{private}");
+        }
     }
 }
