@@ -10,6 +10,8 @@ RestartSec=5
 # Idle most of the time; keep it out of the way of interactive work.
 Nice=5
 NoNewPrivileges=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
 
 [Install]
 WantedBy=graphical-session.target

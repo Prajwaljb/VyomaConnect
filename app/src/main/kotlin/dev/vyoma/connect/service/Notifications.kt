@@ -221,9 +221,13 @@ object Notifications {
     )
 
     fun linkReceived(context: Context, from: String, url: String) {
-        val open = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val id = ("url" + url).hashCode()
-        val openPending = PendingIntent.getActivity(context, url.hashCode(), open, PendingIntent.FLAG_IMMUTABLE)
+        // Other schemes would reach whichever app claims them (calls, stores, deep links): those can only be copied.
+        val openPending = if (!LinkService.looksLikeUrl(url)) null else PendingIntent.getActivity(
+            context, url.hashCode(),
+            Intent(Intent.ACTION_VIEW, Uri.parse(url.trim())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
         notify(
             context, id,
             NotificationCompat.Builder(context, CH_RECEIVED)
@@ -232,7 +236,7 @@ object Notifications {
                 .setContentText(url)
                 .setContentIntent(openPending)
                 // Often you want the link somewhere else than the browser: copying it is one tap too.
-                .addAction(0, "Open", openPending)
+                .apply { if (openPending != null) addAction(0, "Open", openPending) }
                 .addAction(0, "Copy", Commands.copyPending(context, url, id))
                 .setAutoCancel(true)
                 .build(),

@@ -447,7 +447,7 @@ pub async fn pointer_session() -> Result<Pointer> {
     let s = session.clone();
     let started = portal.request_on(REMOTE, "Start", move |t| (s.clone(), "", opts([("handle_token", t.to_string().into())]))).await?;
     if let Some(tok) = started.get("restore_token").and_then(|v| String::try_from(v.try_clone().ok()?).ok()) {
-        let _ = std::fs::write(pointer_token_path(), tok);
+        let _ = crate::identity::write_private(&pointer_token_path(), tok.as_bytes());
     }
     let devices: u32 = started.get("devices").and_then(|v| u32::try_from(v.try_clone().ok()?).ok()).unwrap_or(0);
     anyhow::ensure!(devices & 2 != 0, "the PC didn't allow pointer control");
@@ -514,7 +514,7 @@ impl Cast {
         let s = session.clone();
         let started = portal.request_on(REMOTE, "Start", move |t| (s.clone(), "", opts([("handle_token", t.to_string().into())]))).await?;
         if let Some(tok) = started.get("restore_token").and_then(|v| String::try_from(v.try_clone().ok()?).ok()) {
-            let _ = std::fs::write(remote_token_path(), tok);
+            let _ = crate::identity::write_private(&remote_token_path(), tok.as_bytes());
         }
         let devices: u32 = started.get("devices").and_then(|v| u32::try_from(v.try_clone().ok()?).ok()).unwrap_or(0);
         let streams: Vec<(u32, HashMap<String, OwnedValue>)> =
@@ -565,7 +565,7 @@ impl Cast {
         let s = session.clone();
         let started = portal.request("Start", move |t| (s.clone(), "", opts([("handle_token", t.to_string().into())]))).await?;
         if let Some(tok) = started.get("restore_token").and_then(|v| String::try_from(v.try_clone().ok()?).ok()) {
-            let _ = std::fs::write(token_path(), tok);
+            let _ = crate::identity::write_private(&token_path(), tok.as_bytes());
         }
         let streams: Vec<(u32, HashMap<String, OwnedValue>)> =
             started.get("streams").context("no screen was shared")?.try_clone()?.try_into().context("unexpected stream list")?;

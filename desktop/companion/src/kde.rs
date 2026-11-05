@@ -112,6 +112,23 @@ fn ini_value(text: &str, section: &str, key: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// The phone checks these with another implementation entirely, so check with one here too.
+    #[test]
+    fn proofs_verify_with_another_library() {
+        use base64::Engine;
+        use p256::pkcs8::DecodePrivateKey;
+        let pair = rcgen::KeyPair::generate().unwrap();
+        let secret = p256::SecretKey::from_pkcs8_pem(&pair.serialize_pem()).unwrap();
+        // The form kdeconnectd keeps its key in.
+        let sec1 = secret.to_sec1_pem(Default::default()).unwrap();
+        let signing = SigningKey::from(p256::SecretKey::from_sec1_pem(&sec1).unwrap());
+        let host = KdeHost { device_id: String::new(), name: String::new(), signing, config: PathBuf::new() };
+        let proof = base64::engine::general_purpose::STANDARD.decode(host.sign("message")).unwrap();
+        let verifier = ring::signature::UnparsedPublicKey::new(&ring::signature::ECDSA_P256_SHA256_ASN1, pair.public_key_raw());
+        verifier.verify(b"message", &proof).expect("a valid signature");
+        assert!(verifier.verify(b"other message", &proof).is_err());
+    }
+
     #[test]
     fn reads_ini() {
         let t = "[General]\nkeyAlgorithm=EC\nname=vyoma\n[Other]\nname=x\n";

@@ -574,6 +574,7 @@ private fun actionGroups(away: Boolean) = listOf(
 
 @Composable
 private fun PickerDialog(vm: AppViewModel, slot: Slot, away: Boolean, onDismiss: () -> Unit, onPick: (Any) -> Unit) {
+    val context = LocalContext.current
     val groups = when (slot) {
         Slot.When -> triggerGroups(condition = false)
         is Slot.OnlyIf -> triggerGroups(condition = true)
@@ -616,7 +617,11 @@ private fun PickerDialog(vm: AppViewModel, slot: Slot, away: Boolean, onDismiss:
                             showDivider = i < g.items.lastIndex,
                             enabled = !needsCompanion,
                             haptic = Haptic.Select,
-                            onClick = { onPick(item) },
+                            onClick = {
+                                // A rule runs these unattended, and by hand they'd ask: so it asks here.
+                                if (item == Action.PcScreenshot || item == Action.SleepPc) AppLock.ask(context, "To add this to a rule") { onPick(item) }
+                                else onPick(item)
+                            },
                         )
                     }
                 }

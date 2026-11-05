@@ -430,7 +430,7 @@ class LinkService : LifecycleService() {
 
         fun looksLikeUrl(text: String): Boolean {
             val t = text.trim()
-            return !t.contains(' ') && !t.contains('\n') && (t.startsWith("http://") || t.startsWith("https://"))
+            return !t.contains(' ') && !t.contains('\n') && (t.startsWith("http://", ignoreCase = true) || t.startsWith("https://", ignoreCase = true))
         }
     }
 }

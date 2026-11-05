@@ -222,6 +222,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val plugin = companionOf(pcId) ?: return@launch toast(app, "Vyoma's companion isn't running on the PC")
         plugin.handoff().fold(
             onSuccess = { h ->
+                if (!LinkService.looksLikeUrl(h.url)) return@launch toast(app, "No app here can open that link")
                 val open = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(h.positionMs?.let { Handoff.at(h.url, it) } ?: h.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 runCatching { app.startActivity(open) }.onFailure { toast(app, "No app here can open that link") }
             },
@@ -244,7 +245,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteRule(id: String) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.automation.store.delete(id) }
     fun setRuleEnabled(id: String, enabled: Boolean) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.automation.store.setEnabled(id, enabled) }
     fun ruleNeedsFingerprint(rule: Rule) = rule.actions.any {
-        it == Action.PcScreenshot || it == Action.SleepPc || (it is Action.RunCommand && pcCommandLocked(it.key))
+        ((it == Action.PcScreenshot || it == Action.SleepPc) && AppLock.enabled(getApplication())) ||
+            (it is Action.RunCommand && pcCommandLocked(it.key))
     }
     fun testRule(rule: Rule) = viewModelScope.launch { container.automation.test(rule) }
 
