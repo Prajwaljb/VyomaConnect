@@ -137,6 +137,28 @@ class LanBackend(
         }
     }
 
+    /**
+     * The same link as [connectTo], through a local [port] that carries it over another medium
+     * ([transport], e.g. a Bluetooth tunnel). TLS stays end to end; such a link has no payload sockets.
+     */
+    fun connectTunnel(port: Int, expectedId: String, transport: TransportKind) {
+        if (!connecting.add(expectedId)) return
+        scope.launch(Dispatchers.IO) {
+            try {
+                connectOutgoing(InetAddress.getLoopbackAddress(), port, null, expectedId, transport)
+            } catch (e: Exception) {
+                VLog.d(TAG, "$transport tunnel to $expectedId failed: ${e.message}")
+            } finally {
+                connecting.remove(expectedId)
+            }
+        }
+    }
+
+    /** The other way round: a peer dials us through [plain], which carries it over [transport]. */
+    fun acceptTunnel(plain: Socket, transport: TransportKind) {
+        scope.launch(Dispatchers.IO) { acceptOn(plain, transport) }
+    }
+
     private fun udpLoop(udp: DatagramSocket) {
         val buffer = ByteArray(64 * 1024)
         while (scope.isActive && !udp.isClosed) {
@@ -162,12 +184,12 @@ class LanBackend(
         }
     }
 
-    private suspend fun connectOutgoing(address: InetAddress, port: Int, peer: DeviceIdentity?, expectedId: String?) {
+    private suspend fun connectOutgoing(address: InetAddress, port: Int, peer: DeviceIdentity?, expectedId: String?, tunnel: TransportKind? = null) {
         val plain = Socket()
         try {
             config.route(plain, address)
             plain.connect(InetSocketAddress(address, port), CONNECT_TIMEOUT_MS)
-            if (expectedId != null && config.refuses(expectedId, config.transportOf(plain.localAddress, plain.inetAddress), false)) {
+            if (expectedId != null && config.refuses(expectedId, tunnel ?: config.transportOf(plain.localAddress, plain.inetAddress), false)) {
                 throw ProtocolException("already linked over a better transport")
             }
             config.tuneSocket(plain)
@@ -178,7 +200,7 @@ class LanBackend(
             }
             // We opened the TCP connection, so we are the TLS server.
             val ssl = tls.wrap(plain, asServer = true)
-            finishHandshake(ssl, preTlsIdentity = peer)
+            finishHandshake(ssl, preTlsIdentity = peer, tunnel = tunnel)
         } catch (e: Exception) {
             runCatching { plain.close() }
             throw e
@@ -193,32 +215,38 @@ class LanBackend(
                 if (!server.isClosed) VLog.w(TAG, "accept failed", e)
                 break
             }
-            scope.launch(Dispatchers.IO) {
-                try {
-                    config.tuneSocket(plain)
-                    plain.soTimeout = HANDSHAKE_TIMEOUT_MS
-                    val line = plain.getInputStream().readPacketLine(limit = 64 * 1024)
-                        ?: throw IOException("closed before identity")
-                    val identity = DeviceIdentity.fromPacket(NetworkPacket.parse(line))
-                    if (identity.deviceId == localIdentity().deviceId) throw ProtocolException("Connected to self")
-                    if (config.listenUdp && isLocalAddress(plain.inetAddress)) throw ProtocolException("Peer runs on this device")
-                    if (identity.protocolVersion < DeviceIdentity.MIN_PROTOCOL_VERSION) {
-                        throw ProtocolException("Unsupported protocol ${identity.protocolVersion}")
-                    }
-                    if (config.refuses(identity.deviceId, config.transportOf(plain.localAddress, plain.inetAddress), true)) {
-                        throw ProtocolException("already linked over a better transport")
-                    }
-                    val ssl = tls.wrap(plain, asServer = false)
-                    finishHandshake(ssl, identity)
-                } catch (e: Exception) {
-                    VLog.d(TAG, "incoming from ${plain.inetAddress.hostAddress} rejected: ${e.message}")
-                    runCatching { plain.close() }
-                }
-            }
+            scope.launch(Dispatchers.IO) { acceptOn(plain, null) }
         }
     }
 
-    private suspend fun finishHandshake(ssl: SSLSocket, preTlsIdentity: DeviceIdentity?) {
+    private suspend fun acceptOn(plain: Socket, tunnel: TransportKind?) {
+        try {
+            config.tuneSocket(plain)
+            plain.soTimeout = HANDSHAKE_TIMEOUT_MS
+            val line = plain.getInputStream().readPacketLine(limit = 64 * 1024)
+                ?: throw IOException("closed before identity")
+            val identity = DeviceIdentity.fromPacket(NetworkPacket.parse(line))
+            if (identity.deviceId == localIdentity().deviceId) throw ProtocolException("Connected to self")
+            // Another KDE Connect app on this phone. A companion's call through an adb forward also
+            // comes from loopback; TLS and its pin still decide whether it gets anywhere.
+            if (tunnel == null && config.listenUdp && identity.companionOf == null && isLocalAddress(plain.inetAddress)) {
+                throw ProtocolException("Peer runs on this device")
+            }
+            if (identity.protocolVersion < DeviceIdentity.MIN_PROTOCOL_VERSION) {
+                throw ProtocolException("Unsupported protocol ${identity.protocolVersion}")
+            }
+            if (config.refuses(identity.deviceId, tunnel ?: config.transportOf(plain.localAddress, plain.inetAddress), true)) {
+                throw ProtocolException("already linked over a better transport")
+            }
+            val ssl = tls.wrap(plain, asServer = false)
+            finishHandshake(ssl, identity, tunnel)
+        } catch (e: Exception) {
+            VLog.d(TAG, "incoming from ${plain.inetAddress.hostAddress} rejected: ${e.message}")
+            runCatching { plain.close() }
+        }
+    }
+
+    private suspend fun finishHandshake(ssl: SSLSocket, preTlsIdentity: DeviceIdentity?, tunnel: TransportKind? = null) {
         ssl.startHandshake()
         val peerCert = ssl.session.peerCertificates.first() as X509Certificate
         val certId = Certificates.commonName(peerCert)
@@ -248,7 +276,7 @@ class LanBackend(
         }
         ssl.soTimeout = 0
         VLog.i(TAG, "link up: ${identity.deviceName} (${identity.deviceId}) v${identity.protocolVersion} via ${ssl.inetAddress.hostAddress}")
-        onLink(DeviceLink(identity, peerCert, config.transportOf(ssl.localAddress, ssl.inetAddress), ssl, payloads))
+        onLink(DeviceLink(identity, peerCert, tunnel ?: config.transportOf(ssl.localAddress, ssl.inetAddress), ssl, payloads.takeIf { tunnel == null }))
     }
 
     private fun isLocalAddress(address: InetAddress): Boolean =

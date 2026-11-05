@@ -89,7 +89,7 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, f
     info!("{name}: casting the screen at {w}x{h}");
     let announce = link::packet("vyoma.screen", json!({ "codec": "h264", "framing": "avc4", "width": w, "height": h, "control": control.is_some() }));
     // The phone's touches, as the pointer on this screen, while the cast runs.
-    let touching = control.map(|p| tokio::spawn(p.follow(inputs)));
+    let touching = control.map(|p| tokio::spawn(p.follow(inputs, sender.clone())));
     let result = payload::offer_stream(sender, me, pinned, announce, video).await;
     if let Some(t) = touching {
         t.abort();
@@ -175,7 +175,7 @@ fn encoder(source: &str, fd: Option<zvariant::OwnedFd>, w: i32, h: i32, fps: u32
 /// remote-desktop session: x, y are 0..1 across the picture. Kinds: "click" and "right" (a tap,
 /// a long press), "down" / "move" / "up" (a drag with the left button), "scroll" (dx, dy in
 /// pixels of smooth scrolling) and "scrollend".
-struct Pointer {
+pub struct Pointer {
     conn: Connection,
     session: OwnedObjectPath,
     node: u32,
@@ -183,7 +183,7 @@ struct Pointer {
 }
 
 impl Pointer {
-    async fn follow(self, mut inputs: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>) {
+    async fn follow(self, mut inputs: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>, sender: Sender) {
         while let Some(mut i) = inputs.recv().await {
             // Behind? Only the newest of a run of moves matters.
             while i["kind"] == "move" {
@@ -199,6 +199,10 @@ impl Pointer {
             }
             if let Err(e) = self.perform(&i).await {
                 tracing::debug!("pointer: {e:#}");
+                // Text that didn't all arrive: the phone's field no longer matches, so it starts afresh.
+                if i["kind"] == "text" {
+                    let _ = sender.send(&link::packet("vyoma.paste.ready", json!({ "error": format!("{e:#}") }))).await;
+                }
             }
         }
     }
@@ -241,8 +245,37 @@ impl Pointer {
         self.key(code, false).await
     }
 
-    /// One typed character: the key that types it in the desktop's layout, with Shift if that's
-    /// how it's reached; a character no key types (emoji, other scripts) goes as a keysym.
+    /// Typed text: each character by the key that types it, and what no key types (emoji, other
+    /// scripts) pasted, in order.
+    async fn type_text(&self, text: &str) -> Result<()> {
+        let mut unkeyed = String::new();
+        for c in text.chars() {
+            if c != '\n' && !crate::mirror::layout().keys.contains_key(&(char_keysym(c) as u32)) {
+                unkeyed.push(c);
+                continue;
+            }
+            self.paste(&mut unkeyed).await?;
+            self.type_char(c).await?;
+        }
+        self.paste(&mut unkeyed).await
+    }
+
+    async fn paste(&self, text: &mut String) -> Result<()> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        crate::paste::put(text).await?;
+        text.clear();
+        let Some(v) = keycode("v") else { return Ok(()) };
+        self.key(KEY_LEFTCTRL, true).await?;
+        self.tap(v).await?;
+        self.key(KEY_LEFTCTRL, false).await?;
+        // The app fetches the text on its own time; a key sent now could land before it.
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        Ok(())
+    }
+
+    /// One character by the key that types it in the desktop's layout, with Shift if that's how it's reached.
     async fn type_char(&self, c: char) -> Result<()> {
         if c == '\n' {
             return self.tap(KEY_ENTER).await;
@@ -259,15 +292,26 @@ impl Pointer {
                 }
                 Ok(())
             }
-            None => {
-                self.call("NotifyKeyboardKeysym", &(&self.session, opts([]), sym, 1u32)).await?;
-                self.call("NotifyKeyboardKeysym", &(&self.session, opts([]), sym, 0u32)).await
-            }
+            None => Ok(()),
         }
     }
 
-    async fn button(&self, button: i32, down: bool) -> Result<()> {
+    pub async fn button(&self, button: i32, down: bool) -> Result<()> {
         self.call("NotifyPointerButton", &(&self.session, opts([]), button, down as u32)).await
+    }
+
+    /// The touchpad's moves (pointer.rs): by a distance, not to a place.
+    pub async fn relative(&self, dx: f64, dy: f64) -> Result<()> {
+        self.call_fast("NotifyPointerMotion", &(&self.session, opts([]), dx, dy)).await
+    }
+
+    pub async fn axis(&self, dx: f64, dy: f64) -> Result<()> {
+        self.call_fast("NotifyPointerAxis", &(&self.session, opts([]), dx, dy)).await
+    }
+
+    /// Returns once the portal has dealt with the moves before it.
+    pub async fn settle(&self) -> Result<()> {
+        self.call("NotifyPointerMotion", &(&self.session, opts([]), 0.0f64, 0.0f64)).await
     }
 
     async fn perform(&self, i: &serde_json::Value) -> Result<()> {
@@ -293,10 +337,8 @@ impl Pointer {
                 self.call_fast("NotifyPointerAxis", &(&self.session, opts([]), dx, dy)).await
             }
             "text" => {
-                for c in i["text"].as_str().unwrap_or("").chars().take(4096) {
-                    self.type_char(c).await?;
-                }
-                Ok(())
+                let text: String = i["text"].as_str().unwrap_or("").chars().take(4096).collect();
+                self.type_text(&text).await
             }
             "key" => {
                 let name = i["key"].as_str().unwrap_or("");
@@ -373,6 +415,43 @@ struct Cast {
     size: Option<(i32, i32)>,
     /// A remote-desktop session: the phone's touches can work the pointer on this screen.
     control: Option<OwnedObjectPath>,
+}
+
+/// A session for the pointer alone, no screen: Plasma asks once, then its own token reopens it.
+pub async fn pointer_session() -> Result<Pointer> {
+    let conn = Connection::session().await.context("no session bus")?;
+    let portal = Portal::new(&conn)?;
+    let created = portal
+        .request_on(REMOTE, "CreateSession", |t| (opts([("handle_token", t.to_string().into()), ("session_handle_token", "vyomapointer".into())]),))
+        .await?;
+    let session: OwnedObjectPath = created
+        .get("session_handle")
+        .and_then(|v| String::try_from(v.try_clone().ok()?).ok())
+        .and_then(|s| OwnedObjectPath::try_from(s).ok())
+        .context("the portal made no session")?;
+    let token = std::fs::read_to_string(pointer_token_path()).ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    let s = session.clone();
+    portal
+        .request_on(REMOTE, "SelectDevices", move |t| {
+            let mut o = opts([
+                ("handle_token", t.to_string().into()),
+                ("types", Value::U32(2)), // pointer
+                ("persist_mode", Value::U32(2)),
+            ]);
+            if let Some(tok) = &token {
+                o.insert("restore_token", tok.clone().into());
+            }
+            (s.clone(), o)
+        })
+        .await?;
+    let s = session.clone();
+    let started = portal.request_on(REMOTE, "Start", move |t| (s.clone(), "", opts([("handle_token", t.to_string().into())]))).await?;
+    if let Some(tok) = started.get("restore_token").and_then(|v| String::try_from(v.try_clone().ok()?).ok()) {
+        let _ = std::fs::write(pointer_token_path(), tok);
+    }
+    let devices: u32 = started.get("devices").and_then(|v| u32::try_from(v.try_clone().ok()?).ok()).unwrap_or(0);
+    anyhow::ensure!(devices & 2 != 0, "the PC didn't allow pointer control");
+    Ok(Pointer { conn, session, node: 0, size: (0, 0) })
 }
 
 impl Cast {
@@ -508,6 +587,10 @@ fn opts<const N: usize>(entries: [(&'static str, Value<'static>); N]) -> HashMap
 
 fn remote_token_path() -> std::path::PathBuf {
     crate::identity::dir().join("remotedesktop-token")
+}
+
+fn pointer_token_path() -> std::path::PathBuf {
+    crate::identity::dir().join("pointer-token")
 }
 
 fn token_path() -> std::path::PathBuf {

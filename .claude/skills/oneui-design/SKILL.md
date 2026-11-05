@@ -50,6 +50,13 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   are one "Commands" row in PC details opening the sheet; the fingerprint is one line until tapped.
 - PC status card: battery as an 80 dp hero ring (7 dp stroke, the only exception to 6 dp) + CPU/Memory/GPU/Temp as a
   2×2 of `Meter`s (label, `Reading`, 6 dp capsule bar). Never 5 equal gauges in a row (user: "5 in a row isn't nice").
+- A press spreads (user, 2026-11-05: "the one being pressed dips, others dip lesser and lesser based on distance"): `PressGroup`
+  in Motion.kt. The innermost pressed element takes the full dip; every other in its group takes `0.55 * (1 - d/220 dp)^1.5` of
+  it, d = finger to the nearest point of that element, so it holds across wide rows; a row around a pressed button counts as a neighbour.
+  One group per `glassCard`; slices (`cardSegment`) share the page's (CollapsingHeaderScaffold's list); floating sets take
+  `Modifier.pressGroup()` (Home tiles, chip rows, capture strip, Send tiles, menu items). Touchpad keys and Presenter controls have no group on purpose.
+- Text on clear glass panes (dialogs, menu titles) is full strength, never `onSurfaceVariant` (user, 2026-11-05: grey was hard to read over the colours behind); `GlassDialog` maps it to `onSurface` for everything inside, so size carries the hierarchy.
+- Status bubble: a 48 dp capsule that grows downwards to 4 lines between the header's buttons (24 dp corners, so one line stays a capsule), held longer by length (66 ms a character past 24, max 6 s). Never cut a message off with an ellipsis at one line.
 - Touch, everywhere: `pressable` defaults to `PressAuto` (every edge moves 3 dp in, whatever the size) and a finger glow
   (white in dark, navy shade in light) on anything that dips. Order: `pressable` BEFORE the shape/glass modifiers so the
   glass squishes. Dialog actions are `DialogButton` (never Material TextButton); switch rows toggle on the whole row with
@@ -173,13 +180,16 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   Menus drain towards their element (`MENU_BACK_PEEK`), dialogs sink (`BACK_PEEK`). No plain `BackHandler` for UI.
   A cancelled swipe rewinds by SEEKING back to 0, then `snapTo(currentState)`; never `animateTo(currentState)`:
   that turns the half-done pop into a push and the page underneath bounced back into view for a few frames.
+  z = stack depth (`targetContentZIndex = order(target)`), both ways: AnimatedContent keeps the z a page entered with, so a
+  fixed -1 on pop left a page you'd come back to level with its parent, and swiping from it drew the parent over it, cut at 3/4 width
+  (hidden on long drags: test a SHORT hold, right after coming back). TabsRoot composes Home when a swipe starts, else it's black for 800 ms.
 - Presenter (`PresenterScreen`, from the touchpad header and the touchpad button's long-press menu): Next is the biggest
   target but CLEAR glass with a coloured arrow: a filled panel that size lights up the speaker in a dark room. Keeps the
   screen on; volume keys change slides (`HardwareKeys`).
 - Long-press menus: `MenuHost` (wraps the app in MainActivity) + `LocalMenu.current.show(boundsInRoot, items, title)`,
   triggered from `liquidPress(onLongClick)`. Drawn IN the app's window (a Popup is a separate window: it can't see the
   page, so it was an opaque slab the user called broken): while open the app records into a backdrop and the menu is
-  `glassChrome(blur = 13.dp, bevel = 16.dp)` (blur above the tab bar's 6 so its text reads over a busy page), 24 dp
+  `glassChrome(blur = 5.dp, bevel = 16.dp)` (a little above the bars' so its text reads over a busy page), 24 dp
   corners, 35% black scrim, tap outside or Back closes. It pours out of the tile's own rect (width `leading()`,
   height `jelly()`), items fade in past ~55% formed, and flows back in on close. Placement: above the tile if it fits,
   else below, else the roomier side, always inside the system bars. The lens takes the shape's corner radius from its
@@ -436,7 +446,7 @@ Short, friendly, specific ("Connected via Wi-Fi", "Make sure this code matches o
 
 ## Dialogs are liquid glass
 `GlassDialog` under a `MenuHost` registers a `HostedDialog`; the host draws it over the page recording with
-`glassChrome` (blur 18, bevel 16, 28 dp corners), dimmed like menus, rising on a soft spring and fading out after
+`glassChrome` (blur 7, bevel 16, 28 dp corners), dimmed like menus, rising on a soft spring and fading out after
 dismissal. Outside a MenuHost (small activities) it falls back to the opaque slab in a Dialog window.
 
 ## Morphing menus follow a changed element
@@ -473,7 +483,7 @@ until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played ou
   faces the light and opposite, so the rim reads as a brighter, still coloured band (iOS tiles over blue: bright cyan rim).
 - Blur: LOW on bars and buttons, content stays legible and the rim mirrors it (Safari's search pill shows the building's
   lines sharp; iOS Music shows the art and mirrored text): bars/buttons 1.5 dp, header bubble 2.5 dp, at HALF resolution
-  (`CHROME_RES` 0.5; a quarter turned content to mush). Menus 13 dp, dialogs 18 dp stay heavy, as Apple's menus.
+  (`CHROME_RES` 0.5; a quarter turned content to mush). Menus 5 dp, dialogs 7 dp (user 2026-11-05: 13 and 18 read as the old tech next to the clear bars).
 - Shadows follow the tilt light: every shadow is offset by `SpecularLight.cast(length, light)`, straight away from
   the light (straight down at rest, as far across as down at the 45 deg limit). Chrome, knobs and lifted drops use
   `angle`; cards and raised chips `content` (sways 40%). Read in the draw phase only.
@@ -509,9 +519,10 @@ until the page has slid into place (`PAGE_SETTLE_MS`), else the bubble played ou
   `GlassDialog` takes it (`takeAnchor()`, valid 1 s) as `HostedDialog.from`. The card starts at the row's bounds and
   18 dp corners, its size and centre spring out to the dialog's, and it drains back into the row on dismiss. A
   dialog no row opened rises as before.
-- Press glow spreads into the card: inside a `glassCard` (ModifierLocal `InGlassCard`) `PressScaleNode` draws its
-  radial unclipped, reach 0.7 x the element's longer side (56..160 dp); the card's own clip bounds it. Elsewhere the
-  glow stays clipped to the element.
+- Press glow belongs to the card: inside a `glassCard` (ModifierLocal `InGlassCard` = its `CardLight`) a press hands its
+  light to the card, which draws the radial over its content, reach 0.7 x the element's longer side (56..160 dp), bounded
+  by the card's clip. Drawn by the button it dipped with it, was cut by clips between them and lay under later siblings
+  (user 2026-11-05: buttons didn't behave as one with the glass). Elsewhere the glow stays clipped to the element.
 - The hero title shrinks to fit the width (down to 0.6 of displayMedium) instead of being cut: a long rule name
   ("Headphones take over") was truncated at hero size.
 - Touchpad: a light pool per finger. 2 fingers scroll, or pinch past 28 dp = zoom one step (Ctrl +/-) per 1.25x.

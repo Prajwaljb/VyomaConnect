@@ -106,6 +106,25 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
   (NoPhotography icon) and a tap says why; the companion also refuses such a capture.
 - `vyoma.stats` also carries `ac: bool` (absent on a desktop): a Mains or USB-C supply is online. Stock battery packets
   only say `isCharging`, false on a charger at a charge limit or full, so the phone shows "Plugged in" from this.
+- Bluetooth fallback (`bluetooth.rs`, app `service/BluetoothTunnel.kt`), not stock's beta backend: two BlueZ RFCOMM
+  services for bonded phones. `…f801` (channel 26; BlueZ won't listen without one) pipes to kdeconnectd 127.0.0.1:1716,
+  and the phone links through it as TLS server after 15 s offline. Once that's the PC's only link, `…f802` (channel 27)
+  bridges to a one-time local port the companion dials, with `LanBackend.acceptTunnel` answering, so stats, controls and
+  the controller (link packets, no UDP) work and the walk-away rule sees a phone still here. Links have `payloads = null`:
+  the Dashboard's file/picture tiles say "Needs Wi-Fi or USB". Any other link to the PC closes both (`DeviceHub.onLink`).
+  `…f803` (channel 28) takes the controller's 51-byte frames whatever the link is on (order: cable, Bluetooth, UDP; only
+  with the Settings switch on). The cable, Bluetooth and UDP echo the seq (4 bytes, big-endian) of every 32nd frame: the
+  phone logs "controller round trip over …" every 30 s, the companion "controller frames: … gaps over 150 ms" at close.
+  `vyoma.bluetooth {address}` on every companion link tells the phone where to dial, per PC.
+- Companion over the cable: it dials the phone's listener through `adb forward`, which arrives from loopback, so
+  `LanBackend`'s "another app on this device" check only applies to identities with no `vyomaHost`.
+- Typing: kdeconnectd on Wayland presses the key a keysym is on at any level, without Shift, and drops what no key
+  types (✓, emoji: "failed to convert keysym"). `MousePadPlugin.type` sets `shift` on runs that are shifted on a US layout.
+  What isn't printable ASCII goes by clipboard (`paste.rs`): `vyoma.paste {text}` → `vyoma.paste.ready {error?}` once it's on
+  the PC's clipboard, the phone presses Ctrl+V through mousepad, and 1.2 s after the last one the companion restores the old
+  content unless something new was copied. The phone ignores stock clipboard packets for 3 s meanwhile (their echo). The
+  typing bar queues everything, counts by character (`characterCount`, `commonEnds`) and, with no companion, refuses such
+  text, so its field always equals what the PC got. The PC screen keyboard does the same paste with portal keys, ignores the echo too, and on an unasked `vyoma.paste.ready {error}` (text that failed) clears its field.
 - USB tethering (no adb): the companion's `tether.rs` finds the phone on a `rndis_host`/`cdc_ncm`/`cdc_ether` interface
   (its default gateway there from /proc/net/route, else the one ARP neighbour) and dials port 1716 every 5 s while a
   trusted phone is unlinked, accepting whichever trusted certificate answers (`link::connect_trusted`).
@@ -149,6 +168,7 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
   checked with a C probe). A different `kind` replaces the pad. Removed on `vyoma.gamepad.close`, 4 s of silence or
   link loss (every button released first). `vyoma.gamepad.rumble {strong, weak, ms}` (companion → phone) from the
   game's FF_RUMBLE effects, or `{error}` when the pad can't be made. SDL takes a trigger's first value as its rest.
+- Touchpad over Bluetooth (2026-11-05, Settings > Steadier over Bluetooth, which also sends the controller over `…f803`; off by default, separate from the Bluetooth backup link's switch; old settings carry over if either was on; never on the cable): RFCOMM service `…f804` channel 29. Phone opens the radio, then `vyoma.pointer.request` → `vyoma.pointer.ready {key | error}` (base64 32 bytes; waits up to 60 s for Plasma's allow-control dialog; an error stops retries until the page reopens); `vyoma.pointer.close` when the page closes. 33-byte frames: "VYP1", seq u32, kind u8 (0 keep-awake every 100 ms, 1 move, 2 scroll, 3 press, 4 release), dx, dy f32 (button index in dx), HMAC-SHA256 of those cut to 16; every 32nd echoed (4 bytes). Companion pointer.rs: own RemoteDesktop session (pointer only, token `pointer-token`), same NotifyPointer* calls as kdeconnectd. Write stuck > 500 ms: back to the link.
 - `vyoma.gamepad.udp {port, key}` (companion → phone, once the pad is up): a UDP port in 1750..1764 (inside the
   KDE Connect firewall range, UDP 1714..1764) and a base64 32-byte key. The phone (if it reaches the PC over a
   network, not the USB tunnel: `Device.datagramTo`, routed like payloads past a VPN) then sends each state as a

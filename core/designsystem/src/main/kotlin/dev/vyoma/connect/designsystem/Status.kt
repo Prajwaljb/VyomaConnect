@@ -9,14 +9,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Error
@@ -99,7 +99,9 @@ private fun BoxScope.StatusBubble(c: StatusController, backdrop: Backdrop) {
             spread.animateTo(1f, VyomaMotion.jelly())
         }
         drop.animateTo(1f, VyomaMotion.spatial())
-        delay(if (msg.failure) 2600 else 1600)
+        // Long enough to read: about 15 characters a second past what fits on one line.
+        val extra = (msg.text.length - ONE_LINE_CHARS).coerceAtLeast(0) * 66L
+        delay(((if (msg.failure) 2600L else 1600L) + extra).coerceAtMost(6000L))
         drop.animateTo(0f, VyomaMotion.page())
         shown = null
         if (c.current?.id == msg.id) c.current = null
@@ -120,15 +122,18 @@ private fun BoxScope.StatusBubble(c: StatusController, backdrop: Backdrop) {
             }
             .semantics { liveRegion = LiveRegionMode.Polite }
             // Liquid glass like the tab bar; it was a flat grey slab whose text fell back to black in dark mode.
-            .glassChrome(backdrop, CircleShape, blur = 2.5.dp, bevel = 16.dp)
-            .height(48.dp)
+            // The corners make one line a capsule; longer messages grow downwards as a rounded pane.
+            .glassChrome(backdrop, RoundedCornerShape(24.dp), blur = 2.5.dp, bevel = 16.dp)
+            .heightIn(min = 48.dp)
             .widthIn(min = 120.dp)
-            .padding(start = 14.dp, end = 20.dp),
+            .padding(start = 14.dp, end = 20.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val tone = if (m.failure) SystemColor.RED.color else SystemColor.GREEN.color
         Icon(m.icon ?: if (m.failure) Icons.Rounded.Error else Icons.Rounded.CheckCircle, null, tint = tone, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(10.dp))
-        Text(m.text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(m.text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, maxLines = 4, overflow = TextOverflow.Ellipsis)
     }
 }
+
+private const val ONE_LINE_CHARS = 24

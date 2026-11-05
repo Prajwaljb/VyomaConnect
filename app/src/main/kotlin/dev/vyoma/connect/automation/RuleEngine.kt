@@ -83,6 +83,12 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
         }
     }
 
+    /** Paired Bluetooth devices, (address, name), to pick from. */
+    fun pairedBluetooth(): List<Pair<String, String>> = signals.pairedBluetooth()
+
+    /** The fingerprint of the Wi-Fi this phone is on, if any. */
+    fun currentWifi(): String? = signals.snapshot.value.wifiPrint
+
     /** A scheduled time came (or the phone rebooted): look again. */
     fun onAlarm() {
         start()
@@ -138,6 +144,9 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
         is Trigger.PcPlaying -> if (playing) s.pcPlaying else s.pcConnected && !s.pcPlaying
         is Trigger.Headphones -> s.headphones == connected
         is Trigger.HomeWifi -> if (home) s.wifi == WifiState.HOME else s.wifi != WifiState.HOME
+        is Trigger.BluetoothDevice -> (address in s.bluetooth) == connected
+        is Trigger.PcVia -> s.pcVia == via
+        is Trigger.WifiNetwork -> (s.wifiPrint == print) == on
         is Trigger.Time -> TimeRules.holds(this, now)
     }
 

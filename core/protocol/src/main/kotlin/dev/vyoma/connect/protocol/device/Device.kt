@@ -76,7 +76,7 @@ class Device internal constructor(
     private val links = CopyOnWriteArrayList<DeviceLink>()
 
     /** Where we currently reach this device from; empty when offline. */
-    val addresses: List<java.net.InetAddress> get() = links.filter { !it.isClosed }.map { it.remoteAddress }
+    val addresses: List<java.net.InetAddress> get() = links.filter { !it.isClosed && it.transport != TransportKind.BLUETOOTH }.map { it.remoteAddress }
 
     /**
      * A UDP socket connected to [port] on this device, over its newest network link and routed as
@@ -173,6 +173,9 @@ class Device internal constructor(
         for (link in ordered) if (link.send(packet)) return true
         return false
     }
+
+    /** False when the only way there has no payload sockets (a Bluetooth tunnel). */
+    val canCarryPayloads: Boolean get() = links.any { !it.isClosed && it.payloads != null }
 
     /**
      * Sends [packet] with a binary payload and streams it; suspends until the peer has

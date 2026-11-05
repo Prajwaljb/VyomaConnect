@@ -33,7 +33,7 @@ use ring::hmac;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::{Value, json};
 use tokio::io::unix::AsyncFd;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -553,25 +553,40 @@ pub async fn serve_wired() {
         Err(e) => return warn!("no wired controller channel: {e}"),
     };
     loop {
-        let Ok((mut stream, _)) = listener.accept().await else { continue };
+        let Ok((stream, _)) = listener.accept().await else { continue };
         let _ = stream.set_nodelay(true);
-        tokio::spawn(async move {
-            let mut buf = [0u8; DATAGRAM_LEN];
-            if stream.read_exact(&mut buf).await.is_err() {
-                return;
-            }
-            let found = WIRED.lock().unwrap().iter().find_map(|(_, k, tx)| State::from_datagram(&buf, k).map(|s| (s, k.clone(), tx.clone())));
-            let Some((first, key, tx)) = found else { return };
-            if tx.send(first).await.is_err() {
-                return;
-            }
-            while stream.read_exact(&mut buf).await.is_ok() {
-                let Some(s) = State::from_datagram(&buf, &key) else { return };
-                if tx.send(s).await.is_err() {
-                    return;
-                }
-            }
-        });
+        tokio::spawn(read_frames(stream, "the USB cable"));
+    }
+}
+
+/// Every 32nd state is echoed, so the phone can time the round trip on this very route.
+const ECHO_EVERY: u32 = 32;
+
+fn echoed(state: &State) -> Option<[u8; 4]> {
+    state.order.filter(|(_, seq)| seq % ECHO_EVERY == 0).map(|(_, seq)| seq.to_be_bytes())
+}
+
+/// One stream of signed frames (the cable, or Bluetooth); the first frame's key picks the controller.
+pub async fn read_frames<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, via: &'static str) {
+    let mut buf = [0u8; DATAGRAM_LEN];
+    if stream.read_exact(&mut buf).await.is_err() {
+        return;
+    }
+    let found = WIRED.lock().unwrap().iter().find_map(|(_, k, tx)| State::from_datagram(&buf, k).map(|s| (s, k.clone(), tx.clone())));
+    let Some((first, key, tx)) = found else { return };
+    info!("controller input arriving over {via}");
+    if tx.send(first).await.is_err() {
+        return;
+    }
+    while stream.read_exact(&mut buf).await.is_ok() {
+        let Some(s) = State::from_datagram(&buf, &key) else { return };
+        if let Some(echo) = echoed(&s) {
+            // Nobody reads an accessory's echo: never let that hold up the controller.
+            let _ = tokio::time::timeout(Duration::from_millis(50), stream.write_all(&echo)).await;
+        }
+        if tx.send(s).await.is_err() {
+            return;
+        }
     }
 }
 
@@ -601,8 +616,11 @@ impl Fast {
         let mut buf = [0u8; 64];
         loop {
             tokio::select! {
-                got = self.socket.recv(&mut buf) => {
-                    if let Ok(n) = got && let Some(s) = State::from_datagram(&buf[..n], &self.key) {
+                got = self.socket.recv_from(&mut buf) => {
+                    if let Ok((n, from)) = got && let Some(s) = State::from_datagram(&buf[..n], &self.key) {
+                        if let Some(echo) = echoed(&s) {
+                            let _ = self.socket.send_to(&echo, from).await;
+                        }
                         return (s, false);
                     }
                 }
@@ -631,6 +649,44 @@ impl Order {
     }
 }
 
+/// Stutter on the side channels: they repeat at least every 100 ms, so a longer silence is the
+/// route's fault, not an idle thumb.
+struct Gaps {
+    started: std::time::Instant,
+    last: Option<std::time::Instant>,
+    frames: u64,
+    long: u64,
+    longest: Duration,
+}
+
+impl Gaps {
+    const LONG: Duration = Duration::from_millis(150);
+
+    fn new() -> Gaps {
+        Gaps { started: std::time::Instant::now(), last: None, frames: 0, long: 0, longest: Duration::ZERO }
+    }
+
+    fn frame(&mut self) {
+        let now = std::time::Instant::now();
+        if let Some(last) = self.last {
+            let gap = now - last;
+            self.longest = self.longest.max(gap);
+            self.long += (gap > Self::LONG) as u64;
+        }
+        self.last = Some(now);
+        self.frames += 1;
+    }
+
+    fn report(&self, name: &str) {
+        if self.frames > 0 {
+            info!(
+                "{name}: controller frames: {} in {} s, {} gaps over {} ms, longest {} ms",
+                self.frames, self.started.elapsed().as_secs(), self.long, Self::LONG.as_millis(), self.longest.as_millis()
+            );
+        }
+    }
+}
+
 pub enum Input {
     State(State),
     Close,
@@ -645,7 +701,7 @@ pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String)
     // The gyro mouse's totals last seen (a fresh stream starts its own from anywhere).
     let mut moved: Option<(u32, i32, i32)> = None;
     let mut over_udp = false;
-    let mut over_usb = false;
+    let mut gaps = Gaps::new();
     loop {
         let rumble = async {
             match pad.as_mut() {
@@ -666,16 +722,15 @@ pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String)
                     if pad.take().is_some() {
                         info!("{name}: controller disconnected");
                     }
+                    gaps.report(&name);
                     // A phone switched to USB accessory mode for this gets its USB back.
                     crate::accessory::release();
                     return;
                 }
             },
             (s, wired) = datagram => {
-                if wired && !over_usb {
-                    over_usb = true;
-                    info!("{name}: controller input arriving over the USB cable");
-                } else if !wired && !over_udp {
+                gaps.frame();
+                if !wired && !over_udp {
                     over_udp = true;
                     info!("{name}: controller input arriving over UDP");
                 }

@@ -1,5 +1,6 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.graphics.asAndroidBitmap
 
 import androidx.compose.ui.modifier.modifierLocalProvider
@@ -289,8 +290,10 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
  * mode, a soft shadow, content clipped to [shape]. Static (no blur), cached per size, so long
  * lists scroll at full speed. [fill] replaces the theme's card tone (e.g. a dialog).
  */
-fun Modifier.glassCard(shape: Shape, fill: Color? = null, lit: Boolean = true): Modifier = composed {
+fun Modifier.glassCard(shape: Shape, fill: Color? = null, lit: Boolean = true, ownPressGroup: Boolean = true): Modifier = composed {
     val d = glassDepth
+    val light = remember { CardLight() }
+    val presses = remember(ownPressGroup) { if (ownPressGroup) PressGroup() else null }
     this
         .drawWithCache {
             val outline = shape.createOutline(size, layoutDirection, this)
@@ -301,12 +304,41 @@ fun Modifier.glassCard(shape: Shape, fill: Color? = null, lit: Boolean = true): 
             onDrawBehind { with(painter) { paint(outline, edge, half, size.height, size.width) } }
         }
         .clip(shape)
-        // What's pressed inside lights the card, not just itself (see pressScale).
-        .then(InCardProvider)
+        // What's pressed inside lights the card itself, one piece of glass (see pressScale).
+        .then(light.modifier)
+        .then(presses?.modifier ?: Modifier)
 }
 
-@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
-private val InCardProvider = Modifier.modifierLocalProvider(InGlassCard) { true }
+/**
+ * The light a finger gathers in a [glassCard]. The card draws it, not the button under the finger:
+ * drawn by the button it dipped with it, was cut by any clip between the two (a rule card's rows) and
+ * went under the buttons after it, so a button read as a separate thing lying on the glass.
+ */
+internal class CardLight {
+    var source by mutableStateOf<PressLight?>(null)
+    private var coordinates: androidx.compose.ui.layout.LayoutCoordinates? = null
+
+    @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+    val modifier: Modifier = Modifier
+        .onPlaced { coordinates = it }
+        .drawWithContent {
+            drawContent()
+            val s = source ?: return@drawWithContent
+            val c = coordinates?.takeIf { it.isAttached } ?: return@drawWithContent
+            val at = s.at(c) ?: return@drawWithContent
+            val reach = s.reach
+            drawCircle(Brush.radialGradient(listOf(s.tone, Color.Transparent), at, reach), radius = reach, center = at)
+        }
+        .modifierLocalProvider(InGlassCard) { this@CardLight }
+}
+
+/** What's pressed inside a card, as [CardLight] reads it while drawing. */
+internal interface PressLight {
+    val tone: Color
+    val reach: Float
+    /** The finger in [card]'s coordinates; null once it can't say. */
+    fun at(card: androidx.compose.ui.layout.LayoutCoordinates): Offset?
+}
 
 /**
  * A card's inner light (band and rolled edge, as [glassCard] draws them) laid over its content
@@ -408,7 +440,8 @@ fun Modifier.cardSegment(first: Boolean, last: Boolean, radius: Dp = 26.dp): Mod
         bottomStart = androidx.compose.foundation.shape.CornerSize(if (last) radius else 0.dp),
     )
     // Slices can't each catch the light: their edges would rule lines between the rows.
-    glassCard(shape, d.fill, lit = false)
+    // Nor their own press group: together they're one card, so a press spreads through the page's.
+    glassCard(shape, d.fill, lit = false, ownPressGroup = false)
 }
 
 /**

@@ -95,7 +95,7 @@ class NotificationsPlugin(private val ctx: PluginContext, private val source: No
         }
         val icon = n.icon
         ctx.scope.launch(Dispatchers.IO) {
-            if (icon == null || n.iconHash == null) {
+            if (icon == null || n.iconHash == null || !ctx.device.canCarryPayloads) {
                 ctx.send(body)
                 return@launch
             }

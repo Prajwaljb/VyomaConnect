@@ -140,7 +140,8 @@ desktop/companion/     Rust daemon (Phase 2)
 - **Phone as PC webcam/mic (done 2026-11-04):** Camera2 → H.264 → companion → v4l2loopback "Vyoma Phone
   Camera"; mic → PipeWire source "Vyoma Phone Mic". Preview, zoom (incl. ultra-wide), torch and a notification
   Stop are in. Not yet: tried in real call apps.
-- **Bluetooth fallback transport** for notifications/clipboard when Wi-Fi is absent.
+- **Bluetooth fallback transport** when Wi-Fi and the cable are absent: a tunnel for kdeconnectd and one for the
+  companion (notifications, clipboard, stats, touchpad, controller). No files or pictures over it.
 
 ---
 
@@ -184,3 +185,5 @@ and can be turned off at any time.
 1. Install the JDK 21 / Android SDK cmdline-tools / platform-tools (adb) on CachyOS.
 2. `git init`, Gradle skeleton, module layout, version catalog, theming foundation.
 3. Protocol core + discovery + pairing with your Plasma machine → first green link.
+
+- Automation connections (2026-11-05): triggers/conditions for one paired Bluetooth device (ACL broadcasts + audio profile proxies for what's already connected), how the PC is connected (best transport, settled 3 s), and a named Wi-Fi (added while on it; fingerprint of subnet/router/DHCP, no location permission, so two networks with identical addressing can't be told apart).

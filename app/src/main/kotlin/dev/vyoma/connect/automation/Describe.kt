@@ -3,6 +3,8 @@ package dev.vyoma.connect.automation
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BatteryAlert
 import androidx.compose.material.icons.rounded.BatteryChargingFull
+import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.compose.material.icons.rounded.BluetoothDisabled
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.BrightnessMedium
 import androidx.compose.material.icons.rounded.Call
@@ -29,13 +31,20 @@ import androidx.compose.material.icons.rounded.Screenshot
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Vibration
 import androidx.compose.material.icons.rounded.VolumeOff
+import androidx.compose.material.icons.rounded.Usb
 import androidx.compose.material.icons.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.ui.graphics.vector.ImageVector
 import dev.vyoma.connect.designsystem.SystemColor
+import dev.vyoma.connect.protocol.link.TransportKind
 
 /** How a trigger, condition or action is named and drawn. Labels read as states, so they work after "When" and "Only if". */
-class Look(val label: String, val icon: ImageVector, val color: SystemColor, val detail: String? = null)
+class Look(
+    val label: String, val icon: ImageVector, val color: SystemColor, val detail: String? = null,
+    /** The label starts with a name the user's device or network goes by: leave its case alone. */
+    val named: Boolean = false,
+)
 
 fun Trigger.look(): Look = when (this) {
     is Trigger.PcLink ->
@@ -50,6 +59,15 @@ fun Trigger.look(): Look = when (this) {
     is Trigger.PcPlaying -> if (playing) Look("PC is playing", Icons.Rounded.MusicNote, SystemColor.PINK) else Look("PC isn't playing", Icons.Rounded.MusicOff, SystemColor.GRAY)
     is Trigger.Headphones -> if (connected) Look("Headphones connected", Icons.Rounded.Headphones, SystemColor.CYAN) else Look("Headphones disconnected", Icons.Rounded.Headphones, SystemColor.GRAY)
     is Trigger.HomeWifi -> if (home) Look("On home Wi-Fi", Icons.Rounded.Home, SystemColor.BLUE, "The Wi-Fi your PC is on") else Look("Away from home Wi-Fi", Icons.Rounded.WifiOff, SystemColor.GRAY)
+    is Trigger.BluetoothDevice ->
+        if (connected) Look("$name connected", Icons.Rounded.Bluetooth, SystemColor.BLUE, "Bluetooth", named = true)
+        else Look("$name disconnected", Icons.Rounded.BluetoothDisabled, SystemColor.GRAY, "Bluetooth", named = true)
+    is Trigger.PcVia -> when (via) {
+        TransportKind.USB -> Look("PC on the cable", Icons.Rounded.Usb, SystemColor.GREEN)
+        TransportKind.BLUETOOTH -> Look("PC on Bluetooth", Icons.Rounded.Bluetooth, SystemColor.BLUE)
+        TransportKind.LAN -> Look("PC on Wi-Fi", Icons.Rounded.Wifi, SystemColor.TEAL)
+    }
+    is Trigger.WifiNetwork -> if (on) Look("On $name Wi-Fi", Icons.Rounded.Wifi, SystemColor.TEAL) else Look("Off $name Wi-Fi", Icons.Rounded.WifiOff, SystemColor.GRAY)
     is Trigger.Time -> Look(
         if (end == null) "At ${clock(start)}" else "${clock(start)} – ${clock(end)}",
         Icons.Rounded.Schedule, SystemColor.YELLOW, days(days),
@@ -75,12 +93,14 @@ fun Action.look(): Look = when (this) {
 
 /** One line for a rule's row: what sets it off and what it does. */
 fun Rule.summary(): String {
-    val does = actions.joinToString(", ") { it.look().label.inSentence() }.replaceFirstChar(Char::uppercase)
-    val only = conditions.takeIf { it.isNotEmpty() }?.joinToString(" and ", prefix = ", if ") { it.look().label.inSentence() }.orEmpty()
-    return "When ${trigger.look().label.inSentence()}$only: $does"
+    val does = actions.joinToString(", ") { it.look().inSentence() }.replaceFirstChar(Char::uppercase)
+    val only = conditions.takeIf { it.isNotEmpty() }?.joinToString(" and ", prefix = ", if ") { it.look().inSentence() }.orEmpty()
+    return "When ${trigger.look().inSentence()}$only: $does"
 }
 
 /** Lower-cases a label's first word mid-sentence, but never an acronym ("PC", "Wi-Fi"). */
+private fun Look.inSentence(): String = if (named) label else label.inSentence()
+
 internal fun String.inSentence(): String =
     if (length > 1 && this[1].isUpperCase()) this else replaceFirstChar(Char::lowercase)
 

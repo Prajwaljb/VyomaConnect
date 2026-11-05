@@ -56,6 +56,7 @@ class LinkService : LifecycleService() {
     private var mediaSession: PcMediaSession? = null
     private var mdns: MdnsDiscovery? = null
     private var usb: UsbLink? = null
+    private var bluetooth: BluetoothTunnel? = null
     private var lastConnected: List<dev.vyoma.connect.protocol.device.DeviceState> = emptyList()
 
     override fun onCreate() {
@@ -134,6 +135,7 @@ class LinkService : LifecycleService() {
         hub.start()
         if (!BuildConfig.DEMO) mdns = MdnsDiscovery(this, hub).also { it.start() }
         usb?.start()
+        if (!BuildConfig.DEMO) bluetooth = BluetoothTunnel(this, hub, lifecycleScope).also { it.start() }
         lifecycleScope.launch {
             container.settings.manualHosts.drop(1).collect { hosts ->
                 network.customHosts = hosts.toList()
@@ -345,6 +347,7 @@ class LinkService : LifecycleService() {
         mediaSession?.stop()
         mdns?.stop()
         usb?.stop()
+        bluetooth?.stop()
         container.calls.stop()
         container.signal.stop()
         network.unwatch()

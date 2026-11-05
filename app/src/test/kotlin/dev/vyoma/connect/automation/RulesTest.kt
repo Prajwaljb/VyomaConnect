@@ -48,6 +48,23 @@ class RulesTest {
     }
 
     @Test
+    fun connectionTriggersSurviveARoundTrip() {
+        val triggers = listOf(
+            Trigger.BluetoothDevice("AA:BB", "Car audio", connected = false),
+            Trigger.PcVia(dev.vyoma.connect.protocol.link.TransportKind.BLUETOOTH),
+            Trigger.WifiNetwork("10.0.0.0/24|10.0.0.1", "Office", on = false),
+        )
+        val rules = triggers.map { Rule(id = "r", name = "n", trigger = it, conditions = listOf(it), actions = listOf(Action.LockPc)) }
+        assertEquals(rules, RuleJson.decode(RuleJson.encode(rules)))
+    }
+
+    @Test
+    fun aDevicesNameKeepsItsCaseInASummary() {
+        val rule = Rule(name = "n", trigger = Trigger.BluetoothDevice("AA:BB", "Car audio", connected = true), actions = listOf(Action.LockPc))
+        assertEquals("When Car audio connected: Lock PC", rule.summary())
+    }
+
+    @Test
     fun summariesKeepAcronyms() {
         val r = Rule(name = "x", trigger = Trigger.PcLink(true), conditions = listOf(Trigger.HomeWifi(true)), actions = listOf(Action.MutePc(true), Action.NotifyMe("")))
         assertEquals("When PC is connected, if on home Wi-Fi: Mute PC, notify me", r.summary())

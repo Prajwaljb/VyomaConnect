@@ -242,6 +242,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteRule(id: String) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.automation.store.delete(id) }
     fun setRuleEnabled(id: String, enabled: Boolean) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.automation.store.setEnabled(id, enabled) }
     fun testRule(rule: Rule) = viewModelScope.launch { container.automation.test(rule) }
+
+    /** (address, name) of the phone's paired Bluetooth devices. The demo's are made up. */
+    fun pairedBluetooth(): List<Pair<String, String>> =
+        if (dev.vyoma.connect.BuildConfig.DEMO) listOf("demo:car" to "Car audio", "demo:buds" to "Earbuds")
+        else container.automation.pairedBluetooth()
+
+    fun needsBluetoothPermission(context: android.content.Context): Boolean = !dev.vyoma.connect.BuildConfig.DEMO &&
+        context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /** The fingerprint of the Wi-Fi the phone is on; the demo has a pretend one. */
+    fun currentWifi(): String? = if (dev.vyoma.connect.BuildConfig.DEMO) "demo-wifi" else container.automation.currentWifi()
     /** The connected PC's commands, for a "Run command" action. */
     fun pcCommands(): List<dev.vyoma.connect.protocol.plugin.builtin.RemoteCommand> =
         dev.vyoma.connect.service.Commands.primary(container)?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands?.value.orEmpty()
