@@ -34,10 +34,10 @@ object SpecularLight {
         private set
 
     /**
-     * The light as content (cards) sees it: it sways 40% as far as on the floating chrome, so a
-     * tilt moves the layer above more than the page and two dozen card edges don't all shimmer.
+     * The light as content (cards) sees it: the same as the floating chrome. At 40% of it the
+     * cards felt dead and the buttons too lively, as if two lights (user, 2026-11-05).
      */
-    val content: Float get() = REST + (angle - REST) * 0.4f
+    val content: Float get() = angle
 
     /**
      * Where a shadow [by] px long falls: straight away from the light, so straight down at rest and
@@ -132,8 +132,9 @@ private class TiltListener(private val context: Context) : SensorEventListener {
     private companion object {
         const val SMOOTH = 0.2f
         const val WARMUP = 8
-        /** Follows the room's real up one to one: at 1.7 ordinary handling swung it too much (user, 2026-11-05). */
-        const val GAIN = 1.0f
+        /** Calmer than the room's real up: 1.7 swung buttons too much (user, 2026-11-05); 0.7 for
+         *  everything, cards included (they were at 0.4 of the buttons, 1.0). */
+        const val GAIN = 0.7f
         /** How far the light can sway from rest, either way. */
         const val MAX_SWAY = 45f
     }

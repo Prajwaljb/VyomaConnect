@@ -637,20 +637,19 @@ internal class LensPainter(private val graphics: GraphicsContext) {
         val half = 0.5.dp.toPx()
         val edge = r.deflate(half)
         translate(edge.left, edge.top) {
+            // Under the rim light: darkens only what the drop shows of what's behind.
+            with(RimShadow) {
+                stroke(
+                    Outline.Rounded(RoundRect(Rect(Offset.Zero, edge.size), CornerRadius(edge.minDimension / 2))),
+                    edge.size, edge.minDimension / 2, 1.dp.toPx(), (if (dark) 0.4f else 0.25f) * a,
+                )
+            }
             with(RimLight) {
                 stroke(
                     Outline.Rounded(RoundRect(Rect(Offset.Zero, edge.size), CornerRadius(edge.minDimension / 2))),
                     Color.White.copy(alpha = if (dark) 0.6f else 1f),
                     if (dark) Color.White.copy(alpha = 0.1f) else Color(0xFF1A2B4C).copy(alpha = 0.14f),
                     1.dp.toPx(), edge.size, edge.minDimension / 2, alpha = a,
-                )
-            }
-            with(RimShadow) {
-                stroke(
-                    Outline.Rounded(RoundRect(Rect(Offset.Zero, edge.size), CornerRadius(edge.minDimension / 2))),
-                    // Faint in the dark, as the bars' glass: stronger went darker than what's behind and the
-                    // drop looked cut at its ends (user, 2026-11-05).
-                    edge.size, edge.minDimension / 2, 1.dp.toPx(), (if (dark) 0.15f else 0.25f) * a,
                 )
             }
         }

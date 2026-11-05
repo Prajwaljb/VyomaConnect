@@ -258,6 +258,14 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
         }
         val fill = flat ?: d.fill
         val light = SpecularLight.content
+        val r = corner ?: (edge as? Outline.Rounded)?.roundRect?.takeIf { it.isSimple }?.topLeftCornerRadius?.x ?: (edge as? Outline.Rectangle)?.let { 0f }
+        val ex = if (corner != null) SmoothCornerShape.EXPONENT else 2f
+        val area = Size(width - 2 * inset, height - 2 * inset)
+        // The dark edge goes UNDER the glass's own fill and light: it darkens only what shows
+        // through from behind, so over a black page it's gone and over bright content it shows,
+        // as Apple's (WWDC25: the glass adapts to what's behind; their renders show the dark line
+        // only over light content). Drawn over the glass it was a fixed line (user, 2026-11-05).
+        if (lit && d.rimLit.alpha > 0f) translate(inset, inset) { with(RimShadow) { stroke(edge, area, r, stroke, d.rimDark, ex, light) } }
         if (lit && d.glow.alpha > 0f) {
             // The glow is part of the fill (one gradient pass, not a second layer over the card):
             // brightest at the edge point facing the light, spreading in from there.
@@ -271,11 +279,7 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
         if (!lit || d.rimLit.alpha <= 0f) return
         with(glow) { draw(outline, d.band, band, light, shade = d.shade, depth = roll, corner = corner, exponent = if (corner != null) SmoothCornerShape.EXPONENT else 2f) }
         translate(inset, inset) {
-            val area = Size(width - 2 * inset, height - 2 * inset)
-            val r = corner ?: (edge as? Outline.Rounded)?.roundRect?.takeIf { it.isSimple }?.topLeftCornerRadius?.x ?: (edge as? Outline.Rectangle)?.let { 0f }
-            val ex = if (corner != null) SmoothCornerShape.EXPONENT else 2f
             with(RimLight) { stroke(edge, d.rimLit, d.rimBase, stroke, area, r, ex, light) }
-            with(RimShadow) { stroke(edge, area, r, stroke, d.rimDark, ex, light) }
         }
     }
 }
@@ -358,14 +362,15 @@ fun Modifier.glassRaised(shape: Shape, color: Color? = null): Modifier = compose
                     val fall = SpecularLight.cast(2.5.dp.toPx(), SpecularLight.angle)
                     with(SoftShadow) { draw(Rect(Offset.Zero, size), radius, Color(0xFF0B1220).copy(alpha = 0.1f), 6.dp.toPx(), fall.y, fall.x) }
                 }
-                drawOutline(outline, fill)
                 // The light's angle is read here only, so tilting redraws the edge and nothing else.
                 val light = SpecularLight.angle
+                val ex = if (smooth != null && (outline !is Outline.Rounded)) SmoothCornerShape.EXPONENT else 2f
+                // Under the fill: darkens only what's behind (see the cards' note in GlassPainter).
+                with(RimShadow) { stroke(outline, size, radius, stroke.width, if (base != null) 0.25f else if (dark) 0.45f else 0.3f, ex, light) }
+                drawOutline(outline, fill)
                 // No rolled shading here: on small round controls it turned them into plastic balls.
                 with(glow) { draw(outline, band, bandWidth, light, corner = smooth, exponent = if (smooth != null) SmoothCornerShape.EXPONENT else 2f) }
-                val ex = if (smooth != null && (outline !is Outline.Rounded)) SmoothCornerShape.EXPONENT else 2f
                 with(RimLight) { stroke(outline, lit, rimBase, stroke.width, size, radius, ex, light) }
-                with(RimShadow) { stroke(outline, size, radius, stroke.width, if (base != null) 0.25f else if (dark) 0.15f else 0.3f, ex, light) }
             }
         }
         .clip(shape)
@@ -674,6 +679,12 @@ fun Modifier.glassChrome(
             clipPath(edgePath) {
                 translate(-o, -o) { scale(1f / q, 1f / q, pivot = Offset.Zero) { drawLayer(blurred) } }
             }
+            // Where the edge faces sideways, the view through it is darker (see RimShadow). Right
+            // over the lens's picture of what's behind, under the band and highlight: it darkens
+            // only that, so over a black page it's gone and over bright content it shows, as Apple's.
+            translate(-grow, -grow) {
+                with(RimShadow) { stroke(Outline.Rounded(RoundRect(Rect(Offset.Zero, g), CornerRadius(corner))), g, corner, 1.dp.toPx(), if (dark) 0.55f else 0.4f) }
+            }
             // The band and its shading swell with the glass: left at rest size they read as a
             // second, smaller pane on top of the pressed one.
             translate(-grow, -grow) {
@@ -692,12 +703,6 @@ fun Modifier.glassChrome(
                 ),
                 style = Stroke(1.dp.toPx()),
             )
-            // Where the edge faces sideways, a dark hairline over the faint light there (see RimShadow).
-            // Faint in the dark: over a near-black page a stronger one went darker than the page and the
-            // circle looked cut away at its sides (user, 2026-11-05).
-            translate(-grow, -grow) {
-                with(RimShadow) { stroke(Outline.Rounded(RoundRect(Rect(Offset.Zero, g), CornerRadius(corner))), g, corner, 1.dp.toPx(), if (dark) 0.12f else 0.4f) }
-            }
         }
         .then(if (edge && lens == null) Modifier.border(0.75.dp, edgeBrush, shape) else Modifier)
 }
