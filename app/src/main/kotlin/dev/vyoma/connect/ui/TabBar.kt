@@ -2,6 +2,7 @@ package dev.vyoma.connect.ui
 
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.material.icons.rounded.Slideshow
 import androidx.compose.material.icons.rounded.SportsEsports
 import dev.vyoma.connect.designsystem.liquidPress
 import dev.vyoma.connect.designsystem.MenuItem
@@ -114,6 +115,7 @@ private val ItemWidth = 82.dp
 fun TabsRoot(
     tab: Tab, onTab: (Tab) -> Unit, backToHome: Boolean, onTouchpad: () -> Unit,
     onGamepad: () -> Unit = {},
+    onPresenter: () -> Unit = {},
     content: @Composable (Tab) -> Unit,
 ) {
     val backdrop = rememberBackdrop()
@@ -209,7 +211,7 @@ fun TabsRoot(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TabBar(tab, onTab, backdrop)
-            // Tapped: the touchpad (its keyboard is a button inside). Held: the game controller.
+            // Tapped: the touchpad (its keyboard is a button inside). Held: the game controller, the presenter.
             val menus = LocalMenu.current
             var bounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
             Box(
@@ -220,6 +222,7 @@ fun TabsRoot(
                         onLongClick = {
                             menus.show(bounds, listOf(
                                 MenuItem("Game controller", Icons.Rounded.SportsEsports, onClick = onGamepad),
+                                MenuItem("Presenter", Icons.Rounded.Slideshow, onClick = onPresenter),
                             ), fromRadius = BarHeight / 2)
                         },
                         onClick = onTouchpad,

@@ -3,6 +3,7 @@ package dev.vyoma.connect.ui
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import androidx.compose.ui.platform.LocalContext
 
+import androidx.compose.material.icons.rounded.Slideshow
 import androidx.compose.material.icons.rounded.SportsEsports
 
 import androidx.compose.ui.semantics.Role
@@ -146,7 +147,7 @@ import kotlinx.coroutines.launch
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Boolean, onBack: () -> Unit) {
+fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Boolean, onBack: () -> Unit, onPresenter: (String?) -> Unit = {}) {
     val devices by vm.devices.collectAsStateWithLifecycle()
     val target = devices.firstOrNull { it.identity.deviceId == deviceId && it.isReachable && it.isPaired }
         ?: devices.firstOrNull { it.isPaired && it.isReachable && !it.isCompanion }
@@ -244,11 +245,17 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                             Text(shown, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                         } else {
                             ConnectionOrb(if (target != null) OrbState.CONNECTED else OrbState.OFFLINE, size = 7.dp)
-                            Text(target?.identity?.deviceName ?: "No PC connected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(target?.identity?.deviceName ?: "No PC connected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                         }
                     }
                 }
             }
+            // Slides: keys and a pointer, so it works with plain KDE Connect too.
+            Box(
+                Modifier.size(48.dp).pressable(glass = true) { onPresenter(target?.identity?.deviceId) }.glassRaised(CircleShape),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Rounded.Slideshow, "Presenter") }
+            Spacer(Modifier.width(8.dp))
             // The phone as a game controller: the other way to drive the PC by hand (needs the companion).
             val hasCompanion = target != null && devices.any { it.identity.companionOf == target.identity.deviceId && it.isReachable }
             if (hasCompanion) {
