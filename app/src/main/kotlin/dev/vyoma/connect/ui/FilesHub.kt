@@ -67,6 +67,7 @@ import dev.vyoma.connect.designsystem.SectionLabel
 import dev.vyoma.connect.designsystem.SystemColor
 import dev.vyoma.connect.designsystem.cardSegment
 import dev.vyoma.connect.platform.AndroidShareSink
+import dev.vyoma.connect.platform.AppLock
 import dev.vyoma.connect.protocol.plugin.builtin.Transfer
 import dev.vyoma.connect.protocol.plugin.builtin.Transfers
 import dev.vyoma.connect.service.FileRecord
@@ -142,7 +143,7 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
         item(key = "captures-label") { SectionLabel("Captures", Modifier.animateItem()) }
         item(key = "captures") {
             val plugin = remember(companion, pc?.identity?.deviceId, devices) { pc?.let { vm.companionOf(it.identity.deviceId) } }
-            CapturesStrip(onTake = plugin?.let { c -> { vm.capture(c.screenshot) } }, onSeeAll = onCaptures, modifier = Modifier.animateItem())
+            CapturesStrip(onTake = plugin?.let { c -> { AppLock.ask(context, AppLock.SCREENSHOT) { vm.capture(c.screenshot) } } }, onSeeAll = onCaptures, modifier = Modifier.animateItem())
         }
 
         if (moving.isNotEmpty() || done.isNotEmpty()) {

@@ -6,7 +6,11 @@ import dev.vyoma.connect.protocol.device.PairState
 import dev.vyoma.connect.protocol.device.TrustStore
 import dev.vyoma.connect.protocol.device.TrustedDevice
 import dev.vyoma.connect.protocol.link.LanBackend
+import dev.vyoma.connect.protocol.link.PayloadSource
+import dev.vyoma.connect.protocol.plugin.Plugin
+import dev.vyoma.connect.protocol.plugin.PluginSpec
 import dev.vyoma.connect.protocol.plugin.builtin.PingPlugin
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -54,12 +58,12 @@ class PairingSecurityTest {
     private val attackerCreds = LocalCredentials.generate(pcId)
     private val phoneId get() = phoneCreds.deviceId
 
-    private fun hub(creds: LocalCredentials, store: TrustStore = Memory()): DeviceHub {
+    private fun hub(creds: LocalCredentials, store: TrustStore = Memory(), plugins: List<PluginSpec> = listOf(PingPlugin.spec)): DeviceHub {
         val first = nextPort.getAndAdd(10)
         return DeviceHub(
             credentials = creds,
             trustStore = store,
-            pluginSpecs = listOf(PingPlugin.spec),
+            pluginSpecs = plugins,
             scope = scope,
             deviceName = "test",
             deviceType = DeviceType.DESKTOP,
@@ -210,6 +214,46 @@ class PairingSecurityTest {
         assertNotNull(phone.device(strangers.last().localDeviceId))
         assertNull(phone.device(strangers.first().localDeviceId))
     }
+
+    @Test fun strangersAtThePayloadPortDontEndTheTransfer() = runBlocking {
+        val announced = CompletableDeferred<NetworkPacket>()
+        val catcher = PluginSpec("catcher", setOf("test.file"), setOf("test.file")) { object : Plugin {
+            override suspend fun onPacket(packet: NetworkPacket): Boolean { announced.complete(packet); return true }
+        } }
+        val phone = hub(phoneCreds, trust, listOf(catcher))
+        val pc = hub(pcCreds, plugins = listOf(catcher))
+        val attacker = hub(attackerCreds)
+        promptFromPc(phone, pc)
+        phone.device(pcId)!!.acceptPairing()
+        waitFor { phone.device(pcId)!!.state.value.isPaired && pc.device(phoneId)!!.state.value.isPaired }
+
+        val data = "the file".toByteArray()
+        val sending = scope.async(Dispatchers.IO) {
+            pc.device(phoneId)!!.sendWithPayload(packet("test.file"), PayloadSource(data.size.toLong()) { data.inputStream() })
+        }
+        // Linked over loopback, so announced as its cable forward; the real listener is 200 below.
+        val port = withTimeout(8_000) { announced.await() }.payloadTransferInfo!!["port"]!!.toString().toInt() - 200
+
+        // One gives up, one shows the wrong certificate, the rest (more than can be proving at once) just sit.
+        Socket(lo, port).close()
+        val wrong = scope.async(Dispatchers.IO) { fetch(attacker, port) }
+        val idle = List(5) { Socket(lo, port) }
+
+        val got = withContext(Dispatchers.IO) { fetch(phone, port) }
+        assertEquals("the file", got?.decodeToString())
+        assertTrue(sending.await())
+        assertNull(wrong.await())
+        idle.forEach { it.close() }
+    }
+
+    /** What the payload port serves to [who], or null if it won't. */
+    private fun fetch(who: DeviceHub, port: Int): ByteArray? = runCatching {
+        who.tls.wrap(Socket(lo, port), asServer = false).use {
+            it.soTimeout = 15_000
+            it.startHandshake()
+            it.inputStream.readBytes()
+        }
+    }.getOrNull()?.takeIf { it.isNotEmpty() }
 
     private companion object {
         val nextPort = AtomicInteger(18100)

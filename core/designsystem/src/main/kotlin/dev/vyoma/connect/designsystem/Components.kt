@@ -16,6 +16,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -59,6 +60,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -1175,8 +1177,9 @@ fun GlassDialog(
         }
         return
     }
-    Dialog(onDismissRequest) {
-        Box(Modifier.fillMaxWidth().glassCard(MaterialTheme.shapes.extraLarge, fill = MaterialTheme.colorScheme.surfaceContainerHigh)) { body() }
+    // Outside the app's own host (a see-through share window): no glass to look through, so a solid card.
+    Dialog(onDismissRequest, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.padding(horizontal = 24.dp).widthIn(max = MaxContentWidth).fillMaxWidth().glassCard(MaterialTheme.shapes.extraLarge, fill = MaterialTheme.colorScheme.surfaceContainerHigh)) { body() }
     }
 }
 

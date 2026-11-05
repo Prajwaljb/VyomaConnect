@@ -186,6 +186,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
 - Presenter (`PresenterScreen`, from the touchpad header and the touchpad button's long-press menu): Next is the biggest
   target but CLEAR glass with a coloured arrow: a filled panel that size lights up the speaker in a dark room. Keeps the
   screen on; volume keys change slides (`HardwareKeys`).
+- `GlassDialog` outside `MenuHost` (share window, controller) is a solid card with 24 dp side margins, at most `MaxContentWidth`: clear glass in a see-through window has nothing recorded behind it, and text ran over the app beneath.
 - Long-press menus: `MenuHost` (wraps the app in MainActivity) + `LocalMenu.current.show(boundsInRoot, items, title)`,
   triggered from `liquidPress(onLongClick)`. Drawn IN the app's window (a Popup is a separate window: it can't see the
   page, so it was an opaque slab the user called broken): while open the app records into a backdrop and the menu is

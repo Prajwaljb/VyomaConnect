@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import dev.vyoma.connect.designsystem.MenuHost
+import dev.vyoma.connect.platform.AppLock
 import dev.vyoma.connect.designsystem.StatusHost
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -57,6 +58,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 private const val PAGE_SWIPE_MS = 420
+private const val PC_FILES = "To open the PC's files"
 
 sealed interface Screen {
     /** The tabs (Home, Files, Settings) under the floating bar. */
@@ -131,6 +133,12 @@ class MainActivity : ComponentActivity() {
         super.onWindowFocusChanged(hasFocus)
         // Focus is what Android wants before it lets us read the clipboard.
         if (hasFocus) vm.onForeground()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Came back after the phone was locked or left for a while: its files are asked for again.
+        if (!AppLock.isOpen(this)) backStack.removeAll { it is Screen.Files }
     }
 
     private fun handleIntent(intent: Intent?) {
@@ -297,13 +305,13 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                             onOpenDevice = { backStack.add(Screen.DeviceDetail(it)) },
                             onTouchpad = { id -> backStack.add(Screen.Touchpad(id, keyboard = false)) },
                             onClipboard = { backStack.add(Screen.Clipboard) },
-                            onBrowseFiles = { id -> backStack.add(Screen.Files(id)) },
+                            onBrowseFiles = { id -> AppLock.ask(context, PC_FILES) { backStack.add(Screen.Files(id)) } },
                             onFiles = { toTab(Tab.FILES) },
                             onCaptures = { backStack.add(Screen.Captures) },
                         )
                         Tab.FILES -> FilesHubScreen(
                             vm = vm,
-                            onBrowse = { id, path -> backStack.add(Screen.Files(id, path)) },
+                            onBrowse = { id, path -> AppLock.ask(context, PC_FILES) { backStack.add(Screen.Files(id, path)) } },
                             onClipboard = { backStack.add(Screen.Clipboard) },
                             onCaptures = { backStack.add(Screen.Captures) },
                         )

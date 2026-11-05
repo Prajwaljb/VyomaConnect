@@ -37,7 +37,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import dev.vyoma.connect.platform.AppLock
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -116,6 +118,7 @@ fun rememberPcControls(plugin: CompanionPlugin): PcControls? {
 fun PcPowerDialog(plugin: CompanionPlugin, pcName: String, action: PcPower, onDismiss: () -> Unit) {
     val status = LocalStatus.current
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     GlassDialog(
         onDismissRequest = onDismiss,
         title = { Text("${action.label} $pcName?") },
@@ -123,10 +126,12 @@ fun PcPowerDialog(plugin: CompanionPlugin, pcName: String, action: PcPower, onDi
         confirmButton = {
             DialogButton(destructive = action != PcPower.SLEEP, onClick = {
                 onDismiss()
-                scope.launch {
-                    plugin.power(action)
-                        .onSuccess { status.show(action.done, icon = action.icon) }
-                        .onFailure { status.show(it.message ?: "The PC refused", failure = true) }
+                AppLock.ask(context, "To ${action.label.lowercase()} $pcName") {
+                    scope.launch {
+                        plugin.power(action)
+                            .onSuccess { status.show(action.done, icon = action.icon) }
+                            .onFailure { status.show(it.message ?: "The PC refused", failure = true) }
+                    }
                 }
             }) { Text(action.label) }
         },

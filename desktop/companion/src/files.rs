@@ -6,7 +6,8 @@
 
 use std::net::IpAddr;
 use std::path::{Component, Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::sync::Mutex;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -18,6 +19,8 @@ use crate::payload;
 
 /// Plenty for a phone list; a folder with more is cut short (and says so).
 const MAX_ENTRIES: usize = 5000;
+const TELL_EVERY: Duration = Duration::from_secs(30);
+static LAST_TOLD: Mutex<Option<Instant>> = Mutex::new(None);
 
 pub async fn list(sender: &Sender, rel: &str) -> Result<()> {
     let body = match read_dir(rel).await {
@@ -27,7 +30,7 @@ pub async fn list(sender: &Sender, rel: &str) -> Result<()> {
     sender.send(&link::packet("vyoma.files.listing", body)).await
 }
 
-pub async fn send(sender: &Sender, me: &Identity, pinned: &[u8], rel: &str) -> Result<()> {
+pub async fn send(sender: &Sender, me: &Identity, pinned: &[u8], rel: &str, phone_name: &str) -> Result<()> {
     let opened = async {
         let path = resolve(rel).await?;
         let file = tokio::fs::File::open(&path).await.context("couldn't open the file")?;
@@ -46,13 +49,26 @@ pub async fn send(sender: &Sender, me: &Identity, pinned: &[u8], rel: &str) -> R
         }
     };
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    if should_tell(&LAST_TOLD, Instant::now()) {
+        crate::notice::tell("document-send", "File read from your phone", &format!("{phone_name} is copying {name} from this PC.")).await;
+    }
     let announce = link::packet("vyoma.files.file", json!({ "path": rel, "name": name }));
     payload::offer(sender, me, pinned, announce, size, tokio::io::BufReader::with_capacity(256 * 1024, file)).await
 }
 
+/// One notice per stretch of reading, so a folder's worth of files doesn't fill the screen.
+fn should_tell(last: &Mutex<Option<Instant>>, now: Instant) -> bool {
+    let mut last = last.lock().unwrap();
+    let due = last.is_none_or(|t| now.duration_since(t) >= TELL_EVERY);
+    if due {
+        *last = Some(now);
+    }
+    due
+}
+
 /// Saves a file the phone uploads into a home folder. It's written beside the target under a
 /// hidden name and only renamed into place once complete, and never replaces an existing file.
-pub async fn receive(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value) -> Result<()> {
+pub async fn receive(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value, phone_name: &str) -> Result<()> {
     let folder = packet["body"]["path"].as_str().unwrap_or_default().to_string();
     let wanted = packet["body"]["name"].as_str().unwrap_or_default().to_string();
     let result = async {
@@ -77,6 +93,7 @@ pub async fn receive(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAdd
         }
         let target = free_name(&dir, &name).await;
         tokio::fs::rename(&part, &target).await?;
+        crate::xfer::notify(phone_name, &target, None);
         Ok::<_, anyhow::Error>(target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(name))
     }
     .await;
@@ -175,6 +192,15 @@ fn home() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_burst_of_reads_tells_once() {
+        let last = Mutex::new(None);
+        let start = Instant::now();
+        assert!(should_tell(&last, start));
+        assert!(!should_tell(&last, start + Duration::from_secs(29)));
+        assert!(should_tell(&last, start + TELL_EVERY));
+    }
 
     #[tokio::test]
     async fn only_plain_paths_inside_home_resolve() {

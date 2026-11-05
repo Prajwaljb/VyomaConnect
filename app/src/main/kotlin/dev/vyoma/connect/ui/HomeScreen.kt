@@ -74,6 +74,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.ui.platform.LocalContext
+import dev.vyoma.connect.platform.AppLock
 import androidx.compose.material.icons.rounded.Laptop
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.Refresh
@@ -227,12 +228,18 @@ fun HomeScreen(
                 // The PC's commands, one tap each (the tile opens the full list to edit).
                 if (commands.isNotEmpty()) {
                     item(key = "run-label") { SectionLabel("Run on PC", Modifier.animateItem()) }
-                    item(key = "run") { CommandChips(commands, Modifier.animateItem()) { cmd -> vm.runCommand(id, cmd.key); status.show("Running ${cmd.name}", icon = Icons.Rounded.Terminal) } }
+                    item(key = "run") {
+                        val context = LocalContext.current
+                        CommandChips(commands, Modifier.animateItem()) { cmd -> runGuarded(context, vm, id, cmd, status) }
+                    }
                 }
                 // What the PC's screen and camera sent: one compact row (the full strip is in Files).
                 item(key = "captures") {
                     CapturesRow(
-                        onTake = companionPlugin?.let { c -> { vm.capture(c.screenshot) } },
+                        onTake = companionPlugin?.let { c ->
+                            val context = LocalContext.current
+                            { AppLock.ask(context, AppLock.SCREENSHOT) { vm.capture(c.screenshot) } }
+                        },
                         onOpen = onCaptures,
                         modifier = Modifier.animateItem().padding(top = 8.dp),
                     )

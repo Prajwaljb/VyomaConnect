@@ -17,6 +17,10 @@ use crate::identity::Identity;
 use crate::link::Sender;
 
 const PAYLOAD_PORTS: std::ops::RangeInclusive<u16> = 1739..=1764;
+/// How long the phone has to fetch a payload, and to prove who it is once connected.
+const FETCH_WAIT: Duration = Duration::from_secs(15);
+const PROOF_LIMIT: Duration = Duration::from_secs(5);
+const MAX_PROOFS: usize = 4;
 
 pub async fn offer(sender: &Sender, me: &Identity, pinned: &[u8], packet: Value, size: u64, source: impl AsyncRead + Unpin) -> Result<()> {
     offer_sized(sender, me, pinned, packet, size as i64, source).await
@@ -33,20 +37,45 @@ async fn offer_sized(sender: &Sender, me: &Identity, pinned: &[u8], mut packet: 
     packet["payloadTransferInfo"] = json!({ "port": listener.local_addr()?.port() });
     sender.send(&packet).await?;
 
-    let (tcp, _) = tokio::time::timeout(Duration::from_secs(15), listener.accept()).await.context("phone never fetched the payload")??;
-    tcp.set_nodelay(true)?;
+    let mut tls = accept_phone(&listener, me, pinned).await?;
     if size < 0 {
-        live(&tcp);
-    }
-    let acceptor = TlsAcceptor::from(Arc::new(crate::link::server_config(me)?));
-    let mut tls = tokio::time::timeout(Duration::from_secs(10), acceptor.accept(tcp)).await.context("payload TLS timed out")??;
-    let peer = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).context("phone sent no certificate")?;
-    if peer.as_ref() != pinned {
-        bail!("payload peer isn't the paired phone");
+        live(tls.get_ref().0);
     }
     tokio::io::copy(&mut source, &mut tls).await?;
     tls.shutdown().await?;
     Ok(())
+}
+
+/// The first connection to prove it's the paired phone. Anyone on the network can reach this port,
+/// so one that's wrong or stalls is dropped and the wait goes on. Proofs run side by side, each with
+/// a time limit, so a few idle connections can't hold up the real one.
+async fn accept_phone(listener: &TcpListener, me: &Identity, pinned: &[u8]) -> Result<tokio_rustls::server::TlsStream<TcpStream>> {
+    let acceptor = TlsAcceptor::from(Arc::new(crate::link::server_config(me)?));
+    let mut proofs = tokio::task::JoinSet::new();
+    let wait = async {
+        loop {
+            tokio::select! {
+                accepted = listener.accept(), if proofs.len() < MAX_PROOFS => {
+                    let (acceptor, pinned, (tcp, _)) = (acceptor.clone(), pinned.to_vec(), accepted?);
+                    proofs.spawn(tokio::time::timeout(PROOF_LIMIT, async move {
+                        tcp.set_nodelay(true)?;
+                        let tls = acceptor.accept(tcp).await?;
+                        let peer = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).context("phone sent no certificate")?;
+                        if peer.as_ref() != pinned {
+                            bail!("not the paired phone");
+                        }
+                        Ok(tls)
+                    }));
+                }
+                Some(done) = proofs.join_next() => match done {
+                    Ok(Ok(Ok(tls))) => return Ok(tls),
+                    Ok(Ok(Err(e))) => tracing::info!("payload port: dropped a connection: {e:#}"),
+                    _ => tracing::info!("payload port: dropped a connection that stalled"),
+                },
+            }
+        }
+    };
+    tokio::time::timeout(FETCH_WAIT, wait).await.context("phone never fetched the payload")?
 }
 
 /// Opens the payload the phone announced in `packet`; reads end after `payloadSize` bytes.
@@ -128,4 +157,61 @@ async fn bind() -> Result<TcpListener> {
         }
     }
     bail!("no free payload port")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustls_pki_types::{PrivateKeyDer, ServerName};
+
+    fn identity() -> Identity {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let cert = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap().self_signed(&key).unwrap();
+        Identity { device_id: "test".into(), cert: cert.der().clone(), key: PrivateKeyDer::try_from(key.serialize_der()).unwrap() }
+    }
+
+    async fn dial(who: &Identity, port: u16) -> Result<()> {
+        let tcp = TcpStream::connect(("127.0.0.1", port)).await?;
+        let connector = TlsConnector::from(Arc::new(crate::link::client_config(who)?));
+        let mut tls = connector.connect(ServerName::IpAddress(IpAddr::from([127, 0, 0, 1]).into()), tcp).await?;
+        // With TLS 1.3 the client finishes first; one byte back proves it was let in.
+        let mut byte = [0];
+        tls.read_exact(&mut byte).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn strangers_at_the_port_dont_end_the_transfer() {
+        let (me, phone, stranger) = (identity(), identity(), identity());
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let pinned = phone.cert.to_vec();
+
+        // One gives up at once, one shows the wrong certificate, the rest sit there saying nothing.
+        drop(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+        let wrong = tokio::spawn(async move { dial(&stranger, port).await });
+        let mut idle = Vec::new();
+        for _ in 0..MAX_PROOFS {
+            idle.push(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+        }
+        let real = tokio::spawn(async move { dial(&phone, port).await });
+
+        let mut tls = accept_phone(&listener, &me, &pinned).await.expect("the phone gets through");
+        tls.write_all(&[1]).await.unwrap();
+        tls.flush().await.unwrap();
+        real.await.unwrap().unwrap();
+        assert!(wrong.await.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn nobody_but_the_phone_is_served() {
+        let (me, stranger) = (identity(), identity());
+        let pinned = identity().cert.to_vec();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dialled = tokio::spawn(async move { dial(&stranger, port).await });
+        let waited = tokio::time::timeout(Duration::from_millis(800), accept_phone(&listener, &me, &pinned)).await;
+        assert!(waited.is_err(), "still waiting for the phone");
+        assert!(dialled.await.unwrap().is_err());
+    }
 }

@@ -1,5 +1,5 @@
 //! PC screenshot to phone. Spectacle (always on Plasma) captures in the background with no
-//! prompt or notification; the image travels as a payload (see payload.rs).
+//! prompt or notification of its own, so we show one; the image travels as a payload (see payload.rs).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -13,7 +13,7 @@ use crate::payload;
 
 /// Captures the whole desktop and offers it to the phone. On failure the phone gets an error
 /// packet instead, so it never waits on a spinner.
-pub async fn capture_and_send(sender: &Sender, me: &Identity, pinned: &[u8]) -> Result<()> {
+pub async fn capture_and_send(sender: &Sender, me: &Identity, pinned: &[u8], phone_name: &str) -> Result<()> {
     let image = match capture().await {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -21,6 +21,7 @@ pub async fn capture_and_send(sender: &Sender, me: &Identity, pinned: &[u8]) -> 
             return Err(e);
         }
     };
+    crate::notice::tell("camera-photo", "Screenshot taken from your phone", &format!("{phone_name} took a screenshot of this PC.")).await;
     let announce: Value = link::packet("vyoma.screenshot", json!({ "format": "webp" }));
     payload::offer(sender, me, pinned, announce, image.len() as u64, image.as_slice()).await
 }

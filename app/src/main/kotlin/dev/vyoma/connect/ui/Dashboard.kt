@@ -190,6 +190,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import dev.vyoma.connect.platform.AppLock
+import dev.vyoma.connect.designsystem.StatusController
+import dev.vyoma.connect.designsystem.VyomaSwitch
+import dev.vyoma.connect.protocol.plugin.builtin.RemoteCommand
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -395,7 +400,7 @@ fun PcDashboard(
                     Icons.Rounded.ScreenShare, "Screen", SystemColor.PINK,
                     menu = listOf(
                         MenuItem("Watch the screen", Icons.Rounded.ScreenShare) { PcScreenActivity.open(context, id) },
-                        MenuItem("Take a screenshot", Icons.Rounded.Screenshot) { vm.capture(shots.screenshot) },
+                        MenuItem("Take a screenshot", Icons.Rounded.Screenshot) { AppLock.ask(context, AppLock.SCREENSHOT) { vm.capture(shots.screenshot) } },
                         MenuItem("Show phone on PC", Icons.Rounded.MobileScreenShare) { MirrorActivity.open(context) },
                     ),
                 ) { PcScreenActivity.open(context, id) }
@@ -405,8 +410,8 @@ fun PcDashboard(
                     val webcam = MenuItem("Phone as webcam", Icons.Rounded.Videocam) { WebcamActivity.open(context) }
                     if (cameraOk) Control(
                         Icons.Rounded.PhotoCamera, "Camera", SystemColor.ORANGE,
-                        menu = listOf(MenuItem("Take a laptop photo", Icons.Rounded.PhotoCamera) { vm.capture(shots.photo) }, webcam),
-                    ) { vm.capture(shots.photo) }
+                        menu = listOf(MenuItem("Take a laptop photo", Icons.Rounded.PhotoCamera) { AppLock.ask(context, AppLock.CAMERA) { vm.capture(shots.photo) } }, webcam),
+                    ) { AppLock.ask(context, AppLock.CAMERA) { vm.capture(shots.photo) } }
                     else Control(Icons.Rounded.NoPhotography, "Camera", SystemColor.ORANGE, unavailable = true, menu = listOf(webcam)) {
                         status.show("The laptop's lid is closed. Hold for the phone as webcam", icon = Icons.Rounded.NoPhotography, failure = true)
                     }
@@ -429,7 +434,7 @@ fun PcDashboard(
                     Icons.Rounded.Terminal, "Commands", SystemColor.GRAY, opens = true,
                     menuTitle = "Run on PC",
                     menu = commandList.take(6).map { cmd ->
-                        MenuItem(cmd.name) { vm.runCommand(id, cmd.key); status.show("Running ${cmd.name}", icon = Icons.Rounded.Terminal) }
+                        MenuItem(cmd.name) { runGuarded(context, vm, id, cmd, status) }
                     }.ifEmpty { null },
                 ) { showCommands = true },
             ).map { c ->
@@ -445,7 +450,10 @@ fun PcDashboard(
                     SystemColor.MINT,
                     active = pc.locked == true,
                     toggle = true,
-                ) { vm.setPcLocked(id, pc.locked != true) },
+                ) {
+                    if (pc.locked == true) AppLock.ask(context, "To unlock the PC") { vm.setPcLocked(id, false) }
+                    else vm.setPcLocked(id, true)
+                },
                 // Turned all the way down is as silent as muted, so it reads the same; tapped, it
                 // comes back at a third rather than staying at nothing.
                 run {
@@ -1100,10 +1108,21 @@ private fun Meter(label: String, value: String?, unit: String, fraction: Float, 
     }
 }
 
+/** Runs [cmd], first asking for the fingerprint if it's one the owner marked in [CommandsSheet]. */
+internal fun runGuarded(context: Context, vm: AppViewModel, id: String, cmd: RemoteCommand, status: StatusController) {
+    val run = {
+        vm.runCommand(id, cmd.key)
+        status.show("Running ${cmd.name}", icon = Icons.Rounded.Terminal)
+    }
+    if (AppLock.commandLocked(context, id, cmd.key)) AppLock.askForCommand(context, "To run ${cmd.name}", run) else run()
+}
+
 /** The PC's commands, run from where you are; set up (or edited) on the PC itself. */
 @Composable
 internal fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) {
     val status = LocalStatus.current
+    val context = LocalContext.current
+    var lockChanges by remember { mutableIntStateOf(0) }
     val device = remember(id) { vm.device(id) }
     val commands by (device?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands ?: remember { MutableStateFlow(emptyList()) }).collectAsState()
     GlassDialog(
@@ -1115,16 +1134,30 @@ internal fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) 
             } else {
                 Column(Modifier.heightIn(max = 360.dp).fadingVerticalScroll(rememberScrollState())) {
                     commands.forEachIndexed { i, cmd ->
+                        val locked = remember(lockChanges, cmd.key) { AppLock.commandLocked(context, id, cmd.key) }
+                        fun setLocked(want: Boolean) {
+                            fun save() {
+                                AppLock.setCommandLocked(context, id, cmd.key, want)
+                                lockChanges++
+                            }
+                            // Anyone holding the phone could otherwise just switch it off first.
+                            if (want) save() else AppLock.confirm(context, "To let ${cmd.name} run without asking", ::save)
+                        }
                         // Names only: the shell line is for editing, on the PC or in its details.
                         ListRow(
                             title = cmd.name,
+                            // Says what the switch is for: alone, it could read as the command being on or off.
+                            subtitle = if (locked) "Asks for your fingerprint" else "Runs straight away",
+                            subtitleMaxLines = 1,
                             icon = Icons.Rounded.Terminal,
                             iconTint = SystemColor.GRAY.color,
                             showDivider = i < commands.lastIndex,
                             horizontalPadding = 0.dp,
+                            trailing = {
+                                VyomaSwitch(checked = locked, onCheckedChange = ::setLocked, contentDescription = "Ask for fingerprint before ${cmd.name}")
+                            },
                             onClick = {
-                                vm.runCommand(id, cmd.key)
-                                status.show("Running ${cmd.name}", icon = Icons.Rounded.Terminal)
+                                runGuarded(context, vm, id, cmd, status)
                                 onDismiss()
                             },
                         )
