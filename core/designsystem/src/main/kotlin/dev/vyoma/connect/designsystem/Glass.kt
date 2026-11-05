@@ -683,7 +683,7 @@ fun Modifier.glassChrome(
             // over the lens's picture of what's behind, under the band and highlight: it darkens
             // only that, so over a black page it's gone and over bright content it shows, as Apple's.
             translate(-grow, -grow) {
-                with(RimShadow) { stroke(Outline.Rounded(RoundRect(Rect(Offset.Zero, g), CornerRadius(corner))), g, corner, 1.dp.toPx(), if (dark) 0.55f else 0.4f) }
+                with(RimShadow) { stroke(Outline.Rounded(RoundRect(Rect(Offset.Zero, g), CornerRadius(corner))), g, corner, 1.dp.toPx(), if (dark) 0.55f else 0.2f) }
             }
             // The band and its shading swell with the glass: left at rest size they read as a
             // second, smaller pane on top of the pressed one.
