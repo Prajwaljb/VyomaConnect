@@ -47,6 +47,8 @@ const SERVICE: &str = "_kdeconnect._udp.local.";
 /// How long a stats subscription lasts; the phone renews it while the dashboard is on screen.
 const STATS_LEASE: Duration = Duration::from_secs(12);
 const STATS_EVERY: Duration = Duration::from_secs(2);
+/// How soon a phone unpaired in KDE Connect (lost or stolen, say) loses a session it already has.
+const TRUST_CHECK: Duration = Duration::from_secs(5);
 
 struct Shared {
     host: KdeHost,
@@ -301,8 +303,24 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
     if let Some(address) = bluetooth::address().await {
         let _ = link.sender.send(&packet("vyoma.bluetooth", json!({ "address": address }))).await;
     }
+    let mut trust_check = tokio::time::interval(TRUST_CHECK);
     let result = loop {
-        let Some(p) = link.receiver.next().await? else { break Ok(()) };
+        let next = tokio::select! {
+            next = link.receiver.next() => next,
+            _ = trust_check.tick() => {
+                if !still_trusted(&shared.host.trusted_phones(), phone_id, pinned) {
+                    warn!("{name}: no longer paired in KDE Connect; ending its session");
+                    break Ok(());
+                }
+                continue;
+            }
+        };
+        let p = match next {
+            Ok(Some(p)) => p,
+            Ok(None) => break Ok(()),
+            // Through the cleanup below too: the screen, camera and controller must end with the link.
+            Err(e) => break Err(e),
+        };
         while file_tasks.try_join_next().is_some() {}
         match p["type"].as_str().unwrap_or_default() {
             "kdeconnect.pair" => match p["body"]["pair"].as_bool() {
@@ -624,6 +642,10 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
     result
 }
 
+fn still_trusted(trusted: &HashMap<String, Vec<u8>>, phone_id: &str, pinned: &[u8]) -> bool {
+    trusted.get(phone_id).is_some_and(|cert| cert.as_slice() == pinned)
+}
+
 /// Sends the wallpaper's colours whenever it changes (checked every few seconds; the phone asks for
 /// the current one itself when it connects).
 async fn watch_wallpaper(sender: Sender) {
@@ -688,5 +710,19 @@ async fn stream_stats(sender: Sender, lease: Arc<Mutex<Instant>>, media: Option<
         if sender.send(&packet("vyoma.stats", body)).await.is_err() {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_session_lasts_only_as_long_as_its_pairing() {
+        let trusted = HashMap::from([("phone".to_string(), vec![1, 2, 3])]);
+        assert!(still_trusted(&trusted, "phone", &[1, 2, 3]));
+        assert!(!still_trusted(&trusted, "phone", &[9]));
+        assert!(!still_trusted(&trusted, "other", &[1, 2, 3]));
+        assert!(!still_trusted(&HashMap::new(), "phone", &[1, 2, 3]));
     }
 }
