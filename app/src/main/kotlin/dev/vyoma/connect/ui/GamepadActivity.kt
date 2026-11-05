@@ -213,6 +213,7 @@ class GamepadActivity : ComponentActivity() {
                 companion.collectLatest { c ->
                     val p = c?.first ?: return@collectLatest
                     p.cable = cable
+                    p.radio = dev.vyoma.connect.service.BluetoothPadChannel(applicationContext, p.pcId)
                     coroutineScope {
                         launch { p.rumble.collect(::rumble) }
                         p.streamGamepad(state)
@@ -237,8 +238,9 @@ class GamepadActivity : ComponentActivity() {
                     error != null -> error
                     else -> "$padName on ${pcName ?: "the PC"}" + (when (route) {
                         GamepadRoute.USB -> " · cable"
+                        GamepadRoute.BLUETOOTH -> " · Bluetooth"
                         // Wi-Fi can be fine or stutter: say so, and what's smoother.
-                        GamepadRoute.WIFI -> " · Wi-Fi (a cable is smoother)"
+                        GamepadRoute.WIFI -> " · Wi-Fi (cable or Bluetooth is smoother)"
                         null -> ""
                     }) +
                         (if (all.size > 1) " · ${profile.name}" else "")
@@ -945,7 +947,7 @@ private fun SettingsPanel(
                 }
                 PillButton("Edit layout", onEditLayout, modifier = Modifier.fillMaxWidth())
                 Text(
-                    "Tip: for the least lag, plug the phone into the PC with a USB cable. Over Wi-Fi the controller can stutter when the network is busy.",
+                    "Tip: for the least lag, plug the phone into the PC with a USB cable, or turn on Steadier over Bluetooth in Settings. Over Wi-Fi the controller can stutter when the network is busy.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

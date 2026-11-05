@@ -123,7 +123,10 @@ fun TabsRoot(
     // (parallaxed and dimmed, as under a pushed page), and finishes or snaps back from wherever you let go.
     val swipe = remember { Animatable(0f) }
     val swipeScope = rememberCoroutineScope()
+    val visited = remember { mutableStateListOf(tab) }
     PredictiveBackHandler(enabled = backToHome && tab != Tab.HOME) { events ->
+        // Swiping soon after this page came back from a pushed one: Home must be there to show.
+        if (Tab.HOME !in visited) visited.add(Tab.HOME)
         try {
             events.collect { swipe.snapTo(it.progress) }
         } catch (e: CancellationException) {
@@ -141,7 +144,6 @@ fun TabsRoot(
     }
     val holder = rememberSaveableStateHolder()
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val visited = remember { mutableStateListOf(tab) }
     if (tab !in visited) visited.add(tab)
     LaunchedEffect(Unit) {
         delay(800)

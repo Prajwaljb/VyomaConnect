@@ -99,6 +99,7 @@ import dev.vyoma.connect.designsystem.ListRow
 import dev.vyoma.connect.designsystem.OrbState
 import dev.vyoma.connect.designsystem.SectionCard
 import dev.vyoma.connect.designsystem.SectionLabel
+import dev.vyoma.connect.designsystem.pressGroup
 import dev.vyoma.connect.designsystem.pressable
 import dev.vyoma.connect.protocol.DeviceType
 import dev.vyoma.connect.protocol.device.DeviceState
@@ -109,7 +110,7 @@ import dev.vyoma.connect.protocol.link.TransportKind
 fun HomeScreen(
     vm: AppViewModel,
     onOpenDevice: (String) -> Unit,
-    onKeyboard: (String) -> Unit,
+    onTouchpad: (String) -> Unit,
     onClipboard: () -> Unit,
     onBrowseFiles: (String) -> Unit,
     onFiles: () -> Unit = {},
@@ -163,7 +164,7 @@ fun HomeScreen(
             val id = primary.identity.deviceId
             if (connected.size > 1) {
                 item(key = "switcher") {
-                    Row(Modifier.animateItem().fadingHorizontalScroll(rememberScrollState(), bleed = 16.dp).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.animateItem().pressGroup().fadingHorizontalScroll(rememberScrollState(), bleed = 16.dp).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         connected.forEach { d ->
                             val on = d.identity.deviceId == id
                             Text(
@@ -185,7 +186,7 @@ fun HomeScreen(
             }
             item(key = "status") {
                 Staggered(0, Modifier.animateItem()) {
-                    PcDashboard(vm, primary, DashboardSection.STATUS, { onKeyboard(id) }, onClipboard)
+                    PcDashboard(vm, primary, DashboardSection.STATUS, { onTouchpad(id) }, onClipboard)
                 }
             }
             // What's playing, then the sound (order by frequency: state, what you adjust, actions).
@@ -213,13 +214,13 @@ fun HomeScreen(
             // Spacing groups Home (no labels): what the PC is doing, then what you control.
             if (live) item(key = "volume") {
                 Staggered(2, Modifier.animateItem().padding(top = 8.dp)) {
-                    PcDashboard(vm, primary, DashboardSection.VOLUME, { onKeyboard(id) }, onClipboard)
+                    PcDashboard(vm, primary, DashboardSection.VOLUME, { onTouchpad(id) }, onClipboard)
                 }
             }
             item(key = "controls") {
                 // Free-floating tiles need air from the card above them.
                 Staggered(2, Modifier.animateItem().padding(top = 8.dp)) {
-                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onKeyboard(id) }, onClipboard, onBrowseFiles = { onBrowseFiles(id) }, onFiles = onFiles)
+                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onTouchpad(id) }, onClipboard, onBrowseFiles = { onBrowseFiles(id) }, onFiles = onFiles)
                 }
             }
             if (live) {
@@ -302,7 +303,7 @@ fun HomeScreen(
 @Composable
 private fun CommandChips(commands: List<RemoteCommand>, modifier: Modifier = Modifier, onRun: (RemoteCommand) -> Unit) {
     Row(
-        modifier.fillMaxWidth().fadingHorizontalScroll(rememberScrollState(), bleed = 16.dp).padding(horizontal = 16.dp),
+        modifier.fillMaxWidth().pressGroup().fadingHorizontalScroll(rememberScrollState(), bleed = 16.dp).padding(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         commands.forEach { cmd ->

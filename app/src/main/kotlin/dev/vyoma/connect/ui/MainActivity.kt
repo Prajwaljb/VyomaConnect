@@ -255,7 +255,12 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
             if (order(targetState) > order(initialState)) {
                 slideInHorizontally(slide) { it } togetherWith slideOutHorizontally(slide) { -it / 4 }
             } else {
-                (slideInHorizontally(slide) { -it / 4 } togetherWith slideOutHorizontally(slide) { it }).apply { targetContentZIndex = -1f }
+                slideInHorizontally(slide) { -it / 4 } togetherWith slideOutHorizontally(slide) { it }
+            }.apply {
+                // The deeper page is always on top. A page keeps the z it entered with, so a fixed -1
+                // for going back left a page you'd come back to level with its parent: swiping back
+                // from it drew the parent over it, cut off at 3/4 of the width.
+                targetContentZIndex = order(targetState).toFloat()
             }
         },
     ) { screen ->
@@ -290,7 +295,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                         Tab.HOME -> HomeScreen(
                             vm = vm,
                             onOpenDevice = { backStack.add(Screen.DeviceDetail(it)) },
-                            onKeyboard = { id -> backStack.add(Screen.Touchpad(id, keyboard = true)) },
+                            onTouchpad = { id -> backStack.add(Screen.Touchpad(id, keyboard = false)) },
                             onClipboard = { backStack.add(Screen.Clipboard) },
                             onBrowseFiles = { id -> backStack.add(Screen.Files(id)) },
                             onFiles = { toTab(Tab.FILES) },

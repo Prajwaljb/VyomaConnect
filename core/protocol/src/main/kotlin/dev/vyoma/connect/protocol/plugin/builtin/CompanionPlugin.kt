@@ -76,8 +76,37 @@ data class GamepadState(
     val my: Int = 0,
 )
 
+/** Times frames the PC echoed, per route, for the log. Echoes come on their own coroutines. */
+internal class RoundTrips(private val what: String = "controller") {
+    private val sent = java.util.concurrent.ConcurrentHashMap<Int, Long>()
+    private val samples = mutableListOf<Long>()
+
+    fun sending(seq: Int) {
+        if (seq % ECHO_EVERY != 0) return
+        if (sent.size > 64) sent.clear() // Lost echoes.
+        sent[seq] = System.nanoTime()
+    }
+
+    fun echoed(seq: Int) {
+        val at = sent.remove(seq) ?: return
+        synchronized(samples) { samples += (System.nanoTime() - at) / 1_000_000 }
+    }
+
+    fun report(route: Any?) {
+        val all = synchronized(samples) { samples.sorted().also { samples.clear() } }
+        if (all.isEmpty()) return
+        VLog.i(
+            "CompanionPlugin",
+            "$what round trip over ${route ?: "the link"}: median ${all[all.size / 2]} ms, " +
+                "95% under ${all[all.size * 95 / 100]} ms, worst ${all.last()} ms (${all.size} samples)",
+        )
+    }
+
+    private companion object { const val ECHO_EVERY = 32 }
+}
+
 /** How the controller's states reach the PC beside the link. */
-enum class GamepadRoute { WIFI, USB }
+enum class GamepadRoute { WIFI, BLUETOOTH, USB }
 
 /** The pad games on the PC see. */
 enum class PadKind(val wire: String) { XBOX("xbox"), DUALSENSE("dualsense") }
@@ -182,6 +211,10 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     val controls: StateFlow<PcControls?> = _controls.asStateFlow()
 
     suspend fun requestControls() = ctx.send(packet(PC_REQUEST))
+
+    private val _bluetoothAddress = MutableStateFlow<String?>(null)
+    /** This PC's Bluetooth address, for when Wi-Fi is gone (the app's BluetoothTunnel). */
+    val bluetoothAddress: StateFlow<String?> = _bluetoothAddress.asStateFlow()
 
     private val _wallpaper = MutableStateFlow<PcWallpaper?>(null)
     /** The PC's wallpaper colours, asked for on every link (it may have changed since). */
@@ -318,6 +351,23 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
 
     /** Turns the PC's screens back on and unlocks it (the stock unlock left a dark screen dark). */
     suspend fun wake() = ctx.send(packet(PC_WAKE))
+
+    private var pendingPaste: CompletableDeferred<String?>? = null
+    private val _typingFailed = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
+    /** Text sent to the live screen didn't all arrive. */
+    val typingFailed: SharedFlow<Unit> = _typingFailed.asSharedFlow()
+
+    /**
+     * Puts [text] on the PC's clipboard for a paste. True once it's there; the PC puts back what
+     * was on it by itself. Only one at a time.
+     */
+    suspend fun preparePaste(text: String): Boolean {
+        val reply = CompletableDeferred<String?>()
+        pendingPaste = reply
+        ctx.send(packet(PASTE) { put("text", text) })
+        val answer = withTimeoutOrNull(PASTE_WAIT_MS) { reply.await() ?: "" }
+        return answer == ""
+    }
 
     private var pendingPower: CompletableDeferred<String?>? = null
 
@@ -643,6 +693,17 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     }
     @Volatile var cable: CableChannel? = null
 
+    /** A radio channel for the controller's frames beside the link, steadier than Wi-Fi when there is one. */
+    interface RadioChannel {
+        /** Blocks while connecting; null when there's no way right now. Output first, then the echoes. */
+        fun open(): Pair<java.io.OutputStream, java.io.InputStream>?
+        fun close()
+    }
+    @Volatile var radio: RadioChannel? = null
+
+    /** The PC this companion belongs to. */
+    val pcId: String? get() = ctx.device.identity.companionOf
+
     /**
      * Sends [states] to the PC's virtual pad for as long as this runs: every change at once (the flow
      * conflates, so a slow link only ever carries the newest), and the current one each second, which
@@ -651,7 +712,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
      * Once the PC offers its side channel, changes go there as signed frames instead: down the USB
      * cable when it's plugged in (the companion's adb reverse of [GAMEPAD_WIRED_PORT]; no Wi-Fi
      * stalls), else as UDP datagrams (when reached over a network), repeated every
-     * [GAMEPAD_REPEAT_MS] so a lost one heals fast. The cable is tried again each second, so plugging
+     * [GAMEPAD_REPEAT_MS] so a lost one heals fast. A [radio] sits between them when there is one,
+     * opened in the background since it takes seconds. The cable is tried again each second, so plugging
      * in mid-game moves over. The link still carries the once-a-second state. Every state is
      * numbered so the PC drops older ones.
      */
@@ -666,11 +728,46 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         var lastAsk = 0L
         var mac: javax.crypto.Mac? = null
         var lastLink = 0L
+        var radioOut: java.io.OutputStream? = null
+        val radioReady = java.util.concurrent.atomic.AtomicReference<Pair<java.io.OutputStream, java.io.InputStream>?>(null)
+        val radioUp = java.util.concurrent.atomic.AtomicBoolean(false)
+        val trips = RoundTrips()
+        var lastReport = System.nanoTime() / 1_000_000
         fun route() {
-            _gamepadRoute.value = when {
+            val now = when {
                 wired != null -> GamepadRoute.USB
+                radioOut != null -> GamepadRoute.BLUETOOTH
                 socket != null -> GamepadRoute.WIFI
                 else -> null
+            }
+            if (now != _gamepadRoute.value) trips.report(_gamepadRoute.value)
+            _gamepadRoute.value = now
+        }
+        /** The PC echoes every so often, so the round trip is timed on the route frames really take. */
+        fun listen(input: java.io.InputStream) {
+            launch { runCatching { val echoes = java.io.DataInputStream(input); while (true) trips.echoed(echoes.readInt()) } }
+        }
+        fun listen(udp: java.net.DatagramSocket?) {
+            if (udp != null) launch {
+                val echo = java.net.DatagramPacket(ByteArray(4), 4)
+                runCatching { while (true) { udp.receive(echo); trips.echoed(java.nio.ByteBuffer.wrap(echo.data).int) } }
+            }
+        }
+        fun dropRadio() {
+            runCatching { radioOut?.close() }
+            radio?.close()
+            radioOut = null
+            radioUp.set(false)
+        }
+        val radioJob = launch {
+            while (true) {
+                if (gamepadOffer.value != null && !radioUp.get()) {
+                    runCatching { radio?.open() }.getOrNull()?.let {
+                        radioUp.set(true)
+                        radioReady.set(it)
+                    }
+                }
+                delay(GAMEPAD_RADIO_RETRY_MS)
             }
         }
         fun dropWired() {
@@ -692,6 +789,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
             }.getOrNull()
             wired = wiredSocket?.getOutputStream() ?: cable?.open()
             if (wired != null) {
+                wiredSocket?.let { listen(it.getInputStream()) }
                 socket?.close()
                 socket = null
                 VLog.i(TAG, "controller over the USB cable" + if (wiredSocket == null) " (accessory)" else "")
@@ -719,13 +817,25 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                     tryWired()
                     if (wired == null) {
                         socket = offer?.let { ctx.device.datagramTo(it.port) }
+                        listen(socket)
                         if (socket != null) VLog.i(TAG, "controller over UDP to port ${offer?.port}")
                     }
+                    route()
+                }
+                radioReady.getAndSet(null)?.let { (out, input) ->
+                    radioOut = out
+                    listen(input)
+                    VLog.i(TAG, "controller over Bluetooth")
                     route()
                 }
                 seq++
                 val now = System.nanoTime() / 1_000_000
                 val frame = if (used != null) gamepadDatagram(current, sid, seq, mac!!) else null
+                if (frame != null) trips.sending(seq)
+                if (now - lastReport >= GAMEPAD_REPORT_MS) {
+                    lastReport = now
+                    trips.report(_gamepadRoute.value)
+                }
                 var fast = false
                 wired?.let { w ->
                     fast = runCatching { w.write(frame!!); w.flush() }.isSuccess
@@ -733,7 +843,16 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                         // Unplugged (or the PC went): back to Wi-Fi.
                         dropWired()
                         socket = used?.let { ctx.device.datagramTo(it.port) }
+                        listen(socket)
                         VLog.i(TAG, "controller cable gone; " + if (socket != null) "over UDP" else "over the link")
+                        route()
+                    }
+                }
+                if (!fast) radioOut?.let { r ->
+                    fast = runCatching { r.write(frame!!); r.flush() }.isSuccess
+                    if (!fast) {
+                        dropRadio()
+                        VLog.i(TAG, "controller's Bluetooth gone")
                         route()
                     }
                 }
@@ -758,8 +877,12 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                 current = withTimeoutOrNull(wait) { states.first { it != sent } } ?: sent
             }
         } finally {
+            radioJob.cancel()
+            radioReady.getAndSet(null)?.first?.let { runCatching { it.close() } }
+            dropRadio()
             socket?.close()
             dropWired()
+            trips.report(_gamepadRoute.value)
             gamepadOffer.value = null
             _gamepadRoute.value = null
             withContext(kotlinx.coroutines.NonCancellable) { ctx.send(packet(GAMEPAD_CLOSE)) }
@@ -891,6 +1014,30 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         return Result.success(p.string("view") ?: "windows")
     }
 
+    private var pendingPointer: CompletableDeferred<NetworkPacket>? = null
+
+    /**
+     * The touchpad's own Bluetooth channel: the radio first, so the PC is never asked to allow control
+     * for a channel that can't connect, then a key over the link. Success(null): no radio right now, worth
+     * trying again; failure: the PC said no (or has no such thing), so don't keep asking.
+     */
+    suspend fun openPointer(radio: RadioChannel): Result<PointerChannel?> = withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val (out, input) = radio.open() ?: return@withContext Result.success(null)
+        val reply = CompletableDeferred<NetworkPacket>()
+        pendingPointer = reply
+        val answer = if (ctx.send(packet(POINTER_REQUEST) {})) withTimeoutOrNull(POINTER_TIMEOUT_MS) { reply.await() } else null
+        val key = answer?.string("key")?.let { runCatching { java.util.Base64.getDecoder().decode(it) }.getOrNull() }
+        if (key == null) {
+            radio.close()
+            return@withContext Result.failure(IllegalStateException(answer?.string("error") ?: "The PC didn't answer"))
+        }
+        Result.success(PointerChannel(out, input, key, radio::close))
+    }
+
+    fun closePointer() {
+        ctx.scope.launch { ctx.send(packet(POINTER_CLOSE) {}) }
+    }
+
     /** One UDP state, laid out as the companion's gamepad.rs reads it. */
     private fun gamepadDatagram(s: GamepadState, sid: Int, seq: Int, mac: javax.crypto.Mac): ByteArray {
         val b = java.nio.ByteBuffer.allocate(GAMEPAD_DATAGRAM)
@@ -914,6 +1061,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         if (packet.type == MIRROR_INPUT) receiveMirrorInput(packet)
         if (packet.type == MIRROR_STATE) receiveMirrorState(packet)
         if (packet.type == GAMEPAD_UDP) receiveGamepadOffer(packet)
+        if (packet.type == POINTER_READY) pendingPointer?.also { pendingPointer = null }?.complete(packet)
         if (packet.type == DESKTOP_STEPPED) pendingStep?.also { pendingStep = null }?.complete(packet)
         if (packet.type == SCREENSHOT) screenshot.receive(packet)
         if (packet.type == CAMERA) photo.receive(packet)
@@ -924,8 +1072,14 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         if (packet.type == FILES_SAVED) receiveSaved(packet)
         if (packet.type == PC) receiveControls(packet)
         if (packet.type == WALLPAPER) receiveWallpaper(packet)
+        if (packet.type == BLUETOOTH) packet.string("address")?.let { _bluetoothAddress.value = it }
         if (packet.type == XFER_READY) receiveXfer("ready", packet)
         if (packet.type == XFER_DONE) receiveXfer("done", packet)
+        if (packet.type == PASTE_READY) {
+            val waiting = pendingPaste
+            if (waiting != null) { pendingPaste = null; waiting.complete(packet.string("error")) }
+            else if (packet.string("error") != null) _typingFailed.tryEmit(Unit)
+        }
         if (packet.type == PC_POWERED) pendingPower?.also { pendingPower = null }?.complete(packet.string("error"))
         if (packet.type == STATS) {
             _stats.value = PcStats(
@@ -968,6 +1122,17 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private const val SCREEN_TIMEOUT_MS = 60_000L
         const val PC = "vyoma.pc"
         const val WALLPAPER = "vyoma.wallpaper"
+        const val BLUETOOTH = "vyoma.bluetooth"
+        private const val GAMEPAD_RADIO_RETRY_MS = 10_000L
+        private const val GAMEPAD_REPORT_MS = 30_000L
+        const val PASTE = "vyoma.paste"
+        const val POINTER_REQUEST = "vyoma.pointer.request"
+        const val POINTER_READY = "vyoma.pointer.ready"
+        const val POINTER_CLOSE = "vyoma.pointer.close"
+        /** Long enough for someone to answer the PC's "allow control" dialog. */
+        const val POINTER_TIMEOUT_MS = 60_000L
+        const val PASTE_READY = "vyoma.paste.ready"
+        private const val PASTE_WAIT_MS = 3_000L
         const val WALLPAPER_REQUEST = "vyoma.wallpaper.request"
         const val PC_REQUEST = "vyoma.pc.request"
         const val PC_SET = "vyoma.pc.set"
@@ -1020,8 +1185,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED, WEBCAM_STATE, MIRROR_INPUT, MIRROR_STATE),
-            outgoing = setOf(STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, SCREEN_INPUT, SCREEN_TOUCH, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, USB_ACCESSORY, WEBCAM, WEBCAM_MIC, WEBCAM_TURN, MIRROR, MIRROR_AUDIO, MIRROR_COPY, MIRROR_VOLUME),
+            incoming = setOf(POINTER_READY, BLUETOOTH, PASTE_READY, STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED, WEBCAM_STATE, MIRROR_INPUT, MIRROR_STATE),
+            outgoing = setOf(POINTER_REQUEST, POINTER_CLOSE, PASTE, STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, SCREEN_INPUT, SCREEN_TOUCH, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, USB_ACCESSORY, WEBCAM, WEBCAM_MIC, WEBCAM_TURN, MIRROR, MIRROR_AUDIO, MIRROR_COPY, MIRROR_VOLUME),
         ) { CompanionPlugin(it, sink) }
     }
 }

@@ -26,6 +26,7 @@ import dev.vyoma.connect.designsystem.SmoothCornerShape
 import androidx.compose.ui.graphics.lerp
 import dev.vyoma.connect.designsystem.glassCard
 import dev.vyoma.connect.designsystem.glassRaised
+import dev.vyoma.connect.designsystem.pressGroup
 import dev.vyoma.connect.designsystem.pressable
 import dev.vyoma.connect.designsystem.toned
 import androidx.compose.foundation.layout.Column
@@ -97,7 +98,7 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
         // Sending is the job people come here for: three big glass tiles, one per kind of thing.
         item(key = "send-label") { SectionLabel(pc?.let { "Send to ${it.identity.deviceName}" } ?: "Send to your PC", Modifier.animateItem()) }
         item(key = "send") {
-            Row(Modifier.animateItem().fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.animateItem().fillMaxWidth().pressGroup(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 SendTile(Icons.Rounded.UploadFile, "Files", SystemColor.BLUE, pc != null, Modifier.weight(1f)) { vm.pickFiles(context) }
                 SendTile(Icons.Rounded.PhotoLibrary, "Photos", SystemColor.PINK, pc != null, Modifier.weight(1f)) { vm.pickPhotos(context) }
                 SendTile(Icons.Rounded.ContentPasteGo, "Clipboard", SystemColor.ORANGE, pc != null, Modifier.weight(1f)) {

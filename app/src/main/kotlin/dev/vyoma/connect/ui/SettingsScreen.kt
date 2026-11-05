@@ -1,5 +1,8 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.designsystem.fadingVerticalScroll
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.rounded.TouchApp
 import dev.vyoma.connect.designsystem.accent
 import androidx.compose.material.icons.rounded.Park
 import dev.vyoma.connect.designsystem.LocalStatus
@@ -78,7 +81,9 @@ import dev.vyoma.connect.designsystem.Haptics
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Speed
+import dev.vyoma.connect.service.BluetoothFallback
 import androidx.compose.material.icons.rounded.AutoMode
 import androidx.compose.material.icons.rounded.Gradient
 import androidx.compose.material.icons.rounded.Wallpaper
@@ -286,6 +291,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                     trailing = { RowChevron(if (phoneOn) "On" else "Off") },
                     onClick = { if (!phoneOn) askPhone.launch(PhonePermissions.all) },
                 )
+                BluetoothRow(resumeTick)
+                SteadierRow(resumeTick)
                 ListRow(
                     // Named as on the Clipboard tab: one feature, one name.
                     title = "Sync when closed",
@@ -598,3 +605,113 @@ internal fun UsbHelpDialog(onDismiss: () -> Unit) {
     )
 }
 
+
+/** The controller and touchpad over Bluetooth. Most people's Wi-Fi doesn't need it, so the row opens to say why it's there. */
+@androidx.compose.runtime.Composable
+private fun SteadierRow(resumeTick: Int) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    remember { BluetoothFallback.init(context) }
+    val on by BluetoothFallback.steadier.collectAsStateWithLifecycle()
+    var open by remember { mutableStateOf(false) }
+    var asked by remember { mutableIntStateOf(0) }
+    val ready = remember(resumeTick, on, asked) { BluetoothFallback.readiness(context) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        asked++
+        if (granted) BluetoothFallback.setSteadier(context, true)
+    }
+    fun toggle(want: Boolean) {
+        if (want && !BluetoothFallback.permitted(context)) ask.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
+        else BluetoothFallback.setSteadier(context, want)
+    }
+    val waiting = when (ready) {
+        BluetoothFallback.Readiness.NO_ADAPTER -> "This phone has no Bluetooth."
+        BluetoothFallback.Readiness.RADIO_OFF -> "Turn on Bluetooth to use it."
+        BluetoothFallback.Readiness.PC_UNKNOWN -> "Connect once with the companion on your PC, so Vyoma can find it."
+        BluetoothFallback.Readiness.NOT_PAIRED -> "Pair this phone with your PC in Bluetooth settings."
+        else -> null
+    }
+    ListRow(
+        title = "Steadier over Bluetooth",
+        subtitle = "If the controller or cursor stutters",
+        icon = Icons.Rounded.TouchApp,
+        iconTint = SystemColor.BLUE.color,
+        showDivider = true,
+        trailing = { RowChevron(if (on) "On" else "Off") },
+        onClick = { open = true },
+    )
+    if (open) GlassDialog(
+        onDismissRequest = { open = false },
+        title = { Text("Steadier over Bluetooth") },
+        text = {
+            Column(Modifier.heightIn(max = 420.dp).fadingVerticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "On a busy Wi-Fi network, the controller and touchpad can stall for a moment: a game reacts late, and the cursor stutters or jumps.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "This sends them over Bluetooth instead. Good Wi-Fi can be quicker, but Bluetooth is usually more even.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "If they already feel smooth, you don't need it. A cable is always used first, and typing and files stay as they are.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "Needs the companion on your PC, which asks once to allow control of the cursor.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (on && waiting != null) Text(waiting, style = MaterialTheme.typography.bodySmall, color = SystemColor.ORANGE.color)
+                ListRow(
+                    title = "Use Bluetooth for both",
+                    horizontalPadding = 0.dp,
+                    haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
+                    onClick = { toggle(!on) },
+                    trailing = { VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Use Bluetooth for the controller and touchpad") },
+                )
+            }
+        },
+        confirmButton = { DialogButton(onClick = { open = false }) { Text("Done") } },
+    )
+}
+
+/** The fallback link: a switch, and what it still needs in words. Off until asked for (it needs a permission). */
+@androidx.compose.runtime.Composable
+private fun BluetoothRow(resumeTick: Int) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    remember { BluetoothFallback.init(context) }
+    val on by BluetoothFallback.enabled.collectAsStateWithLifecycle()
+    var asked by remember { mutableIntStateOf(0) }
+    val ready = remember(resumeTick, on, asked) { BluetoothFallback.readiness(context) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        asked++
+        if (granted) BluetoothFallback.setEnabled(context, true)
+        else runCatching {
+            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + context.packageName)))
+        }
+    }
+    fun openBluetoothSettings() = runCatching { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+    fun toggle(want: Boolean) {
+        if (!want) BluetoothFallback.setEnabled(context, false)
+        else if (BluetoothFallback.permitted(context)) BluetoothFallback.setEnabled(context, true)
+        else ask.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
+    }
+    val needsPairing = on && (ready == BluetoothFallback.Readiness.NOT_PAIRED || ready == BluetoothFallback.Readiness.RADIO_OFF)
+    ListRow(
+        title = "Bluetooth",
+        subtitle = when {
+            !on -> "Connect without Wi-Fi or cable"
+            ready == BluetoothFallback.Readiness.NO_ADAPTER -> "This phone has no Bluetooth"
+            ready == BluetoothFallback.Readiness.RADIO_OFF -> "Turn on Bluetooth to use it"
+            ready == BluetoothFallback.Readiness.PC_UNKNOWN -> "Connect once over Wi-Fi so it can find your PC"
+            ready == BluetoothFallback.Readiness.NOT_PAIRED -> "Pair this phone with your PC in Bluetooth settings"
+            else -> "Connect without Wi-Fi or cable"
+        },
+        icon = Icons.Rounded.Bluetooth,
+        iconTint = SystemColor.BLUE.color,
+        showDivider = true,
+        haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
+        onClick = { if (needsPairing) openBluetoothSettings() else toggle(!on) },
+        trailing = { VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Bluetooth") },
+    )
+}

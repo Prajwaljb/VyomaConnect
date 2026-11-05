@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import dev.vyoma.connect.protocol.link.TransportKind
+import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Usb
 import androidx.compose.material.icons.rounded.Terminal
 import android.widget.Toast
@@ -108,7 +109,11 @@ fun DeviceScreen(
                 ListRow(
                     title = if (state.isReachable) "Link" else "Not reachable",
                     subtitle = if (state.isReachable) "${state.plugins.size} features active" else "Open KDE Connect on it, or join the same network",
-                    icon = if (TransportKind.USB in state.transports) Icons.Rounded.Usb else Icons.Rounded.Wifi,
+                    icon = when {
+                        TransportKind.USB in state.transports -> Icons.Rounded.Usb
+                        TransportKind.LAN !in state.transports && TransportKind.BLUETOOTH in state.transports -> Icons.Rounded.Bluetooth
+                        else -> Icons.Rounded.Wifi
+                    },
                     iconTint = if (state.isReachable) SystemColor.BLUE.color else SystemColor.GRAY.color,
                     showDivider = battery != null,
                     // Checks the link end to end: the PC shows a "Ping!" notification.

@@ -26,7 +26,7 @@ object UsbAccessoryLink {
         close()
         val usb = context.getSystemService(UsbManager::class.java)
         fd = runCatching { usb.openAccessory(accessory) }.getOrNull()
-        out = fd?.let { Latest(FileOutputStream(it.fileDescriptor)) }
+        out = fd?.let { LatestFrame(FileOutputStream(it.fileDescriptor)) }
         VLog.i(TAG, if (out != null) "PC companion's accessory open" else "couldn't open the PC companion's accessory")
     }
 
@@ -37,7 +37,7 @@ object UsbAccessoryLink {
             val usb = context.getSystemService(UsbManager::class.java)
             usb.accessoryList?.firstOrNull { it.manufacturer == "Vyoma" && it.model == "Companion" && usb.hasPermission(it) }?.let { a ->
                 fd = runCatching { usb.openAccessory(a) }.getOrNull()
-                out = fd?.let { Latest(FileOutputStream(it.fileDescriptor)) }
+                out = fd?.let { LatestFrame(FileOutputStream(it.fileDescriptor)) }
             }
         }
         out
@@ -58,12 +58,12 @@ object UsbAccessoryLink {
 }
 
 /**
- * Writes to the accessory on a thread of its own, keeping only the newest frame: a USB write blocks
+ * Writes on a thread of its own, keeping only the newest frame: a USB or Bluetooth write blocks
  * until the PC reads, so with nothing reading (companion not bridging yet, or gone) the controller
  * would freeze. A write pending longer than [STALL_MS] fails the stream, and the controller falls
  * back to Wi-Fi.
  */
-private class Latest(private val out: OutputStream) : OutputStream() {
+internal class LatestFrame(private val out: OutputStream) : OutputStream() {
     private val lock = Object()
     private var next: ByteArray? = null
     @Volatile private var busySince = 0L
@@ -85,13 +85,13 @@ private class Latest(private val out: OutputStream) : OutputStream() {
             } catch (_: Exception) {
                 failed = true
             }
-        }, "accessory-out").apply { isDaemon = true; start() }
+        }, "controller-out").apply { isDaemon = true; start() }
     }
 
     override fun write(b: ByteArray, off: Int, len: Int) {
         val busy = busySince
         if (failed || closed || (busy != 0L && System.nanoTime() - busy > STALL_MS * 1_000_000)) {
-            throw java.io.IOException("accessory not read")
+            throw java.io.IOException("frames not read")
         }
         synchronized(lock) { next = b.copyOfRange(off, off + len); lock.notify() }
     }

@@ -63,6 +63,7 @@ import dev.vyoma.connect.designsystem.fadingHorizontalScroll
 import dev.vyoma.connect.designsystem.glassCard
 import dev.vyoma.connect.designsystem.glassRaised
 import dev.vyoma.connect.designsystem.isDarkUi
+import dev.vyoma.connect.designsystem.pressGroup
 import dev.vyoma.connect.designsystem.pressable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -163,7 +164,7 @@ fun CapturesStrip(onTake: (() -> Unit)?, onSeeAll: () -> Unit, modifier: Modifie
         return
     }
     Row(
-        modifier.fillMaxWidth().fadingHorizontalScroll(rememberScrollState(), bleed = 16.dp).padding(horizontal = 16.dp),
+        modifier.fillMaxWidth().pressGroup().fadingHorizontalScroll(rememberScrollState(), bleed = 16.dp).padding(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         r.items.forEach { c ->

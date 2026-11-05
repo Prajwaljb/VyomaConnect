@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.verticalScroll
 import dev.vyoma.connect.designsystem.GlassDialog
 import dev.vyoma.connect.designsystem.fitTogether
+import dev.vyoma.connect.protocol.link.TransportKind
 import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -203,6 +204,7 @@ import dev.vyoma.connect.designsystem.pressScale
 import androidx.compose.ui.geometry.Rect
 import dev.vyoma.connect.designsystem.LensStyle
 import dev.vyoma.connect.designsystem.liquidLens
+import dev.vyoma.connect.designsystem.pressGroup
 import dev.vyoma.connect.designsystem.pressable
 import dev.vyoma.connect.protocol.device.DeviceState
 import dev.vyoma.connect.protocol.plugin.builtin.AudioSink
@@ -297,6 +299,9 @@ fun Staggered(index: Int, modifier: Modifier = Modifier, content: @Composable ()
     ) { content() }
 }
 
+/** Tiles whose job moves a file or a picture, which a Bluetooth link has no sockets for. */
+private val NEEDS_PAYLOADS = setOf("Send files", "PC files", "Screen", "Camera")
+
 /** The connected PC at a glance: battery and clipboard bento, media, volume, then the controls. */
 @Composable
 fun PcDashboard(
@@ -358,6 +363,7 @@ fun PcDashboard(
           val photo by (shots?.photo?.state ?: remember { MutableStateFlow(CaptureState.Idle) }).collectAsStateWithLifecycle()
           // The companion says when a photo can't be taken (lid shut, no other camera); unknown counts as fine.
           val cameraOk = (shots?.stats ?: remember { MutableStateFlow(null) }).collectAsStateWithLifecycle().value?.camera != false
+          val overBluetooth = state.transports == setOf(TransportKind.BLUETOOTH)
           val commandList by (vm.device(id)?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands ?: remember { MutableStateFlow(emptyList()) }).collectAsStateWithLifecycle()
           CaptureOutcome(shot, "Screenshot")
           CaptureOutcome(photo, "Photo")
@@ -426,7 +432,10 @@ fun PcDashboard(
                         MenuItem(cmd.name) { vm.runCommand(id, cmd.key); status.show("Running ${cmd.name}", icon = Icons.Rounded.Terminal) }
                     }.ifEmpty { null },
                 ) { showCommands = true },
-            ),
+            ).map { c ->
+                // Files and pictures don't fit through Bluetooth: same slots, and a tap says why.
+                if (overBluetooth && c.label in NEEDS_PAYLOADS) c.copy(unavailable = true, menu = null, onClick = { status.show("Needs Wi-Fi or USB", failure = true) }) else c
+            },
             // Toggles say their state when on ("Locked", "Muted"): the user wants it in words, not
             // only in the fill.
             toggles = listOf(
@@ -702,7 +711,7 @@ private const val PICK_HOLD_MS = 3_000L
 
 private const val STATS_RENEW_MS = 5_000L
 
-private class Control(
+private data class Control(
     val icon: ImageVector,
     val label: String,
     val color: SystemColor,
@@ -732,7 +741,7 @@ private class Control(
  */
 @Composable
 private fun ControlGrid(actions: List<Control>, toggles: List<Control>, modifier: Modifier = Modifier, enabled: Boolean = true) {
-    BoxWithConstraints(modifier.fillMaxWidth()) {
+    BoxWithConstraints(modifier.fillMaxWidth().pressGroup()) {
         // Narrow grids (small screens, the largest display sizes) close the gaps a little so the
         // labels keep a readable size.
         val gap = if (maxWidth < 320.dp) TileGap * 0.75f else TileGap

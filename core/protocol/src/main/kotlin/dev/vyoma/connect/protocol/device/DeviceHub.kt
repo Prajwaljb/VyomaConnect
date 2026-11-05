@@ -69,15 +69,17 @@ class DeviceHub(
         tls = tls,
         scope = scope,
         config = lanConfig.copy(
-            isConnected = { id -> _devices.value[id]?.state?.value?.isReachable == true },
+            isConnected = ::linkedWell,
             // The cable wins. A PC (kdeconnectd) keeps only its newest connection per device, so a
             // Wi-Fi link completing while we're on USB would knock the cable link out on its side.
             // We never dial Wi-Fi then. The PC only dials a device it thinks is gone, so its Wi-Fi
             // call is a race with a cable link that just came up (refuse it), or a sign that an
             // older tunnel died on its side without us noticing (take it; onLink drops the tunnel).
             refuses = { id, transport, incoming ->
-                // Companions never come over the cable (they dial the phone's Wi-Fi address), so
-                // holding Wi-Fi back for the tunnel only delayed them after every app start.
+                // Bluetooth is only for when nothing else is there.
+                if (transport == TransportKind.BLUETOOTH) return@copy linkedWell(id)
+                // A companion keeps whichever link it got first and has no kdeconnectd to knock out,
+                // so holding Wi-Fi back for the tunnel only delayed it after every app start.
                 val companion = _devices.value[id]?.identity?.companionOf != null
                 if (transport != TransportKind.USB && holdingWifi() && !companion) return@copy true
                 val usbAge = if (transport == TransportKind.USB) null else _devices.value[id]?.linkAge(TransportKind.USB)
@@ -118,7 +120,7 @@ class DeviceHub(
         val trusted = trustStore.all()
         val onCable = onCableAddresses()
         for (trusted in trusted) {
-            if (_devices.value[trusted.deviceId]?.state?.value?.isReachable == true) continue
+            if (linkedWell(trusted.deviceId)) continue
             // Companions have no listener; they always dial us. Their address + 1716 is kdeconnectd.
             if (trusted.companionOf != null) continue
             val address = trusted.lastAddress ?: continue
@@ -140,7 +142,7 @@ class DeviceHub(
      */
     fun dial(address: java.net.InetAddress, port: Int, deviceId: String? = null) {
         val devices = _devices.value.values
-        if (deviceId != null && devices.any { it.id == deviceId && it.state.value.isReachable }) return
+        if (deviceId != null && linkedWell(deviceId)) return
         if (devices.any { address in it.addresses }) return
         if (!address.isLoopbackAddress && (holdingWifi() || address.hostAddress in onCableAddresses())) return
         lan.connectTo(address, port, expectedId = deviceId)
@@ -182,8 +184,21 @@ class DeviceHub(
         }
     }
 
-    /** True while some paired device isn't connected; the service uses it to keep retrying. */
-    fun anyPairedOffline(): Boolean = trustStore.all().any { _devices.value[it.deviceId]?.state?.value?.isReachable != true }
+    /** True while some paired device isn't on Wi-Fi or the cable; the service uses it to keep retrying. */
+    fun anyPairedOffline(): Boolean = trustStore.all().any { !linkedWell(it.deviceId) }
+
+    /**
+     * Linked over something other than Bluetooth. A PC ignores broadcasts from a device it's linked
+     * to, so while on Bluetooth it's on us to keep trying the network, and the better link replaces it.
+     */
+    private fun linkedWell(id: String): Boolean =
+        _devices.value[id]?.state?.value?.transports?.any { it != TransportKind.BLUETOOTH } == true
+
+    /** Links to [deviceId] through a local [port] that a Bluetooth tunnel carries to its PC. */
+    fun dialBluetooth(port: Int, deviceId: String) = lan.connectTunnel(port, deviceId, TransportKind.BLUETOOTH)
+
+    /** A PC's companion calling through [socket], which a Bluetooth tunnel carries to it. */
+    fun acceptBluetooth(socket: java.net.Socket) = lan.acceptTunnel(socket, TransportKind.BLUETOOTH)
 
     fun device(id: String): Device? = _devices.value[id]
 
@@ -224,6 +239,15 @@ class DeviceHub(
         // Only reachable with a cable link up if that link is stale (see `refuses`): drop it, or
         // sends would keep going down the dead tunnel.
         if (link.transport != TransportKind.USB) device!!.disconnect(TransportKind.USB)
+        if (link.transport == TransportKind.BLUETOOTH && linkedWell(id)) {
+            link.close()
+            return
+        }
+        if (link.transport != TransportKind.BLUETOOTH) {
+            device!!.disconnect(TransportKind.BLUETOOTH)
+            // The PC is back: let its companion follow, or it stays on the radio with no payloads.
+            _devices.value.values.filter { it.identity.companionOf == id }.forEach { it.disconnect(TransportKind.BLUETOOTH) }
+        }
         device!!.addLink(link)
     }
 

@@ -117,6 +117,7 @@ import dev.vyoma.connect.designsystem.VyomaTheme
 import dev.vyoma.connect.platform.ScreenDecoder
 import dev.vyoma.connect.protocol.plugin.builtin.CaptureState
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.typeable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -165,11 +166,12 @@ class PcScreenActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         val pcId = intent.getStringExtra(EXTRA_PC)
+        val hub = application.container.hub.value
         plugin = pcId?.let { id ->
-            val hub = application.container.hub.value
             hub?.devices?.value?.values?.firstOrNull { it.identity.companionOf == id && it.state.value.isReachable }
                 ?.plugin(CompanionPlugin.ID)
         }
+        val clipboard = pcId?.let { hub?.device(it)?.plugin<dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin>(dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin.ID) }
         setContent {
             val theme by application.container.settings.theme.collectAsStateWithLifecycle(ThemeSettings())
             // Video wants a dark room whatever the app's theme.
@@ -178,6 +180,8 @@ class PcScreenActivity : ComponentActivity() {
                 ScreenView(
                     phase = p,
                     plugin = plugin,
+                    // What no key types goes by the PC's clipboard for a moment: not a copy to sync here.
+                    onPasting = { clipboard?.ignoreIncomingFor(PASTE_ECHO_MS) },
                     stats = { decoder },
                     onSurface = ::surfaceChanged,
                     onClose = ::finish,
@@ -268,6 +272,7 @@ class PcScreenActivity : ComponentActivity() {
 private fun ScreenView(
     phase: PcScreenActivity.Phase,
     plugin: CompanionPlugin?,
+    onPasting: () -> Unit,
     stats: () -> ScreenDecoder?,
     onSurface: (Surface?) -> Unit,
     onClose: () -> Unit,
@@ -291,6 +296,15 @@ private fun ScreenView(
     // Ctrl and Alt, armed for the next key (tap again to disarm).
     var mods by remember { mutableStateOf(emptySet<String>()) }
     var hint by remember { mutableIntStateOf(0) }
+    // Bumped when typed text didn't reach the PC, so the keyboard's field starts afresh.
+    var fieldResets by remember { mutableIntStateOf(0) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(plugin) {
+        plugin?.typingFailed?.collect {
+            fieldResets++
+            Toast.makeText(context, "Couldn't type that on the PC", Toast.LENGTH_SHORT).show()
+        }
+    }
     val ratio = live?.takeIf { it.width > 0 && it.height > 0 }?.let { it.width.toFloat() / it.height } ?: (16f / 9f)
     // Touches go out in order, one after another.
     val outbox = remember { Channel<Touch>(Channel.UNLIMITED) }
@@ -494,9 +508,14 @@ private fun ScreenView(
             PcKeyboard(
                 onText = { text ->
                     // An armed Ctrl/Alt makes a single character a shortcut (Ctrl+C), not typing.
-                    if (mods.isNotEmpty() && text.length == 1) key(text) else outbox.trySend(Touch("text", text = text))
+                    if (mods.isNotEmpty() && text.length == 1) key(text)
+                    else {
+                        if (!text.all(::typeable)) onPasting()
+                        outbox.trySend(Touch("text", text = text))
+                    }
                 },
                 onKey = ::key,
+                resets = fieldResets,
                 onClosed = { typing = false },
             )
             Box(Modifier.fillMaxSize().imePadding().safeDrawingPadding().padding(horizontal = 12.dp, vertical = 8.dp), contentAlignment = Alignment.BottomCenter) {
@@ -630,6 +649,8 @@ private val ZOOM_SPRING = spring(dampingRatio = 0.85f, stiffness = Spring.Stiffn
 
 /** Past this much typed, the hidden field starts over (between keys, telling the keyboard). */
 private const val FIELD_MAX = 2_000
+/** How long the phone ignores the PC's clipboard after a paste: the text itself, then what comes back. */
+private const val PASTE_ECHO_MS = 3_000L
 
 /**
  * The phone's keyboard, typing on the PC: an invisible field the keyboard writes into. Each change
@@ -640,7 +661,9 @@ private const val FIELD_MAX = 2_000
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun PcKeyboard(onText: (String) -> Unit, onKey: (String) -> Unit, onClosed: () -> Unit) {
+private fun PcKeyboard(onText: (String) -> Unit, onKey: (String) -> Unit, resets: Int, onClosed: () -> Unit) {
+    var clearField by remember { mutableStateOf<() -> Unit>({}) }
+    LaunchedEffect(resets) { if (resets > 0) clearField() }
     val ime = WindowInsets.isImeVisible
     var shown by remember { mutableStateOf(false) }
     // The keyboard swiped away with Back: done typing.
@@ -666,6 +689,13 @@ private fun PcKeyboard(onText: (String) -> Unit, onKey: (String) -> Unit, onClos
                 alpha = 0f
                 var before = ""
                 var clearing = false
+                val clear = {
+                    clearing = true
+                    text.clear()
+                    clearing = false
+                    context.getSystemService(android.view.inputmethod.InputMethodManager::class.java).restartInput(this@apply)
+                }
+                clearField = clear
                 addTextChangedListener(object : android.text.TextWatcher {
                     override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
                     override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
@@ -673,16 +703,11 @@ private fun PcKeyboard(onText: (String) -> Unit, onKey: (String) -> Unit, onClos
                         val now = s.toString()
                         if (clearing) { before = now; return }
                         if (now == before) return
-                        val same = now.commonPrefixWith(before).length
-                        repeat(before.length - same) { onKey("BackSpace") }
+                        val same = dev.vyoma.connect.protocol.plugin.builtin.commonEnds(before, now).first
+                        repeat(dev.vyoma.connect.protocol.plugin.builtin.characterCount(before.substring(same))) { onKey("BackSpace") }
                         now.substring(same).takeIf { it.isNotEmpty() }?.let(onText)
                         before = now
-                        if (now.length > FIELD_MAX) post {
-                            clearing = true
-                            text.clear()
-                            clearing = false
-                            context.getSystemService(android.view.inputmethod.InputMethodManager::class.java).restartInput(this@apply)
-                        }
+                        if (now.length > FIELD_MAX) post { clear() }
                     }
                 })
                 // Keys the keyboard sends as keys: Enter, and Backspace once the field is empty.

@@ -10,6 +10,37 @@ import kotlinx.serialization.json.put
 
 class ProtocolTest {
     @Test
+    fun pointerFramesMatchTheCompanion() {
+        val mac = dev.vyoma.connect.protocol.plugin.builtin.pointerMac(ByteArray(32) { 7 })
+        val frame = dev.vyoma.connect.protocol.plugin.builtin.pointerFrame(7, 1, 1.5f, -2f, mac)
+        // The same bytes pointer.rs's tests read.
+        assertEquals("5659503100000007013fc00000c000000040121d619c28d79b0856686ed5a767b0", frame.joinToString("") { "%02x".format(it) })
+    }
+
+    @Test
+    fun emojiCountAsOneCharacter() {
+        val b = dev.vyoma.connect.protocol.plugin.builtin.characterCount("a😀b")
+        assertEquals(3, b)
+        assertEquals(1, dev.vyoma.connect.protocol.plugin.builtin.characterCount("👨‍👩‍👧"))
+        // Two emoji sharing a surrogate: replaced whole, not half of each.
+        assertEquals(1 to 1, dev.vyoma.connect.protocol.plugin.builtin.commonEnds(" 😀x", " 😁x"))
+        assertEquals(3 to 0, dev.vyoma.connect.protocol.plugin.builtin.commonEnds(" hi😀", " hi"))
+        assertEquals(
+            listOf("hi " to true, "😀é" to false, "!" to true),
+            dev.vyoma.connect.protocol.plugin.builtin.typingRuns("hi 😀é!"),
+        )
+    }
+
+    @Test
+    fun typedTextHoldsShiftForShiftedCharacters() {
+        assertEquals(
+            listOf("what" to false, "?" to true, "/" to false, "AB" to true, " 1,😀" to false),
+            dev.vyoma.connect.protocol.plugin.builtin.shiftRuns("what?/AB 1,😀"),
+        )
+        assertEquals(emptyList(), dev.vyoma.connect.protocol.plugin.builtin.shiftRuns(""))
+    }
+
+    @Test
     fun packetRoundTrip() {
         val original = packet(PacketTypes.PING) { put("message", "hi") }
         val parsed = NetworkPacket.parse(original.serialize().trimEnd())

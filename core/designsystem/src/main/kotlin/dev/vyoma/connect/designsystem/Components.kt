@@ -284,7 +284,8 @@ fun CollapsingHeaderScaffold(
                 bottom = 24.dp + bottomInset + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize().then(listModifier),
+            // A card keeps a press to itself; this is for cards in slices and whatever else floats on the page.
+            modifier = Modifier.fillMaxSize().pressGroup().then(listModifier),
         ) {
             item(key = "header", contentType = "header") {
                 // The title sits at the same height on every page (a fixed anchor, not centred with
@@ -1095,7 +1096,8 @@ private fun DrawScope.sliderKnob(value: Float, swell: Float, knob: Dp): Rect {
     val h = knob.toPx() * (1f + 0.45f * k)
     val w = h * 1.55f
     val rest = knob.toPx() * 1.55f
-    val x = (value.coerceIn(0f, 1f) * size.width).coerceIn(rest / 2, size.width - rest / 2)
+    // A track narrower than the knob (a row still animating open) has no room to keep it inside.
+    val x = (value.coerceIn(0f, 1f) * size.width).coerceIn(rest / 2, maxOf(rest / 2, size.width - rest / 2))
     return Rect(x - w / 2, (size.height - h) / 2, x + w / 2, (size.height + h) / 2)
 }
 
@@ -1137,22 +1139,25 @@ fun GlassDialog(
 ) {
     val host = LocalMenu.current
     val body: @Composable () -> Unit = {
-        Column(modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 12.dp)) {
-            CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
-                if (title != null) {
-                    ProvideTextStyle(MaterialTheme.typography.headlineSmall) { title() }
-                    Spacer(Modifier.height(14.dp))
-                }
-                if (text != null) {
-                    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant) {
-                        ProvideTextStyle(MaterialTheme.typography.bodyMedium) { text() }
+        // Clear glass shows whatever colours are behind it, and muted text got lost over them: all of a
+        // dialog's text is full strength, its labels and subtitles included. Size sets the hierarchy here.
+        val scheme = MaterialTheme.colorScheme
+        MaterialTheme(colorScheme = scheme.copy(onSurfaceVariant = scheme.onSurface)) {
+            Column(modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 12.dp)) {
+                CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+                    if (title != null) {
+                        ProvideTextStyle(MaterialTheme.typography.headlineSmall) { title() }
+                        Spacer(Modifier.height(14.dp))
                     }
-                    Spacer(Modifier.height(16.dp))
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    dismissButton?.invoke()
-                    Spacer(Modifier.width(4.dp))
-                    confirmButton()
+                    if (text != null) {
+                        ProvideTextStyle(MaterialTheme.typography.bodyMedium) { text() }
+                        Spacer(Modifier.height(16.dp))
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                        dismissButton?.invoke()
+                        Spacer(Modifier.width(4.dp))
+                        confirmButton()
+                    }
                 }
             }
         }

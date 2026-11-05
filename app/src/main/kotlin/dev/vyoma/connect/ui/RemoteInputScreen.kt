@@ -128,7 +128,16 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalWindowInfo
 import kotlinx.coroutines.flow.first
+import dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin
+import dev.vyoma.connect.protocol.link.TransportKind
 import dev.vyoma.connect.protocol.plugin.builtin.MousePadPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.PointerChannel
+import dev.vyoma.connect.service.BluetoothFallback
+import dev.vyoma.connect.service.BluetoothPointerChannel
+import dev.vyoma.connect.protocol.plugin.builtin.characterCount
+import dev.vyoma.connect.protocol.plugin.builtin.commonEnds
+import dev.vyoma.connect.protocol.plugin.builtin.typeable
+import dev.vyoma.connect.protocol.plugin.builtin.typingRuns
 import dev.vyoma.connect.protocol.plugin.builtin.SpecialKey
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -160,15 +169,47 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
 
+    // The touchpad's own Bluetooth channel, for Wi-Fi that stalls (Settings > Steadier over Bluetooth). Never
+    // on the cable, which beats it. While it's down, everything goes over the link as usual.
+    val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
+    remember { BluetoothFallback.init(appContext) }
+    val steadier by BluetoothFallback.steadier.collectAsStateWithLifecycle()
+    val onCable = target?.transports?.contains(TransportKind.USB) == true
+    var pointer by remember { mutableStateOf<PointerChannel?>(null) }
+    LaunchedEffect(companionPlugin, steadier, onCable) {
+        val companion = companionPlugin
+        if (companion == null || !steadier || onCable) return@LaunchedEffect
+        try {
+            while (isActive) {
+                val opened = companion.openPointer(BluetoothPointerChannel(appContext, companion.pcId))
+                // The PC said no: don't ask it again every few seconds. Wi-Fi it is, until the page reopens.
+                val channel = opened.getOrElse { break }
+                if (channel != null) {
+                    pointer = channel
+                    while (channel.alive) delay(250)
+                    pointer = null
+                }
+                delay(POINTER_RETRY_MS)
+            }
+        } finally {
+            pointer?.close()
+            pointer = null
+            companion.closePointer()
+        }
+    }
     // Accumulated motion, flushed by the pump below.
     val motion = remember { FloatArray(4) } // dx, dy, scrollX, scrollY
+    suspend fun flushMotion(p: MousePadPlugin) {
+        val (dx, dy, sx, sy) = synchronized(motion) { motion.copyOf().also { motion.fill(0f) } }
+        val radio = pointer
+        if (dx != 0f || dy != 0f) { if (radio?.move(dx, dy) != true) p.move(dx, dy) }
+        if (sx != 0f || sy != 0f) { if (radio?.scroll(sx, sy) != true) p.scroll(sx, sy) }
+    }
     LaunchedEffect(pad) {
         val p = pad ?: return@LaunchedEffect
         while (isActive) {
             delay(8)
-            val (dx, dy, sx, sy) = synchronized(motion) { motion.copyOf().also { motion.fill(0f) } }
-            if (dx != 0f || dy != 0f) p.move(dx, dy)
-            if (sx != 0f || sy != 0f) p.scroll(sx, sy)
+            flushMotion(p)
         }
     }
     // The phone keyboard types on the PC through the typing bar.
@@ -206,7 +247,38 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
         if (keyboard) caretMoved++
         pad?.let { scope.launch { it.block() } }
     }
-    fun typing(block: suspend MousePadPlugin.() -> Unit) { pad?.let { scope.launch { it.block() } } }
+    // Clicks take the same road as the moves before them, or one could land before the cursor got there.
+    fun clickButton(button: Int, overLink: suspend MousePadPlugin.() -> Unit) {
+        if (keyboard) caretMoved++
+        val p = pad ?: return
+        scope.launch {
+            flushMotion(p)
+            if (pointer?.click(button) != true) p.overLink()
+        }
+    }
+    // A drag lets go the way it took hold. If that channel has died, the PC lets go by itself.
+    var dragVia by remember { mutableStateOf<PointerChannel?>(null) }
+    fun grab() {
+        val p = pad ?: return
+        val radio = pointer
+        scope.launch {
+            flushMotion(p)
+            if (radio?.button(0, true) == true) dragVia = radio else { dragVia = null; p.press() }
+        }
+    }
+    fun letGo() {
+        val p = pad ?: return
+        val radio = dragVia
+        dragVia = null
+        scope.launch {
+            flushMotion(p)
+            if (radio == null) p.release() else radio.button(0, false)
+        }
+    }
+    // One at a time: a paste waits on the PC, and what's typed next mustn't overtake it.
+    val typingQueue = remember { kotlinx.coroutines.channels.Channel<suspend () -> Unit>(kotlinx.coroutines.channels.Channel.UNLIMITED) }
+    LaunchedEffect(typingQueue) { for (job in typingQueue) runCatching { job() } }
+    fun typing(block: suspend MousePadPlugin.() -> Unit) { pad?.let { p -> typingQueue.trySend { p.block() } } }
     // What a gesture just did ("Overview", "Next desktop"): shown for a moment in the header, in
     // place of the PC's name, instead of a toast over the pad (user 2026-11-04).
     var gestureNote by remember { mutableStateOf<String?>(null) }
@@ -215,6 +287,22 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
         gestureNote = text
         noteJob?.cancel()
         noteJob = scope.launch { delay(1_400); gestureNote = null }
+    }
+
+    /** Keys for what has keys; the rest by clipboard, since neither kdeconnectd nor KWin can type it. */
+    fun sendTyped(text: String) = typing {
+        for ((run, keyed) in typingRuns(text)) {
+            if (keyed) { type(run); continue }
+            target?.let { vm.device(it.identity.deviceId)?.plugin<ClipboardPlugin>(ClipboardPlugin.ID) }?.ignoreIncomingFor(PASTE_ECHO_MS)
+            if (companionPlugin?.preparePaste(run) == true) {
+                chord("v", ctrl = true)
+                delay(PASTE_SETTLE_MS) // The app fetches the text on its own time; a key sent now could land first.
+            } else {
+                // It never arrived, so the field and the PC differ: start the field afresh.
+                caretMoved++
+                note("Couldn't type that on the PC")
+            }
+        }
     }
 
     // Surface, not a bare background: it supplies onBackground as the content color for the bar.
@@ -331,7 +419,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                                     if (travelled < slop && maxPointers == 1) {
                                         dragging = true
                                         haptics.perform(Haptic.Hold)
-                                        act { press() }
+                                        grab()
                                     }
                                     continue
                                 }
@@ -405,14 +493,14 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                                     when {
                                         dragging -> {
                                             haptics.perform(Haptic.Detent)
-                                            act { release() }
+                                            letGo()
                                         }
                                         travelled < slop && duration < 260 && twoMode != 2 && !swiped -> {
                                             haptics.perform(Haptic.Tap)
                                             when (maxPointers) {
-                                                1 -> act { click() }
-                                                2 -> act { rightClick() }
-                                                else -> act { middleClick() }
+                                                1 -> clickButton(0) { click() }
+                                                2 -> clickButton(1) { rightClick() }
+                                                else -> clickButton(2) { middleClick() }
                                             }
                                         }
                                     }
@@ -488,12 +576,12 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
 
         // ---- mouse buttons: the middle one is also a scroll strip ----
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(52.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MouseButton("Left", Modifier.weight(2f)) { act { click() } }
+            MouseButton("Left", Modifier.weight(2f)) { clickButton(0) { click() } }
             // A true circle in its share, like the keys (an icon-only capsule broke the shape rule).
             Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
                 ScrollStrip(Modifier.circle(), onScroll = { dy -> synchronized(motion) { motion[3] += dy * SCROLL_SCALE } }) { act { middleClick() } }
             }
-            MouseButton("Right", Modifier.weight(2f)) { act { rightClick() } }
+            MouseButton("Right", Modifier.weight(2f)) { clickButton(1) { rightClick() } }
         }
 
         // ---- keys: two fixed rows, an arrow cluster, and an Fn layer for the rarer ones ----
@@ -541,7 +629,13 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
         }
 
         if (keyboard) key(keyboardSession) {
-            TypingBar(caretMoved, onText = { t -> typing { type(t) } }, onKey = { k -> typing { key(k) } })
+            TypingBar(
+                caretMoved,
+                canPaste = companionPlugin != null,
+                onText = ::sendTyped,
+                onKey = { k -> typing { key(k) } },
+                onRefused = { note("Emoji need the PC companion") },
+            )
         }
         Spacer(Modifier.navigationBarsPadding())
     } }
@@ -556,7 +650,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
  * backspace when the field looks empty. Send presses Enter and starts afresh.
  */
 @Composable
-private fun TypingBar(caretMoved: Int, onText: (String) -> Unit, onKey: (SpecialKey) -> Unit) {
+private fun TypingBar(caretMoved: Int, canPaste: Boolean, onText: (String) -> Unit, onKey: (SpecialKey) -> Unit, onRefused: () -> Unit) {
     val sentinel = " "
     val fresh = TextFieldValue(sentinel, TextRange(sentinel.length))
     var value by remember { mutableStateOf(fresh) }
@@ -578,9 +672,16 @@ private fun TypingBar(caretMoved: Int, onText: (String) -> Unit, onKey: (Special
             pcCaret = sentinel.length
         }
     }
-    fun moveTo(target: Int) {
-        val delta = target - pcCaret
-        repeat(kotlin.math.abs(delta)) { onKey(if (delta > 0) SpecialKey.RIGHT else SpecialKey.LEFT) }
+    // The field never holds what the PC didn't get, so its text and the PC's stay the same.
+    LaunchedEffect(canPaste) {
+        if (!canPaste && !value.text.all(::typeable)) {
+            value = fresh
+            pcCaret = sentinel.length
+        }
+    }
+    fun moveTo(text: String, target: Int) {
+        val steps = characterCount(text.substring(minOf(pcCaret, target), maxOf(pcCaret, target)))
+        repeat(steps) { onKey(if (target > pcCaret) SpecialKey.RIGHT else SpecialKey.LEFT) }
         pcCaret = target
     }
     fun typed(text: String) = text.split('\n').forEachIndexed { i, part ->
@@ -591,15 +692,19 @@ private fun TypingBar(caretMoved: Int, onText: (String) -> Unit, onKey: (Special
         value = value,
         onValueChange = { incoming ->
             var new = incoming
+            if (!canPaste && !new.text.all(::typeable)) {
+                val before = new.text.take(new.selection.start).count(::typeable)
+                new = TextFieldValue(new.text.filter(::typeable), TextRange(before))
+                onRefused()
+            }
             val old = value.text
             val cur = new.text
             if (old != cur) {
                 // The edit replaced old[prefix, old.length - suffix) with cur[prefix, cur.length - suffix).
-                val prefix = old.commonPrefixWith(cur).length
-                val suffix = minOf(old.commonSuffixWith(cur).length, minOf(old.length, cur.length) - prefix)
+                val (prefix, suffix) = commonEnds(old, cur)
                 val end = old.length - suffix
-                moveTo(end)
-                repeat(end - prefix) { onKey(SpecialKey.BACKSPACE) }
+                moveTo(old, end)
+                repeat(characterCount(old.substring(prefix, end))) { onKey(SpecialKey.BACKSPACE) }
                 typed(cur.substring(prefix, cur.length - suffix))
                 pcCaret = cur.length - suffix
             }
@@ -615,7 +720,7 @@ private fun TypingBar(caretMoved: Int, onText: (String) -> Unit, onKey: (Special
             }
             // Keep the caret off the sentinel, then follow it on the PC (only a plain caret, not a range).
             if (new.selection.collapsed && new.selection.start < sentinel.length) new = new.copy(selection = TextRange(sentinel.length))
-            if (new.selection.collapsed) moveTo(new.selection.start)
+            if (new.selection.collapsed) moveTo(new.text, new.selection.start)
             value = when {
                 // Long runs reset at a word break when typing at the end, so the field stays light.
                 new.text.length > 400 && new.text.endsWith(' ') && new.selection.start == new.text.length -> fresh.also { pcCaret = sentinel.length }
@@ -655,6 +760,10 @@ private fun TypingBar(caretMoved: Int, onText: (String) -> Unit, onKey: (Special
         },
     )
 }
+
+/** How long the phone ignores the PC's clipboard after a paste: the text itself, then what comes back. */
+private const val PASTE_ECHO_MS = 3_000L
+private const val PASTE_SETTLE_MS = 120L
 
 @Composable
 private fun MouseButton(label: String, modifier: Modifier, onClick: () -> Unit) {
@@ -815,6 +924,7 @@ private val KEY_HEIGHT = 48.dp
 /** Held arrows and backspace switch from characters to whole words after ~1 s of repeats. */
 private const val WORD_AFTER = 14
 private const val SCROLL_SCALE = 0.35f
+private const val POINTER_RETRY_MS = 5_000L
 
 /** Light pooled under one finger on the touchpad. */
 private class LightPool(var at: Offset, var glow: Float = 0f)

@@ -1,5 +1,9 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.protocol.link.TransportKind
+import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
 import android.app.AlarmManager
 import android.content.Intent
 import android.net.Uri
@@ -510,6 +514,7 @@ private fun apply(
 private fun tunable(x: Any): Boolean = when (x) {
     is Trigger.PcLink -> !x.connected
     is Trigger.PhoneBatteryBelow, is Trigger.PcBatteryBelow, is Trigger.Time -> true
+    is Trigger.BluetoothDevice, is Trigger.PcVia, is Trigger.WifiNetwork -> true
     is Action.PcVolume, is Action.PcBrightness, is Action.MessagePc, is Action.NotifyMe, is Action.RunCommand -> true
     else -> false
 }
@@ -534,6 +539,11 @@ private fun triggerGroups(condition: Boolean) = listOf(
         Trigger.Call(ringingOnly = false), Trigger.Call(ringingOnly = true),
         Trigger.PhoneCharging(charging = true), Trigger.PhoneCharging(charging = false), Trigger.PhoneBatteryBelow(20),
         Trigger.Headphones(connected = true), Trigger.Headphones(connected = false),
+    )),
+    Group("Connections", listOf(
+        Trigger.BluetoothDevice("", "", connected = true),
+        Trigger.PcVia(TransportKind.USB),
+        Trigger.WifiNetwork("", "", on = true),
     )),
     Group("Time and place", listOf(
         // A condition is a stretch of time; "at a moment" only starts things.
@@ -582,6 +592,9 @@ private fun PickerDialog(vm: AppViewModel, slot: Slot, away: Boolean, onDismiss:
                             is Trigger.Time -> if (item.end == null) "At a time" else "During a time of day"
                             is Trigger.PcBatteryBelow -> "PC battery is low"
                             is Trigger.PhoneBatteryBelow -> "Phone battery is low"
+                            is Trigger.BluetoothDevice -> "A Bluetooth device"
+                            is Trigger.PcVia -> "How the PC is connected"
+                            is Trigger.WifiNetwork -> "A Wi-Fi network"
                             is Action.PcVolume -> "Set PC volume"
                             is Action.PcBrightness -> "Set PC brightness"
                             else -> look.label
@@ -631,6 +644,25 @@ private fun TuneDialog(vm: AppViewModel, value: Any, onDismiss: () -> Unit, onDo
                 dismissButton = { DialogButton(onClick = onDismiss) { Text("Cancel") } },
             )
         }
+        is Trigger.BluetoothDevice -> BluetoothDialog(vm, value, onDismiss) { onDone(it) }
+        is Trigger.PcVia -> {
+            val routes = listOf(TransportKind.USB, TransportKind.BLUETOOTH, TransportKind.LAN)
+            var pick by remember { mutableIntStateOf(routes.indexOf(value.via)) }
+            GlassDialog(
+                onDismissRequest = onDismiss,
+                title = { Text("PC connected by") },
+                text = {
+                    Column {
+                        Text("When it can use more than one, the cable counts first, then Wi-Fi.", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(16.dp))
+                        SegmentedControl(listOf("Cable", "Bluetooth", "Wi-Fi"), pick, { pick = it })
+                    }
+                },
+                confirmButton = { DialogButton(onClick = { onDone(Trigger.PcVia(routes[pick])) }) { Text("Done") } },
+                dismissButton = { DialogButton(onClick = onDismiss) { Text("Cancel") } },
+            )
+        }
+        is Trigger.WifiNetwork -> WifiDialog(vm, value, onDismiss) { onDone(it) }
         is Trigger.Time -> {
             var period by remember { mutableStateOf(value.end != null) }
             var days by remember { mutableIntStateOf(value.days) }
@@ -640,9 +672,11 @@ private fun TuneDialog(vm: AppViewModel, value: Any, onDismiss: () -> Unit, onDo
                 onDismissRequest = onDismiss,
                 title = { Text("Time") },
                 text = {
-                    Column(Modifier.heightIn(max = 480.dp).fadingVerticalScroll(rememberScrollState())) {
-                        SegmentedControl(listOf("At a time", "From – to"), if (period) 1 else 0, { period = it == 1 })
-                        Spacer(Modifier.height(16.dp))
+                    // Outside the scrolling part: its clip cut off the drop as it lifted.
+                    Column {
+                    SegmentedControl(listOf("At a time", "From – to"), if (period) 1 else 0, { period = it == 1 })
+                    Spacer(Modifier.height(16.dp))
+                    Column(Modifier.heightIn(max = 420.dp).fadingVerticalScroll(rememberScrollState())) {
                         Text(if (period) "From" else "At", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         TimeInput(start)
                         if (period) {
@@ -652,6 +686,7 @@ private fun TuneDialog(vm: AppViewModel, value: Any, onDismiss: () -> Unit, onDo
                         Text("On", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.height(8.dp))
                         DayChips(days) { days = it }
+                    }
                     }
                 },
                 confirmButton = {
@@ -712,6 +747,92 @@ private fun TuneDialog(vm: AppViewModel, value: Any, onDismiss: () -> Unit, onDo
         }
         else -> LaunchedEffect(Unit) { onDone(value) }
     }
+}
+
+/** Which paired device, and whether it connecting or disconnecting counts. */
+@Composable
+private fun BluetoothDialog(vm: AppViewModel, value: Trigger.BluetoothDevice, onDismiss: () -> Unit, onDone: (Trigger) -> Unit) {
+    val context = LocalContext.current
+    var devices by remember { mutableStateOf(vm.pairedBluetooth()) }
+    var blocked by remember { mutableStateOf(vm.needsBluetoothPermission(context)) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        blocked = vm.needsBluetoothPermission(context)
+        devices = vm.pairedBluetooth()
+    }
+    var address by remember { mutableStateOf(value.address) }
+    var connected by remember { mutableStateOf(value.connected) }
+    GlassDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Bluetooth device") },
+        text = {
+            Column {
+                SegmentedControl(listOf("Connects", "Disconnects"), if (connected) 0 else 1, { connected = it == 0 })
+                Spacer(Modifier.height(12.dp))
+                when {
+                    blocked -> Text("Vyoma needs the Nearby devices permission to see your Bluetooth devices.", style = MaterialTheme.typography.bodyMedium)
+                    devices.isEmpty() -> Text("Nothing is paired with this phone yet. Pair the device in Android's Bluetooth settings first.", style = MaterialTheme.typography.bodyMedium)
+                    else -> Column(Modifier.heightIn(max = 320.dp).fadingVerticalScroll(rememberScrollState())) {
+                        devices.forEachIndexed { i, (a, name) ->
+                            ListRow(
+                                title = name,
+                                icon = Icons.Rounded.Bluetooth,
+                                iconTint = SystemColor.BLUE.color,
+                                horizontalPadding = 0.dp,
+                                showDivider = i < devices.lastIndex,
+                                haptic = Haptic.Select,
+                                trailing = if (a == address) ({ Icon(Icons.Rounded.Check, "Chosen") }) else null,
+                                onClick = { address = a },
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (blocked) DialogButton(onClick = { ask.launch(android.Manifest.permission.BLUETOOTH_CONNECT) }) { Text("Allow") }
+            else DialogButton(enabled = address.isNotEmpty(), onClick = {
+                // A device since unpaired keeps the name it was picked by.
+                val name = devices.firstOrNull { it.first == address }?.second ?: value.name
+                onDone(Trigger.BluetoothDevice(address, name, connected))
+            }) { Text("Done") }
+        },
+        dismissButton = { DialogButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/**
+ * One Wi-Fi network, added while on it: reading a network's real name needs the location permission,
+ * so it's recognised as home Wi-Fi is, and the user names it.
+ */
+@Composable
+private fun WifiDialog(vm: AppViewModel, value: Trigger.WifiNetwork, onDismiss: () -> Unit, onDone: (Trigger) -> Unit) {
+    val print = remember { value.print.ifEmpty { vm.currentWifi().orEmpty() } }
+    var name by remember { mutableStateOf(value.name) }
+    var on by remember { mutableStateOf(value.on) }
+    GlassDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Wi-Fi network") },
+        text = {
+            if (print.isEmpty()) {
+                Text("Connect this phone to the Wi-Fi you want, then add it here.", style = MaterialTheme.typography.bodyMedium)
+            } else Column {
+                SegmentedControl(listOf("On it", "Off it"), if (on) 0 else 1, { on = it == 0 })
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    if (value.print.isEmpty()) "Uses the network you're on now, recognised by its address and router, so no location permission."
+                    else "Recognised by its address and router, so no location permission.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(name, { name = it }, singleLine = true, label = { Text("Name") }, placeholder = { Text("Office") })
+            }
+        },
+        confirmButton = {
+            if (print.isEmpty()) DialogButton(onClick = onDismiss) { Text("OK") }
+            else DialogButton(enabled = name.isNotBlank(), onClick = { onDone(Trigger.WifiNetwork(print, name.trim(), on)) }) { Text("Done") }
+        },
+        dismissButton = if (print.isEmpty()) null else ({ DialogButton(onClick = onDismiss) { Text("Cancel") } }),
+    )
 }
 
 @Composable

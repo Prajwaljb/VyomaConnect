@@ -96,7 +96,13 @@ class ClipboardPlugin(private val ctx: PluginContext, private val bridge: Clipbo
         }
     }
 
+    @Volatile private var ignoreUntil = 0L
+
+    /** The PC's clipboard is about to change for a moment on our account: don't take it as a copy. */
+    fun ignoreIncomingFor(millis: Long) { ignoreUntil = System.nanoTime() + millis * 1_000_000 }
+
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
+        if (System.nanoTime() - ignoreUntil < 0) return true
         val content = packet.string("content") ?: return true
         when (packet.type) {
             PacketTypes.CLIPBOARD -> bridge.applyRemote(content, ctx.device.id)
@@ -319,7 +325,17 @@ class MousePadPlugin(private val ctx: PluginContext) : Plugin {
     suspend fun press() = send { put("singlehold", true) }
     suspend fun release() = send { put("singlerelease", true) }
 
-    suspend fun type(text: String) = send { put("key", text) }
+    /**
+     * kdeconnectd on Wayland types a character by pressing the key it's on, at whatever level, without
+     * Shift: "?" came out as "/" and "A" as "a". So shifted characters go with shift set, which holds
+     * it around them. Which ones those are is the US layout's; the phone can't see the PC's.
+     */
+    suspend fun type(text: String) = shiftRuns(text).forEach { (run, shifted) ->
+        send {
+            put("key", run)
+            if (shifted) put("shift", true)
+        }
+    }
 
     suspend fun key(key: SpecialKey, ctrl: Boolean = false, alt: Boolean = false, shift: Boolean = false, meta: Boolean = false) = send {
         put("specialKey", key.code)
@@ -373,6 +389,49 @@ class PresenterPlugin(private val ctx: PluginContext) : Plugin {
 }
 
 // ---- JSON helpers -----------------------------------------------------------------------------
+
+/** What a key on any keyboard types. The rest goes by clipboard, through the companion. */
+fun typeable(c: Char) = c in ' '..'~'
+
+/** [text] cut into runs that can be typed (true) and runs that have to be pasted, in order. */
+fun typingRuns(text: String): List<Pair<String, Boolean>> = runs(text, ::typeable)
+
+/** Characters as a person (and a PC's Backspace or arrow key) counts them: an emoji is one, not two. */
+fun characterCount(text: String): Int {
+    val breaks = java.text.BreakIterator.getCharacterInstance()
+    breaks.setText(text)
+    var count = 0
+    while (breaks.next() != java.text.BreakIterator.DONE) count++
+    return count
+}
+
+/** How much of [old] and [new] is shared at the start and at the end, never cutting a character in two. */
+fun commonEnds(old: String, new: String): Pair<Int, Int> {
+    fun breaksOf(text: String) = java.text.BreakIterator.getCharacterInstance().apply { setText(text) }
+    val (a, b) = breaksOf(old) to breaksOf(new)
+    var prefix = old.commonPrefixWith(new).length
+    while (prefix > 0 && !(a.isBoundary(prefix) && b.isBoundary(prefix))) prefix--
+    var suffix = minOf(old.commonSuffixWith(new).length, minOf(old.length, new.length) - prefix)
+    while (suffix > 0 && !(a.isBoundary(old.length - suffix) && b.isBoundary(new.length - suffix))) suffix--
+    return prefix to suffix
+}
+
+private const val US_SHIFTED = "~!@#$%^&*()_+{}|:\"<>?"
+
+/** [text] cut into runs of characters that do, or don't, need Shift on a US keyboard, in order. */
+internal fun shiftRuns(text: String): List<Pair<String, Boolean>> = runs(text) { c -> c in 'A'..'Z' || c in US_SHIFTED }
+
+private fun runs(text: String, shifted: (Char) -> Boolean): List<Pair<String, Boolean>> {
+    val runs = mutableListOf<Pair<String, Boolean>>()
+    var start = 0
+    for (i in 1..text.length) {
+        if (i == text.length || shifted(text[i]) != shifted(text[start])) {
+            runs += text.substring(start, i) to shifted(text[start])
+            start = i
+        }
+    }
+    return runs
+}
 
 internal fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
 internal fun JsonObject.int(key: String): Int? = (this[key] as? JsonPrimitive)?.let { it.intOrNull ?: it.contentOrNull?.toIntOrNull() }

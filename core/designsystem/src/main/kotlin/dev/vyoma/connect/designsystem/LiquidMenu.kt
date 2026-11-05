@@ -341,7 +341,7 @@ private fun DialogOverlay(d: HostedDialog, backdrop: Backdrop, onGone: () -> Uni
                         compositingStrategy = CompositingStrategy.ModulateAlpha
                     }
                     .pointerInput(Unit) { detectTapGestures { } }
-                    .glassChrome(backdrop, shape, blur = 18.dp, bevel = 16.dp)
+                    .glassChrome(backdrop, shape, blur = 7.dp, bevel = 16.dp)
                     .clip(shape)
                     // The drop's size, around the card laid out at full size (so its words never reflow).
                     .layout { m, c ->
@@ -559,7 +559,7 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                     }
                     compositingStrategy = CompositingStrategy.ModulateAlpha
                 }
-                .glassChrome(backdrop, shape, blur = 13.dp, bevel = 16.dp)
+                .glassChrome(backdrop, shape, blur = 5.dp, bevel = 16.dp)
                 // Morphing, the element's own colour, clearing into glass as the drop grows. Draining
                 // home it floods back in as the drop nears the element's size: clear glass shrinking
                 // onto a tile blurred its neighbours across it (a blue smear over the red Screen tile,
@@ -610,6 +610,7 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                 Modifier
                     .wrapContentSize(Alignment.TopStart, unbounded = true)
                     .requiredWidth(MENU_WIDTH)
+                    .pressGroup()
                     .graphicsLayer {
                         // Draining, the items are gone before the element's colour floods in under them.
                         alpha = ink.value.coerceIn(0f, 1f) * (if (closing) smooth((formed() - 0.7f) / 0.3f) else 1f)
@@ -627,7 +628,7 @@ private fun MenuOverlay(r: MenuRequest, backdrop: Backdrop, onGone: () -> Unit) 
                     Text(
                         // Footnote-sized, like an iOS menu title: at item size it read as a disabled item.
                         title, style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.height(TITLE_HEIGHT).padding(start = 20.dp, end = 20.dp, top = 10.dp),
                     )

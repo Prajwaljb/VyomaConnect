@@ -1,5 +1,8 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.ui.node.requireLayoutCoordinates
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import kotlin.math.roundToInt
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.node.requireDensity
@@ -31,6 +34,10 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
 import androidx.compose.ui.input.pointer.positionChangedIgnoreConsumed
 import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.modifier.modifierLocalProvider
+import kotlin.math.hypot
+import kotlin.math.pow
 import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.node.LayoutModifierNode
@@ -309,17 +316,55 @@ private data class PressScaleElement(val pressedScale: Float, val enabled: Boole
     }
 }
 
-/** True under a [glassCard]: a press's light may spread into the card (which clips it). */
-internal val InGlassCard = androidx.compose.ui.modifier.modifierLocalOf { false }
+/** The card under a [glassCard]'s contents: a press lights it rather than itself (see [CardLight]). */
+internal val InGlassCard = androidx.compose.ui.modifier.modifierLocalOf<CardLight?> { null }
+
+/** The piece of glass a press dips, see [PressGroup]. */
+internal val InPressGroup = androidx.compose.ui.modifier.modifierLocalOf<PressGroup?> { null }
+
+/** Makes what's pressable inside one piece of glass, for things with no [glassCard] around them (a grid of tiles, a row of chips). */
+fun Modifier.pressGroup(): Modifier = composed { androidx.compose.runtime.remember { PressGroup() }.modifier }
+
+/**
+ * What a press spreads through. The element under the finger dips fully and the others in its card
+ * dip less the further they are from the finger, so the card answers as one material rather than one
+ * button moving on a still slab. Each dips from its own edges by the same travel, whatever its size.
+ */
+internal class PressGroup {
+    private val members = ArrayList<PressScaleNode>()
+    private var owner: PressScaleNode? = null
+
+    @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+    val modifier: Modifier = Modifier.modifierLocalProvider(InPressGroup) { this@PressGroup }
+
+    fun join(node: PressScaleNode) { members.add(node) }
+
+    fun leave(node: PressScaleNode) {
+        members.remove(node)
+        released(node, bounce = false)
+    }
+
+    /** Runs for each element under the finger, outermost first: the innermost ends up the owner. */
+    fun pressed(node: PressScaleNode, finger: Offset) {
+        owner = node
+        for (i in members.indices) if (members[i] !== node) members[i].feel(finger)
+    }
+
+    fun released(node: PressScaleNode, bounce: Boolean) {
+        if (owner !== node) return
+        owner = null
+        for (i in members.indices) members[i].unfeel(bounce)
+    }
+}
 
 /**
  * [glass]: a capsule or circle that dips even when asked not to scale (the chrome handles it).
  * [glow]: light gathers under the finger: everything that dips does (tiles, rows and cards too,
  * not only pills), so every surface answers a touch the same way.
  */
-private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var glass: Boolean, var glow: Boolean) :
+internal class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var glass: Boolean, var glow: Boolean) :
     Modifier.Node(), PointerInputModifierNode, LayoutModifierNode, DrawModifierNode, CompositionLocalConsumerModifierNode,
-    androidx.compose.ui.modifier.ModifierLocalModifierNode {
+    androidx.compose.ui.modifier.ModifierLocalModifierNode, PressLight {
     private val sx = Animatable(1f)
     private val sy = Animatable(1f)
     /** How lit the glass is under the finger: up while held, eases out after. Only with [glass]. */
@@ -330,12 +375,52 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
     private var job: Job? = null
     private var glassJob: Job? = null
     /** Where the finger is, for the glow. */
-    private var touch = Offset.Unspecified
+    private var touch by androidx.compose.runtime.mutableStateOf(Offset.Unspecified)
+    /** The card lit by this press, until the light has gone. */
+    private var lit: CardLight? = null
     /** The element's size at the last touch, for [PressAuto]. */
     private var bounds = IntSize.Zero
+    private var group: PressGroup? = null
+    /** How much of a full dip it takes: 1 under the finger, less for one spread to from nearby. */
+    private var share = 1f
+    /** Dipping because of a press elsewhere in its group. */
+    private var spreading = false
+    /** Precomposed list items are attached before they have a place on screen. */
+    private var placed = false
 
-    /** The scale a press dips to: the caller's, or the one that moves the edges [PRESS_TRAVEL_DP] in. */
-    private fun pressed(): Float {
+    override fun onAttach() {
+        sideEffect { if (isAttached) group = InPressGroup.current?.also { it.join(this) } }
+    }
+
+    /** A press landed elsewhere in the group: dip by how near the finger is. */
+    fun feel(finger: Offset) {
+        if (!isAttached || !placed || pressedScale >= 1f && !glass) return
+        val me = requireLayoutCoordinates()
+        val box = me.findRootCoordinates().localBoundingBoxOf(me, clipBounds = false)
+        // Held by a finger of its own: a second finger's press doesn't take it. Holding the same finger
+        // (a row around the button pressed) it gives up the full dip to what's inside it.
+        if (held && !box.contains(finger)) return
+        val d = requireDensity().density
+        val away = hypot(maxOf(box.left - finger.x, 0f, finger.x - box.right), maxOf(box.top - finger.y, 0f, finger.y - box.bottom))
+        val near = (1f - away / (SPREAD_REACH_DP * d)).coerceAtLeast(0f)
+        val felt = SPREAD_PEAK * near.pow(1.5f)
+        if (felt < SPREAD_MIN && !spreading && !held) return
+        share = felt
+        spreading = !held
+        bounds = me.size
+        dip()
+    }
+
+    fun unfeel(bounce: Boolean) {
+        if (!spreading) return
+        spreading = false
+        settle(bounce)
+    }
+
+    /** The scale a press dips to: the caller's, or the one that moves the edges [PRESS_TRAVEL_DP] in, by [share]. */
+    private fun pressed(): Float = 1f - (1f - fullDip()) * share
+
+    private fun fullDip(): Float {
         val s = if (!pressedScale.isNaN()) pressedScale else {
             val longest = maxOf(bounds.width, bounds.height).toFloat()
             if (longest <= 0f) 0.94f else (1f - 2f * PRESS_TRAVEL_DP * requireDensity().density / longest).coerceIn(0.86f, 0.985f)
@@ -345,6 +430,7 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
 
     override fun ContentDrawScope.draw() {
         drawContent()
+        if (lit != null) return
         val a = if (glow) clear.value.coerceIn(0f, 1f) else 0f
         if (a < 0.01f) return
         val dark = currentValueOf(LocalContentColor).luminance() > 0.5f
@@ -353,13 +439,6 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
         val at = if (touch.isSpecified) touch else center
         // White light can't show on light glass: there the finger leaves a faint shade instead.
         val tone = if (dark) Color.White.copy(alpha = 0.16f * a) else Color(0xFF1A2B4C).copy(alpha = 0.08f * a)
-        if (InGlassCard.current) {
-            // Inside a card (a button, a row) the light flows on into the card's glass and stops only
-            // at the card's edge (its clip): kept to the button, it ended in a hard line there.
-            val reach = (size.maxDimension * 0.7f).coerceIn(56.dp.toPx(), 160.dp.toPx())
-            drawCircle(Brush.radialGradient(listOf(tone, Color.Transparent), at, reach), radius = reach, center = at)
-            return
-        }
         // Round for capsules and circles; a rounded rectangle (tile-like) for anything larger.
         val r = minOf(size.minDimension / 2, 20.dp.toPx())
         clipPath(Path().apply { addRoundRect(RoundRect(0f, 0f, size.width, size.height, CornerRadius(r))) }) {
@@ -374,16 +453,54 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
     private fun clearTo(target: Float) {
         if (!glow) return
         glassJob?.cancel()
-        glassJob = coroutineScope.launch { clear.animateTo(target, if (target > 0f) VyomaMotion.spatial() else VyomaMotion.effects()) }
+        if (target > 0f) {
+            // Inside a card the light flows on into the glass and stops only at the card's edge.
+            lit = InGlassCard.current?.also { it.source = this }
+        }
+        glassJob = coroutineScope.launch {
+            clear.animateTo(target, if (target > 0f) VyomaMotion.spatial() else VyomaMotion.effects())
+            if (target <= 0f) letGoOfCard()
+        }
+    }
+
+    private fun letGoOfCard() {
+        lit?.let { if (it.source === this) it.source = null }
+        lit = null
+    }
+
+    override fun onDetach() {
+        letGoOfCard()
+        group?.leave(this)
+        group = null
+        spreading = false
+        placed = false
+    }
+
+    override val tone: Color
+        get() {
+            val a = clear.value.coerceIn(0f, 1f)
+            val dark = currentValueOf(LocalContentColor).luminance() > 0.5f
+            return if (dark) Color.White.copy(alpha = 0.16f * a) else Color(0xFF1A2B4C).copy(alpha = 0.08f * a)
+        }
+
+    override val reach: Float
+        get() {
+            val d = requireDensity().density
+            return (maxOf(bounds.width, bounds.height) * 0.7f).coerceIn(56f * d, 160f * d)
+        }
+
+    override fun at(card: androidx.compose.ui.layout.LayoutCoordinates): Offset? {
+        if (!isAttached || !touch.isSpecified) return null
+        return card.localPositionOf(requireLayoutCoordinates(), touch)
     }
 
     override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, bounds: IntSize) {
         if (!enabled) return
         this.bounds = bounds
-        if (glow && pass == PointerEventPass.Initial) {
+        if (pass == PointerEventPass.Initial) {
             pointerEvent.changes.firstOrNull { it.pressed }?.let {
                 touch = it.position
-                if (held) invalidateDraw()
+                if (glow && held) invalidateDraw()
             }
         }
         when (pass) {
@@ -421,7 +538,14 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
 
     private fun press() {
         held = true
+        share = 1f
+        spreading = false
         clearTo(1f)
+        dip()
+        group?.pressed(this, requireLayoutCoordinates().localToRoot(touch))
+    }
+
+    private fun dip() {
         job?.cancel()
         // Height gives a beat later than width: a squash, not a shrink.
         val target = pressed()
@@ -434,6 +558,11 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
     private fun release(bounce: Boolean) {
         held = false
         clearTo(0f)
+        settle(bounce)
+        group?.released(this, bounce)
+    }
+
+    private fun settle(bounce: Boolean) {
         job?.cancel()
         job = coroutineScope.launch {
             if (bounce) {
@@ -462,6 +591,7 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
     override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
         val placeable = measurable.measure(constraints)
         return layout(placeable.width, placeable.height) {
+            placed = true
             placeable.placeWithLayer(0, 0) {
                 scaleX = sx.value
                 scaleY = sy.value
@@ -477,5 +607,9 @@ private class PressScaleNode(var pressedScale: Float, var enabled: Boolean, var 
         const val GLASS_PRESSED = 0.9f
         /** How far past its edge a finger can stray before the press lets go. */
         const val SLIDE_MARGIN_DP = 12f
+        /** What a neighbour right beside the finger takes of a full dip, and how far away it fades to none. */
+        const val SPREAD_PEAK = 0.55f
+        const val SPREAD_REACH_DP = 220f
+        const val SPREAD_MIN = 0.03f
     }
 }

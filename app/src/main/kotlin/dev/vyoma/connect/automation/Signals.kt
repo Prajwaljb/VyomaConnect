@@ -1,6 +1,16 @@
 package dev.vyoma.connect.automation
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -30,6 +40,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.launch
@@ -51,6 +63,12 @@ data class Snapshot(
     val pcPlaying: Boolean = false,
     val headphones: Boolean = false,
     val wifi: WifiState = WifiState.OFF,
+    /** This Wi-Fi's fingerprint, null off Wi-Fi. */
+    val wifiPrint: String? = null,
+    /** How the PC's link runs, null while it's away. */
+    val pcVia: TransportKind? = null,
+    /** Addresses of the Bluetooth devices connected now. */
+    val bluetooth: Set<String> = emptySet(),
     /** False until every input has reported once. */
     val ready: Boolean = false,
 )
@@ -65,6 +83,7 @@ class Signals(private val context: Context, private val c: AppContainer, private
 
     private val call = MutableStateFlow(CallState.NONE)
     private val headphones = MutableStateFlow(false)
+    private val bluetooth = MutableStateFlow<Set<String>>(emptySet())
     /** This Wi-Fi network's fingerprint (its subnet and router), null off Wi-Fi. */
     private val wifiPrint = MutableStateFlow<String?>(null)
     private val homes = MutableStateFlow(prefs.getStringSet(HOMES, emptySet()).orEmpty())
@@ -84,6 +103,7 @@ class Signals(private val context: Context, private val c: AppContainer, private
     private fun build(): StateFlow<Snapshot> {
         watchCalls()
         watchHeadphones()
+        watchBluetooth()
         watchWifi()
         learnHome()
 
@@ -105,19 +125,26 @@ class Signals(private val context: Context, private val c: AppContainer, private
         }
         val playing = c.media.nowPlaying.map { it?.player?.isPlaying == true }.distinctUntilChanged()
         val wifi = combine(wifiPrint, homes) { print, homes -> if (print == null) WifiState.OFF else if (print in homes) WifiState.HOME else WifiState.OTHER }
+        // Cable in or out swaps the link over a few seconds: a rule shouldn't run for the gap.
+        val via = pc.flatMapLatest { d -> d?.state?.map { it.transports.minOrNull() } ?: flowOf(null) }.distinctUntilChanged()
+            .transformLatest { delay(VIA_SETTLE_MS); emit(it) }.onStart { emit(null) }
+        val connections = combine(wifiPrint, via, bluetooth) { print, route, nearby -> Connections(print, route, nearby) }
         val phone = c.battery.state
         val local = combine(call, headphones, wifi, phone) { call, phones, wifi, battery -> Local(call, phones, wifi, battery?.charge, battery?.charging == true) }
-        return combine(link, pcState, playing, local) { (up, since), (charge, charging, locked), play, l ->
+        return combine(link, pcState, playing, local, connections) { (up, since), (charge, charging, locked), play, l, conn ->
             Snapshot(
                 pcConnected = up, pcAwaySince = since, call = l.call,
                 phoneBattery = l.battery, phoneCharging = l.charging,
                 pcBattery = charge, pcCharging = charging, pcLocked = locked, pcPlaying = play && up,
-                headphones = l.headphones, wifi = l.wifi, ready = true,
+                headphones = l.headphones, wifi = l.wifi,
+                wifiPrint = conn.wifiPrint, pcVia = conn.pcVia, bluetooth = conn.bluetooth, ready = true,
             )
         }.distinctUntilChanged().stateIn(scope, SharingStarted.Eagerly, Snapshot())
     }
 
     private data class Local(val call: CallState, val headphones: Boolean, val wifi: WifiState, val battery: Int?, val charging: Boolean)
+
+    private data class Connections(val wifiPrint: String?, val pcVia: TransportKind?, val bluetooth: Set<String>)
 
     private fun watchCalls() = scope.launch {
         c.calls.events.collect { e ->
@@ -140,6 +167,62 @@ class Signals(private val context: Context, private val c: AppContainer, private
             override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) = check()
         }, Handler(Looper.getMainLooper()))
         check()
+    }
+
+    private fun bluetoothAllowed() = context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+
+    /** Every device's connect and disconnect, audio or not; what's already connected comes from [lookForConnected]. */
+    private fun watchBluetooth() {
+        val filter = IntentFilter().apply {
+            addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+            addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+            addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+        }
+        context.registerReceiver(object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                @Suppress("DEPRECATION")
+                val address = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)?.address
+                when (intent.action) {
+                    BluetoothDevice.ACTION_ACL_CONNECTED -> address?.let { a -> bluetooth.update { it + a } }
+                    BluetoothDevice.ACTION_ACL_DISCONNECTED -> address?.let { a -> bluetooth.update { it - a } }
+                    BluetoothAdapter.ACTION_STATE_CHANGED ->
+                        if (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.STATE_OFF) != BluetoothAdapter.STATE_ON) bluetooth.value = emptySet()
+                }
+            }
+        }, filter, Context.RECEIVER_NOT_EXPORTED)
+        lookForConnected()
+    }
+
+    /** Android only tells a running app about changes: ask its audio profiles what's connected already. */
+    @SuppressLint("MissingPermission")
+    private fun lookForConnected() {
+        if (!bluetoothAllowed()) return
+        val adapter = context.getSystemService(BluetoothManager::class.java).adapter ?: return
+        val profiles = buildList {
+            add(BluetoothProfile.A2DP)
+            add(BluetoothProfile.HEADSET)
+            if (Build.VERSION.SDK_INT >= 33) add(BluetoothProfile.LE_AUDIO)
+        }
+        for (profile in profiles) runCatching {
+            adapter.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
+                override fun onServiceConnected(which: Int, proxy: BluetoothProfile) {
+                    val found = runCatching { proxy.connectedDevices.map { it.address } }.getOrDefault(emptyList())
+                    bluetooth.update { it + found }
+                    adapter.closeProfileProxy(which, proxy)
+                }
+                override fun onServiceDisconnected(which: Int) = Unit
+            }, profile)
+        }
+    }
+
+    /** (address, name) of each paired device; empty without the permission. */
+    @SuppressLint("MissingPermission")
+    fun pairedBluetooth(): List<Pair<String, String>> {
+        if (!bluetoothAllowed()) return emptyList()
+        // The permission may only just have been given.
+        lookForConnected()
+        val adapter = context.getSystemService(BluetoothManager::class.java).adapter ?: return emptyList()
+        return runCatching { adapter.bondedDevices.map { it.address to (it.name ?: it.address) }.sortedBy { it.second.lowercase() } }.getOrDefault(emptyList())
     }
 
     /**
@@ -192,6 +275,7 @@ class Signals(private val context: Context, private val c: AppContainer, private
         const val HOMES = "home_wifi"
         const val MAX_HOMES = 3
         const val AWAY_GRACE_MS = 20_000L
+        const val VIA_SETTLE_MS = 3_000L
         val HEADPHONES = setOf(
             AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
             AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_BLE_HEADSET,
