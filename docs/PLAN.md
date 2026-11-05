@@ -174,6 +174,9 @@ User choice: **all features enabled by default** for paired devices. TLS with pi
 peer certificates (inherent to the protocol). Per-plugin toggles still exist in settings
 and can be turned off at any time.
 
+Fingerprint lock: per-command switches and "asks when chosen for a rule" live on the phone for
+now. They may move to the planned PC companion GUI, along with allowed phones and signing keys.
+
 ## 8. Testing
 
 - Protocol: unit tests against captured KDE Connect / GSConnect packet fixtures.
