@@ -70,6 +70,7 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
 - `vyoma.screenshot.request` → `vyoma.screenshot {format:"webp"}` + payload (companion listens on 1739..1764, is the
   TLS server, and only serves the pinned phone cert), or `{error}` with no payload. Phone saves to Pictures/Vyoma.
   Any companion payload uses this same flow (`payload.rs`).
+  The payload port is open to the network, so on either side a connection that's wrong or stalls is only dropped: at most 4 prove themselves at once, 5 s each, and the wait goes on (15 s PC, `timeoutMs` phone). The PC shows a notification for each screenshot (`notice.rs`).
 - `vyoma.camera.request` → `vyoma.camera {format:"jpg"}` + payload, or `{error}`. ffmpeg grabs one frame from the
   first V4L2 node offering MJPEG (skips IR cams), largest size, after 15 warm-up frames. The PC always shows a
   notification ("<phone> took a photo with this PC's camera"). Phone: `CompanionPlugin.photo` (same `Capture` as
@@ -82,11 +83,11 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
 - `vyoma.files.list {path}` → `vyoma.files.listing {path, entries:[{name, dir, size, modified(ms)}], truncated, error?}`.
   `path` is relative to the PC user's home (`""` = home); `..`/absolute components are refused and the canonical
   path (symlinks resolved) must stay inside home, with no dot-named part: hidden files can't be listed, fetched or written (`.config/autostart` would run code on the PC). Folders first, max 5000 entries.
-- `vyoma.files.get {path}` → `vyoma.files.file {path, name}` + payload, or `{path, error}`. Phone saves to
+- `vyoma.files.get {path}` → `vyoma.files.file {path, name}` + payload, or `{path, error}`. The PC says so in a notification, at most one per 30 s. Phone saves to
   Downloads/Vyoma via `ShareSink.createFile`, tracks it in `Transfers`, and opens it.
 - `vyoma.files.put {path(folder), name}` + payload (phone serves it; the companion connects as TLS client with its
   cert and pins the phone's) → `vyoma.files.saved {path, name, error?}`. Written as `.name.vyoma-part`, renamed when
-  complete, never overwrites (`name (2).ext`). A refusal before connecting makes the phone stop waiting.
+  complete, never overwrites (`name (2).ext`); the PC then shows the same "Received" notification as Send files. A refusal before connecting makes the phone stop waiting.
 - The companion rechecks `trusted_devices` every 5 s and ends a session once the phone is unpaired or its certificate changed.
 - `vyoma.pc.request` → `vyoma.pc {displays:[{id, label, internal, value 0..1}], apps:[{id, name, binary?, title?, volume, muted}]}`
   (`pc.rs`). Displays come from Plasma's `org.kde.ScreenBrightness` (panels and DDC monitors; ids are its D-Bus names,
@@ -260,3 +261,7 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
   shortcuts ("Overview" steps Grid → Overview → closed, "Grid View", "Show Desktop" toggles). KWin's
   `showDesktop(bool)` does nothing on Plasma 6 Wayland. Without the companion the phone keeps its own ladder guess.
 
+## Local access rules (not on the wire)
+- USB grants (`usb.rs`): READ_LOGS and the overlay appop are real power and any app can take our package name, so they go only to an APK whose signing certificate is in `~/.config/vyoma-companion/allowed-apps`; otherwise the PC asks once by notification (Allow / Not now). The digest comes from the APK's signing block (`dumpsys` only has a forgeable 32-bit hash), and every signer in every scheme must agree, because Android skips signers meant for other versions. Nothing is fetched or asked when the grants are already there. Tunnels need no such check: every link and payload proves its certificate.
+- Shares (`ShareActivity`): `file:` and Vyoma's own providers are refused (`maySend`), as anything named there is read with Vyoma's access. A shared link waits for a yes, since it opens on the PC.
+- Fingerprint lock (`AppLock`): unlocking the PC, PC files, its screen, screenshots, its camera and power actions, plus any command with its switch on in the Commands sheet (per command and PC; holds even with the main lock off, and turning one off always asks). One pass lasts until the phone's screen goes off or 5 min away from the app; PC files and the screen viewer close then. Turning it off always asks. On by default, off in the demo. Rules run unattended and aren't asked.

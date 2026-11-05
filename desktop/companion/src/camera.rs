@@ -118,9 +118,5 @@ async fn find_camera() -> Option<(String, String)> {
 }
 
 async fn notify(phone_name: &str) {
-    let _ = tokio::process::Command::new("notify-send")
-        .args(["--app-name=Vyoma", "--icon=camera-photo", "Camera used from your phone"])
-        .arg(format!("{phone_name} took a photo with this PC's camera."))
-        .status()
-        .await;
+    crate::notice::tell("camera-photo", "Camera used from your phone", &format!("{phone_name} took a photo with this PC's camera.")).await;
 }

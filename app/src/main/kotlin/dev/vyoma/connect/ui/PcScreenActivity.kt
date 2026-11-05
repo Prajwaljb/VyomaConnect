@@ -115,6 +115,7 @@ import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.ThemeSettings
 import dev.vyoma.connect.designsystem.VyomaTheme
 import dev.vyoma.connect.platform.ScreenDecoder
+import dev.vyoma.connect.platform.AppLock
 import dev.vyoma.connect.protocol.plugin.builtin.CaptureState
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.typeable
@@ -193,6 +194,11 @@ class PcScreenActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        // Came back after the phone was locked or left for a while: the screen is asked for again.
+        if (!AppLock.isOpen(this)) {
+            finish()
+            return
+        }
         runCatching { wifiLock.acquire() }
         start()
     }
@@ -263,8 +269,9 @@ class PcScreenActivity : ComponentActivity() {
     companion object {
         const val EXTRA_PC = "pc"
 
-        fun open(context: Context, pcId: String) =
+        fun open(context: Context, pcId: String) = AppLock.ask(context, "To see the PC's screen") {
             context.startActivity(Intent(context, PcScreenActivity::class.java).putExtra(EXTRA_PC, pcId))
+        }
     }
 }
 

@@ -232,7 +232,7 @@ fn downloads(home: &Path) -> PathBuf {
 
 /// "Received X from phone", like kdeconnectd's, with Open and Show in folder. Runs on its own:
 /// notify-send waits for the click.
-fn notify(phone_name: &str, path: &Path, count: Option<u64>) {
+pub(crate) fn notify(phone_name: &str, path: &Path, count: Option<u64>) {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let body = match count {
         Some(n) => format!("{name} ({n} file{}) from {phone_name}", if n == 1 { "" } else { "s" }),

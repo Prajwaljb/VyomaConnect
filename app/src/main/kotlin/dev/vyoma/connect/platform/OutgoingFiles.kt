@@ -1,6 +1,7 @@
 package dev.vyoma.connect.platform
 
 import android.content.ContentResolver
+import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import dev.vyoma.connect.protocol.VLog
@@ -8,6 +9,17 @@ import dev.vyoma.connect.protocol.plugin.builtin.OutgoingFile
 import dev.vyoma.connect.protocol.plugin.builtin.SendItem
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
+
+/**
+ * Whether a URI another app handed us may leave the phone. It's read with Vyoma's own access, so an
+ * app could otherwise name files only Vyoma can read (its private key among them) and have them sent.
+ */
+fun Context.maySend(uri: Uri): Boolean {
+    if (uri.scheme != ContentResolver.SCHEME_CONTENT) return false
+    // "0@authority" is the same provider, for user 0.
+    val authority = uri.authority?.substringAfterLast('@') ?: return false
+    return packageManager.resolveContentProvider(authority, 0)?.packageName != packageName
+}
 
 /** A picked or shared document as something to upload: its display name, size, and a way to read it. */
 fun ContentResolver.outgoingFile(uri: Uri): OutgoingFile {

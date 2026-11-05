@@ -44,13 +44,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import dev.vyoma.connect.container
+import dev.vyoma.connect.designsystem.DialogButton
+import dev.vyoma.connect.designsystem.GlassDialog
 import dev.vyoma.connect.designsystem.ThemeSettings
 import dev.vyoma.connect.designsystem.VyomaTheme
 import dev.vyoma.connect.platform.Ringer
+import dev.vyoma.connect.platform.maySend
 import dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin
 import dev.vyoma.connect.service.Commands
 import dev.vyoma.connect.service.LinkService
@@ -132,6 +136,11 @@ class ShareActivity : ComponentActivity() {
                 @Suppress("DEPRECATION")
                 val stream = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
                 val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+                // A link opens on the PC, and any app can send one here: that waits for an answer.
+                if (stream == null && text != null && LinkService.looksLikeUrl(text)) {
+                    confirmLink(text)
+                    return
+                }
                 if (stream != null) forward(listOf(stream), null) else if (text != null) forward(emptyList(), text)
                 finish()
             }
@@ -145,7 +154,36 @@ class ShareActivity : ComponentActivity() {
         }
     }
 
-    private fun forward(uris: List<Uri>, text: String?, isFolder: Boolean = false) {
+    private fun confirmLink(link: String) {
+        val target = Commands.primary(application.container)
+        if (target == null) {
+            forward(emptyList(), link) // says what to do
+            finish()
+            return
+        }
+        setContent {
+            val theme by application.container.settings.theme.collectAsStateWithLifecycle(ThemeSettings())
+            VyomaTheme(theme) {
+                GlassDialog(
+                    onDismissRequest = ::finish,
+                    title = { Text("Open this link on ${target.name}?") },
+                    text = { Text(link.trim(), maxLines = 5, overflow = TextOverflow.Ellipsis) },
+                    confirmButton = {
+                        DialogButton(onClick = {
+                            forward(emptyList(), link)
+                            finish()
+                        }) { Text("Open") }
+                    },
+                    dismissButton = { DialogButton(onClick = ::finish) { Text("Cancel") } },
+                )
+            }
+        }
+    }
+
+    private fun forward(picked: List<Uri>, text: String?, isFolder: Boolean = false) {
+        val uris = picked.filter { maySend(it) }
+        if (uris.size < picked.size) Toast.makeText(this, "That can't be sent: it's private to Vyoma", Toast.LENGTH_LONG).show()
+        if (uris.isEmpty() && text == null) return
         val c = application.container
         val target = Commands.primary(c)
         if (target == null) {

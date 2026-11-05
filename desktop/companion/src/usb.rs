@@ -1,11 +1,17 @@
 //! Plug the phone in, and Vyoma's USB link just works: when a phone with USB debugging appears,
 //! set up the adb reverse tunnel Vyoma dials over the cable, and the two one-time grants its
 //! background clipboard sync needs. No adb server runs until a phone is actually plugged in.
+//!
+//! Any app can call itself dev.vyoma.connect. The tunnels don't care (every link and payload still
+//! proves its certificate), but the grants are real power on the phone, so they only go to an APK
+//! whose signing certificate the person at this PC has allowed once.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 
 const PACKAGES: [&str; 2] = ["dev.vyoma.connect", "dev.vyoma.connect.debug"];
@@ -28,6 +34,9 @@ const WIRED: [&str; 2] = ["tcp:1866", "tcp:1766"];
 /// over the cable alone (Wi-Fi off, or a network that keeps them apart).
 const PHONE_LISTENER: &str = "tcp:1716";
 const POLL: Duration = Duration::from_secs(3);
+/// How long the "Allow Vyoma?" question stays up, and how long fetching an APK to check may take.
+const ASK_WAIT: Duration = Duration::from_secs(300);
+const PULL_WAIT: Duration = Duration::from_secs(60);
 /// How long to keep retrying a phone that shows "unauthorized" (the RSA prompt is on its screen).
 const AUTH_WAIT: Duration = Duration::from_secs(90);
 /// While a phone is plugged in, check its tunnel every this many polls (12 s). The tunnel dies with
@@ -176,13 +185,174 @@ async fn setup(adb: &PathBuf, serial: &str) {
     }
     info!("{serial}: payload ports mirrored over USB ({mirrored} to the phone, {forwarded} from it)");
     for pkg in installed {
-        // Both are idempotent; they only ever touch Vyoma's own permissions.
-        let logs = run(adb, serial, &["shell", "pm", "grant", pkg, "android.permission.READ_LOGS"]).await;
-        let overlay = run(adb, serial, &["shell", "appops", "set", pkg, "SYSTEM_ALERT_WINDOW", "allow"]).await;
-        if logs.is_some() && overlay.is_some() {
-            info!("{serial}: background clipboard sync allowed for {pkg}");
+        if has_grants(adb, serial, pkg).await {
+            continue;
+        }
+        let digest = match signing_digest(adb, serial, pkg).await {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("{serial}: no clipboard grants for {pkg}: {e:#}");
+                continue;
+            }
+        };
+        if !allowed_apps().contains(&digest) {
+            ask_to_allow(adb.clone(), serial.to_string(), pkg, digest);
+            continue;
+        }
+        grant(adb, serial, pkg).await;
+    }
+}
+
+/// Both are idempotent; they only ever touch this package's own permissions.
+async fn grant(adb: &PathBuf, serial: &str, pkg: &str) {
+    let logs = run(adb, serial, &["shell", "pm", "grant", pkg, "android.permission.READ_LOGS"]).await;
+    let overlay = run(adb, serial, &["shell", "appops", "set", pkg, "SYSTEM_ALERT_WINDOW", "allow"]).await;
+    if logs.is_some() && overlay.is_some() {
+        info!("{serial}: background clipboard sync allowed for {pkg}");
+    }
+}
+
+/// Nothing to ask or fetch when it already has them (the usual case: they last until uninstalled).
+async fn has_grants(adb: &PathBuf, serial: &str, pkg: &str) -> bool {
+    let logs = run(adb, serial, &["shell", "dumpsys", "package", pkg]).await;
+    let overlay = run(adb, serial, &["shell", "appops", "get", pkg, "SYSTEM_ALERT_WINDOW"]).await;
+    logs.is_some_and(|o| o.contains("android.permission.READ_LOGS: granted=true")) && overlay.is_some_and(|o| o.contains("allow"))
+}
+
+/// Answered "Not now" since the companion started: don't ask at every plug-in.
+static DECLINED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// A question already on screen.
+static ASKING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn allowed_apps_path() -> PathBuf {
+    crate::identity::dir().join("allowed-apps")
+}
+
+fn allowed_apps() -> Vec<String> {
+    std::fs::read_to_string(allowed_apps_path()).unwrap_or_default().lines().map(str::to_string).collect()
+}
+
+/// Runs on its own: notify-send waits for the click.
+fn ask_to_allow(adb: PathBuf, serial: String, pkg: &'static str, digest: String) {
+    if DECLINED.lock().unwrap().contains(&digest) {
+        return;
+    }
+    {
+        let mut asking = ASKING.lock().unwrap();
+        if asking.contains(&digest) {
+            return;
+        }
+        asking.push(digest.clone());
+    }
+    tokio::spawn(async move {
+        let model = run(&adb, &serial, &["shell", "getprop", "ro.product.model"]).await.unwrap_or_else(|| "this phone".to_string());
+        let body = format!(
+            "Background clipboard sync needs log access and drawing over other apps, which only a computer can grant. \
+             Allow it only if you installed this app yourself. Signing key {}.",
+            digest[..8].to_uppercase(),
+        );
+        let answer = tokio::time::timeout(
+            ASK_WAIT,
+            tokio::process::Command::new("notify-send")
+                .args(["--app-name=Vyoma", "--icon=dialog-password", "--action=allow=Allow", "--action=no=Not now"])
+                .arg(format!("Allow Vyoma on {model}?"))
+                .arg(body)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await;
+        let answer = match answer {
+            Ok(Ok(out)) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            _ => String::new(), // unanswered: asks again at the next plug-in
+        };
+        match answer.as_str() {
+            "allow" => {
+                let saved = std::fs::create_dir_all(crate::identity::dir())
+                    .and_then(|()| std::fs::write(allowed_apps_path(), allowed_apps().into_iter().chain([digest.clone()]).collect::<Vec<_>>().join("\n") + "\n"));
+                if let Err(e) = saved {
+                    warn!("couldn't remember the allowed app: {e}");
+                }
+                grant(&adb, &serial, pkg).await;
+            }
+            "no" => DECLINED.lock().unwrap().push(digest.clone()),
+            _ => {}
+        }
+        ASKING.lock().unwrap().retain(|d| *d != digest);
+    });
+}
+
+/// SHA-256 of the signing certificate of the APK installed as `pkg`. `dumpsys` only gives a 32-bit
+/// hash of it, which can be forged, so this reads the real one out of the APK.
+async fn signing_digest(adb: &PathBuf, serial: &str, pkg: &str) -> Result<String> {
+    let paths = run(adb, serial, &["shell", "pm", "path", pkg]).await.context("can't find the app")?;
+    let apk = paths.lines().find_map(|l| l.strip_prefix("package:")).filter(|p| p.ends_with("/base.apk")).context("can't find the app's APK")?;
+    // Private to this user (XDG_RUNTIME_DIR is 0700), and deleted as soon as it's read.
+    let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    let local = dir.join(format!("vyoma-check-{}.apk", std::process::id()));
+    let local_str = local.to_string_lossy().into_owned();
+    let pulled = tokio::time::timeout(
+        PULL_WAIT,
+        tokio::process::Command::new(adb).args(["-s", serial, "pull", apk, &local_str]).kill_on_drop(true).output(),
+    )
+    .await;
+    let read = tokio::fs::read(&local).await;
+    let _ = tokio::fs::remove_file(&local).await;
+    pulled.context("fetching the APK took too long")??;
+    let bytes = read.context("couldn't fetch the APK")?;
+    Ok(hex::encode(Sha256::digest(signing_certificate(&bytes)?)))
+}
+
+/// The one certificate that signed this APK, from its APK Signing Block. Android checked the block
+/// when installing, so it can't be someone else's key with a valid signature. But it skips signers
+/// meant for other Android versions, and a block could name our key in one of those; so every
+/// signer in every scheme has to agree.
+fn signing_certificate(apk: &[u8]) -> Result<&[u8]> {
+    const EOCD: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
+    const MAGIC: &[u8] = b"APK Sig Block 42";
+    // v2, v3 and v3.1. Each is a list of signers shaped alike up to the certificates.
+    const SCHEMES: [u32; 3] = [0x7109_871a, 0xf053_68c0, 0x1b93_ad49];
+    let last = apk.len().checked_sub(22).context("not an APK")?;
+    let eocd = (last.saturating_sub(0xffff)..=last).rev().find(|&i| apk[i..].starts_with(&EOCD)).context("not an APK")?;
+    let directory = u32::from_le_bytes(apk[eocd + 16..eocd + 20].try_into()?) as usize;
+    let tail = directory.checked_sub(24).filter(|&t| t + 24 <= apk.len()).context("APK has no signing block")?;
+    if &apk[tail + 8..directory] != MAGIC {
+        bail!("APK has no signing block");
+    }
+    let size = u64::from_le_bytes(apk[tail..tail + 8].try_into()?) as usize;
+    let start = directory.checked_sub(size).and_then(|s| s.checked_sub(8)).context("bad signing block")?;
+    let mut pairs = apk.get(start + 8..tail).context("bad signing block")?;
+    let mut found: Option<&[u8]> = None;
+    while !pairs.is_empty() {
+        let len = u64::from_le_bytes(pairs.get(..8).context("bad signing block")?.try_into()?) as usize;
+        let pair = pairs.get(8..).and_then(|p| p.get(..len)).context("bad signing block")?;
+        pairs = &pairs[8 + len..];
+        let id = u32::from_le_bytes(pair.get(..4).context("bad signing block")?.try_into()?);
+        if !SCHEMES.contains(&id) {
+            continue;
+        }
+        let mut value = &pair[4..];
+        let mut signers = prefixed(&mut value)?;
+        while !signers.is_empty() {
+            let mut signer = prefixed(&mut signers)?;
+            let mut signed = prefixed(&mut signer)?;
+            prefixed(&mut signed)?; // digests
+            let mut certificates = prefixed(&mut signed)?;
+            let certificate = prefixed(&mut certificates)?;
+            if found.is_some_and(|f| f != certificate) {
+                bail!("APK names more than one signer");
+            }
+            found = Some(certificate);
         }
     }
+    found.context("APK has no v2 or v3 signature")
+}
+
+/// Takes one u32-length-prefixed piece off the front.
+fn prefixed<'a>(input: &mut &'a [u8]) -> Result<&'a [u8]> {
+    let len = u32::from_le_bytes(input.get(..4).context("bad signing block")?.try_into()?) as usize;
+    let piece = input[4..].get(..len).context("bad signing block")?;
+    *input = &input[4 + len..];
+    Ok(piece)
 }
 
 async fn list_devices(adb: &PathBuf) -> Vec<(String, String)> {
@@ -218,4 +388,82 @@ fn find_adb() -> Option<PathBuf> {
     candidates.into_iter().flatten().find(|p| p.is_file()).or_else(|| {
         std::env::var_os("PATH").and_then(|path| std::env::split_paths(&path).map(|d| d.join("adb")).find(|p| p.is_file()))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lp(piece: &[u8]) -> Vec<u8> {
+        [&(piece.len() as u32).to_le_bytes()[..], piece].concat()
+    }
+
+    /// One scheme's value: a list of signers, each with the certificate given.
+    fn scheme(certs: &[&[u8]]) -> Vec<u8> {
+        let signers: Vec<u8> = certs
+            .iter()
+            .flat_map(|c| {
+                let signed = [lp(b"digests"), lp(&lp(c)), lp(b"attributes")].concat();
+                lp(&[lp(&signed), lp(b"signatures"), lp(b"key")].concat())
+            })
+            .collect();
+        lp(&signers)
+    }
+
+    fn apk(schemes: &[(u32, Vec<u8>)]) -> Vec<u8> {
+        let pairs: Vec<u8> = schemes
+            .iter()
+            .flat_map(|(id, value)| [&((value.len() + 4) as u64).to_le_bytes()[..], &id.to_le_bytes()[..], value].concat())
+            .collect();
+        let size = (pairs.len() + 24) as u64;
+        let mut out = b"zip entries".to_vec();
+        out.extend(size.to_le_bytes());
+        out.extend(pairs);
+        out.extend(size.to_le_bytes());
+        out.extend(b"APK Sig Block 42");
+        let directory = out.len() as u32;
+        out.extend(b"central directory");
+        out.extend([0x50, 0x4b, 0x05, 0x06]);
+        out.extend([0; 12]);
+        out.extend(directory.to_le_bytes());
+        out.extend([0; 2]);
+        out
+    }
+
+    const V2: u32 = 0x7109_871a;
+    const V3: u32 = 0xf053_68c0;
+
+    #[test]
+    fn reads_the_signing_certificate() {
+        let both = apk(&[(0x4242, b"other".to_vec()), (V2, scheme(&[b"mine"])), (V3, scheme(&[b"mine"]))]);
+        assert_eq!(signing_certificate(&both).unwrap(), b"mine");
+    }
+
+    #[test]
+    fn a_signer_for_another_android_version_cant_hide_the_real_one() {
+        assert!(signing_certificate(&apk(&[(V3, scheme(&[b"mine", b"theirs"]))])).is_err());
+        assert!(signing_certificate(&apk(&[(V2, scheme(&[b"theirs"])), (V3, scheme(&[b"mine"]))])).is_err());
+    }
+
+    #[test]
+    fn refuses_what_isnt_signed_or_is_cut_short() {
+        assert!(signing_certificate(&apk(&[(0x4242, b"other".to_vec())])).is_err());
+        assert!(signing_certificate(b"short").is_err());
+        let whole = apk(&[(V2, scheme(&[b"mine"]))]);
+        for cut in 0..whole.len() {
+            let _ = signing_certificate(&whole[..cut]); // must not panic
+        }
+        let mut lying = whole.clone();
+        let at = whole.windows(4).position(|w| w == V2.to_le_bytes()).unwrap() + 4;
+        lying[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(signing_certificate(&lying).is_err());
+    }
+
+    /// `VYOMA_APK=x.apk VYOMA_APK_DIGEST=<apksigner's SHA-256> cargo test real_apk -- --ignored`
+    #[test]
+    #[ignore]
+    fn real_apk() {
+        let bytes = std::fs::read(std::env::var("VYOMA_APK").unwrap()).unwrap();
+        assert_eq!(hex::encode(Sha256::digest(signing_certificate(&bytes).unwrap())), std::env::var("VYOMA_APK_DIGEST").unwrap());
+    }
 }

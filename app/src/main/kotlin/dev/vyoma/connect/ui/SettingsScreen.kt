@@ -35,6 +35,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.text.font.FontFamily
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import dev.vyoma.connect.platform.AppLock
 import dev.vyoma.connect.platform.NotificationBridge
 import dev.vyoma.connect.platform.PhonePermissions
 import dev.vyoma.connect.protocol.link.LanBackend
@@ -89,6 +90,7 @@ import androidx.compose.material.icons.rounded.Gradient
 import androidx.compose.material.icons.rounded.Wallpaper
 import dev.vyoma.connect.designsystem.AppCanvas
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -305,6 +307,9 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                 )
             }
         }
+
+        item(key = "security-label") { SectionLabel("Security") }
+        item(key = "security") { SectionCard { FingerprintLockRow(resumeTick) } }
 
         item(key = "hosts-label") { SectionLabel("Connect by address") }
         item(key = "hosts") {
@@ -541,7 +546,7 @@ internal fun ClipboardAdbDialog(onDismiss: () -> Unit) {
             Column {
                 Text("Android only lets the app in front read the clipboard. Two permissions lift that, and Android only lets a computer grant them, once.")
                 Spacer(Modifier.height(12.dp))
-                Text("With the Vyoma companion on your PC: turn on USB debugging, plug in, done. Without it, run this from any computer with adb:")
+                Text("With the Vyoma companion on your PC: turn on USB debugging, plug in, then allow it when the PC asks. Without it, run this from any computer with adb:")
                 Spacer(Modifier.height(8.dp))
                 Text(cmd, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
                 Spacer(Modifier.height(12.dp))
@@ -713,5 +718,32 @@ private fun BluetoothRow(resumeTick: Int) {
         haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
         onClick = { if (needsPairing) openBluetoothSettings() else toggle(!on) },
         trailing = { VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Bluetooth") },
+    )
+}
+
+@Composable
+private fun FingerprintLockRow(resumeTick: Int) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var on by remember { mutableStateOf(AppLock.enabled(context)) }
+    val usable = remember(resumeTick) { AppLock.canAsk(context) }
+    fun toggle(want: Boolean) {
+        if (want) {
+            AppLock.setEnabled(context, true)
+            on = true
+        } else {
+            AppLock.confirm(context, "To turn off the fingerprint lock") {
+                AppLock.setEnabled(context, false)
+                on = false
+            }
+        }
+    }
+    ListRow(
+        title = "Fingerprint lock",
+        subtitle = if (usable) "Unlock, files, screen and more" else "Set a screen lock on this phone to use it",
+        icon = Icons.Rounded.Fingerprint,
+        iconTint = SystemColor.MINT.color,
+        haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
+        onClick = { toggle(!on) },
+        trailing = { VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Fingerprint lock") },
     )
 }

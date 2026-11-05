@@ -2,11 +2,15 @@ package dev.vyoma.connect.protocol.link
 
 import dev.vyoma.connect.protocol.NetworkPacket
 import dev.vyoma.connect.protocol.ProtocolException
+import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.protocol.crypto.TlsContext
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -20,6 +24,7 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.security.cert.X509Certificate
+import java.util.concurrent.ConcurrentHashMap
 import javax.net.ssl.SSLSocket
 
 /** Something to upload: [size] bytes from a fresh stream each time [open] is called (-1 if unknown). */
@@ -68,7 +73,6 @@ internal class LanPayloads(
         val server = bindPayloadPort()
         var ssl: SSLSocket? = null
         closeOnCancel(server, { ssl }) {
-            server.soTimeout = timeoutMs
             // Over the adb tunnel the PC reaches our port through its forward of it, shifted.
             val port = if (link.remoteAddress.isLoopbackAddress) server.localPort + USB_FORWARD_SHIFT else server.localPort
             val announced = packet.withPayload(source.size, buildJsonObject {
@@ -76,17 +80,66 @@ internal class LanPayloads(
                 if (usbMirror && !link.remoteAddress.isLoopbackAddress) put("usbPort", server.localPort + USB_FORWARD_SHIFT)
             })
             if (!link.send(announced)) return@closeOnCancel false
-            val plain = server.accept()
-            tuneSocket(plain)
-            val secure = tls.wrap(plain, asServer = true).also { ssl = it }
+            val secure = acceptPeer(server, link.peerCertificate, timeoutMs).also { ssl = it }
             secure.use {
                 it.soTimeout = IO_TIMEOUT_MS
-                it.startHandshake()
-                verifyPeer(it, link.peerCertificate)
                 source.open().use { input -> input.copyWithProgress(it.outputStream, onProgress) }
                 it.outputStream.flush()
             }
             true
+        }
+    }
+
+    /**
+     * The first connection to prove it's [expected]. Anyone on the network can reach this port, so
+     * one that's wrong or stalls is dropped and the wait goes on, for [timeoutMs] in all. Proofs run
+     * side by side, each with a time limit, so a few idle connections can't hold up the real one.
+     */
+    private suspend fun acceptPeer(server: ServerSocket, expected: X509Certificate, timeoutMs: Int): SSLSocket = coroutineScope {
+        val peer = CompletableDeferred<SSLSocket>()
+        val proving = ConcurrentHashMap.newKeySet<Socket>()
+        val slots = Semaphore(MAX_PROOFS)
+        val deadline = System.nanoTime() / 1_000_000 + timeoutMs
+        val waiter = launch {
+            try {
+                while (true) {
+                    slots.acquire()
+                    server.soTimeout = (deadline - System.nanoTime() / 1_000_000).coerceAtLeast(1).toInt()
+                    val plain = server.accept()
+                    proving += plain
+                    launch {
+                        val limit = launch {
+                            delay(PROOF_LIMIT_MS)
+                            runCatching { plain.close() }
+                        }
+                        try {
+                            tuneSocket(plain)
+                            val secure = tls.wrap(plain, asServer = true)
+                            secure.startHandshake()
+                            verifyPeer(secure, expected)
+                            limit.cancel()
+                            proving -= plain // before it's handed over: the rest get closed then
+                            if (!peer.complete(secure)) runCatching { secure.close() }
+                        } catch (e: Exception) {
+                            VLog.d(TAG, "payload port: dropped a connection: ${e.message}")
+                            proving -= plain
+                            runCatching { plain.close() }
+                        } finally {
+                            limit.cancel()
+                            slots.release()
+                        }
+                    }
+                }
+            } catch (e: IOException) {
+                peer.completeExceptionally(e) // out of time, or cancelled
+            }
+        }
+        try {
+            peer.await()
+        } finally {
+            waiter.cancel()
+            runCatching { server.close() }
+            proving.forEach { runCatching { it.close() } }
         }
     }
 
@@ -149,7 +202,10 @@ internal class LanPayloads(
          * the payloads we offer over the cable. Must match FORWARD_SHIFT in desktop/companion/src/usb.rs.
          */
         const val USB_FORWARD_SHIFT = 200
+        const val TAG = "LanPayloads"
         const val CONNECT_TIMEOUT_MS = 5_000
+        const val MAX_PROOFS = 4
+        const val PROOF_LIMIT_MS = 5_000L
         const val IO_TIMEOUT_MS = 30_000
     }
 }

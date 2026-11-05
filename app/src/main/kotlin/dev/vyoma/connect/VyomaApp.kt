@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import dev.vyoma.connect.designsystem.CanvasWallpaper
 import dev.vyoma.connect.designsystem.GlassQuality
 import dev.vyoma.connect.platform.AndroidClipboard
+import dev.vyoma.connect.platform.AppLock
 import dev.vyoma.connect.platform.FrameBudget
 import dev.vyoma.connect.platform.AndroidShareSink
 import dev.vyoma.connect.platform.AndroidContacts
@@ -87,6 +88,7 @@ class VyomaApp : Application() {
             Demo.seedClipboard(this)
             DemoDiagnostics.install(this)
         }
+        AppLock.install(this)
         container = AppContainer(this)
         if (BuildConfig.DEMO) container.appScope.launch { DemoDiagnostics.reportCrashes(this@VyomaApp) }
         // Lighter glass: the user's setting, or found here when this phone can't keep up with the full kind.

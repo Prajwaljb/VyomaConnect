@@ -17,6 +17,7 @@ mod kde;
 mod link;
 mod media;
 mod mirror;
+mod notice;
 mod payload;
 mod paste;
 mod pc;
@@ -339,7 +340,7 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                 if shot_task.as_ref().is_none_or(|t| t.is_finished()) {
                     let (sender, shared, pinned, name) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone());
                     shot_task = Some(tokio::spawn(async move {
-                        match screenshot::capture_and_send(&sender, &shared.me, &pinned).await {
+                        match screenshot::capture_and_send(&sender, &shared.me, &pinned, &name).await {
                             Ok(()) => info!("{name}: sent a screenshot"),
                             Err(e) => warn!("{name}: screenshot failed: {e:#}"),
                         }
@@ -577,7 +578,7 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                 let (sender, shared, pinned, name) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone());
                 let rel = p["body"]["path"].as_str().unwrap_or_default().to_string();
                 file_tasks.spawn(async move {
-                    match files::send(&sender, &shared.me, &pinned, &rel).await {
+                    match files::send(&sender, &shared.me, &pinned, &rel, &name).await {
                         Ok(()) => info!("{name}: sent a file"),
                         Err(e) => warn!("{name}: file transfer failed: {e:#}"),
                     }
@@ -586,7 +587,7 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
             "vyoma.files.put" => {
                 let (sender, shared, pinned, name, phone) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone(), addr.ip());
                 file_tasks.spawn(async move {
-                    match files::receive(&sender, &shared.me, &pinned, phone, &p).await {
+                    match files::receive(&sender, &shared.me, &pinned, phone, &p, &name).await {
                         Ok(()) => info!("{name}: received a file"),
                         Err(e) => warn!("{name}: upload failed: {e:#}"),
                     }
