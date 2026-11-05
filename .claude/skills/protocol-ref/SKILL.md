@@ -47,6 +47,11 @@ Peers mix up number and string types, so always use the lenient `NetworkPacket.s
 Stock types live in `PacketTypes`. Check the upstream kdeconnect-kde / kdeconnect-android plugin source for exact
 body fields before implementing one.
 
+## Presenter (stock, no companion)
+Slides are `kdeconnect.mousepad.request` keys: Page Down/Up (next/previous), F5, Esc, `key:"b"` (black screen). The pointer
+is `kdeconnect.presenter {dx, dy}` (KDE's overlay, screen -1..1 across, it multiplies dy by the aspect) then `{stop:true}`;
+keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPlugin`, app presenter/PointerGyro.kt.
+
 ## vyoma.* extensions (companion and our own features)
 - Namespace `vyoma.<feature>[.<verb>]`, advertised in capabilities like any packet, so stock peers just don't load them.
 - Never change the meaning of a stock `kdeconnect.*` packet; extend with extra optional body fields only if stock

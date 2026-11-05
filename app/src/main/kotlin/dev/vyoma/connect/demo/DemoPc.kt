@@ -107,6 +107,8 @@ internal class DemoPc(credentials: LocalCredentials) : SimulatedPeer(credentials
             PacketTypes.SYSTEMVOLUME_REQUEST -> onVolume(packet)
             PacketTypes.MPRIS_REQUEST -> onMedia(packet, session)
             PacketTypes.SHARE_REQUEST -> if (packet.hasPayload) session.launch(kotlinx.coroutines.Dispatchers.IO) { receivePayload(packet) }
+            // Logged so a test can see what reached the "PC".
+            PacketTypes.PRESENTER, PacketTypes.MOUSEPAD_REQUEST -> android.util.Log.d("DemoPc", "${packet.type} ${packet.body}")
             // Clipboard, touchpad and find-my-PC need no answer; the clipboard is never stored.
         }
     }
@@ -256,7 +258,7 @@ internal class DemoPc(credentials: LocalCredentials) : SimulatedPeer(credentials
             protocolVersion = DeviceIdentity.PROTOCOL_VERSION,
             incomingCapabilities = setOf(
                 PacketTypes.PING, PacketTypes.BATTERY, PacketTypes.BATTERY_REQUEST, PacketTypes.CLIPBOARD, PacketTypes.CLIPBOARD_CONNECT,
-                PacketTypes.FIND_MY_PHONE_REQUEST, PacketTypes.LOCK_REQUEST, PacketTypes.MPRIS_REQUEST, PacketTypes.MOUSEPAD_REQUEST,
+                PacketTypes.FIND_MY_PHONE_REQUEST, PacketTypes.LOCK_REQUEST, PacketTypes.MPRIS_REQUEST, PacketTypes.MOUSEPAD_REQUEST, PacketTypes.PRESENTER,
                 PacketTypes.RUNCOMMAND_REQUEST, PacketTypes.SYSTEMVOLUME_REQUEST, PacketTypes.SHARE_REQUEST,
             ),
             outgoingCapabilities = setOf(

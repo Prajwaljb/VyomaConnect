@@ -352,6 +352,26 @@ class MousePadPlugin(private val ctx: PluginContext) : Plugin {
     }
 }
 
+/**
+ * The on-screen pointer of KDE Connect's presenter plugin: dx/dy move it (the screen is -1..1 across),
+ * stop hides it. Slides change with [MousePadPlugin] keys, as stock clients do.
+ */
+class PresenterPlugin(private val ctx: PluginContext) : Plugin {
+    override suspend fun onPacket(packet: NetworkPacket) = false
+
+    suspend fun move(dx: Float, dy: Float) = ctx.send(packet(PacketTypes.PRESENTER) { put("dx", dx); put("dy", dy) })
+
+    /** On the plugin's scope: it must still go out when the screen that held the pointer has closed. */
+    fun stop() {
+        ctx.scope.launch { ctx.send(packet(PacketTypes.PRESENTER) { put("stop", true) }) }
+    }
+
+    companion object {
+        const val ID = "presenter"
+        val spec = PluginSpec(ID, incoming = emptySet(), outgoing = setOf(PacketTypes.PRESENTER), ::PresenterPlugin)
+    }
+}
+
 // ---- JSON helpers -----------------------------------------------------------------------------
 
 internal fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull

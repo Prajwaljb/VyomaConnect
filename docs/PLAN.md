@@ -97,7 +97,7 @@ desktop/companion/     Rust daemon (Phase 2)
 - **Share:** files, text and URLs both ways; multi-file; Live Update progress in the Now Bar.
 - **Media control (MPRIS):** **high-quality art.** Full-resolution art is sent and requested
   (up to 1024 px WebP), not thumbnails. YouTube art is upgraded to `maxresdefault` by the companion later.
-- **Remote input:** touchpad with gestures, keyboard, presenter mode.
+- **Remote input:** touchpad with gestures, keyboard, presenter mode (done 2026-11-05: Next/Previous + volume keys, start/end with a timer, black screen, hold to point with the gyro; pointer not yet tried on the real PC).
 - **Telephony / SMS:** conversation sync, send SMS, call notifications, mute ringer.
   Contacts with photos. (RCS isn't accessible to third-party apps; that's an Android limitation.)
 - **Run commands, find my phone / ring PC, battery, connectivity, system volume, lock PC.**

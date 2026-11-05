@@ -46,6 +46,7 @@ import dev.vyoma.connect.protocol.plugin.builtin.TelephonyPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.FindMyPhonePlugin
 import dev.vyoma.connect.protocol.plugin.builtin.LockPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.MousePadPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.PresenterPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.MprisPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.NotificationsPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.PingPlugin
@@ -205,6 +206,7 @@ class AppContainer(private val app: Application) {
         RunCommandPlugin.spec,
         SystemVolumePlugin.spec,
         MousePadPlugin.spec,
+        PresenterPlugin.spec,
         SmsPlugin.spec(sms),
         TelephonyPlugin.spec(calls),
         ContactsPlugin.spec(contacts),

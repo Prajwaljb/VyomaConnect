@@ -65,6 +65,7 @@ sealed interface Screen {
     data object Captures : Screen
     data class DeviceDetail(val id: String) : Screen
     data class Touchpad(val deviceId: String?, val keyboard: Boolean) : Screen
+    data class Presenter(val deviceId: String?) : Screen
     data class Files(val pcId: String, val path: String = "") : Screen
     data object Automation : Screen
     data object Notifications : Screen
@@ -109,6 +110,10 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    /** Ahead of the system's volume handling, for a screen that has claimed the keys. */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
+        HardwareKeys.handler?.invoke(event) == true || super.dispatchKeyEvent(event)
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -182,6 +187,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
             Screen.Home -> tab.name.lowercase().replaceFirstChar(Char::uppercase)
             is Screen.DeviceDetail -> "Device"
             is Screen.Touchpad -> if (current.keyboard) "Keyboard" else "Touchpad"
+            is Screen.Presenter -> "Presenter"
             is Screen.Files -> "PC files"
             Screen.Clipboard -> "Clipboard"
             Screen.Captures -> "Captures"
@@ -278,6 +284,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                     backToHome = backStack.size == 1,
                     onTouchpad = { backStack.add(Screen.Touchpad(null, keyboard = false)) },
                     onGamepad = { GamepadActivity.open(context, null) },
+                    onPresenter = { backStack.add(Screen.Presenter(null)) },
                 ) { t ->
                     when (t) {
                         Tab.HOME -> HomeScreen(
@@ -302,7 +309,11 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                     }
                 }
                 is Screen.DeviceDetail -> DeviceScreen(vm, screen.id, onBack = pop)
-                is Screen.Touchpad -> RemoteInputScreen(vm, screen.deviceId, screen.keyboard, onBack = pop)
+                is Screen.Touchpad -> RemoteInputScreen(
+                    vm, screen.deviceId, screen.keyboard, onBack = pop,
+                    onPresenter = { id -> backStack.add(Screen.Presenter(id)) },
+                )
+                is Screen.Presenter -> PresenterScreen(vm, screen.deviceId, onBack = pop)
                 is Screen.Files -> FilesScreen(
                     vm, screen.pcId, screen.path, onBack = pop,
                     onOpen = { backStack.add(Screen.Files(screen.pcId, it)) },
