@@ -35,11 +35,14 @@ use crate::payload;
 pub const LABEL: &str = "Vyoma Phone Camera";
 const MIC_NAME: &str = "vyoma_phone_mic";
 const MIC_LABEL: &str = "Vyoma Phone Mic";
-/// Both streams flow all the time (audio every 10 ms, a frame at least every 100 ms), so this long
-/// without a byte means the phone is gone even if no close reached us (killed app, dropped cable).
 /// The mic pipe's size: one page, about 40 ms of 48 kHz mono.
 const MIC_PIPE_BYTES: libc::c_int = 4096;
+/// Audio flows all the time (every 10 ms), so this long without a byte means the phone is gone
+/// even if no close reached us (killed app, dropped cable).
 const SILENCE: std::time::Duration = std::time::Duration::from_secs(4);
+/// The picture stops while another app has the phone's camera and resumes when it's free, and a
+/// lost link already ends this task: so only a stream that's truly stuck runs into this.
+const VIDEO_SILENCE: std::time::Duration = std::time::Duration::from_secs(60);
 const OPEN_TRIES: u32 = 10;
 const OPEN_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
 
@@ -205,7 +208,7 @@ pub async fn camera(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr
         });
         let ended = loop {
             tokio::select! {
-                n = tokio::time::timeout(SILENCE, input.read(&mut buf)) => match n.unwrap_or_else(|_| Err(std::io::ErrorKind::TimedOut.into())) {
+                n = tokio::time::timeout(VIDEO_SILENCE, input.read(&mut buf)) => match n.unwrap_or_else(|_| Err(std::io::ErrorKind::TimedOut.into())) {
                     Ok(0) => break Ok(true),
                     Ok(n) => {
                         if let Err(e) = stdin.write_all(&buf[..n]).await {
