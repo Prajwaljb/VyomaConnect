@@ -107,6 +107,8 @@ async fn setup_all(adb: &PathBuf) {
 
 /// Local ports that reach a plugged-in phone's own listener (adb forwards), by serial.
 static CABLE: std::sync::Mutex<Vec<(String, u16)>> = std::sync::Mutex::new(Vec::new());
+/// Phones being set up: plugging in starts it, and the periodic check can come along meanwhile.
+static SETTING_UP: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 /// Where the companion can dial plugged-in Vyoma phones over the cable (127.0.0.1 ports).
 pub fn cable_ports() -> Vec<u16> {
@@ -118,7 +120,7 @@ async fn recheck_tunnels(adb: &PathBuf) {
     let devices = list_devices(adb).await;
     CABLE.lock().unwrap().retain(|(serial, _)| devices.iter().any(|(s, st)| s == serial && st == "device"));
     for (serial, state) in devices {
-        if state != "device" || NOT_VYOMA.lock().unwrap().contains(&serial) {
+        if state != "device" || NOT_VYOMA.lock().unwrap().contains(&serial) || SETTING_UP.lock().unwrap().contains(&serial) {
             continue;
         }
         let Some(list) = run(adb, &serial, &["reverse", "--list"]).await else { continue };
@@ -139,6 +141,18 @@ async fn recheck_tunnels(adb: &PathBuf) {
 static NOT_VYOMA: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 async fn setup(adb: &PathBuf, serial: &str) {
+    {
+        let mut running = SETTING_UP.lock().unwrap();
+        if running.iter().any(|s| s == serial) {
+            return;
+        }
+        running.push(serial.to_string());
+    }
+    set_up(adb, serial).await;
+    SETTING_UP.lock().unwrap().retain(|s| s != serial);
+}
+
+async fn set_up(adb: &PathBuf, serial: &str) {
     let installed: Vec<&str> = {
         let mut v = Vec::new();
         for pkg in PACKAGES {
@@ -163,9 +177,16 @@ async fn setup(adb: &PathBuf, serial: &str) {
     // tcp:0 lets adb pick a free local port and print it.
     match run(adb, serial, &["forward", "tcp:0", PHONE_LISTENER]).await.and_then(|o| o.trim().parse::<u16>().ok()) {
         Some(port) => {
-            let mut cable = CABLE.lock().unwrap();
-            cable.retain(|(s, _)| s != serial);
-            cable.push((serial.to_string(), port));
+            let old = {
+                let mut cable = CABLE.lock().unwrap();
+                let old = cable.iter().find(|(s, _)| s == serial).map(|(_, p)| *p);
+                cable.retain(|(s, _)| s != serial);
+                cable.push((serial.to_string(), port));
+                old
+            };
+            if let Some(old) = old.filter(|old| *old != port) {
+                run(adb, serial, &["forward", "--remove", &format!("tcp:{old}")]).await;
+            }
         }
         None => warn!("{serial}: can't reach the phone's listener over the cable"),
     }

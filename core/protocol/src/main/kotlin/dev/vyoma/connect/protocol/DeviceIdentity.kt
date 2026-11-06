@@ -53,6 +53,13 @@ data class DeviceIdentity(
         fun sanitizeName(name: String): String =
             name.filterNot { it in FORBIDDEN_NAME_CHARS }.trim().take(MAX_NAME_LENGTH).ifEmpty { "Unnamed" }
 
+        /**
+         * Whether a hello before TLS says it's a Vyoma companion. Only for telling one from another
+         * KDE Connect app on this phone; TLS and the pinned certificate decide if it gets anywhere.
+         */
+        fun helloFromCompanion(packet: NetworkPacket): Boolean =
+            packet.string("vyomaHost") != null || packet.bool("vyomaCompanion") == true
+
         fun fromPacket(packet: NetworkPacket): DeviceIdentity {
             if (packet.type != PacketTypes.IDENTITY) throw ProtocolException("Expected identity, got ${packet.type}")
             val id = packet.string("deviceId") ?: throw ProtocolException("Identity without deviceId")

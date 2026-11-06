@@ -42,6 +42,17 @@ class GamepadRouteTest {
     }
 
     @Test
+    fun aCompanionsPrivateHelloIsToldFromAnotherAppOnThePhone() {
+        fun hello(extra: String = "") = NetworkPacket.parse(
+            """{"id":1,"type":"${PacketTypes.IDENTITY}","body":{"deviceId":"abc"$extra}}""",
+        )
+        assertEquals(true, DeviceIdentity.helloFromCompanion(hello(""","vyomaCompanion":true""")))
+        assertEquals(true, DeviceIdentity.helloFromCompanion(hello(""","vyomaHost":"abc"""")))
+        assertEquals(false, DeviceIdentity.helloFromCompanion(hello()))
+        assertEquals(false, DeviceIdentity.helloFromCompanion(hello(""","vyomaCompanion":false""")))
+    }
+
+    @Test
     fun aPulledCableIsSpottedOnceEchoesStop() {
         val watch = CableWatch(silentMs = 250)
         watch.echoed(33)
