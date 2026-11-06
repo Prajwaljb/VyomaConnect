@@ -91,6 +91,7 @@ object PhoneWebcam {
     private const val MIC_BACKLOG = RATE * 2 / 10
     /** Past this a phone's zoom is digital mush. */
     private const val MAX_ZOOM = 8f
+    private const val CAMERA_RETRY_MS = 2_000L
 
     private val _status = MutableStateFlow(Status())
     val status: StateFlow<Status> = _status.asStateFlow()
@@ -210,13 +211,7 @@ object PhoneWebcam {
         val video = LiveStream(VIDEO_BACKLOG)
         val encoder = H264Encoder(size.width, size.height, if (hd) 8_000_000 else 4_000_000, FPS, video, "webcam-encoder")
         val turns = Turns(app)
-        // Losing the camera once it's open: the encoder would keep repeating its last picture.
-        val lost = CompletableDeferred<Unit>()
         try {
-            launch {
-                lost.await()
-                error("lost the camera")
-            }
             launch {
                 plugin.webcam.collect { s -> _status.value = _status.value.copy(camera = s.camera, mic = s.mic) }
             }
@@ -232,40 +227,64 @@ object PhoneWebcam {
                     zoom.value = 1f
                     torch.value = false
                     _status.value = _status.value.copy(zoomRange = range, torchable = torchable)
-                    val camera = open(cameras, id, encoder.handler) { lost.complete(Unit) }
-                    try {
-                        VLog.i(TAG, "camera ${if (f) "front" else "back"} ${size.width}x${size.height}")
-                        preview.collectLatest { shown ->
-                            val targets = listOfNotNull(encoder.surface, shown).toMutableList()
-                            // A camera that can't add the preview still streams without it.
-                            val session = runCatching { session(camera, targets, encoder.handler) }.getOrElse { e ->
-                                if (e is CancellationException || shown == null) throw e
-                                VLog.w(TAG, "no preview: ${e.message}")
-                                targets.retainAll { it !== shown }
-                                session(camera, targets, encoder.handler)
-                            }
-                            capturing = session
-                            try {
-                                val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                                    targets.forEach(::addTarget)
-                                    set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(FPS, FPS))
-                                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                                }
-                                // A dragged zoom slider changes many times a frame; the camera takes one
-                                // new request per frame at most (the latest), or it queues and lags.
-                                combine(zoom, torch) { z, t -> z to t }.collect { (z, t) ->
-                                    builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, z.coerceIn(range))
-                                    if (torchable) builder.set(CaptureRequest.FLASH_MODE, if (t) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
-                                    runCatching { session.setRepeatingRequest(builder.build(), null, encoder.handler) }
-                                    delay(1000L / FPS)
-                                }
-                            } finally {
-                                capturing = null
-                                runCatching { session.close() }
-                            }
+                    // Another app can take the camera at any time. The stream stays up (the PC's camera
+                    // device with it, holding the last picture) and this one comes back when it's free.
+                    while (true) {
+                        val lost = CompletableDeferred<Unit>()
+                        val camera = try {
+                            open(cameras, id, encoder.handler) { lost.complete(Unit) }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            VLog.w(TAG, "can't open the camera: ${e.message}")
+                            delay(CAMERA_RETRY_MS)
+                            continue
                         }
-                    } finally {
-                        camera.close()
+                        try {
+                            coroutineScope {
+                                launch {
+                                    lost.await()
+                                    error("another app took the camera")
+                                }
+                                VLog.i(TAG, "camera ${if (f) "front" else "back"} ${size.width}x${size.height}")
+                                preview.collectLatest { shown ->
+                                    val targets = listOfNotNull(encoder.surface, shown).toMutableList()
+                                    // A camera that can't add the preview still streams without it.
+                                    val session = runCatching { session(camera, targets, encoder.handler) }.getOrElse { e ->
+                                        if (e is CancellationException || shown == null) throw e
+                                        VLog.w(TAG, "no preview: ${e.message}")
+                                        targets.retainAll { it !== shown }
+                                        session(camera, targets, encoder.handler)
+                                    }
+                                    capturing = session
+                                    try {
+                                        val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                                            targets.forEach(::addTarget)
+                                            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(FPS, FPS))
+                                            set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                                        }
+                                        // A dragged zoom slider changes many times a frame; the camera takes one
+                                        // new request per frame at most (the latest), or it queues and lags.
+                                        combine(zoom, torch) { z, t -> z to t }.collect { (z, t) ->
+                                            builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, z.coerceIn(range))
+                                            if (torchable) builder.set(CaptureRequest.FLASH_MODE, if (t) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
+                                            runCatching { session.setRepeatingRequest(builder.build(), null, encoder.handler) }
+                                            delay(1000L / FPS)
+                                        }
+                                    } finally {
+                                        capturing = null
+                                        runCatching { session.close() }
+                                    }
+                                }
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            VLog.w(TAG, "camera lost: ${e.message}")
+                        } finally {
+                            camera.close()
+                        }
+                        delay(CAMERA_RETRY_MS)
                     }
                 }
             }
