@@ -555,19 +555,20 @@ pub async fn serve_wired() {
     loop {
         let Ok((stream, _)) = listener.accept().await else { continue };
         let _ = stream.set_nodelay(true);
-        tokio::spawn(read_frames(stream, "the USB cable"));
+        // Every frame: echoes stopping is how the phone knows at once that the cable was pulled.
+        tokio::spawn(read_frames(stream, "the USB cable", 1));
     }
 }
 
 /// Every 32nd state is echoed, so the phone can time the round trip on this very route.
-const ECHO_EVERY: u32 = 32;
+pub const ECHO_EVERY: u32 = 32;
 
-fn echoed(state: &State) -> Option<[u8; 4]> {
-    state.order.filter(|(_, seq)| seq % ECHO_EVERY == 0).map(|(_, seq)| seq.to_be_bytes())
+fn echoed(state: &State, every: u32) -> Option<[u8; 4]> {
+    state.order.filter(|(_, seq)| seq % every == 0).map(|(_, seq)| seq.to_be_bytes())
 }
 
 /// One stream of signed frames (the cable, or Bluetooth); the first frame's key picks the controller.
-pub async fn read_frames<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, via: &'static str) {
+pub async fn read_frames<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, via: &'static str, echo_every: u32) {
     let mut buf = [0u8; DATAGRAM_LEN];
     if stream.read_exact(&mut buf).await.is_err() {
         return;
@@ -580,8 +581,8 @@ pub async fn read_frames<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, via: 
     }
     while stream.read_exact(&mut buf).await.is_ok() {
         let Some(s) = State::from_datagram(&buf, &key) else { return };
-        if let Some(echo) = echoed(&s) {
-            // Nobody reads an accessory's echo: never let that hold up the controller.
+        if let Some(echo) = echoed(&s, echo_every) {
+            // Never let a slow echo hold up the controller.
             let _ = tokio::time::timeout(Duration::from_millis(50), stream.write_all(&echo)).await;
         }
         if tx.send(s).await.is_err() {
@@ -618,7 +619,7 @@ impl Fast {
             tokio::select! {
                 got = self.socket.recv_from(&mut buf) => {
                     if let Ok((n, from)) = got && let Some(s) = State::from_datagram(&buf[..n], &self.key) {
-                        if let Some(echo) = echoed(&s) {
+                        if let Some(echo) = echoed(&s, ECHO_EVERY) {
                             let _ = self.socket.send_to(&echo, from).await;
                         }
                         return (s, false);
@@ -651,7 +652,7 @@ impl Order {
 
 /// Stutter on the side channels: they repeat at least every 100 ms, so a longer silence is the
 /// route's fault, not an idle thumb.
-struct Gaps {
+pub(crate) struct Gaps {
     started: std::time::Instant,
     last: Option<std::time::Instant>,
     frames: u64,
@@ -662,11 +663,11 @@ struct Gaps {
 impl Gaps {
     const LONG: Duration = Duration::from_millis(150);
 
-    fn new() -> Gaps {
+    pub(crate) fn new() -> Gaps {
         Gaps { started: std::time::Instant::now(), last: None, frames: 0, long: 0, longest: Duration::ZERO }
     }
 
-    fn frame(&mut self) {
+    pub(crate) fn frame(&mut self) {
         let now = std::time::Instant::now();
         if let Some(last) = self.last {
             let gap = now - last;
@@ -677,7 +678,7 @@ impl Gaps {
         self.frames += 1;
     }
 
-    fn report(&self, name: &str) {
+    pub(crate) fn report(&self, name: &str) {
         if self.frames > 0 {
             info!(
                 "{name}: controller frames: {} in {} s, {} gaps over {} ms, longest {} ms",
@@ -804,6 +805,14 @@ pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cable_echoes_every_frame_and_the_rest_every_32nd() {
+        let at = |seq| State { order: Some((1, seq)), ..Default::default() };
+        assert_eq!(echoed(&at(7), 1), Some(7u32.to_be_bytes()));
+        assert_eq!(echoed(&at(7), ECHO_EVERY), None);
+        assert_eq!(echoed(&at(64), ECHO_EVERY), Some(64u32.to_be_bytes()));
+    }
 
     #[test]
     fn reads_signed_datagrams_only() {

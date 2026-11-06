@@ -29,7 +29,7 @@ pub async fn capture_and_send(sender: &Sender, me: &Identity, pinned: &[u8], pho
 
 async fn capture() -> Result<Vec<u8>> {
     if !available() {
-        bail!(UNAVAILABLE);
+        bail!(unavailable_reason(behind_lid()));
     }
     let (device, size) = find_camera().await.context("no camera found")?;
     let out = tokio::time::timeout(
@@ -53,7 +53,15 @@ async fn capture() -> Result<Vec<u8>> {
     Ok(out.stdout)
 }
 
-const UNAVAILABLE: &str = "the laptop's lid is closed, so its camera can't see";
+fn unavailable_reason(behind_lid: bool) -> &'static str {
+    if behind_lid { "the laptop's lid is closed, so its camera can't see" } else { "this PC has no camera" }
+}
+
+/// When there's no camera to use, whether that's only the lid's doing. A desktop without a webcam has
+/// no lid, and a closed laptop may have no camera of its own either.
+pub fn behind_lid() -> bool {
+    lid_closed() && camera_nodes().iter().any(|node| built_in(node))
+}
 
 /// Whether a photo can be taken now, cheaply (sysfs only, every stats tick): some camera is plugged
 /// in, and it isn't only the laptop's built-in one behind a closed lid.
@@ -76,12 +84,14 @@ fn built_in(node: &str) -> bool {
         || std::fs::read_to_string(dev.join("port/connect_type")).is_ok_and(|t| t.trim() == "hardwired")
 }
 
-/// The capture node of each camera (index 0; the others are metadata).
+/// The capture node of each real camera (index 0; the others are metadata). A virtual one has no
+/// device behind it: the phone-as-webcam loopback isn't something to take a photo with.
 fn camera_nodes() -> Vec<String> {
     let mut nodes: Vec<String> = std::fs::read_dir("/sys/class/video4linux")
         .map(|d| {
             d.flatten()
                 .filter(|e| std::fs::read_to_string(e.path().join("index")).is_ok_and(|i| i.trim() == "0"))
+                .filter(|e| e.path().join("device").exists())
                 .map(|e| e.file_name().to_string_lossy().into_owned())
                 .collect()
         })
@@ -119,4 +129,15 @@ async fn find_camera() -> Option<(String, String)> {
 
 async fn notify(phone_name: &str) {
     crate::notice::tell("camera-photo", "Camera used from your phone", &format!("{phone_name} took a photo with this PC's camera.")).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_camera_behind_a_lid_blames_the_lid() {
+        assert!(unavailable_reason(true).contains("lid"));
+        assert_eq!(unavailable_reason(false), "this PC has no camera");
+    }
 }

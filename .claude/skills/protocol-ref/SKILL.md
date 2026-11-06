@@ -106,7 +106,7 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
   (plus the ~30 s keepalive), the companion pauses every playing MPRIS player, mutes the default sink (`pactl`) and
   locks via logind `Session.Lock` on `session/auto` (desktop/companion/src/away.rs); with `undo`, its next link unmutes
   and resumes what it paused. A returning link bumps a generation counter that cancels the pending timer.
-- `vyoma.stats` also carries `camera: bool`: false when the only cameras are built in (`removable=fixed` /
+- `vyoma.stats` also carries `cameraLid: bool` when `camera` is false (true: a closed lid is why; false: this PC has no camera, so never blame a lid on a desktop), and `camera: bool`: false when the only cameras are built in (`removable=fixed` /
   `connect_type=hardwired`) and the lid is closed (`/proc/acpi/button/lid/*/state`). The phone dims its Camera tile
   (NoPhotography icon) and a tap says why; the companion also refuses such a capture.
 - `vyoma.stats` also carries `ac: bool` (absent on a desktop): a Mains or USB-C supply is online. Stock battery packets
@@ -192,7 +192,14 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
   `open:false` while already an accessory = the app lost its permission (reinstall): reset and switch again so
   Android re-attaches it (dialog once, "Always" sticks). NEVER reset on controller close: on the S24 FE a reset while
   the app held the accessory wedged the phone's USB (error -71) until replugged; it stays an accessory until unplugged.
-  Phone writes go through a newest-frame writer thread; a write pending > 500 ms fails over to Wi-Fi. Access without
+  Pulling the cable: writes to the 1866 socket keep succeeding ~1.25 s until adbd notices (measured 2026-11-06), so the
+  companion echoes EVERY frame on the wired listener and the phone's `CableWatch` fails over after 250 ms of no echo, once
+  it has seen a non-32nd echo (older companions only send those); the cable is then left alone 3 s. The accessory bridge
+  drains those echoes unread. A trusted phone's new Bluetooth tunnel takes over a session the PC still holds (main.rs `take_over`).
+  Phone writes go through a newest-frame writer thread; a write pending > 500 ms fails over to Wi-Fi. The accessory is
+  only opened while USB_STATE says plugged (it stays listed briefly after a pull, and retrying it froze the controller).
+  No echoes on this route, on purpose: a phone read blocked on the accessory outlives close, so the next open fails and
+  asks for the reset above. Its timing is the PC's "USB accessory: controller frames" gaps line. Access without
   debugging: desktop/companion/udev/70-vyoma-usb.rules (sudo, once). Verified 2026-11-03: switch ~2 s, A/B/X/Y arrive.
 - Phone mirroring + control from the PC (app mirror/, companion mirror.rs, 2026-11-04): phone → PC `vyoma.mirror
   {w, h}` + live payload of H.264 Annex-B (MediaProjection, whole screen only via createConfigForDefaultDisplay on

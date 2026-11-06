@@ -134,6 +134,7 @@ import dev.vyoma.connect.protocol.plugin.builtin.MousePadPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.PointerChannel
 import dev.vyoma.connect.service.BluetoothFallback
 import dev.vyoma.connect.service.BluetoothPointerChannel
+import androidx.lifecycle.repeatOnLifecycle
 import dev.vyoma.connect.protocol.plugin.builtin.characterCount
 import dev.vyoma.connect.protocol.plugin.builtin.commonEnds
 import dev.vyoma.connect.protocol.plugin.builtin.typeable
@@ -176,25 +177,30 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
     val steadier by BluetoothFallback.steadier.collectAsStateWithLifecycle()
     val onCable = target?.transports?.contains(TransportKind.USB) == true
     var pointer by remember { mutableStateOf<PointerChannel?>(null) }
+    val pageLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(companionPlugin, steadier, onCable) {
         val companion = companionPlugin
         if (companion == null || !steadier || onCable) return@LaunchedEffect
-        try {
-            while (isActive) {
-                val opened = companion.openPointer(BluetoothPointerChannel(appContext, companion.pcId))
-                // The PC said no: don't ask it again every few seconds. Wi-Fi it is, until the page reopens.
-                val channel = opened.getOrElse { break }
-                if (channel != null) {
-                    pointer = channel
-                    while (channel.alive) delay(250)
-                    pointer = null
+        // Only while it's on screen: it idles at 10 frames a second, and hidden under the controller
+        // that shares the radio with the controller's own frames.
+        pageLifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            try {
+                while (isActive) {
+                    val opened = companion.openPointer(BluetoothPointerChannel(appContext, companion.pcId))
+                    // The PC said no: don't ask it again every few seconds. Wi-Fi it is, until the page returns.
+                    val channel = opened.getOrElse { break }
+                    if (channel != null) {
+                        pointer = channel
+                        while (channel.alive) delay(250)
+                        pointer = null
+                    }
+                    delay(POINTER_RETRY_MS)
                 }
-                delay(POINTER_RETRY_MS)
+            } finally {
+                pointer?.close()
+                pointer = null
+                companion.closePointer()
             }
-        } finally {
-            pointer?.close()
-            pointer = null
-            companion.closePointer()
         }
     }
     // Accumulated motion, flushed by the pump below.

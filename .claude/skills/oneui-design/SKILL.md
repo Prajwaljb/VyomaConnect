@@ -302,6 +302,7 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   Send tiles, On the PC folders, Captures, Transfers, latest clips + "All clipboard history". PC details (header
   "i") leads with Connection (Link + Ping, battery), then one Commands row, then Security. Find PC is gone
   everywhere (the user saw no use for it); its Home slot is Send clip, and Camera's slot is Touchpad without the companion.
+- PC details' "Connection checks" (right under Connection, `ConnectionChecks.kt`): one row per route and channel, what's using it now in words, plus a trailing check / dash / warning glyph. Android's Bluetooth page only counts calls and audio, so this is where Vyoma's own Bluetooth shows (user, 2026-11-06).
 - Outcomes show in the status bubble (`LocalStatus.current.show(text, icon?, failure?, haptic?)`, designsystem/Status.kt):
   liquid glass (`glassChrome` over the whole app recorded by `StatusHost`, bevel 16, text onSurface; the old flat
   slab let its text fall back to black in dark mode) that drops from the top, swells on jelly, holds 1.6 s (2.6 s for failures). Never Toast

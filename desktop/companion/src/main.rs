@@ -61,6 +61,8 @@ struct Shared {
     media: Option<Arc<media::Media>>,
     /// Walk-away rules each phone asked for.
     away: Arc<away::Away>,
+    /// Ends a phone's running session (see take_over).
+    sessions: Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
 }
 
 fn main() -> Result<()> {
@@ -88,7 +90,7 @@ async fn daemon() -> Result<()> {
             None
         }
     };
-    let shared = Arc::new(Shared { host, me, connected: Mutex::default(), seen: Mutex::default(), media, away: Arc::default() });
+    let shared = Arc::new(Shared { host, me, connected: Mutex::default(), seen: Mutex::default(), media, away: Arc::default(), sessions: Mutex::default() });
 
     tokio::spawn(usb::watch());
     let (bluetooth_links, bluetooth_ports) = tokio::sync::mpsc::unbounded_channel();
@@ -186,6 +188,8 @@ fn identity_packet(shared: &Shared) -> Value {
 }
 
 const MAX_SEEN: usize = 64;
+const TAKE_OVER_TRIES: u32 = 60;
+const TAKE_OVER_WAIT: Duration = Duration::from_millis(50);
 /// The port Vyoma listens on (KDE Connect's).
 const PHONE_PORT: u16 = 1716;
 const TETHER_POLL: Duration = Duration::from_secs(5);
@@ -252,8 +256,7 @@ async fn watch_bluetooth(shared: Arc<Shared>, mut ports: tokio::sync::mpsc::Unbo
             let trusted = shared.host.trusted_phones();
             match link::connect_trusted(addr, &shared.me, &identity_packet(&shared), &trusted).await {
                 Ok((id, link)) => {
-                    // Its Wi-Fi link can look alive for a while after Wi-Fi went; the phone asks again.
-                    if !shared.connected.lock().unwrap().insert(id.clone()) {
+                    if !take_over(&shared, &id).await {
                         return;
                     }
                     info!("{id}: reached over Bluetooth");
@@ -265,6 +268,22 @@ async fn watch_bluetooth(shared: Arc<Shared>, mut ports: tokio::sync::mpsc::Unbo
             }
         });
     }
+}
+
+/// The phone only opens this tunnel once it has lost the companion, so a session still running here is
+/// dead and just hasn't timed out yet (Wi-Fi gone: up to 30 s). End it and take its place. False if the
+/// phone stays claimed anyway.
+async fn take_over(shared: &Shared, id: &str) -> bool {
+    for _ in 0..TAKE_OVER_TRIES {
+        if shared.connected.lock().unwrap().insert(id.to_string()) {
+            return true;
+        }
+        if let Some(session) = shared.sessions.lock().unwrap().get(id) {
+            session.notify_one();
+        }
+        tokio::time::sleep(TAKE_OVER_WAIT).await;
+    }
+    false
 }
 
 async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u8]) -> Result<()> {
@@ -318,9 +337,15 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
         let _ = link.sender.send(&packet("vyoma.bluetooth", json!({ "address": address }))).await;
     }
     let mut trust_check = tokio::time::interval(TRUST_CHECK);
+    let replaced = Arc::new(tokio::sync::Notify::new());
+    shared.sessions.lock().unwrap().insert(phone_id.to_string(), replaced.clone());
     let result = loop {
         let next = tokio::select! {
             next = link.receiver.next() => next,
+            _ = replaced.notified() => {
+                info!("{name}: back over Bluetooth; ending the old link");
+                break Ok(());
+            }
             _ = trust_check.tick() => {
                 if !still_trusted(&shared.host.trusted_phones(), phone_id, pinned) {
                     warn!("{name}: no longer paired in KDE Connect; ending its session");
@@ -652,6 +677,7 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
     if let Some(t) = stats_task {
         t.abort();
     }
+    shared.sessions.lock().unwrap().remove(phone_id);
     info!("{name}: link closed");
     result
 }
@@ -715,7 +741,11 @@ async fn stream_stats(sender: Sender, lease: Arc<Mutex<Instant>>, media: Option<
             body["handoff"] = json!(title);
         }
         // So the phone can say "Camera unavailable" up front instead of after a failed tap.
-        body["camera"] = json!(camera::available());
+        let camera = camera::available();
+        body["camera"] = json!(camera);
+        if !camera {
+            body["cameraLid"] = json!(camera::behind_lid());
+        }
         // Stock battery packets only say "charging": a laptop on its charger that holds at a
         // charge limit (or is full) reads as on battery without this.
         if let Some(ac) = on_ac() {

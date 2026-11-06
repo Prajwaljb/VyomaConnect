@@ -54,6 +54,8 @@ data class PcStats(
     val handoff: String? = null,
     /** False when no camera can see (the laptop's only one is behind its closed lid); null: not said. */
     val camera: Boolean? = null,
+    /** With [camera] false: true when it's only a closed lid in the way, false when the PC has no camera. */
+    val cameraLid: Boolean? = null,
     /** On its charger, whether or not the battery is taking charge (a charge limit holds it); null: not said. */
     val ac: Boolean? = null,
 )
@@ -76,8 +78,35 @@ data class GamepadState(
     val my: Int = 0,
 )
 
+private const val ECHO_EVERY = 32
+
+/**
+ * Spots a dead adb channel. Writes keep succeeding for over a second after the cable is pulled, until
+ * adbd notices, so the only early sign is the PC's echoes stopping. Armed by an echo that isn't one of
+ * the every-[ECHO_EVERY] kind: a companion too old to echo every frame would look dead between those.
+ */
+internal class CableWatch(private val silentMs: Long = 250L) {
+    private val armed = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val waitingSince = java.util.concurrent.atomic.AtomicLong(0L)
+
+    fun sent(now: Long) { waitingSince.compareAndSet(0L, now) }
+
+    fun echoed(seq: Int) {
+        if (seq % ECHO_EVERY != 0) armed.set(true)
+        waitingSince.set(0L)
+    }
+
+    fun silent(now: Long): Boolean {
+        val since = waitingSince.get()
+        return armed.get() && since != 0L && now - since > silentMs
+    }
+}
+
+/** The latest timing of a route, for PC details' connection checks. */
+data class TripReport(val medianMs: Long, val worstMs: Long)
+
 /** Times frames the PC echoed, per route, for the log. Echoes come on their own coroutines. */
-internal class RoundTrips(private val what: String = "controller") {
+internal class RoundTrips(private val what: String = "controller", private val onReport: (TripReport) -> Unit = {}) {
     private val sent = java.util.concurrent.ConcurrentHashMap<Int, Long>()
     private val samples = mutableListOf<Long>()
 
@@ -92,17 +121,21 @@ internal class RoundTrips(private val what: String = "controller") {
         synchronized(samples) { samples += (System.nanoTime() - at) / 1_000_000 }
     }
 
-    fun report(route: Any?) {
+    /** A frame sent on the old route says nothing about the new one, however late its echo comes. */
+    fun moved() = sent.clear()
+
+    /** Logs and clears what's been timed, returning how many samples that was. */
+    fun report(route: Any?): Int {
         val all = synchronized(samples) { samples.sorted().also { samples.clear() } }
-        if (all.isEmpty()) return
+        if (all.isEmpty()) return 0
         VLog.i(
             "CompanionPlugin",
             "$what round trip over ${route ?: "the link"}: median ${all[all.size / 2]} ms, " +
                 "95% under ${all[all.size * 95 / 100]} ms, worst ${all.last()} ms (${all.size} samples)",
         )
+        onReport(TripReport(all[all.size / 2], all.last()))
+        return all.size
     }
-
-    private companion object { const val ECHO_EVERY = 32 }
 }
 
 /** How the controller's states reach the PC beside the link. */
@@ -680,6 +713,14 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     private val _gamepadRoute = MutableStateFlow<GamepadRoute?>(null)
     /** How the controller's states travel beside the link right now; null: only the link. */
     val gamepadRoute: StateFlow<GamepadRoute?> = _gamepadRoute.asStateFlow()
+    private val _gamepadTrip = MutableStateFlow<TripReport?>(null)
+    /** The controller's round trip on [gamepadRoute]; null until the first report there. */
+    val gamepadTrip: StateFlow<TripReport?> = _gamepadTrip.asStateFlow()
+    private val _pointerOpen = MutableStateFlow(false)
+    /** Whether the touchpad's own Bluetooth channel is up. */
+    val pointerOpen: StateFlow<Boolean> = _pointerOpen.asStateFlow()
+    private val _pointerTrip = MutableStateFlow<TripReport?>(null)
+    val pointerTrip: StateFlow<TripReport?> = _pointerTrip.asStateFlow()
 
     /**
      * The phone's USB cable without USB debugging (Android's accessory mode, set by the app): whether
@@ -690,6 +731,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         fun plugged(): Boolean
         fun open(): java.io.OutputStream?
         fun close()
+        /** Android keeps listing an accessory for a moment after the cable is pulled: that one only fails. */
+        fun openIfPlugged(): java.io.OutputStream? = if (plugged()) open() else null
     }
     @Volatile var cable: CableChannel? = null
 
@@ -725,13 +768,15 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         var socket: java.net.DatagramSocket? = null
         var wiredSocket: java.net.Socket? = null
         var wired: java.io.OutputStream? = null
+        var cableWatch: CableWatch? = null
+        var cableHeldUntil = 0L
         var lastAsk = 0L
         var mac: javax.crypto.Mac? = null
         var lastLink = 0L
         var radioOut: java.io.OutputStream? = null
         val radioReady = java.util.concurrent.atomic.AtomicReference<Pair<java.io.OutputStream, java.io.InputStream>?>(null)
         val radioUp = java.util.concurrent.atomic.AtomicBoolean(false)
-        val trips = RoundTrips()
+        val trips = RoundTrips { _gamepadTrip.value = it }
         var lastReport = System.nanoTime() / 1_000_000
         fun route() {
             val now = when {
@@ -740,12 +785,25 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                 socket != null -> GamepadRoute.WIFI
                 else -> null
             }
-            if (now != _gamepadRoute.value) trips.report(_gamepadRoute.value)
+            if (now != _gamepadRoute.value) {
+                trips.report(_gamepadRoute.value)
+                trips.moved()
+                _gamepadTrip.value = null
+            }
             _gamepadRoute.value = now
         }
         /** The PC echoes every so often, so the round trip is timed on the route frames really take. */
-        fun listen(input: java.io.InputStream) {
-            launch { runCatching { val echoes = java.io.DataInputStream(input); while (true) trips.echoed(echoes.readInt()) } }
+        fun listen(input: java.io.InputStream, watch: CableWatch? = null) {
+            launch {
+                runCatching {
+                    val echoes = java.io.DataInputStream(input)
+                    while (true) {
+                        val seq = echoes.readInt()
+                        trips.echoed(seq)
+                        watch?.echoed(seq)
+                    }
+                }
+            }
         }
         fun listen(udp: java.net.DatagramSocket?) {
             if (udp != null) launch {
@@ -761,7 +819,9 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         }
         val radioJob = launch {
             while (true) {
-                if (gamepadOffer.value != null && !radioUp.get()) {
+                // At once when the PC's offer lands: it's never there yet as the controller opens.
+                gamepadOffer.first { it != null }
+                if (!radioUp.get()) {
                     runCatching { radio?.open() }.getOrNull()?.let {
                         radioUp.set(true)
                         radioReady.set(it)
@@ -774,22 +834,38 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
             if (wiredSocket != null) runCatching { wiredSocket?.close() } else cable?.close()
             wiredSocket = null
             wired = null
+            cableWatch = null
+        }
+        /**
+         * Back to the other routes, and the cable left alone a moment: a pulled cable still accepts a
+         * connection until adbd notices, and the phone still reports it plugged in for a second or two.
+         */
+        fun cableGone() {
+            dropWired()
+            cableHeldUntil = System.nanoTime() / 1_000_000 + GAMEPAD_CABLE_RETRY_MS
+            socket = used?.let { ctx.device.datagramTo(it.port) }
+            listen(socket)
+            route()
+            VLog.i(TAG, "controller cable gone; over ${_gamepadRoute.value ?: "the link"}")
         }
         /**
          * Moves to the cable if it's plugged in: adb's reverse (USB debugging on), else the USB
          * accessory; with neither, asks the companion to switch the phone into accessory mode.
          */
         suspend fun tryWired() {
-            if (wired != null || used == null) return
+            if (wired != null || used == null || System.nanoTime() / 1_000_000 < cableHeldUntil) return
             wiredSocket = runCatching {
                 java.net.Socket().apply {
                     tcpNoDelay = true
                     connect(java.net.InetSocketAddress(java.net.InetAddress.getLoopbackAddress(), GAMEPAD_WIRED_PORT), 300)
                 }
             }.getOrNull()
-            wired = wiredSocket?.getOutputStream() ?: cable?.open()
+            wired = wiredSocket?.getOutputStream() ?: cable?.openIfPlugged()
             if (wired != null) {
-                wiredSocket?.let { listen(it.getInputStream()) }
+                wiredSocket?.let {
+                    cableWatch = CableWatch()
+                    listen(it.getInputStream(), cableWatch)
+                }
                 socket?.close()
                 socket = null
                 VLog.i(TAG, "controller over the USB cable" + if (wiredSocket == null) " (accessory)" else "")
@@ -836,17 +912,12 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                     lastReport = now
                     trips.report(_gamepadRoute.value)
                 }
+                if (cableWatch?.silent(now) == true) cableGone()
                 var fast = false
                 wired?.let { w ->
                     fast = runCatching { w.write(frame!!); w.flush() }.isSuccess
-                    if (!fast) {
-                        // Unplugged (or the PC went): back to Wi-Fi.
-                        dropWired()
-                        socket = used?.let { ctx.device.datagramTo(it.port) }
-                        listen(socket)
-                        VLog.i(TAG, "controller cable gone; " + if (socket != null) "over UDP" else "over the link")
-                        route()
-                    }
+                    // Unplugged (or the PC went).
+                    if (fast) cableWatch?.sent(now) else cableGone()
                 }
                 if (!fast) radioOut?.let { r ->
                     fast = runCatching { r.write(frame!!); r.flush() }.isSuccess
@@ -883,6 +954,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
             socket?.close()
             dropWired()
             trips.report(_gamepadRoute.value)
+            _gamepadTrip.value = null
             gamepadOffer.value = null
             _gamepadRoute.value = null
             withContext(kotlinx.coroutines.NonCancellable) { ctx.send(packet(GAMEPAD_CLOSE)) }
@@ -1031,7 +1103,12 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
             radio.close()
             return@withContext Result.failure(IllegalStateException(answer?.string("error") ?: "The PC didn't answer"))
         }
-        Result.success(PointerChannel(out, input, key, radio::close))
+        _pointerOpen.value = true
+        Result.success(PointerChannel(out, input, key, { _pointerTrip.value = it }) {
+            _pointerOpen.value = false
+            _pointerTrip.value = null
+            radio.close()
+        })
     }
 
     fun closePointer() {
@@ -1091,6 +1168,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                 uptimeSeconds = packet.long("uptime"),
                 handoff = packet.string("handoff"),
                 camera = packet.bool("camera"),
+                cameraLid = packet.bool("cameraLid"),
                 ac = packet.bool("ac"),
             )
         }
@@ -1146,6 +1224,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val GAMEPAD_UDP = "vyoma.gamepad.udp"
         private const val GAMEPAD_HEARTBEAT_MS = 1_000L
         private const val GAMEPAD_REPEAT_MS = 100L
+        private const val GAMEPAD_CABLE_RETRY_MS = 3_000L
         /** The phone's end of the companion's adb reverse for the wired controller; must match usb.rs WIRED. */
         const val GAMEPAD_WIRED_PORT = 1866
         const val USB_ACCESSORY = "vyoma.usb.accessory"
