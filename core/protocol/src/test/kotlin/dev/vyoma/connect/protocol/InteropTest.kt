@@ -25,6 +25,8 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
@@ -92,6 +94,26 @@ class InteropTest {
         )
     }
 
+    /**
+     * Keeps announcing: kdeconnectd ignores a broadcast that comes right after the last test's link
+     * closed, and a phone would announce again anyway.
+     */
+    private suspend fun awaitDesktop(): Device = coroutineScope {
+        val announcing = launch {
+            while (true) {
+                delay(2_000)
+                hub.lan.broadcastIdentity()
+            }
+        }
+        try {
+            withTimeout(15_000) {
+                hub.devices.first { desktopId in it }.getValue(desktopId).also { d -> d.state.first { it.isReachable } }
+            }
+        } finally {
+            announcing.cancel()
+        }
+    }
+
     @After
     fun tearDown() {
         if (!::hub.isInitialized) return
@@ -104,9 +126,7 @@ class InteropTest {
         val ourId = hub.localIdentity().deviceId
         hub.start()
 
-        val desktop = withTimeout(15_000) {
-            hub.devices.first { desktopId in it }.getValue(desktopId).also { d -> d.state.first { it.isReachable } }
-        }
+        val desktop = awaitDesktop()
         println("link established with ${desktop.name}, v${desktop.identity.protocolVersion}")
 
         // 1) Desktop asks to pair, we accept; codes must match on both screens.
@@ -134,6 +154,7 @@ class InteropTest {
         assertEquals(desktopKey(ourId), desktop.state.value.verificationKey, "verification keys differ (phone-initiated)")
         dbus(ourId, "acceptPairing")
         withTimeout(5_000) { desktop.state.first { it.pairState == PairState.PAIRED } }
+        waitUntil { dbus(ourId, "isPaired") == "true" }
 
         desktop.unpair()
         waitUntil { dbus(ourId, "isPaired") == "false" }
@@ -145,9 +166,7 @@ class InteropTest {
     fun desktopBatteryArrives() = runBlocking {
         val ourId = hub.localIdentity().deviceId
         hub.start()
-        val desktop = withTimeout(15_000) {
-            hub.devices.first { desktopId in it }.getValue(desktopId).also { d -> d.state.first { it.isReachable } }
-        }
+        val desktop = awaitDesktop()
         if (!desktop.state.value.isPaired) {
             val request = async(start = CoroutineStart.UNDISPATCHED) { hub.events.filterIsInstance<HubEvent.PairRequested>().first() }
             cli("-d", ourId, "--pair")
@@ -184,9 +203,7 @@ class InteropTest {
     fun payloadsAndPlugins() = runBlocking {
         val ourId = hub.localIdentity().deviceId
         hub.start()
-        val desktop = withTimeout(15_000) {
-            hub.devices.first { desktopId in it }.getValue(desktopId).also { d -> d.state.first { it.isReachable } }
-        }
+        val desktop = awaitDesktop()
         if (!desktop.state.value.isPaired) {
             desktop.requestPairing()
             waitUntil { dbus(ourId, "isPairRequestedByPeer") == "true" }

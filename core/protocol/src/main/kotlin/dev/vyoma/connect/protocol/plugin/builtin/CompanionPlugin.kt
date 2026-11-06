@@ -82,8 +82,8 @@ private const val ECHO_EVERY = 32
 
 /**
  * Spots a dead adb channel. Writes keep succeeding for over a second after the cable is pulled, until
- * adbd notices, so the only early sign is the PC's echoes stopping. Armed by an echo that isn't one of
- * the every-[ECHO_EVERY] kind: a companion too old to echo every frame would look dead between those.
+ * adbd notices, so the only early sign is the PC's echoes stopping. Armed by the first echo: until then
+ * the PC may just still be getting ready for the channel.
  */
 internal class CableWatch(private val silentMs: Long = 250L) {
     private val armed = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -91,8 +91,8 @@ internal class CableWatch(private val silentMs: Long = 250L) {
 
     fun sent(now: Long) { waitingSince.compareAndSet(0L, now) }
 
-    fun echoed(seq: Int) {
-        if (seq % ECHO_EVERY != 0) armed.set(true)
+    fun echoed() {
+        armed.set(true)
         waitingSince.set(0L)
     }
 
@@ -800,7 +800,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                     while (true) {
                         val seq = echoes.readInt()
                         trips.echoed(seq)
-                        watch?.echoed(seq)
+                        watch?.echoed()
                     }
                 }
             }
