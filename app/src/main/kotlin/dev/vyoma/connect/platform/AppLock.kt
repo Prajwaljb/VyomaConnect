@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.vyoma.connect.BuildConfig
+import dev.vyoma.connect.protocol.VLog
 
 /**
  * Someone holding this phone unlocked shouldn't get into the PC with it: unlocking it, its files,
@@ -35,6 +36,7 @@ object AppLock {
     const val TOUCHPAD = "To control the PC"
     const val PRESENTER = "To present on the PC"
     const val CLIPBOARD = "To see your clipboard history"
+    private const val TAG = "AppLock"
     private const val PREFS = "app_lock"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_COMMANDS = "commands"
@@ -58,11 +60,18 @@ object AppLock {
             override fun onActivityDestroyed(activity: Activity) = Unit
         })
         app.registerReceiver(object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) = session.end()
+        }, IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_NOT_EXPORTED)
+        // Exported because System UI sends this one, and it isn't "the system" to a private receiver,
+        // which never hears it. Safe: Android lets only its own components send this action.
+        app.registerReceiver(object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                if (intent.action == Intent.ACTION_SCREEN_OFF) session.end()
-                else if (unlockCounts(context)) session.phoneUnlocked()
+                if (intent.action != Intent.ACTION_USER_PRESENT) return
+                val counts = unlockCounts(context)
+                VLog.i(TAG, "phone unlocked, counts as the pass: $counts")
+                if (counts) session.phoneUnlocked()
             }
-        }, IntentFilter(Intent.ACTION_SCREEN_OFF).apply { addAction(Intent.ACTION_USER_PRESENT) }, Context.RECEIVER_NOT_EXPORTED)
+        }, IntentFilter(Intent.ACTION_USER_PRESENT), Context.RECEIVER_EXPORTED)
     }
 
     /** Recents keeps a picture of the last page, which would show it with the lock closed again. */
