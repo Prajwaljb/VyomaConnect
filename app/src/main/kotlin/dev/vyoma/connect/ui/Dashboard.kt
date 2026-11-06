@@ -367,7 +367,8 @@ fun PcDashboard(
           val shot by (shots?.screenshot?.state ?: remember { MutableStateFlow(CaptureState.Idle) }).collectAsStateWithLifecycle()
           val photo by (shots?.photo?.state ?: remember { MutableStateFlow(CaptureState.Idle) }).collectAsStateWithLifecycle()
           // The companion says when a photo can't be taken (lid shut, no other camera); unknown counts as fine.
-          val cameraOk = (shots?.stats ?: remember { MutableStateFlow(null) }).collectAsStateWithLifecycle().value?.camera != false
+          val pcCamera = (shots?.stats ?: remember { MutableStateFlow(null) }).collectAsStateWithLifecycle().value
+          val cameraOk = pcCamera?.camera != false
           val overBluetooth = state.transports == setOf(TransportKind.BLUETOOTH)
           val commandList by (vm.device(id)?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands ?: remember { MutableStateFlow(emptyList()) }).collectAsStateWithLifecycle()
           CaptureOutcome(shot, "Screenshot")
@@ -410,10 +411,10 @@ fun PcDashboard(
                     val webcam = MenuItem("Phone as webcam", Icons.Rounded.Videocam) { WebcamActivity.open(context) }
                     if (cameraOk) Control(
                         Icons.Rounded.PhotoCamera, "Camera", SystemColor.ORANGE,
-                        menu = listOf(MenuItem("Take a laptop photo", Icons.Rounded.PhotoCamera) { AppLock.ask(context, AppLock.CAMERA) { vm.capture(shots.photo) } }, webcam),
+                        menu = listOf(MenuItem("Take a photo with the PC", Icons.Rounded.PhotoCamera) { AppLock.ask(context, AppLock.CAMERA) { vm.capture(shots.photo) } }, webcam),
                     ) { AppLock.ask(context, AppLock.CAMERA) { vm.capture(shots.photo) } }
                     else Control(Icons.Rounded.NoPhotography, "Camera", SystemColor.ORANGE, unavailable = true, menu = listOf(webcam)) {
-                        status.show("The laptop's lid is closed. Hold for the phone as webcam", icon = Icons.Rounded.NoPhotography, failure = true)
+                        status.show(noCameraMessage(pcCamera?.cameraLid), icon = Icons.Rounded.NoPhotography, failure = true)
                     }
                 }
                 else Control(Icons.Rounded.TouchApp, "Touchpad", SystemColor.ORANGE, opens = true, onClick = onTouchpad),
@@ -1171,3 +1172,8 @@ internal fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) 
         },
     )
 }
+
+/** Why the Camera tile can't take a photo. An older companion doesn't say, and only ever meant the lid. */
+internal fun noCameraMessage(behindLid: Boolean?): String =
+    if (behindLid == false) "This PC has no camera. Hold for the phone as webcam"
+    else "The laptop's lid is closed. Hold for the phone as webcam"

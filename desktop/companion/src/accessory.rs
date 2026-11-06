@@ -15,6 +15,10 @@
 //! Access: the device nodes need to be writable by this user. With USB debugging on, systemd's
 //! uaccess rule covers them; without it, 70-vyoma-usb.rules (desktop/companion/udev) does.
 //! Raw usbdevfs ioctls, no libusb.
+//!
+//! No echoes come back this way, so this route has no round trip, only the gaps between frames. The
+//! phone would have to sit in a read on the accessory, and that read outlives closing it (nothing
+//! wakes it but the PC or the cable): the next open then fails, which is what asks for the reset above.
 
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -140,6 +144,14 @@ fn switch(d: &UsbDevice) -> Result<bool> {
 }
 
 /// Interface 0's bulk endpoints (in, out), from sysfs.
+/// The wired listener echoes every frame for the adb route. Nothing here wants them, and left unread
+/// they'd fill the socket until each echo held up the controller.
+fn drain_echoes(wired: &std::net::TcpStream) {
+    let mut echoes = [0u8; 256];
+    // SAFETY: a non-blocking read into a buffer we own, of that buffer's size.
+    unsafe { libc::recv(wired.as_raw_fd(), echoes.as_mut_ptr().cast(), echoes.len(), libc::MSG_DONTWAIT) };
+}
+
 fn bulk_endpoints(d: &UsbDevice) -> Option<(u8, u8)> {
     let name = d.sys.file_name()?.to_string_lossy().into_owned();
     let iface = d.sys.join(format!("{name}:1.0"));
@@ -242,6 +254,7 @@ fn run(reswitch: bool) -> Result<()> {
     info!("phone in USB accessory mode: controller over the cable");
     let mut wired: Option<std::net::TcpStream> = None;
     let mut buf = [0u8; 512];
+    let mut gaps = crate::gamepad::Gaps::new();
     let result = loop {
         if STOP.load(Ordering::SeqCst) {
             break Ok(());
@@ -259,6 +272,7 @@ fn run(reswitch: bool) -> Result<()> {
         if n == 0 {
             continue;
         }
+        gaps.frame();
         // Each phone write is one frame, one transfer; the wired listener checks each frame's tag.
         if wired.is_none() {
             wired = std::net::TcpStream::connect(("127.0.0.1", 1766)).ok();
@@ -271,7 +285,11 @@ fn run(reswitch: bool) -> Result<()> {
         {
             wired = None;
         }
+        if let Some(w) = &wired {
+            drain_echoes(w);
+        }
     };
+    gaps.report("USB accessory");
     match &result {
         Ok(()) => info!("controller closed: stopped reading the USB accessory"),
         Err(e) => warn!("accessory bridge ended: {e:#}"),

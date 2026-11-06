@@ -12,13 +12,13 @@ import javax.crypto.spec.SecretKeySpec
  * everything in order, so a click can't overtake the move before it, and runs of moves merge if the
  * radio falls behind. It idles with a small frame, which also keeps Bluetooth from dozing between strokes.
  */
-class PointerChannel(private val out: OutputStream, private val input: InputStream, key: ByteArray, private val onClose: () -> Unit) {
+class PointerChannel(private val out: OutputStream, private val input: InputStream, key: ByteArray, onTrip: (TripReport) -> Unit, private val onClose: () -> Unit) {
     private class Step(val kind: Int, var dx: Float, var dy: Float)
 
     private val mac = pointerMac(key)
     private val queue = ArrayDeque<Step>()
     private val lock = Object()
-    private val trips = RoundTrips("touchpad")
+    private val trips = RoundTrips("touchpad", onTrip)
     @Volatile private var open = true
     @Volatile private var writingSince = 0L
 

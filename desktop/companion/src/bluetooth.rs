@@ -95,7 +95,7 @@ impl PadProfile {
 
     async fn new_connection(&self, _device: OwnedObjectPath, fd: OwnedFd, _properties: HashMap<String, OwnedValue>) -> fdo::Result<()> {
         let radio = radio_stream(fd.into()).map_err(|e| fdo::Error::Failed(format!("{e:#}")))?;
-        tokio::spawn(crate::gamepad::read_frames(radio, "Bluetooth"));
+        tokio::spawn(crate::gamepad::read_frames(radio, "Bluetooth", crate::gamepad::ECHO_EVERY));
         Ok(())
     }
 

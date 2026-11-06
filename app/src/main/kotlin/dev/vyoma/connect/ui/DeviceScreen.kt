@@ -77,6 +77,12 @@ fun DeviceScreen(
     val battery by (device?.plugin<BatteryPlugin>(BatteryPlugin.ID)?.remote ?: remember { MutableStateFlow(null) }).collectAsState()
     val commands by (device?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands ?: remember { MutableStateFlow(emptyList()) }).collectAsState()
 
+    val pcRoute by (companionPlugin?.gamepadRoute ?: remember { MutableStateFlow(null) }).collectAsState()
+    val pcTrip by (companionPlugin?.gamepadTrip ?: remember { MutableStateFlow(null) }).collectAsState()
+    val pointerOpen by (companionPlugin?.pointerOpen ?: remember { MutableStateFlow(false) }).collectAsState()
+    val pointerTrip by (companionPlugin?.pointerTrip ?: remember { MutableStateFlow(null) }).collectAsState()
+    val bluetooth = rememberBluetoothReadiness()
+
     // How it's connected; the battery row below owns the charge (each fact said once).
     val subtitle = state?.let { transportLabel(it) }
 
@@ -129,6 +135,25 @@ fun DeviceScreen(
                     )
                 }
             }
+        }
+
+        item(key = "checks-label") { SectionLabel("Connection checks", Modifier.animateItem()) }
+        item(key = "checks") {
+            ConnectionChecksCard(
+                connectionChecks(
+                    LinkFacts(
+                        pc = state.transports,
+                        paired = state.isPaired,
+                        companion = companion?.transports,
+                        bluetooth = bluetooth,
+                        controllerRoute = pcRoute,
+                        controllerTrip = pcTrip,
+                        touchpadOpen = pointerOpen,
+                        touchpadTrip = pointerTrip,
+                    ),
+                ),
+                Modifier.animateItem(),
+            )
         }
 
         companionPlugin?.let { pcControls(it, pcLevels) { action -> confirmPower = action } }
