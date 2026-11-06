@@ -55,19 +55,18 @@ class GamepadRouteTest {
     @Test
     fun aPulledCableIsSpottedOnceEchoesStop() {
         val watch = CableWatch(silentMs = 250)
-        watch.echoed(33)
+        watch.echoed()
         watch.sent(1_000)
         watch.sent(1_100) // Later frames don't restart the wait.
         assertEquals(false, watch.silent(1_250))
         assertEquals(true, watch.silent(1_251))
-        watch.echoed(34)
+        watch.echoed()
         assertEquals(false, watch.silent(5_000))
     }
 
     @Test
-    fun anOlderCompanionsSparseEchoesDontLookLikeAPull() {
+    fun aChannelThePcHasntAnsweredYetIsGivenTime() {
         val watch = CableWatch(silentMs = 250)
-        watch.echoed(32)
         watch.sent(1_000)
         assertEquals(false, watch.silent(9_000))
     }
@@ -75,7 +74,7 @@ class GamepadRouteTest {
     @Test
     fun aPausedPhoneIsNotMistakenForAPull() {
         val watch = CableWatch(silentMs = 250)
-        watch.echoed(33)
+        watch.echoed()
         assertEquals(false, watch.silent(9_000)) // Nothing sent, so nothing owed.
     }
 

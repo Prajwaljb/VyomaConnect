@@ -250,6 +250,10 @@ async fn watch_tether(shared: Arc<Shared>) {
                 continue;
             }
             let connected = shared.links.linked();
+            // One phone to a PC: once it's linked, the cable only leads back to it, to be closed again.
+            if via == tether::Via::Cable && !connected.is_empty() {
+                continue;
+            }
             let free: HashMap<String, Vec<u8>> = shared.host.trusted_phones().into_iter().filter(|(id, _)| !connected.contains(id)).collect();
             if free.is_empty() {
                 continue;

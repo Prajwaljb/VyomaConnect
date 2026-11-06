@@ -53,6 +53,7 @@ pub async fn watch() {
     let mut polls = 0u32;
     loop {
         let now = adb_interfaces();
+        let plugged_in = now.difference(&known).next().is_some();
         for dev in now.difference(&known) {
             info!("phone with USB debugging plugged in ({dev})");
             let adb = adb.clone();
@@ -63,7 +64,8 @@ pub async fn watch() {
             CABLE.lock().unwrap().clear();
         }
         polls = polls.wrapping_add(1);
-        if !known.is_empty() && polls % TUNNEL_CHECK_POLLS == 0 {
+        // Just plugged in, it's being set up: no tunnel yet isn't a lost tunnel.
+        if !known.is_empty() && !plugged_in && polls % TUNNEL_CHECK_POLLS == 0 {
             let adb = adb.clone();
             tokio::spawn(async move { recheck_tunnels(&adb).await });
         }

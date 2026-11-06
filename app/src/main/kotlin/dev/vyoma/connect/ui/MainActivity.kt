@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Ahead of the system's volume handling, for a screen that has claimed the keys. */
+    @android.annotation.SuppressLint("RestrictedApi") // Activity's own public method; lint sees androidx.core's override.
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
         HardwareKeys.handler?.invoke(event) == true || super.dispatchKeyEvent(event)
 

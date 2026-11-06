@@ -56,7 +56,10 @@ object BluetoothFallback {
         }
     }
 
-    fun init(context: Context) { load(context) }
+    fun init(context: Context): BluetoothFallback {
+        load(context)
+        return this
+    }
 
     fun setEnabled(context: Context, on: Boolean) {
         load(context).edit().putBoolean(ON, on).apply()
