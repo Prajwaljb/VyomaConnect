@@ -13,8 +13,7 @@ use futures_util::StreamExt;
 use serde_json::json;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{info, warn};
-use zbus::zvariant::{self, OwnedObjectPath, OwnedValue, Value};
-use zbus::{Connection, MatchRule, MessageStream};
+use zbus::{Connection, DynamicType, MatchRule, MessageStream, OwnedFd, OwnedObjectPath, OwnedVariant, Variant};
 
 use crate::identity::Identity;
 use crate::link::{self, Sender};
@@ -149,7 +148,7 @@ fn fit((w, h): (i32, i32)) -> (i32, i32) {
     (w & !1, h & !1)
 }
 
-fn encoder(source: &str, fd: Option<zvariant::OwnedFd>, w: i32, h: i32, fps: u32) -> Result<tokio::process::Child> {
+fn encoder(source: &str, fd: Option<OwnedFd>, w: i32, h: i32, fps: u32) -> Result<tokio::process::Child> {
     // Latency first. The capture has a variable frame rate (KWin sends one per change, up to the
     // monitor's 200 Hz); `max-framerate` asks KWin itself to send no more than `fps` (videorate
     // can't cap it: the capture's timestamps let it through at ~100). At most one frame waits
@@ -218,18 +217,18 @@ impl Pointer {
     /// Keys and buttons wait for the portal's answer, one after another: it handles calls
     /// concurrently, so a release sent straight after its press could overtake it, be dropped, and
     /// leave the key held and repeating (letters repeated, 2026-11-04).
-    async fn call<B: serde::Serialize + zvariant::DynamicType>(&self, method: &str, body: &B) -> Result<()> {
+    async fn call<B: serde::Serialize + DynamicType>(&self, method: &str, body: &B) -> Result<()> {
         self.conn.call_method(Some(PORTAL), PORTAL_PATH, Some(REMOTE), method, body).await?;
         Ok(())
     }
 
     /// Moves and scrolls don't wait (each would cost a round trip through the portal and KWin):
     /// one overtaking another changes nothing that the next one doesn't fix.
-    async fn call_fast<B: serde::Serialize + zvariant::DynamicType>(&self, method: &str, body: &B) -> Result<()> {
-        let msg = zbus::message::Message::method_call(PORTAL_PATH, method)?
-            .destination(PORTAL)?
-            .interface(REMOTE)?
-            .with_flags(zbus::message::Flags::NoReplyExpected)?
+    async fn call_fast<B: serde::Serialize + DynamicType>(&self, method: &str, body: &B) -> Result<()> {
+        let msg = zbus::message::Message::method_call(PORTAL_PATH, method)
+            .destination(PORTAL)
+            .interface(REMOTE)
+            .with_flags(zbus::message::Flags::NO_REPLY_EXPECTED)
             .build(body)?;
         self.conn.send(&msg).await?;
         Ok(())
@@ -359,7 +358,7 @@ impl Pointer {
                     .collect();
                 self.tap_with(&mods, code).await
             }
-            "scrollend" => self.call("NotifyPointerAxis", &(&self.session, opts([("finish", Value::Bool(true))]), 0.0f64, 0.0f64)).await,
+            "scrollend" => self.call("NotifyPointerAxis", &(&self.session, opts([("finish", Variant::Bool(true))]), 0.0f64, 0.0f64)).await,
             _ => Ok(()),
         }
     }
@@ -442,7 +441,7 @@ fn keycode(name: &str) -> Option<i32> {
 struct Cast {
     conn: Connection,
     node: u32,
-    fd: zvariant::OwnedFd,
+    fd: OwnedFd,
     size: Option<(i32, i32)>,
     /// A remote-desktop session: the phone's touches can work the pointer on this screen.
     control: Option<OwnedObjectPath>,
@@ -466,8 +465,8 @@ pub async fn pointer_session() -> Result<Pointer> {
         .request_on(REMOTE, "SelectDevices", move |t| {
             let mut o = opts([
                 ("handle_token", t.to_string().into()),
-                ("types", Value::U32(2)), // pointer
-                ("persist_mode", Value::U32(2)),
+                ("types", Variant::U32(2)), // pointer
+                ("persist_mode", Variant::U32(2)),
             ]);
             if let Some(tok) = &token {
                 o.insert("restore_token", tok.clone().into());
@@ -518,8 +517,8 @@ impl Cast {
             .request_on(REMOTE, "SelectDevices", move |t| {
                 let mut o = opts([
                     ("handle_token", t.to_string().into()),
-                    ("types", Value::U32(1 | 2)), // keyboard, pointer
-                    ("persist_mode", Value::U32(2)),
+                    ("types", Variant::U32(1 | 2)), // keyboard, pointer
+                    ("persist_mode", Variant::U32(2)),
                 ]);
                 if let Some(tok) = &token {
                     o.insert("restore_token", tok.clone().into());
@@ -535,9 +534,9 @@ impl Cast {
                     s.clone(),
                     opts([
                         ("handle_token", t.to_string().into()),
-                        ("types", Value::U32(1)),
-                        ("multiple", Value::Bool(false)),
-                        ("cursor_mode", Value::U32(if cursors & 2 != 0 { 2 } else { 1 })),
+                        ("types", Variant::U32(1)),
+                        ("multiple", Variant::Bool(false)),
+                        ("cursor_mode", Variant::U32(if cursors & 2 != 0 { 2 } else { 1 })),
                     ]),
                 )
             })
@@ -548,7 +547,7 @@ impl Cast {
             let _ = crate::identity::write_private(&remote_token_path(), tok.as_bytes());
         }
         let devices: u32 = started.get("devices").and_then(|v| u32::try_from(v.try_clone().ok()?).ok()).unwrap_or(0);
-        let streams: Vec<(u32, HashMap<String, OwnedValue>)> =
+        let streams: Vec<(u32, HashMap<String, OwnedVariant>)> =
             started.get("streams").context("no screen was shared")?.try_clone()?.try_into().context("unexpected stream list")?;
         let (node, props) = streams.into_iter().next().context("no screen was shared")?;
         let size = props.get("size").and_then(|v| <(i32, i32)>::try_from(v.try_clone().ok()?).ok());
@@ -556,7 +555,7 @@ impl Cast {
             .call_method(Some(PORTAL), PORTAL_PATH, Some(SCREENCAST), "OpenPipeWireRemote", &(&session, opts([])))
             .await
             .context("the portal wouldn't open the stream")?;
-        let fd: zvariant::OwnedFd = reply.body().deserialize()?;
+        let fd: OwnedFd = reply.body().deserialize()?;
         let control = (devices & 2 != 0).then_some(session);
         Ok(Cast { conn, node, fd, size, control })
     }
@@ -579,12 +578,12 @@ impl Cast {
             .request("SelectSources", move |t| {
                 let mut o = opts([
                     ("handle_token", t.to_string().into()),
-                    ("types", Value::U32(1)), // monitors
-                    ("multiple", Value::Bool(false)),
+                    ("types", Variant::U32(1)), // monitors
+                    ("multiple", Variant::Bool(false)),
                     // Embedded (2) draws the pointer into the picture; else hidden (1).
-                    ("cursor_mode", Value::U32(if cursors & 2 != 0 { 2 } else { 1 })),
+                    ("cursor_mode", Variant::U32(if cursors & 2 != 0 { 2 } else { 1 })),
                     // Until revoked: Plasma asks once, then the token reopens the same screen.
-                    ("persist_mode", Value::U32(2)),
+                    ("persist_mode", Variant::U32(2)),
                 ]);
                 if let Some(tok) = &token {
                     o.insert("restore_token", tok.clone().into());
@@ -598,7 +597,7 @@ impl Cast {
         if let Some(tok) = started.get("restore_token").and_then(|v| String::try_from(v.try_clone().ok()?).ok()) {
             let _ = crate::identity::write_private(&token_path(), tok.as_bytes());
         }
-        let streams: Vec<(u32, HashMap<String, OwnedValue>)> =
+        let streams: Vec<(u32, HashMap<String, OwnedVariant>)> =
             started.get("streams").context("no screen was shared")?.try_clone()?.try_into().context("unexpected stream list")?;
         let (node, props) = streams.into_iter().next().context("no screen was shared")?;
         let size = props.get("size").and_then(|v| <(i32, i32)>::try_from(v.try_clone().ok()?).ok());
@@ -607,12 +606,12 @@ impl Cast {
             .call_method(Some(PORTAL), PORTAL_PATH, Some(SCREENCAST), "OpenPipeWireRemote", &(&session, opts([])))
             .await
             .context("the portal wouldn't open the stream")?;
-        let fd: zvariant::OwnedFd = reply.body().deserialize()?;
+        let fd: OwnedFd = reply.body().deserialize()?;
         Ok(Cast { conn, node, fd, size, control: None })
     }
 }
 
-fn opts<const N: usize>(entries: [(&'static str, Value<'static>); N]) -> HashMap<&'static str, Value<'static>> {
+fn opts<const N: usize>(entries: [(&'static str, Variant<'static>); N]) -> HashMap<&'static str, Variant<'static>> {
     entries.into_iter().collect()
 }
 
@@ -641,39 +640,39 @@ impl<'a> Portal<'a> {
         Ok(Portal { conn, sender: unique.trim_start_matches(':').replace('.', "_") })
     }
 
-    async fn property<T: TryFrom<OwnedValue>>(&self, name: &str) -> Option<T> {
+    async fn property<T: TryFrom<OwnedVariant>>(&self, name: &str) -> Option<T> {
         self.property_of(SCREENCAST, name).await
     }
 
-    async fn property_of<T: TryFrom<OwnedValue>>(&self, iface: &str, name: &str) -> Option<T> {
+    async fn property_of<T: TryFrom<OwnedVariant>>(&self, iface: &str, name: &str) -> Option<T> {
         let reply = self
             .conn
             .call_method(Some(PORTAL), PORTAL_PATH, Some("org.freedesktop.DBus.Properties"), "Get", &(iface, name))
             .await
             .ok()?;
-        let v: OwnedValue = reply.body().deserialize().ok()?;
+        let v: OwnedVariant = reply.body().deserialize().ok()?;
         T::try_from(v).ok()
     }
 
-    async fn request<B>(&self, method: &str, body: impl FnOnce(&str) -> B) -> Result<HashMap<String, OwnedValue>>
+    async fn request<B>(&self, method: &str, body: impl FnOnce(&str) -> B) -> Result<HashMap<String, OwnedVariant>>
     where
-        B: serde::Serialize + zvariant::DynamicType,
+        B: serde::Serialize + DynamicType,
     {
         self.request_on(SCREENCAST, method, body).await
     }
 
-    async fn request_on<B>(&self, iface: &str, method: &str, body: impl FnOnce(&str) -> B) -> Result<HashMap<String, OwnedValue>>
+    async fn request_on<B>(&self, iface: &str, method: &str, body: impl FnOnce(&str) -> B) -> Result<HashMap<String, OwnedVariant>>
     where
-        B: serde::Serialize + zvariant::DynamicType,
+        B: serde::Serialize + DynamicType,
     {
         let token = format!("vyoma{}", std::process::id() ^ rand_u32());
         let path = format!("{PORTAL_PATH}/request/{}/{token}", self.sender);
         // Listen before calling, or a fast answer is missed.
-        let rule = MatchRule::builder().msg_type(zbus::message::Type::Signal).interface("org.freedesktop.portal.Request")?.member("Response")?.path(path.as_str())?.build();
-        let mut responses = MessageStream::for_match_rule(rule, self.conn, Some(1)).await?;
+        let rule = MatchRule::builder().msg_type(zbus::message::Type::Signal).interface("org.freedesktop.portal.Request").member("Response").path(path.as_str()).build()?;
+        let mut responses = MessageStream::for_match_rule(rule, self.conn, Some(std::num::NonZeroUsize::MIN)).await?;
         self.conn.call_method(Some(PORTAL), PORTAL_PATH, Some(iface), method, &body(&token)).await.with_context(|| format!("the screen-sharing portal refused {method}"))?;
         let msg = responses.next().await.context("the portal went away")??;
-        let (code, results): (u32, HashMap<String, OwnedValue>) = msg.body().deserialize()?;
+        let (code, results): (u32, HashMap<String, OwnedVariant>) = msg.body().deserialize()?;
         match code {
             0 => Ok(results),
             1 => bail!("screen sharing was cancelled on the PC"),

@@ -16,8 +16,7 @@ use anyhow::{Context, Result};
 use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, info, warn};
-use zbus::zvariant::{ObjectPath, OwnedFd, OwnedObjectPath, OwnedValue, Value};
-use zbus::{fdo, interface, Connection};
+use zbus::{fdo, interface, Connection, ObjectPath, OwnedFd, OwnedObjectPath, OwnedVariant, Variant};
 
 /// Must match BluetoothTunnel.SERVICE on the phone.
 const SERVICE: &str = "6f1d3e52-8a47-4c1b-9d06-2be7a5c4f801";
@@ -50,7 +49,7 @@ impl Profile {
         debug!("bluetooth profile released");
     }
 
-    async fn new_connection(&self, device: OwnedObjectPath, fd: OwnedFd, _properties: HashMap<String, OwnedValue>) -> fdo::Result<()> {
+    async fn new_connection(&self, device: OwnedObjectPath, fd: OwnedFd, _properties: HashMap<String, OwnedVariant>) -> fdo::Result<()> {
         info!("bluetooth tunnel opened by {}", device.as_str());
         let fd: StdFd = fd.into();
         tokio::spawn(async move {
@@ -74,7 +73,7 @@ impl CompanionProfile {
         debug!("bluetooth companion profile released");
     }
 
-    async fn new_connection(&self, device: OwnedObjectPath, fd: OwnedFd, _properties: HashMap<String, OwnedValue>) -> fdo::Result<()> {
+    async fn new_connection(&self, device: OwnedObjectPath, fd: OwnedFd, _properties: HashMap<String, OwnedVariant>) -> fdo::Result<()> {
         info!("bluetooth companion tunnel opened by {}", device.as_str());
         let port = bridge(fd.into()).await.map_err(|e| fdo::Error::Failed(format!("{e:#}")))?;
         let _ = self.0.send(port);
@@ -93,7 +92,7 @@ impl PadProfile {
         debug!("bluetooth controller profile released");
     }
 
-    async fn new_connection(&self, _device: OwnedObjectPath, fd: OwnedFd, _properties: HashMap<String, OwnedValue>) -> fdo::Result<()> {
+    async fn new_connection(&self, _device: OwnedObjectPath, fd: OwnedFd, _properties: HashMap<String, OwnedVariant>) -> fdo::Result<()> {
         let radio = radio_stream(fd.into()).map_err(|e| fdo::Error::Failed(format!("{e:#}")))?;
         tokio::spawn(crate::gamepad::read_frames(radio, "Bluetooth", crate::gamepad::ECHO_EVERY));
         Ok(())
@@ -111,7 +110,7 @@ impl PointerProfile {
         debug!("bluetooth touchpad profile released");
     }
 
-    async fn new_connection(&self, _device: OwnedObjectPath, fd: OwnedFd, _properties: HashMap<String, OwnedValue>) -> fdo::Result<()> {
+    async fn new_connection(&self, _device: OwnedObjectPath, fd: OwnedFd, _properties: HashMap<String, OwnedVariant>) -> fdo::Result<()> {
         let radio = radio_stream(fd.into()).map_err(|e| fdo::Error::Failed(format!("{e:#}")))?;
         tokio::spawn(crate::pointer::read_frames(radio));
         Ok(())
@@ -157,15 +156,15 @@ async fn bridge(fd: StdFd) -> Result<u16> {
 }
 
 async fn register(system: &Connection, path: &str, service: &str, channel: u16) -> Result<()> {
-    let options: HashMap<&str, Value> = HashMap::from([
-        ("Name", Value::from("Vyoma")),
-        ("Role", Value::from("server")),
+    let options: HashMap<&str, Variant> = HashMap::from([
+        ("Name", Variant::from("Vyoma")),
+        ("Role", Variant::from("server")),
         // Without a channel BlueZ advertises the service but never listens: the phone's connect just fails.
-        ("Channel", Value::from(channel)),
+        ("Channel", Variant::from(channel)),
         // Bonded phones only, and no extra prompt: TLS decides who gets further.
-        ("RequireAuthentication", Value::from(true)),
-        ("RequireAuthorization", Value::from(false)),
-        ("AutoConnect", Value::from(false)),
+        ("RequireAuthentication", Variant::from(true)),
+        ("RequireAuthorization", Variant::from(false)),
+        ("AutoConnect", Variant::from(false)),
     ]);
     let done = system
         .call_method(
@@ -248,6 +247,6 @@ pub async fn address() -> Option<String> {
         )
         .await
         .ok()?;
-    let value: OwnedValue = reply.body().deserialize().ok()?;
+    let value: OwnedVariant = reply.body().deserialize().ok()?;
     String::try_from(value).ok()
 }
