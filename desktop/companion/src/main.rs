@@ -573,6 +573,10 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                 }
             }
             "vyoma.screen.stop" => {
+                screen_input = None;
+                if let Some(t) = touch_task.take() {
+                    t.abort();
+                }
                 if let Some(t) = screen_task.take() {
                     t.abort();
                     info!("{name}: screen cast stopped");

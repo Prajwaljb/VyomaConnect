@@ -231,7 +231,11 @@ pub async fn mic(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr, p
     let body = &packet["body"];
     let rate = body["rate"].as_u64().unwrap_or(48000).clamp(8000, 96000);
     let channels = body["channels"].as_u64().unwrap_or(1).clamp(1, 2);
-    let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    // Only the private runtime folder: anyone who can reach the pipe can speak into this microphone.
+    let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) else {
+        state(sender, json!({ "error": "couldn't add the microphone: the PC's session has no private folder" })).await;
+        bail!("XDG_RUNTIME_DIR isn't set");
+    };
     // A name of its own: a session being replaced removes its pipe as it goes.
     let fifo = dir.join(format!("vyoma-phone-mic-{}.fifo", uuid::Uuid::new_v4().simple()));
     remove_stale_mics().await;

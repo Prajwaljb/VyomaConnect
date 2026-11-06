@@ -154,7 +154,9 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
         item(key = "clips-label") { SectionLabel("Clipboard", Modifier.animateItem()) }
         item(key = "clips") {
             SectionCard(Modifier.animateItem()) {
-                clips.take(CLIPS_SHOWN).forEach { clip ->
+                // What was copied can be anything: shown only with the lock open, like the page it leads to.
+                val clipsOpen = AppLock.isOpen(context)
+                if (clipsOpen) clips.take(CLIPS_SHOWN).forEach { clip ->
                     ListRow(
                         title = clip.text.replace('\n', ' '),
                         subtitle = (if (clip.origin == null) "This phone" else vm.deviceName(clip.origin!!)) + " · " + ago(clip.timestamp),
@@ -170,9 +172,17 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
                     )
                 }
                 ListRow(
-                    title = if (clips.isEmpty()) "Nothing copied yet" else "All clipboard history",
-                    subtitle = if (clips.isEmpty()) "What you copy here or on the PC shows up here" else null,
-                    icon = if (clips.isEmpty()) Icons.Rounded.ContentPaste else null,
+                    title = when {
+                        clips.isEmpty() -> "Nothing copied yet"
+                        clipsOpen -> "All clipboard history"
+                        else -> "Clipboard history"
+                    },
+                    subtitle = when {
+                        clips.isEmpty() -> "What you copy here or on the PC shows up here"
+                        clipsOpen -> null
+                        else -> "Asks for your fingerprint first"
+                    },
+                    icon = if (clips.isEmpty() || !clipsOpen) Icons.Rounded.ContentPaste else null,
                     iconTint = SystemColor.ORANGE.color,
                     trailing = { RowChevron() },
                     onClick = onClipboard,

@@ -691,7 +691,7 @@ private fun PcKeyboard(onText: (String) -> Unit, onKey: (String) -> Unit, resets
                 inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
                     android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
                 imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI or android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN or
-                    android.view.inputmethod.EditorInfo.IME_ACTION_NONE
+                    android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or android.view.inputmethod.EditorInfo.IME_ACTION_NONE
                 background = null
                 alpha = 0f
                 var before = ""
