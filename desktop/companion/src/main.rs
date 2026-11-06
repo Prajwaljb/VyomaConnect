@@ -51,10 +51,42 @@ const STATS_EVERY: Duration = Duration::from_secs(2);
 /// How soon a phone unpaired in KDE Connect (lost or stolen, say) loses a session it already has.
 const TRUST_CHECK: Duration = Duration::from_secs(5);
 
+/// Which phones have a session, and which are being dialled. Kept apart: a dial that's still failing
+/// (the old Wi-Fi address, long after Wi-Fi went) must not turn away a link that works.
+#[derive(Default)]
+struct Links {
+    live: Mutex<HashSet<String>>,
+    dialling: Mutex<HashSet<String>>,
+}
+
+impl Links {
+    /// False if it's linked already or a dial is on its way.
+    fn start_dial(&self, id: &str) -> bool {
+        !self.live.lock().unwrap().contains(id) && self.dialling.lock().unwrap().insert(id.to_string())
+    }
+
+    fn dial_done(&self, id: &str) {
+        self.dialling.lock().unwrap().remove(id);
+    }
+
+    /// The session is this link's, unless another got there first.
+    fn claim(&self, id: &str) -> bool {
+        self.live.lock().unwrap().insert(id.to_string())
+    }
+
+    fn release(&self, id: &str) {
+        self.live.lock().unwrap().remove(id);
+    }
+
+    fn linked(&self) -> HashSet<String> {
+        self.live.lock().unwrap().clone()
+    }
+}
+
 struct Shared {
     host: KdeHost,
     me: Identity,
-    connected: Mutex<HashSet<String>>,
+    links: Links,
     /// Last address each trusted phone announced, so we can redial without waiting for mDNS.
     seen: Mutex<HashMap<String, SocketAddr>>,
     /// Tracks what's playing for handoff; None without a session bus.
@@ -90,7 +122,7 @@ async fn daemon() -> Result<()> {
             None
         }
     };
-    let shared = Arc::new(Shared { host, me, connected: Mutex::default(), seen: Mutex::default(), media, away: Arc::default(), sessions: Mutex::default() });
+    let shared = Arc::new(Shared { host, me, links: Links::default(), seen: Mutex::default(), media, away: Arc::default(), sessions: Mutex::default() });
 
     tokio::spawn(usb::watch());
     let (bluetooth_links, bluetooth_ports) = tokio::sync::mpsc::unbounded_channel();
@@ -151,13 +183,21 @@ fn dial_attempt(shared: &Arc<Shared>, id: &str, attempt: u32) {
     let trusted = shared.host.trusted_phones();
     let Some(cert) = trusted.get(id).cloned() else { return };
     let Some(addr) = shared.seen.lock().unwrap().get(id).copied() else { return };
-    if !shared.connected.lock().unwrap().insert(id.to_string()) {
+    if !shared.links.start_dial(id) {
         return;
     }
     let (shared, id) = (shared.clone(), id.to_string());
     tokio::spawn(async move {
-        let failed = session(&shared, &id, addr, &cert).await.inspect_err(|e| warn!("{id}: {e:#}")).is_err();
-        shared.connected.lock().unwrap().remove(&id);
+        // Once a round: with the phone off this network, the retries would say the same every few seconds.
+        let result = session(&shared, &id, addr, &cert).await;
+        let failed = result.as_ref().is_err();
+        if let Err(e) = result {
+            if attempt == 0 {
+                warn!("{id}: {e:#}");
+            } else {
+                tracing::debug!("{id}: {e:#}");
+            }
+        }
         if failed && attempt < 3 {
             tokio::time::sleep(Duration::from_secs(2 * (attempt as u64 + 1))).await;
             dial_attempt(&shared, &id, attempt + 1);
@@ -209,7 +249,7 @@ async fn watch_tether(shared: Arc<Shared>) {
             if next_try.lock().unwrap().get(&addr).is_some_and(|t| Instant::now() < *t) {
                 continue;
             }
-            let connected = shared.connected.lock().unwrap().clone();
+            let connected = shared.links.linked();
             let free: HashMap<String, Vec<u8>> = shared.host.trusted_phones().into_iter().filter(|(id, _)| !connected.contains(id)).collect();
             if free.is_empty() {
                 continue;
@@ -220,7 +260,7 @@ async fn watch_tether(shared: Arc<Shared>) {
                 match link::connect_trusted(addr, &shared.me, &identity_packet(&shared), &free).await {
                     Ok((id, link)) => {
                         // A Wi-Fi dial may have won meanwhile: then this one just closes.
-                        if !shared.connected.lock().unwrap().insert(id.clone()) {
+                        if !shared.links.claim(&id) {
                             return;
                         }
                         match via {
@@ -234,7 +274,7 @@ async fn watch_tether(shared: Arc<Shared>) {
                         }
                         next_try.lock().unwrap().remove(&addr);
                         let _ = run(&shared, &id, addr, &free[&id], link).await.inspect_err(|e| warn!("{id}: {e:#}"));
-                        shared.connected.lock().unwrap().remove(&id);
+                        shared.links.release(&id);
                     }
                     // A router (most Wi-Fi gateways) refuses, and a cable may lead to a phone this PC
                     // doesn't trust (an emulator): not worth a line every 30 s.
@@ -261,7 +301,7 @@ async fn watch_bluetooth(shared: Arc<Shared>, mut ports: tokio::sync::mpsc::Unbo
                     }
                     info!("{id}: reached over Bluetooth");
                     let _ = run(&shared, &id, addr, &trusted[&id], link).await.inspect_err(|e| warn!("{id}: {e:#}"));
-                    shared.connected.lock().unwrap().remove(&id);
+                    shared.links.release(&id);
                     dial(&shared, &id);
                 }
                 Err(e) => warn!("bluetooth companion link: {e:#}"),
@@ -275,7 +315,7 @@ async fn watch_bluetooth(shared: Arc<Shared>, mut ports: tokio::sync::mpsc::Unbo
 /// phone stays claimed anyway.
 async fn take_over(shared: &Shared, id: &str) -> bool {
     for _ in 0..TAKE_OVER_TRIES {
-        if shared.connected.lock().unwrap().insert(id.to_string()) {
+        if shared.links.claim(id) {
             return true;
         }
         if let Some(session) = shared.sessions.lock().unwrap().get(id) {
@@ -287,8 +327,16 @@ async fn take_over(shared: &Shared, id: &str) -> bool {
 }
 
 async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u8]) -> Result<()> {
-    let link = link::connect(addr, &shared.me, &identity_packet(shared), phone_id, pinned).await?;
-    run(shared, phone_id, addr, pinned, link).await
+    let dialled = link::connect(addr, &shared.me, &identity_packet(shared), phone_id, pinned).await;
+    shared.links.dial_done(phone_id);
+    let link = dialled?;
+    // The cable or Bluetooth may have won meanwhile: then this one just closes.
+    if !shared.links.claim(phone_id) {
+        return Ok(());
+    }
+    let result = run(shared, phone_id, addr, pinned, link).await;
+    shared.links.release(phone_id);
+    result
 }
 
 async fn run(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u8], mut link: link::Link) -> Result<()> {
@@ -779,5 +827,18 @@ mod tests {
         assert!(!still_trusted(&trusted, "phone", &[9]));
         assert!(!still_trusted(&trusted, "other", &[1, 2, 3]));
         assert!(!still_trusted(&HashMap::new(), "phone", &[1, 2, 3]));
+    }
+
+    #[test]
+    fn a_failing_dial_doesnt_turn_away_a_working_link() {
+        let links = Links::default();
+        assert!(links.start_dial("phone"));
+        assert!(!links.start_dial("phone"), "one dial at a time");
+        assert!(links.claim("phone"), "the cable links while the dial is still failing");
+        links.dial_done("phone");
+        assert!(!links.start_dial("phone"), "no dialling while it's linked");
+        assert!(!links.claim("phone"), "one session at a time");
+        links.release("phone");
+        assert!(links.start_dial("phone"));
     }
 }

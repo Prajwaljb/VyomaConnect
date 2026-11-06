@@ -196,6 +196,8 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
   companion echoes EVERY frame on the wired listener and the phone's `CableWatch` fails over after 250 ms of no echo, once
   it has seen a non-32nd echo (older companions only send those); the cable is then left alone 3 s. The accessory bridge
   drains those echoes unread. A trusted phone's new Bluetooth tunnel takes over a session the PC still holds (main.rs `take_over`).
+  main.rs `Links` keeps "dialling" apart from "linked": a failing dial to the old Wi-Fi address used to discard a working cable link.
+  The companion's pre-TLS hello hides `vyomaHost` but carries `vyomaCompanion: true`: the phone refuses other loopback peers ("Peer runs on this device"), and an adb-forward call is loopback too. Without the marker every cable link fails (2026-11-06).
   Phone writes go through a newest-frame writer thread; a write pending > 500 ms fails over to Wi-Fi. The accessory is
   only opened while USB_STATE says plugged (it stays listed briefly after a pull, and retrying it froze the controller).
   No echoes on this route, on purpose: a phone read blocked on the accessory outlives close, so the next open fails and

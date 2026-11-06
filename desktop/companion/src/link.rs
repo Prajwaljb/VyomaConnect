@@ -106,6 +106,9 @@ fn public_hello(identity: &Value) -> Value {
     if let Some(body) = body.as_object_mut() {
         body.remove("vyomaHost");
     }
+    // Which PC stays private, but the phone must know a call through an adb forward isn't another
+    // KDE Connect app on it (both come from loopback). The name above says as much already.
+    body["vyomaCompanion"] = true.into();
     hello
 }
 
@@ -220,6 +223,7 @@ mod tests {
             }),
         );
         let hello = public_hello(&full);
+        assert_eq!(hello["body"]["vyomaCompanion"], true);
         assert_eq!(hello["body"]["deviceId"], "abc");
         assert_eq!(hello["body"]["protocolVersion"], 8);
         let text = hello.to_string();

@@ -250,11 +250,12 @@ class LanBackend(
             plain.soTimeout = HANDSHAKE_TIMEOUT_MS
             val line = plain.getInputStream().readPacketLine(limit = 64 * 1024)
                 ?: throw IOException("closed before identity")
-            val identity = DeviceIdentity.fromPacket(NetworkPacket.parse(line))
+            val hello = NetworkPacket.parse(line)
+            val identity = DeviceIdentity.fromPacket(hello)
             if (identity.deviceId == localIdentity().deviceId) throw ProtocolException("Connected to self")
             // Another KDE Connect app on this phone. A companion's call through an adb forward also
             // comes from loopback; TLS and its pin still decide whether it gets anywhere.
-            if (tunnel == null && config.listenUdp && identity.companionOf == null && isLocalAddress(plain.inetAddress)) {
+            if (tunnel == null && config.listenUdp && !DeviceIdentity.helloFromCompanion(hello) && isLocalAddress(plain.inetAddress)) {
                 throw ProtocolException("Peer runs on this device")
             }
             if (identity.protocolVersion < DeviceIdentity.MIN_PROTOCOL_VERSION) {
