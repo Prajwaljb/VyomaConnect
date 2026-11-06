@@ -361,8 +361,15 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
     result
 }
 
+/// The phone picks its own name, and it ends up in notifications and logs (the protocol's rule).
+fn phone_name(raw: &str) -> String {
+    let clean: String = raw.chars().filter(|c| !matches!(c, '"' | '\'' | ',' | ';' | ':' | '.' | '!' | '?' | '(' | ')' | '[' | ']' | '<' | '>') && !c.is_control()).take(32).collect();
+    let clean = clean.trim().trim_start_matches('-').trim();
+    if clean.is_empty() { "Phone".to_string() } else { clean.to_string() }
+}
+
 async fn run(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u8], mut link: link::Link) -> Result<()> {
-    let name = link.phone_identity["body"]["deviceName"].as_str().unwrap_or(phone_id).to_string();
+    let name = phone_name(link.phone_identity["body"]["deviceName"].as_str().unwrap_or(phone_id));
     info!("linked with {name} at {addr}");
 
     // Ask to pair with a proof signed by kdeconnectd's key; Vyoma accepts it without a prompt.
@@ -678,7 +685,8 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                         }
                     },
                 };
-                link.sender.send(&packet("vyoma.handoff", reply)).await?;
+                // Not `?`: leaving here skips the cleanup below, and a dead link ends the loop anyway.
+                let _ = link.sender.send(&packet("vyoma.handoff", reply)).await;
             }
             "vyoma.files.list" => {
                 let (sender, rel) = (link.sender.clone(), p["body"]["path"].as_str().unwrap_or_default().to_string());
@@ -833,6 +841,13 @@ async fn stream_stats(sender: Sender, lease: Arc<Mutex<Instant>>, media: Option<
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn phone_names_cant_become_options_or_markup() {
+        assert_eq!(super::phone_name("--icon=x <b>Pixel</b>"), "icon=x bPixel/b");
+        assert_eq!(super::phone_name("-- \n"), "Phone");
+        assert_eq!(super::phone_name(&"a".repeat(99)).len(), 32);
+    }
+
     use super::*;
 
     #[test]

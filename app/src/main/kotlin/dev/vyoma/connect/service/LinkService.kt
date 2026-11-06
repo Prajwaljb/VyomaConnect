@@ -254,11 +254,15 @@ class LinkService : LifecycleService() {
             .distinctUntilChanged()
             .flatMapLatest { Commands.primary(container)?.plugin<BatteryPlugin>(BatteryPlugin.ID)?.remote ?: flowOf(null) }
         lifecycleScope.launch {
-            combine(
-                connectedFlow, container.media.nowPlaying, Transfers.all.map { list -> list.count { it.state == Transfer.State.RUNNING } },
-                pcBattery, container.battery.state,
-            ) { c, np, running, pc, phone ->
-                listOf(c.map(::summary), np?.let { Triple(it.player.title, it.player.isPlaying, it.art) }, running, pc, phone)
+            // Transfers in 5% steps, for the drop widget's ring; the newest clips, for the clipboard widget.
+            val transfers = Transfers.all.map { list ->
+                val running = list.filter { it.state == Transfer.State.RUNNING }
+                val total = running.sumOf { it.totalBytes.coerceAtLeast(0) }
+                running.size to if (total > 0) running.sumOf { it.doneBytes } * 20 / total else 0L
+            }
+            val shown = combine(transfers, container.clipboard.history.map { it.take(4) }) { running, clips -> running to clips }
+            combine(connectedFlow, container.media.nowPlaying, shown, pcBattery, container.battery.state) { c, np, others, pc, phone ->
+                listOf(c.map(::summary), np?.let { Triple(it.player.title, it.player.isPlaying, it.art) }, others, pc, phone)
             }
                 .distinctUntilChanged()
                 .throttleLatest(500)

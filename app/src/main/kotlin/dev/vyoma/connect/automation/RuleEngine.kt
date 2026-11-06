@@ -24,6 +24,7 @@ import dev.vyoma.connect.protocol.plugin.builtin.PingPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.SystemVolumePlugin
 import dev.vyoma.connect.service.Commands
+import dev.vyoma.connect.service.LinkService
 import dev.vyoma.connect.service.Notifications
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -411,6 +412,8 @@ sealed interface Undo {
 /** A rule's time came, or the phone rebooted. */
 class RuleAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        // The service may be gone: rules need its links, and it keeps this process alive for them.
+        runCatching { LinkService.start(context) }
         (context.applicationContext as Application).container.automation.onAlarm()
     }
 }

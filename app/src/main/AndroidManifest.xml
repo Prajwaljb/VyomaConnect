@@ -90,6 +90,7 @@
 
         <activity
             android:name=".ui.ShareActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="true"
             android:excludeFromRecents="true"
             android:label="@string/share_label"

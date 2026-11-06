@@ -25,6 +25,7 @@
 
 use std::collections::HashMap;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -552,13 +553,28 @@ pub async fn serve_wired() {
         Ok(l) => l,
         Err(e) => return warn!("no wired controller channel: {e}"),
     };
+    // Anything on the phone or this PC can dial it: a few at once, and each must prove itself quickly.
+    let slots = Arc::new(tokio::sync::Semaphore::new(WIRED_STREAMS));
     loop {
-        let Ok((stream, _)) = listener.accept().await else { continue };
+        let (stream, _) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(_) => {
+                tokio::time::sleep(Duration::from_millis(200)).await; // out of file descriptors
+                continue;
+            }
+        };
+        let Ok(slot) = slots.clone().try_acquire_owned() else { continue };
         let _ = stream.set_nodelay(true);
         // Every frame: echoes stopping is how the phone knows at once that the cable was pulled.
-        tokio::spawn(read_frames(stream, "the USB cable", 1));
+        tokio::spawn(async move {
+            read_frames(stream, "the USB cable", 1).await;
+            drop(slot);
+        });
     }
 }
+
+const WIRED_STREAMS: usize = 8;
+const FIRST_FRAME_WAIT: Duration = Duration::from_secs(2);
 
 /// Every 32nd state is echoed, so the phone can time the round trip on this very route.
 pub const ECHO_EVERY: u32 = 32;
@@ -570,7 +586,7 @@ fn echoed(state: &State, every: u32) -> Option<[u8; 4]> {
 /// One stream of signed frames (the cable, or Bluetooth); the first frame's key picks the controller.
 pub async fn read_frames<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, via: &'static str, echo_every: u32) {
     let mut buf = [0u8; DATAGRAM_LEN];
-    if stream.read_exact(&mut buf).await.is_err() {
+    if !matches!(tokio::time::timeout(FIRST_FRAME_WAIT, stream.read_exact(&mut buf)).await, Ok(Ok(_))) {
         return;
     }
     let found = WIRED.lock().unwrap().iter().find_map(|(_, k, tx)| State::from_datagram(&buf, k).map(|s| (s, k.clone(), tx.clone())));
