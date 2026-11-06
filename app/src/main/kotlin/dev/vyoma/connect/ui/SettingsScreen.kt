@@ -91,6 +91,7 @@ import androidx.compose.material.icons.rounded.Wallpaper
 import dev.vyoma.connect.designsystem.AppCanvas
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Fingerprint
+import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -743,7 +744,36 @@ private fun FingerprintLockRow(resumeTick: Int) {
         icon = Icons.Rounded.Fingerprint,
         iconTint = SystemColor.MINT.color,
         haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
+        showDivider = on && usable,
         onClick = { toggle(!on) },
         trailing = { VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Fingerprint lock") },
+    )
+    if (on && usable) UnlockCountsRow()
+}
+
+@Composable
+private fun UnlockCountsRow() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var on by remember { mutableStateOf(AppLock.unlockCounts(context)) }
+    fun toggle(want: Boolean) {
+        if (want) {
+            // Loosens the lock, so it's asked like turning the lock off.
+            AppLock.confirm(context, "To skip the fingerprint after unlocking") {
+                AppLock.setUnlockCounts(context, true)
+                on = true
+            }
+        } else {
+            AppLock.setUnlockCounts(context, false)
+            on = false
+        }
+    }
+    ListRow(
+        title = "Phone unlock counts",
+        subtitle = "No prompt within 30 s of unlocking",
+        icon = Icons.Rounded.LockOpen,
+        iconTint = SystemColor.MINT.color,
+        haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
+        onClick = { toggle(!on) },
+        trailing = { VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Phone unlock counts") },
     )
 }

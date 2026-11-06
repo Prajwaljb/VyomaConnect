@@ -52,6 +52,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.withResumed
 import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.VyomaTheme
 import kotlinx.coroutines.CancellationException
@@ -138,23 +140,32 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        // Came back after the phone was locked or left for a while: its files are asked for again.
-        if (!AppLock.isOpen(this)) backStack.removeAll { it is Screen.Files }
+        // Came back after the phone was locked or left for a while: these are asked for again.
+        if (!AppLock.isOpen(this)) backStack.removeAll { it is Screen.Files || it is Screen.Touchpad || it is Screen.Presenter || it == Screen.Clipboard }
     }
 
     private fun handleIntent(intent: Intent?) {
         intent ?: return
         if (intent.getStringExtra(EXTRA_SCREEN) == SCREEN_CLIPBOARD) {
-            backStack.retainAll { it == Screen.Home }
-            tab.value = Tab.FILES
-            backStack.add(Screen.Clipboard)
+            askOnScreen(AppLock.CLIPBOARD) {
+                backStack.retainAll { it == Screen.Home }
+                tab.value = Tab.FILES
+                backStack.add(Screen.Clipboard)
+            }
             return
         }
-        val target = when (intent.getStringExtra(EXTRA_SCREEN)) {
-            SCREEN_TOUCHPAD -> Screen.Touchpad(intent.getStringExtra(EXTRA_DEVICE), keyboard = false)
-            else -> intent.getStringExtra(EXTRA_DEVICE)?.let { Screen.DeviceDetail(it) }
-        } ?: return
+        if (intent.getStringExtra(EXTRA_SCREEN) == SCREEN_TOUCHPAD) {
+            val target = Screen.Touchpad(intent.getStringExtra(EXTRA_DEVICE), keyboard = false)
+            askOnScreen(AppLock.TOUCHPAD) { if (backStack.lastOrNull() != target) backStack.add(target) }
+            return
+        }
+        val target = intent.getStringExtra(EXTRA_DEVICE)?.let { Screen.DeviceDetail(it) } ?: return
         if (backStack.lastOrNull() != target) backStack.add(target)
+    }
+
+    /** These arrive while the activity is still coming up, and Android only asks for an app on screen. */
+    private fun askOnScreen(why: String, then: () -> Unit) {
+        lifecycleScope.launch { withResumed { AppLock.ask(this@MainActivity, why, then) } }
     }
 
     companion object {
@@ -296,16 +307,16 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                     onTab = toTab,
                     // At the root, back on another tab goes Home first, like One UI apps.
                     backToHome = backStack.size == 1,
-                    onTouchpad = { backStack.add(Screen.Touchpad(null, keyboard = false)) },
+                    onTouchpad = { AppLock.ask(context, AppLock.TOUCHPAD) { backStack.add(Screen.Touchpad(null, keyboard = false)) } },
                     onGamepad = { GamepadActivity.open(context, null) },
-                    onPresenter = { backStack.add(Screen.Presenter(null)) },
+                    onPresenter = { AppLock.ask(context, AppLock.PRESENTER) { backStack.add(Screen.Presenter(null)) } },
                 ) { t ->
                     when (t) {
                         Tab.HOME -> HomeScreen(
                             vm = vm,
                             onOpenDevice = { backStack.add(Screen.DeviceDetail(it)) },
-                            onTouchpad = { id -> backStack.add(Screen.Touchpad(id, keyboard = false)) },
-                            onClipboard = { backStack.add(Screen.Clipboard) },
+                            onTouchpad = { id -> AppLock.ask(context, AppLock.TOUCHPAD) { backStack.add(Screen.Touchpad(id, keyboard = false)) } },
+                            onClipboard = { AppLock.ask(context, AppLock.CLIPBOARD) { backStack.add(Screen.Clipboard) } },
                             onBrowseFiles = { id -> AppLock.ask(context, PC_FILES) { backStack.add(Screen.Files(id)) } },
                             onFiles = { toTab(Tab.FILES) },
                             onCaptures = { backStack.add(Screen.Captures) },
@@ -313,7 +324,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                         Tab.FILES -> FilesHubScreen(
                             vm = vm,
                             onBrowse = { id, path -> AppLock.ask(context, PC_FILES) { backStack.add(Screen.Files(id, path)) } },
-                            onClipboard = { backStack.add(Screen.Clipboard) },
+                            onClipboard = { AppLock.ask(context, AppLock.CLIPBOARD) { backStack.add(Screen.Clipboard) } },
                             onCaptures = { backStack.add(Screen.Captures) },
                         )
                         Tab.SETTINGS -> SettingsScreen(
@@ -325,7 +336,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                 is Screen.DeviceDetail -> DeviceScreen(vm, screen.id, onBack = pop)
                 is Screen.Touchpad -> RemoteInputScreen(
                     vm, screen.deviceId, screen.keyboard, onBack = pop,
-                    onPresenter = { id -> backStack.add(Screen.Presenter(id)) },
+                    onPresenter = { id -> AppLock.ask(context, AppLock.PRESENTER) { backStack.add(Screen.Presenter(id)) } },
                 )
                 is Screen.Presenter -> PresenterScreen(vm, screen.deviceId, onBack = pop)
                 is Screen.Files -> FilesScreen(

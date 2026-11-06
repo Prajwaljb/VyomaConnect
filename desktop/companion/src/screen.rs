@@ -89,11 +89,11 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, f
     info!("{name}: casting the screen at {w}x{h}");
     let announce = link::packet("vyoma.screen", json!({ "codec": "h264", "framing": "avc4", "width": w, "height": h, "control": control.is_some() }));
     // The phone's touches, as the pointer on this screen, while the cast runs.
-    let touching = control.map(|p| tokio::spawn(p.follow(inputs, sender.clone())));
+    // Ends with this cast however it ends: the phone's stop aborts this task, and a spawned task would
+    // outlive that, holding the portal connection and so the remote-desktop session open.
+    let touching = control.map(|p| AbortOnDrop(tokio::spawn(p.follow(inputs, sender.clone()))));
     let result = payload::offer_stream(sender, me, pinned, announce, video).await;
-    if let Some(t) = touching {
-        t.abort();
-    }
+    drop(touching);
     let _ = gst.kill().await;
     stamping.abort();
     if let Err(e) = &result {
@@ -107,6 +107,14 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, f
     // Dropping the portal connection closes the session, and Plasma's "sharing" indicator with it.
     drop(conn);
     Ok(())
+}
+
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// Passes the encoder's length-prefixed NAL units through, putting a timestamp unit before each
@@ -705,6 +713,22 @@ mod tests {
         let _ = editor.kill();
         let _ = gst.kill().await;
         for d in &delays { println!("frames around a letter, ms: {d:?}"); }
+    }
+
+    #[tokio::test]
+    async fn aborting_a_cast_ends_what_it_started() {
+        let (held, mut gone) = tokio::sync::mpsc::channel::<()>(1);
+        let cast = tokio::spawn(async move {
+            let _touching = AbortOnDrop(tokio::spawn(async move {
+                let _held = held;
+                std::future::pending::<()>().await;
+            }));
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        cast.abort();
+        let ended = tokio::time::timeout(std::time::Duration::from_secs(2), gone.recv()).await;
+        assert_eq!(ended, Ok(None));
     }
 
     #[test]

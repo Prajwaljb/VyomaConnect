@@ -65,6 +65,9 @@ fn video_delay() -> Duration {
 
 /// A pause in the phone's picture this long is logged.
 const STALL: Duration = Duration::from_millis(250);
+/// Most reads of video waiting for the window: far more than the sound's delay holds back, so only
+/// a stuck decoder fills it, and then the phone is made to wait instead of this growing.
+const VIDEO_QUEUE: usize = 1024;
 
 async fn state(sender: &Sender, body: Value) {
     let _ = sender.send(&link::packet("vyoma.mirror.state", body)).await;
@@ -95,7 +98,7 @@ pub async fn show(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr, 
 
     // Video waits here as long as the sound takes to be heard (see [VIDEO_DELAY_MS]); a writer
     // passes each piece to the window once its time comes.
-    let (pieces, mut due) = tokio::sync::mpsc::unbounded_channel::<(Instant, Vec<u8>)>();
+    let (pieces, mut due) = tokio::sync::mpsc::channel::<(Instant, Vec<u8>)>(VIDEO_QUEUE);
     let feed = async {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let read = async {
@@ -112,7 +115,7 @@ pub async fn show(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr, 
                     info!("{name}: no picture from the phone for {} ms", gap.as_millis());
                 }
                 last = Instant::now();
-                if pieces.send((last, buf[..n].to_vec())).is_err() {
+                if pieces.send((last, buf[..n].to_vec())).await.is_err() {
                     break;
                 }
             }
@@ -204,6 +207,8 @@ const SOUND_TARGET: usize = 4;
 const SOUND_WINDOW: Duration = Duration::from_secs(2);
 /// ... and never more than this (a stall that then floods in).
 const SOUND_MAX: usize = 30;
+/// The reader's own limit, for a player that's stuck and so never trims to [SOUND_MAX].
+const SOUND_STUCK: usize = 10 * SOUND_MAX;
 
 /// The phone's sound waiting for the player: pieces, and the reader's end-of-stream.
 struct SoundQueue {
@@ -343,6 +348,9 @@ pub async fn sound(me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value, 
             let mut q = lock.lock().unwrap();
             for p in buf[..whole].chunks(piece) {
                 q.pieces.push_back(p.to_vec());
+            }
+            while q.pieces.len() > SOUND_STUCK {
+                q.pieces.pop_front();
             }
             let loud = buf[..whole].chunks_exact(2).any(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs() > AUDIBLE as u16);
             if loud {

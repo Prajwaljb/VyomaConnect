@@ -88,6 +88,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import android.view.inputmethod.EditorInfo
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.platform.InterceptPlatformTextInput
+import androidx.compose.ui.platform.PlatformTextInputMethodRequest
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -694,76 +698,99 @@ private fun TypingBar(caretMoved: Int, canPaste: Boolean, onText: (String) -> Un
         if (i > 0) onKey(SpecialKey.ENTER)
         if (part.isNotEmpty()) onText(part)
     }
-    BasicTextField(
-        value = value,
-        onValueChange = { incoming ->
-            var new = incoming
-            if (!canPaste && !new.text.all(::typeable)) {
-                val before = new.text.take(new.selection.start).count(::typeable)
-                new = TextFieldValue(new.text.filter(::typeable), TextRange(before))
-                onRefused()
-            }
-            val old = value.text
-            val cur = new.text
-            if (old != cur) {
-                // The edit replaced old[prefix, old.length - suffix) with cur[prefix, cur.length - suffix).
-                val (prefix, suffix) = commonEnds(old, cur)
-                val end = old.length - suffix
-                moveTo(old, end)
-                repeat(characterCount(old.substring(prefix, end))) { onKey(SpecialKey.BACKSPACE) }
-                typed(cur.substring(prefix, cur.length - suffix))
-                pcCaret = cur.length - suffix
-            }
-            // Backspace at the very start ate the sentinel (and so text before ours on the PC).
-            if (!new.text.startsWith(sentinel)) {
-                val shift = sentinel.length
-                new = new.copy(
-                    text = sentinel + new.text,
-                    selection = TextRange(new.selection.start + shift, new.selection.end + shift),
-                    composition = new.composition?.let { TextRange(it.start + shift, it.end + shift) },
-                )
-                pcCaret += shift
-            }
-            // Keep the caret off the sentinel, then follow it on the PC (only a plain caret, not a range).
-            if (new.selection.collapsed && new.selection.start < sentinel.length) new = new.copy(selection = TextRange(sentinel.length))
-            if (new.selection.collapsed) moveTo(new.text, new.selection.start)
-            value = when {
-                // Long runs reset at a word break when typing at the end, so the field stays light.
-                new.text.length > 400 && new.text.endsWith(' ') && new.selection.start == new.text.length -> fresh.also { pcCaret = sentinel.length }
-                else -> new
-            }
-        },
-        keyboardOptions = KeyboardOptions(
-            keyboardType = KeyboardType.Text,
-            capitalization = KeyboardCapitalization.Sentences,
-            autoCorrectEnabled = true,
-            imeAction = ImeAction.Send,
-        ),
-        keyboardActions = KeyboardActions(onSend = {
-            onKey(SpecialKey.ENTER)
-            value = fresh
-            pcCaret = sentinel.length
-        }),
-        singleLine = true,
-        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-            .focusRequester(focus),
-        decorationBox = { field ->
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .glassRaised(SmoothCornerShape(20.dp))
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-            ) {
-                if (value.text == sentinel) {
-                    Text("Type on your PC…", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    NoKeyboardLearning {
+        BasicTextField(
+            value = value,
+            onValueChange = { incoming ->
+                var new = incoming
+                if (!canPaste && !new.text.all(::typeable)) {
+                    val before = new.text.take(new.selection.start).count(::typeable)
+                    new = TextFieldValue(new.text.filter(::typeable), TextRange(before))
+                    onRefused()
                 }
-                field()
-            }
+                val old = value.text
+                val cur = new.text
+                if (old != cur) {
+                    // The edit replaced old[prefix, old.length - suffix) with cur[prefix, cur.length - suffix).
+                    val (prefix, suffix) = commonEnds(old, cur)
+                    val end = old.length - suffix
+                    moveTo(old, end)
+                    repeat(characterCount(old.substring(prefix, end))) { onKey(SpecialKey.BACKSPACE) }
+                    typed(cur.substring(prefix, cur.length - suffix))
+                    pcCaret = cur.length - suffix
+                }
+                // Backspace at the very start ate the sentinel (and so text before ours on the PC).
+                if (!new.text.startsWith(sentinel)) {
+                    val shift = sentinel.length
+                    new = new.copy(
+                        text = sentinel + new.text,
+                        selection = TextRange(new.selection.start + shift, new.selection.end + shift),
+                        composition = new.composition?.let { TextRange(it.start + shift, it.end + shift) },
+                    )
+                    pcCaret += shift
+                }
+                // Keep the caret off the sentinel, then follow it on the PC (only a plain caret, not a range).
+                if (new.selection.collapsed && new.selection.start < sentinel.length) new = new.copy(selection = TextRange(sentinel.length))
+                if (new.selection.collapsed) moveTo(new.text, new.selection.start)
+                value = when {
+                    // Long runs reset at a word break when typing at the end, so the field stays light.
+                    new.text.length > 400 && new.text.endsWith(' ') && new.selection.start == new.text.length -> fresh.also { pcCaret = sentinel.length }
+                    else -> new
+                }
+            },
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Text,
+                capitalization = KeyboardCapitalization.Sentences,
+                autoCorrectEnabled = true,
+                imeAction = ImeAction.Send,
+            ),
+            keyboardActions = KeyboardActions(onSend = {
+                onKey(SpecialKey.ENTER)
+                value = fresh
+                pcCaret = sentinel.length
+            }),
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 6.dp)
+                .focusRequester(focus),
+            decorationBox = { field ->
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .glassRaised(SmoothCornerShape(20.dp))
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                ) {
+                    if (value.text == sentinel) {
+                        Text("Type on your PC…", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    field()
+                }
+            },
+        )
+    }
+}
+
+/**
+ * Fields inside keep autocorrect and swiping, but the phone's keyboard doesn't learn from them or
+ * sync what they hear: what's typed here goes to the PC, passwords included.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun NoKeyboardLearning(content: @Composable () -> Unit) {
+    InterceptPlatformTextInput(
+        interceptor = { request, next ->
+            next.startInputMethod(
+                PlatformTextInputMethodRequest { attributes ->
+                    request.createInputConnection(attributes).also {
+                        attributes.imeOptions = attributes.imeOptions or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+                    }
+                },
+            )
         },
+        content = content,
     )
 }
 
