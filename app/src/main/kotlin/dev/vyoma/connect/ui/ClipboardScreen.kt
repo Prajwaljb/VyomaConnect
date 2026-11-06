@@ -53,12 +53,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.material.icons.rounded.Sync
+import dev.vyoma.connect.platform.AppLock
 
 /** Shared clipboard: what's on it now, recent history from both sides, and how sync is running. */
 @Composable
 fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
-    val history by vm.clipHistory.collectAsStateWithLifecycle()
+    val clips by vm.clipHistory.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    // The page leaves with a slide when the lock closes: nothing to read while it does.
+    val history = if (AppLock.isOpen(context)) clips else emptyList()
     val status = LocalStatus.current
     val background = vm.backgroundClipboardSync()
     var setup by rememberSaveable { mutableStateOf(false) }

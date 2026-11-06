@@ -725,7 +725,11 @@ fun VyomaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: 
             haptics.perform(if (on) Haptic.ToggleOn else Haptic.ToggleOff)
             change(on)
         }
-        scope.launch { position.animateTo(if (on) 1f else 0f, VyomaMotion.release()) }
+        scope.launch {
+            position.animateTo(if (on) 1f else 0f, VyomaMotion.release())
+            // Its owner said no (a cancelled fingerprint): [checked] never changed, so nothing else would bring it back.
+            if (current != on && !held) position.animateTo(if (current) 1f else 0f, VyomaMotion.release())
+        }
     }
     Spacer(
         modifier

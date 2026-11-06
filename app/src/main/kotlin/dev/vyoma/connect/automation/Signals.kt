@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -116,14 +117,20 @@ class Signals(private val context: Context, private val c: AppContainer, private
             }
         }
         val pcState = pc.flatMapLatest { d ->
-            if (d == null) flowOf(Triple(null, null, null))
+            // Held through a link swap, like [link], or a swap reads as the PC's battery and lock changing.
+            if (d == null) flow { delay(AWAY_GRACE_MS); emit(Triple(null, null, null)) }
             else d.state.map { it.plugins }.distinctUntilChanged().flatMapLatest {
                 val battery = d.plugin<BatteryPlugin>(BatteryPlugin.ID)?.remote ?: flowOf(null)
                 val locked = d.plugin<LockPlugin>(LockPlugin.ID)?.locked ?: flowOf(null)
                 combine(battery, locked) { b, l -> Triple(b?.charge, b?.charging, l) }
             }
         }
-        val playing = c.media.nowPlaying.map { it?.player?.isPlaying == true }.distinctUntilChanged()
+        val playing = combine(c.media.nowPlaying.map { it?.player?.isPlaying == true }, pc.map { it != null }) { playing, up -> playing to up }
+            .transformLatest { (playing, up) ->
+                if (!playing && !up) delay(AWAY_GRACE_MS)
+                emit(playing)
+            }
+            .distinctUntilChanged()
         val wifi = combine(wifiPrint, homes) { print, homes -> if (print == null) WifiState.OFF else if (print in homes) WifiState.HOME else WifiState.OTHER }
         // Cable in or out swaps the link over a few seconds: a rule shouldn't run for the gap.
         val via = pc.flatMapLatest { d -> d?.state?.map { it.transports.minOrNull() } ?: flowOf(null) }.distinctUntilChanged()

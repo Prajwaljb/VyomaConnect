@@ -114,6 +114,8 @@ class AndroidNetwork(private val context: Context) {
                 Os.setsockoptInt(fd, OsConstants.IPPROTO_TCP, TCP_KEEPIDLE, 120)
                 Os.setsockoptInt(fd, OsConstants.IPPROTO_TCP, TCP_KEEPINTVL, 10)
                 Os.setsockoptInt(fd, OsConstants.IPPROTO_TCP, TCP_KEEPCNT, 3)
+                // Keep-alive stops while a write waits for its ack: a PC that lost power would look alive for ~15 min.
+                Os.setsockoptInt(fd, OsConstants.IPPROTO_TCP, TCP_USER_TIMEOUT, 150_000)
             }
         }.onFailure { VLog.d(TAG, "keep-alive tuning unavailable: ${it.message}") }
     }
@@ -214,5 +216,6 @@ class AndroidNetwork(private val context: Context) {
         const val TCP_KEEPIDLE = 4
         const val TCP_KEEPINTVL = 5
         const val TCP_KEEPCNT = 6
+        const val TCP_USER_TIMEOUT = 18
     }
 }

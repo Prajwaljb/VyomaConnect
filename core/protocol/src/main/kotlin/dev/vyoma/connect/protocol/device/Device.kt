@@ -103,6 +103,8 @@ class Device internal constructor(
     /** Whose code is on screen while a pairing is pending: the only certificate it can end up trusting. */
     private var pairingCertificate: X509Certificate? = null
     private var pairTimeout: Job? = null
+    private var promptedAt = 0L
+    private var promptExpiredAt = 0L
     private var pluginScope: CoroutineScope? = null
     private val plugins = mutableMapOf<String, Plugin>()
     private val packetRoutes = mutableMapOf<String, Plugin>()
@@ -148,9 +150,13 @@ class Device internal constructor(
         links.filter { it.transport == link.transport }.forEach { old ->
             env.scope.launch { delay(REPLACED_LINK_GRACE_MS); old.close() }
         }
+        // Each link holds a thread for as long as it's up, and one stranger can keep making new ones.
+        if (!isPaired()) while (links.size >= MAX_UNPAIRED_LINKS) links.removeAt(0).close()
         links.add(link)
         linger?.cancel()
-        _state.update { it.copy(identity = link.identity, transports = transports()) }
+        // Whose companion a paired device is was settled by the proof at pairing, not by what it says now.
+        val identity = env.trustStore.get(id)?.let { link.identity.copy(companionOf = it.companionOf) } ?: link.identity
+        _state.update { it.copy(identity = identity, transports = transports()) }
         if (isPaired()) {
             // Peer may have renamed itself; keep the offline listing current.
             env.trustStore.get(id)?.let {
@@ -323,10 +329,20 @@ class Device internal constructor(
                     setPairState(PairState.UNPAIRED)
                     return
                 }
+                // Asking again doesn't extend the prompt or ring again, and one left unanswered
+                // has to wait: otherwise it can hold the screen and its place in the list for good.
+                val repeat = current == PairState.REQUESTED_BY_PEER
+                if (repeat && timestamp == pairingTimestamp) return
+                val now = System.nanoTime() / 1_000_000
+                if (!repeat && promptExpiredAt != 0L && now - promptExpiredAt < PROMPT_COOLDOWN_MS) {
+                    send(packet(PacketTypes.PAIR) { put("pair", false) })
+                    return
+                }
+                if (!repeat) promptedAt = now
                 pairingTimestamp = timestamp
                 setPairState(PairState.REQUESTED_BY_PEER)
-                armPairTimeout()
-                env.onPairRequest(this)
+                armPairTimeout((PAIR_TIMEOUT_MS - (now - promptedAt)).coerceAtLeast(0))
+                if (!repeat) env.onPairRequest(this)
             }
         }
     }
@@ -382,12 +398,13 @@ class Device internal constructor(
         _state.update { it.copy(pairState = state, verificationKey = key) }
     }
 
-    private fun armPairTimeout() {
+    private fun armPairTimeout(ms: Long = PAIR_TIMEOUT_MS) {
         pairTimeout?.cancel()
         pairTimeout = env.scope.launch(serial) {
-            delay(PAIR_TIMEOUT_MS)
+            delay(ms)
             val s = _state.value.pairState
             if (s == PairState.REQUESTED_BY_US || s == PairState.REQUESTED_BY_PEER) {
+                if (s == PairState.REQUESTED_BY_PEER) promptExpiredAt = System.nanoTime() / 1_000_000
                 VLog.i(TAG, "$name: pairing timed out")
                 setPairState(PairState.UNPAIRED)
             }
@@ -473,6 +490,8 @@ class Device internal constructor(
     private companion object {
         const val TAG = "Device"
         const val PAIR_TIMEOUT_MS = 30_000L
+        const val PROMPT_COOLDOWN_MS = 60_000L
+        const val MAX_UNPAIRED_LINKS = 4
         const val PAIR_CLOCK_SKEW_S = 1800L
         /** Before pairing a peer has nothing to say that takes more; anyone can get this far. */
         const val UNPAIRED_PACKET_BYTES = 64 * 1024

@@ -25,6 +25,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -81,12 +84,18 @@ class MirrorActivity : ComponentActivity() {
             }
             val sound by PhoneMirror.sound.collectAsStateWithLifecycle()
             // Sound needs the record-audio permission (Android counts capturing playback as recording).
+            var startAfterAsking by remember { mutableStateOf(false) }
             val askAudio = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
                 if (!ok) setSound(false)
-                if (!status.on) consent.launch(PhoneMirror.consentIntent(this))
+                // Only when it was Start that asked, not the Sound switch.
+                if (startAfterAsking && !status.on) consent.launch(PhoneMirror.consentIntent(this))
+                startAfterAsking = false
             }
             fun start() {
-                if (sound && !granted(Manifest.permission.RECORD_AUDIO)) askAudio.launch(Manifest.permission.RECORD_AUDIO)
+                if (sound && !granted(Manifest.permission.RECORD_AUDIO)) {
+                    startAfterAsking = true
+                    askAudio.launch(Manifest.permission.RECORD_AUDIO)
+                }
                 else consent.launch(PhoneMirror.consentIntent(this))
             }
             fun openAccessibility() = startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))

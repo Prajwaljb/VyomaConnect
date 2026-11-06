@@ -195,7 +195,7 @@ object Widgets {
             artist = np?.player?.artist,
             playing = np?.player?.isPlaying == true,
             // RemoteViews have a hard bitmap budget; 480px is still sharp full-bleed on a 4x2 widget.
-            art = np?.art?.let { if (it.width > 480) it.scale(480, 480 * it.height / it.width) else it },
+            art = np?.art?.let(::widgetArt),
             clips = if (AppLock.enabled(context)) emptyList() else c.clipboard.history.value.take(4).map { it.text.replace('\n', ' ').take(80) },
             clipsHidden = AppLock.enabled(context),
             transferFraction = running.takeIf { it.isNotEmpty() }?.let { list ->
@@ -205,6 +205,19 @@ object Widgets {
             transferLabel = running.firstOrNull()?.let { if (running.size == 1) it.fileName else "${running.size} files" },
         )
     }
+
+    /** The same picture stays the same object: a snapshot compares its art by identity, and saves it by that too. */
+    private fun widgetArt(art: Bitmap): Bitmap {
+        if (art.width <= 480) return art
+        if (art !== scaledFrom) {
+            scaled = art.scale(480, 480 * art.height / art.width)
+            scaledFrom = art
+        }
+        return scaled ?: art
+    }
+
+    @Volatile private var scaledFrom: Bitmap? = null
+    @Volatile private var scaled: Bitmap? = null
 
     // ---- disk cache ---------------------------------------------------------------------------
 

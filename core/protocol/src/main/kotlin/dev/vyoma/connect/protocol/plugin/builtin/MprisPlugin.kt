@@ -143,11 +143,23 @@ class MprisPlugin(private val ctx: PluginContext) : Plugin {
                     val n = input.read(buf)
                     if (n < 0) break
                     out.write(buf, 0, n)
-                    if (out.size() > MAX_ART_BYTES) error("album art too large")
+                    if (out.size() > MAX_ART_BYTES) {
+                        VLog.d(TAG, "album art too large") // stays marked as asked for: it'd only be too large again
+                        return
+                    }
                 }
                 out.toByteArray()
-            } ?: return
-            _art.update { old -> (old + (url to bytes)).entries.toList().takeLast(MAX_ART_ENTRIES).associate { it.key to it.value } }
+            } ?: run {
+                requestedArt.remove(url)
+                return
+            }
+            var dropped = emptySet<String>()
+            _art.update { old ->
+                val kept = (old + (url to bytes)).entries.toList().takeLast(MAX_ART_ENTRIES).associate { it.key to it.value }
+                dropped = old.keys - kept.keys
+                kept
+            }
+            requestedArt.removeAll(dropped) // or a cover coming round again would never return
         } catch (e: Exception) {
             requestedArt.remove(url)
             VLog.d(TAG, "album art download failed: ${e.message}")

@@ -40,6 +40,8 @@ const MIC_LABEL: &str = "Vyoma Phone Mic";
 /// The mic pipe's size: one page, about 40 ms of 48 kHz mono.
 const MIC_PIPE_BYTES: libc::c_int = 4096;
 const SILENCE: std::time::Duration = std::time::Duration::from_secs(4);
+const OPEN_TRIES: u32 = 10;
+const OPEN_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// What the user is told when the loopback device is missing.
 const SETUP: &str = "The PC needs a one-time setup for the phone camera (v4l2loopback): see desktop/companion/webcam/README";
@@ -155,11 +157,19 @@ pub async fn camera(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr
         state(sender, json!({ "error": SETUP })).await;
         bail!("no {LABEL} device (v4l2loopback not loaded)");
     };
-    let out = match open_output(&path, w, h) {
-        Ok(f) => f,
-        Err(e) => {
-            state(sender, json!({ "error": format!("{e:#}") })).await;
-            return Err(e);
+    // A stream replacing the last one: the old one lets go of the device a moment later.
+    let mut tries = 0;
+    let out = loop {
+        match open_output(&path, w, h) {
+            Ok(f) => break f,
+            Err(_) if tries < OPEN_TRIES => {
+                tries += 1;
+                tokio::time::sleep(OPEN_WAIT).await;
+            }
+            Err(e) => {
+                state(sender, json!({ "error": format!("{e:#}") })).await;
+                return Err(e);
+            }
         }
     };
     let mut input = payload::fetch_stream(me, pinned, phone, packet).await?;

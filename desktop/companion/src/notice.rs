@@ -2,7 +2,8 @@
 
 pub async fn tell(icon: &str, title: &str, body: &str) {
     let sent = tokio::process::Command::new("notify-send")
-        .args(["--app-name=Vyoma", &format!("--icon={icon}"), title])
+        // --: a name starting with a dash isn't an option, which would lose the notice.
+        .args(["--app-name=Vyoma", &format!("--icon={icon}"), "--", title])
         .arg(escape(body))
         .status()
         .await;
@@ -12,7 +13,7 @@ pub async fn tell(icon: &str, title: &str, body: &str) {
 }
 
 /// Notification bodies are read as markup, and names come from the phone or from any file.
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 

@@ -90,7 +90,7 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
-        handleIntent(intent)
+        if (savedInstanceState == null) handleIntent(intent) // a recreated activity already acted on it
         setContent {
             val theme by vm.theme.collectAsStateWithLifecycle()
             VyomaTheme(theme) {

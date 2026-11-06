@@ -2,6 +2,7 @@ package dev.vyoma.connect.protocol
 
 import dev.vyoma.connect.protocol.crypto.LocalCredentials
 import dev.vyoma.connect.protocol.device.DeviceHub
+import dev.vyoma.connect.protocol.device.HubEvent
 import dev.vyoma.connect.protocol.device.PairState
 import dev.vyoma.connect.protocol.device.TrustStore
 import dev.vyoma.connect.protocol.device.TrustedDevice
@@ -18,6 +19,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -156,6 +158,22 @@ class PairingSecurityTest {
         phone.device(pcId)!!.unpair()
         waitFor { store.get(companionId) == null }
         assertNull(store.get(pcId))
+    }
+
+    @Test fun askingAgainDoesntRingAgainOrExtendThePrompt() = runBlocking {
+        val phone = hub(phoneCreds)
+        val pc = hub(pcCreds)
+        val rings = AtomicInteger()
+        val counting = scope.launch { phone.events.collect { if (it is HubEvent.PairRequested) rings.incrementAndGet() } }
+        delay(100)
+        promptFromPc(phone, pc)
+        waitFor { rings.get() == 1 }
+        delay(1_100) // the request's time is in seconds: this one is a new request, not a resend
+        pc.device(phoneId)!!.requestPairing()
+        delay(500)
+        counting.cancel()
+        assertEquals(1, rings.get())
+        assertEquals(PairState.REQUESTED_BY_PEER, phone.device(pcId)!!.state.value.pairState)
     }
 
     @Test fun aPairedDeviceRefusesAnyOtherCertificate() = runBlocking {

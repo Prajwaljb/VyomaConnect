@@ -48,7 +48,9 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.ime
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.material.icons.automirrored.rounded.Backspace
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -697,7 +699,10 @@ private const val PASTE_ECHO_MS = 3_000L
 private fun PcKeyboard(onText: (String) -> Unit, onKey: (String) -> Unit, resets: Int, onClosed: () -> Unit) {
     var clearField by remember { mutableStateOf<() -> Unit>({}) }
     LaunchedEffect(resets) { if (resets > 0) clearField() }
-    val ime = WindowInsets.isImeVisible
+    // From the inset itself: WindowInsets.isImeVisible stays false on One UI even with the keyboard up.
+    val imeInsets = WindowInsets.ime
+    val density = LocalDensity.current
+    val ime by remember(imeInsets, density) { derivedStateOf { imeInsets.getBottom(density) > 0 } }
     var shown by remember { mutableStateOf(false) }
     // The keyboard swiped away with Back: done typing.
     LaunchedEffect(ime) {

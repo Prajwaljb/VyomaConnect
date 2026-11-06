@@ -51,20 +51,25 @@ pub async fn put(text: &str) -> Result<()> {
     Ok(())
 }
 
+/// wl-paste waits on whichever app owns the clipboard, which can be frozen: it mustn't hold [STATE].
+async fn wl_paste(args: &[&str]) -> Option<std::process::Output> {
+    tokio::time::timeout(std::time::Duration::from_secs(2), Command::new("wl-paste").args(args).kill_on_drop(true).output()).await.ok()?.ok()
+}
+
 async fn current_text() -> Option<String> {
-    let out = Command::new("wl-paste").args(["--no-newline", "--type", "text/plain"]).kill_on_drop(true).output().await.ok()?;
+    let out = wl_paste(&["--no-newline", "--type", "text/plain"]).await?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 async fn read_clipboard() -> Option<(String, Vec<u8>)> {
-    let list = Command::new("wl-paste").arg("--list-types").kill_on_drop(true).output().await.ok()?;
+    let list = wl_paste(&["--list-types"]).await?;
     if !list.status.success() {
         return None;
     }
     let list = String::from_utf8_lossy(&list.stdout).into_owned();
     let offered: Vec<&str> = list.lines().collect();
     let kind = TYPES.iter().find(|t| offered.contains(t)).copied().or(offered.first().copied())?;
-    let out = Command::new("wl-paste").args(["--no-newline", "--type", kind]).kill_on_drop(true).output().await.ok()?;
+    let out = wl_paste(&["--no-newline", "--type", kind]).await?;
     out.status.success().then(|| (kind.to_string(), out.stdout))
 }
 

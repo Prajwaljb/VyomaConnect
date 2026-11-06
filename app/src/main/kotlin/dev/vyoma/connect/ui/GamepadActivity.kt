@@ -593,6 +593,7 @@ private fun GamepadScreen(
                     val grips = HashMap<PointerId, Pair<Grip, Int>>()
                     var pulses = 0
                     var sent = GamepadState()
+                    onTouch(sent) // restarted with a finger down (the link dropped): nothing still counts as held
                     fun publish() {
                         var bits = pulses
                         var left: Grip.Stick? = null
