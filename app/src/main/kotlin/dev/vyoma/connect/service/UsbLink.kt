@@ -11,6 +11,8 @@ import dev.vyoma.connect.protocol.link.LanBackend
 import dev.vyoma.connect.protocol.link.TransportKind
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -34,6 +36,8 @@ import java.net.InetAddress
 class UsbLink(private val context: Context, private val hub: DeviceHub, private val scope: CoroutineScope) {
     private var receiver: BroadcastReceiver? = null
     private var dialer: Job? = null
+    private val _cable = MutableStateFlow(false)
+    val cable: StateFlow<Boolean> = _cable
 
     /** Whether a cable is in right now (the sticky USB state), for before the hub starts. */
     fun cableIn(): Boolean =
@@ -59,6 +63,7 @@ class UsbLink(private val context: Context, private val hub: DeviceHub, private 
     }
 
     private fun onUsbState(connected: Boolean) {
+        _cable.value = connected
         if (!connected) {
             if (dialer != null) hub.cableUnplugged()
             dialer?.cancel()

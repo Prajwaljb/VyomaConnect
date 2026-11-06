@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import android.app.Application
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -32,7 +33,6 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,6 +65,8 @@ import dev.vyoma.connect.designsystem.perform
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.PcControls
 import dev.vyoma.connect.protocol.plugin.builtin.PcPower
+import dev.vyoma.connect.container
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -117,7 +119,6 @@ fun rememberPcControls(plugin: CompanionPlugin): PcControls? {
 @Composable
 fun PcPowerDialog(plugin: CompanionPlugin, pcName: String, action: PcPower, onDismiss: () -> Unit) {
     val status = LocalStatus.current
-    val scope = rememberCoroutineScope()
     val context = LocalContext.current
     GlassDialog(
         onDismissRequest = onDismiss,
@@ -127,7 +128,8 @@ fun PcPowerDialog(plugin: CompanionPlugin, pcName: String, action: PcPower, onDi
             DialogButton(destructive = action != PcPower.SLEEP, onClick = {
                 onDismiss()
                 AppLock.ask(context, "To ${action.label.lowercase()} $pcName") {
-                    scope.launch {
+                    // Not this dialog's scope: it closes before the answer, and took the command with it.
+                    (context.applicationContext as Application).container.appScope.launch(Dispatchers.Main) {
                         plugin.power(action)
                             .onSuccess { status.show(action.done, icon = action.icon) }
                             .onFailure { status.show(it.message ?: "The PC refused", failure = true) }

@@ -15,14 +15,41 @@ use zbus::Connection;
 use crate::media::Media;
 
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
-struct Config {
-    lock: bool,
-    pause: bool,
-    mute: bool,
+struct Want {
+    on: bool,
     /// Seconds to wait after the link drops before acting.
     after: u64,
     /// Put back what we changed (unmute, resume) when the phone returns.
     undo: bool,
+}
+
+impl Want {
+    fn read(v: &Value) -> Want {
+        Want { on: v.is_object(), after: v["after"].as_u64().unwrap_or(0).min(24 * 3600), undo: v["undo"].as_bool().unwrap_or(false) }
+    }
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+struct Config {
+    lock: Want,
+    pause: Want,
+    mute: Want,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Step {
+    Pause,
+    Mute,
+    Lock,
+}
+
+impl Config {
+    /// What to do, soonest first; at the same moment, the sound goes before the screen locks.
+    fn steps(&self) -> Vec<(Step, Want)> {
+        let mut steps: Vec<_> = [(Step::Pause, self.pause), (Step::Mute, self.mute), (Step::Lock, self.lock)].into_iter().filter(|(_, w)| w.on).collect();
+        steps.sort_by_key(|(_, w)| w.after);
+        steps
+    }
 }
 
 /// What we changed while the phone was away, to put back.
@@ -30,6 +57,19 @@ struct Config {
 struct Done {
     unmute: bool,
     resume: Vec<String>,
+}
+
+impl Done {
+    async fn put_back(&self, media: Option<&Arc<Media>>) {
+        if self.unmute {
+            let _ = pactl(&["set-sink-mute", "@DEFAULT_SINK@", "0"]).await;
+        }
+        if let Some(media) = media {
+            for bus in &self.resume {
+                media.play_bus(bus).await;
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -49,13 +89,7 @@ pub struct Away {
 impl Away {
     /// `vyoma.away` from [phone]: its walk-away wishes.
     pub fn configure(&self, phone: &str, body: &Value) {
-        let config = Config {
-            lock: body["lock"].as_bool().unwrap_or(false),
-            pause: body["pause"].as_bool().unwrap_or(false),
-            mute: body["mute"].as_bool().unwrap_or(false),
-            after: body["after"].as_u64().unwrap_or(0).min(24 * 3600),
-            undo: body["undo"].as_bool().unwrap_or(false),
-        };
+        let config = Config { lock: Want::read(&body["lock"]), pause: Want::read(&body["pause"]), mute: Want::read(&body["mute"]) };
         let mut phones = self.phones.lock().unwrap();
         let entry = phones.entry(phone.to_string()).or_default();
         if entry.config != config {
@@ -75,58 +109,69 @@ impl Away {
         };
         if let Some(done) = done {
             info!("{phone}: back; undoing what its walk-away rules did");
-            if done.unmute {
-                let _ = pactl(&["set-sink-mute", "@DEFAULT_SINK@", "0"]).await;
-            }
-            if let Some(media) = media {
-                for bus in &done.resume {
-                    media.play_bus(bus).await;
-                }
-            }
+            done.put_back(media).await;
         }
     }
 
     /// A link to [phone] closed. Once none are left and it stays gone for its `after`, runs its rules.
     pub fn unlinked(self: &Arc<Self>, phone: &str, media: Option<Arc<Media>>) {
-        let (config, generation) = {
+        let (steps, generation) = {
             let mut phones = self.phones.lock().unwrap();
             let Some(p) = phones.get_mut(phone) else { return };
             p.links = p.links.saturating_sub(1);
-            if p.links > 0 || !(p.config.lock || p.config.pause || p.config.mute) {
+            if p.links > 0 || p.config.steps().is_empty() {
                 return;
             }
-            (p.config, p.generation)
+            (p.config.steps(), p.generation)
         };
         let (away, phone) = (self.clone(), phone.to_string());
         tokio::spawn(async move {
-            // A Wi-Fi/USB swap or an app update closes the link for a moment: never act on that.
-            tokio::time::sleep(Duration::from_secs(config.after.max(MIN_GONE_SECS))).await;
-            let still_gone = away.phones.lock().unwrap().get(&phone).is_some_and(|p| p.links == 0 && p.generation == generation);
-            if !still_gone {
-                return;
-            }
-            info!("{phone}: gone; running its walk-away rules");
-            let mut done = Done::default();
-            if config.pause {
-                if let Some(media) = &media {
-                    done.resume = media.pause_all().await;
+            let left = tokio::time::Instant::now();
+            for (step, want) in steps {
+                // A Wi-Fi/USB swap or an app update closes the link for a moment: never act on that.
+                tokio::time::sleep_until(left + Duration::from_secs(want.after.max(MIN_GONE_SECS))).await;
+                let still_gone = away.phones.lock().unwrap().get(&phone).is_some_and(|p| p.links == 0 && p.generation == generation);
+                if !still_gone {
+                    return;
                 }
-            }
-            if config.mute {
-                let muted = pactl(&["get-sink-mute", "@DEFAULT_SINK@"]).await.is_ok_and(|out| String::from_utf8_lossy(&out).contains("yes"));
-                if !muted && pactl(&["set-sink-mute", "@DEFAULT_SINK@", "1"]).await.is_ok() {
-                    done.unmute = true;
+                info!("{phone}: gone; walk-away rules: {step:?}");
+                let mut done = Done::default();
+                match step {
+                    Step::Pause => {
+                        if let Some(media) = &media {
+                            done.resume = media.pause_all().await;
+                        }
+                    }
+                    Step::Mute => {
+                        let muted = pactl(&["get-sink-mute", "@DEFAULT_SINK@"]).await.is_ok_and(|out| String::from_utf8_lossy(&out).contains("yes"));
+                        if !muted && pactl(&["set-sink-mute", "@DEFAULT_SINK@", "1"]).await.is_ok() {
+                            done.unmute = true;
+                        }
+                    }
+                    Step::Lock => {
+                        if let Err(e) = lock().await {
+                            warn!("{phone}: couldn't lock: {e:#}");
+                        }
+                    }
                 }
-            }
-            if config.lock {
-                if let Err(e) = lock().await {
-                    warn!("{phone}: couldn't lock: {e:#}");
+                if !want.undo {
+                    continue;
                 }
-            }
-            if config.undo {
-                let mut phones = away.phones.lock().unwrap();
-                if let Some(p) = phones.get_mut(&phone).filter(|p| p.generation == generation) {
-                    p.done = Some(done);
+                // Back while that ran: nothing will come to undo it later.
+                let back_already = {
+                    let mut phones = away.phones.lock().unwrap();
+                    match phones.get_mut(&phone).filter(|p| p.generation == generation) {
+                        Some(p) => {
+                            let all = p.done.get_or_insert_default();
+                            all.unmute |= done.unmute;
+                            all.resume.append(&mut done.resume);
+                            false
+                        }
+                        None => true,
+                    }
+                };
+                if back_already {
+                    done.put_back(media.as_ref()).await;
                 }
             }
         });
@@ -159,15 +204,24 @@ mod tests {
     #[test]
     fn reads_the_config() {
         let away = Away::default();
-        away.configure("p", &json!({ "lock": true, "after": 60, "undo": true }));
+        away.configure("p", &json!({ "lock": { "after": 60, "undo": true } }));
         let c = away.phones.lock().unwrap()["p"].config;
-        assert_eq!(c, Config { lock: true, pause: false, mute: false, after: 60, undo: true });
+        assert_eq!(c, Config { lock: Want { on: true, after: 60, undo: true }, ..Config::default() });
+    }
+
+    #[test]
+    fn each_action_keeps_its_own_time() {
+        let away = Away::default();
+        away.configure("p", &json!({ "lock": { "after": 600 }, "mute": { "after": 0, "undo": true } }));
+        let steps = away.phones.lock().unwrap()["p"].config.steps();
+        let order: Vec<_> = steps.iter().map(|(s, w)| (*s, w.after)).collect();
+        assert_eq!(order, [(Step::Mute, 0), (Step::Lock, 600)]);
     }
 
     #[tokio::test]
     async fn a_returning_phone_cancels_the_timer() {
         let away = Arc::new(Away::default());
-        away.configure("p", &json!({ "mute": true, "after": 0 }));
+        away.configure("p", &json!({ "mute": { "after": 0 } }));
         away.linked("p", None).await;
         away.unlinked("p", None);
         away.linked("p", None).await;

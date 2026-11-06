@@ -171,7 +171,11 @@ class Signals(private val context: Context, private val c: AppContainer, private
 
     private fun bluetoothAllowed() = context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
 
-    /** Every device's connect and disconnect, audio or not; what's already connected comes from [lookForConnected]. */
+    /**
+     * Every device's connect and disconnect, audio or not; what's already connected comes from
+     * [lookForConnected]. Exported: these come from the Bluetooth process, which a private receiver
+     * never hears. Only the system can send them (protected broadcasts).
+     */
     private fun watchBluetooth() {
         val filter = IntentFilter().apply {
             addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
@@ -189,7 +193,7 @@ class Signals(private val context: Context, private val c: AppContainer, private
                         if (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.STATE_OFF) != BluetoothAdapter.STATE_ON) bluetooth.value = emptySet()
                 }
             }
-        }, filter, Context.RECEIVER_NOT_EXPORTED)
+        }, filter, Context.RECEIVER_EXPORTED)
         lookForConnected()
     }
 

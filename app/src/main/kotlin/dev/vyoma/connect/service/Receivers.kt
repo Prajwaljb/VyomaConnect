@@ -55,7 +55,7 @@ class BootReceiver : BroadcastReceiver() {
  * PendingIntent registered with ConnectivityManager, so no process has to stay up for it) when a
  * Wi-Fi or Ethernet network comes up, and the link service starts again. Android may refuse a
  * background start unless Vyoma is allowed background activity; then it starts the next time the
- * app opens or the phone is plugged in to a PC.
+ * app opens. Nothing wakes it for a cable: Android has no plug-in broadcast for a stopped app.
  */
 class OutdoorReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {

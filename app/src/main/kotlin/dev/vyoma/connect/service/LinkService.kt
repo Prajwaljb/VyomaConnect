@@ -32,6 +32,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
+import dev.vyoma.connect.webcam.PhoneWebcam
+import dev.vyoma.connect.mirror.PhoneMirror
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
@@ -266,17 +268,19 @@ class LinkService : LifecycleService() {
 
     /**
      * Outdoor mode: away from Wi-Fi, with no cable, no PC connected for a minute (a Tailscale link
-     * keeps it running) and the app not on screen, the service stops: no notification, no sockets,
-     * nothing waking the phone. ConnectivityManager holds a PendingIntent that starts it again
+     * keeps it running), the app not on screen, no Bluetooth fallback to wait for and no camera or
+     * mirror on, the service stops: no notification, no sockets, nothing waking the phone. ConnectivityManager holds a PendingIntent that starts it again
      * ([OutdoorReceiver]) when Wi-Fi or Ethernet comes up; opening the app starts it too.
      */
     private fun watchOutdoors(anyConnected: Flow<Boolean>) {
         val onLan = MutableStateFlow(network.onLan())
         network.watchLan { onLan.value = it }
         lifecycleScope.launch {
-            combine(container.settings.outdoorMode, onLan, anyConnected, container.uiVisible) { enabled, lan, connected, visible ->
-                enabled && !lan && !connected && !visible && usb?.cableIn() != true
+            val sharing = combine(PhoneWebcam.status, PhoneMirror.status) { camera, mirror -> camera.on || mirror.on }
+            val staying = combine(anyConnected, container.uiVisible, usb?.cable ?: flowOf(false), BluetoothFallback.enabled, sharing) { connected, visible, cable, radio, shared ->
+                connected || visible || cable || radio || shared
             }
+            combine(container.settings.outdoorMode, onLan, staying) { enabled, lan, stay -> enabled && !lan && !stay }
                 .distinctUntilChanged()
                 .collectLatest { outdoors ->
                     if (!outdoors) return@collectLatest

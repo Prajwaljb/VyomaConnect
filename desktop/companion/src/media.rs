@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
@@ -16,6 +16,8 @@ use tracing::warn;
 use zbus::{Connection, MatchRule, MessageStream, OwnedVariant};
 
 const PREFIX: &str = "org.mpris.MediaPlayer2.";
+/// How long a player gets to answer.
+const PLAYER_TIMEOUT: Duration = Duration::from_secs(3);
 const PATH: &str = "/org/mpris/MediaPlayer2";
 const PLAYER: &str = "org.mpris.MediaPlayer2.Player";
 
@@ -58,7 +60,9 @@ pub struct Media {
 
 impl Media {
     pub async fn start() -> Result<Arc<Media>> {
-        let conn = Connection::session().await.context("no session bus")?;
+        // A frozen player never answers, and zbus would wait for ever: the daemon's start and a
+        // phone's session both wait on these calls.
+        let conn = zbus::connection::Builder::session().method_timeout(PLAYER_TIMEOUT).build().await.context("no session bus")?;
         let media = Arc::new(Media { conn, tracks: Mutex::default() });
         let names: Vec<String> = media.conn.call_method(Some("org.freedesktop.DBus"), "/org/freedesktop/DBus", Some("org.freedesktop.DBus"), "ListNames", &()).await?.body().deserialize()?;
         for name in names.into_iter().filter(|n| n.starts_with(PREFIX)) {
@@ -295,6 +299,14 @@ mod live {
         let iface = conn.object_server().interface::<_, Fake>(super::PATH).await.unwrap();
         iface.get_mut().await.status = status.into();
         iface.get().await.playback_status_changed(iface.signal_emitter()).await.unwrap();
+    }
+
+    // A player that owns its name and never answers: the daemon has to start anyway.
+    #[tokio::test]
+    #[ignore]
+    async fn frozen_player() {
+        let _frozen = zbus::connection::Builder::session().name("org.mpris.MediaPlayer2.vyomafrozen").build().await.unwrap();
+        tokio::time::timeout(super::PLAYER_TIMEOUT * 3, super::Media::start()).await.expect("held up by a frozen player").unwrap();
     }
 
     #[tokio::test]

@@ -197,7 +197,10 @@ data class PcControls(val displays: List<PcDisplay> = emptyList(), val apps: Lis
  * What the PC does by itself once this phone has been gone [afterSeconds] (on top of the ~30 s it
  * takes to notice), from the phone's "PC goes away" rules; with [undo], put back when it returns.
  */
-data class AwayRules(val lock: Boolean = false, val pause: Boolean = false, val mute: Boolean = false, val afterSeconds: Int = 0, val undo: Boolean = false)
+data class AwayRules(val lock: AwayAction? = null, val pause: AwayAction? = null, val mute: AwayAction? = null)
+
+/** One thing the PC does once the phone has gone: how long after, and whether it's put back on return. */
+data class AwayAction(val afterSeconds: Int, val undo: Boolean)
 
 enum class PcPower(val wire: String) { SLEEP("sleep"), RESTART("restart"), SHUTDOWN("shutdown"), LOGOUT("logout") }
 
@@ -368,8 +371,10 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     suspend fun sendAway() {
         val rules = away.value
         ctx.send(packet(AWAY) {
-            put("lock", rules.lock); put("pause", rules.pause); put("mute", rules.mute)
-            put("after", rules.afterSeconds); put("undo", rules.undo)
+            fun action(name: String, a: AwayAction?) {
+                if (a != null) put(name, buildJsonObject { put("after", a.afterSeconds); put("undo", a.undo) })
+            }
+            action("lock", rules.lock); action("pause", rules.pause); action("mute", rules.mute)
         })
     }
 

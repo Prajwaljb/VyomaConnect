@@ -211,6 +211,13 @@ class DeviceHub(
         _events.tryEmit(HubEvent.PairRequested(device))
     }
 
+    /** A companion is only trusted on its PC's behalf, and the app doesn't list it to remove by hand. */
+    override fun onUnpaired(deviceId: String) {
+        trustStore.all().filter { it.companionOf == deviceId }.forEach { companion ->
+            _devices.value[companion.deviceId]?.let { scope.launch { it.unpair() } } ?: trustStore.remove(companion.deviceId)
+        }
+    }
+
     override fun usbTunnelUp(deviceId: String): Boolean =
         _devices.value[deviceId]?.state?.value?.transports?.contains(TransportKind.USB) == true
 

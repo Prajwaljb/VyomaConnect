@@ -7,6 +7,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
+import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.protocol.device.Device
 import dev.vyoma.connect.protocol.plugin.builtin.IncomingFile
 import dev.vyoma.connect.protocol.plugin.builtin.ShareSink
@@ -25,7 +26,6 @@ class AndroidShareSink(private val context: Context, private val clipboard: Andr
     override fun onUrl(from: Device, url: String) = Notifications.linkReceived(context, from.name, url)
 
     override fun createFile(from: Device, name: String, size: Long, lastModified: Long?): IncomingFile? {
-        val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, name)
             put(MediaStore.Downloads.MIME_TYPE, mimeOf(name))
@@ -33,29 +33,32 @@ class AndroidShareSink(private val context: Context, private val clipboard: Andr
             put(MediaStore.Downloads.IS_PENDING, 1)
             if (size >= 0) put(MediaStore.Downloads.SIZE, size)
         }
-        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return null
-        val out = resolver.openOutputStream(uri) ?: run {
-            resolver.delete(uri, null, null)
-            return null
-        }
-        return MediaStoreFile(uri, out.buffered(256 * 1024))
+        return open(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
     }
 
     /** Screenshots go with the user's pictures, so Gallery shows them in a "Vyoma" album. */
     override fun createPicture(from: Device, name: String, size: Long): IncomingFile? {
-        val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, name)
             put(MediaStore.Images.Media.MIME_TYPE, mimeOf(name))
             put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Vyoma")
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
-        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
-        val out = resolver.openOutputStream(uri) ?: run {
-            resolver.delete(uri, null, null)
-            return null
-        }
-        return MediaStoreFile(uri, out.buffered(256 * 1024))
+        return open(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+    }
+
+    /** Null when it can't be made (storage full, too many copies of the name): these calls can throw. */
+    private fun open(collection: Uri, values: ContentValues): IncomingFile? {
+        val resolver = context.contentResolver
+        return runCatching {
+            val uri = resolver.insert(collection, values) ?: return null
+            val out = runCatching { resolver.openOutputStream(uri) }.getOrNull()
+            if (out == null) {
+                resolver.delete(uri, null, null)
+                return null
+            }
+            MediaStoreFile(uri, out.buffered(256 * 1024))
+        }.onFailure { VLog.w("ShareSink", "couldn't create a file: ${it.message}") }.getOrNull()
     }
 
     /**
