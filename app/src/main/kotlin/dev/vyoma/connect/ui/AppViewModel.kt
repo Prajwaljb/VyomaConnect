@@ -128,11 +128,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun requestPair(id: String) = act(id) { it.requestPairing() }
     fun acceptPair(id: String) = act(id) { it.acceptPairing() }
     fun rejectPair(id: String) = act(id) { it.rejectPairing() }
-    /** Unpairing a PC also drops its companion, which was only trusted on the PC's behalf. */
-    fun unpair(id: String) {
-        act(id) { it.unpair() }
-        devices.value.filter { it.identity.companionOf == id }.forEach { c -> act(c.identity.deviceId) { it.unpair() } }
-    }
+    fun unpair(id: String) = act(id) { it.unpair() }
     fun ping(id: String) = act(id) { it.plugin<PingPlugin>(PingPlugin.ID)?.ping("Ping from Vyoma") }
     fun lockPc(id: String) = act(id) { it.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(true) }
     fun setPcLocked(id: String, locked: Boolean) = act(id) {

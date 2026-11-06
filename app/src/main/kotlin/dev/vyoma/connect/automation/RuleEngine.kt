@@ -13,6 +13,7 @@ import dev.vyoma.connect.AppContainer
 import dev.vyoma.connect.container
 import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.protocol.device.Device
+import dev.vyoma.connect.protocol.plugin.builtin.AwayAction
 import dev.vyoma.connect.protocol.plugin.builtin.AwayRules
 import dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
@@ -28,10 +29,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -52,6 +51,8 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
     private val clock = MutableStateFlow(System.currentTimeMillis())
     private val lock = Mutex()
     private val on = HashMap<String, List<Undo>>()
+    /** What couldn't be put back because the PC wasn't there, by rule: goes back when it returns. */
+    private val owed = HashMap<String, Owed>()
     private var started = false
     private var startedAt = 0L
     private var wake: Job? = null
@@ -64,8 +65,13 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
         startedAt = System.currentTimeMillis()
         loadOn()
         c.appScope.launch {
-            combine(signals.snapshot, store.rules, clock) { s, rules, now -> Triple(s, rules, now) }.collect { (s, rules, now) ->
-                lock.withLock { evaluate(s, rules, now) }
+            // [clock] only says when to look again: it can be hours old when a signal or a rule changes.
+            combine(signals.snapshot, store.rules, clock) { s, rules, _ -> s to rules }.collect { (s, rules) ->
+                val now = System.currentTimeMillis()
+                lock.withLock {
+                    evaluate(s, rules, now)
+                    tellCompanions(s, rules, now)
+                }
                 schedule(rules, s, now)
             }
         }
@@ -73,13 +79,6 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
         c.appScope.launch {
             delay(SETTLE_MS)
             clock.value = System.currentTimeMillis()
-        }
-        // Walk-away rules live on the PC: keep every companion told.
-        c.appScope.launch {
-            store.rules.map(::awayRules).distinctUntilChanged().collect { rules ->
-                CompanionPlugin.away.value = rules
-                companions().forEach { it.sendAway() }
-            }
         }
     }
 
@@ -108,12 +107,18 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
     private suspend fun evaluate(s: Snapshot, rules: List<Rule>, now: Long) {
         if (!s.ready || now - startedAt < SETTLE_MS - 100) return
         val byId = rules.associateBy { it.id }
-        // Switched off or deleted while on: put things back.
+        // Switched off or deleted while on: put things back. Only a rule that undoes keeps its undos.
         for (id in on.keys.toList()) {
             val rule = byId[id]
             if (rule == null || !rule.enabled) {
                 val undos = on.remove(id).orEmpty()
-                if (rule?.undo == true && undos.isNotEmpty()) revert(rule, undos, "Switched off")
+                if (undos.isNotEmpty()) revert(id, rule?.name ?: DELETED_RULE, undos, "Switched off")
+            }
+        }
+        if (Commands.primary(c) != null) {
+            for ((id, was) in owed.toList()) {
+                owed.remove(id)
+                revert(id, was.name, was.undos, "Put back now the PC is here")
             }
         }
         for (rule in rules) {
@@ -123,11 +128,12 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
             if (holds && !wasOn) {
                 val away = rule.trigger is Trigger.PcLink && !rule.trigger.connected
                 val (ran, failed, undos) = perform(rule, away)
-                on[rule.id] = undos
+                // On again before the PC returned: what's owed now goes back when this turns off.
+                on[rule.id] = owed.remove(rule.id)?.undos.orEmpty() + undos.takeIf { rule.undo }.orEmpty()
                 record(rule, if (ran.isEmpty() && failed.isEmpty()) "Ran on the PC" else outcome(ran, failed).removePrefix(": "), failed.isNotEmpty() && ran.isEmpty())
             } else if (!holds && wasOn) {
                 val undos = on.remove(rule.id).orEmpty()
-                if (rule.undo && undos.isNotEmpty()) revert(rule, undos, "Undone")
+                if (undos.isNotEmpty()) revert(rule.id, rule.name, undos, "Undone")
             }
         }
         saveOn()
@@ -250,27 +256,29 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
         }
     }
 
-    private suspend fun revert(rule: Rule, undos: List<Undo>, label: String) {
+    /** Puts back what it can; what needs a PC that isn't there is [owed] until it is. */
+    private suspend fun revert(id: String, name: String, undos: List<Undo>, label: String) {
         val pc = Commands.primary(c)
+        val volume = pc?.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)
+        val companion = pc?.let(::companionOf)
         val audio = app.getSystemService(AudioManager::class.java)
         var done = 0
+        val waiting = ArrayDeque<Undo>()
         for (u in undos.reversed()) {
             runCatching {
                 when (u) {
-                    is Undo.Mute -> pc?.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.setMuted(u.sink, u.muted) ?: return@runCatching
-                    is Undo.Volume -> pc?.plugin<SystemVolumePlugin>(SystemVolumePlugin.ID)?.setVolume(u.sink, u.volume) ?: return@runCatching
-                    is Undo.PcMedia -> if (pc == null) return@runCatching else c.media.control { p, n -> p.action(n, if (u.play) MprisPlugin.MediaAction.PLAY else MprisPlugin.MediaAction.PAUSE) }
-                    is Undo.Brightness -> {
-                        val companion = pc?.let(::companionOf) ?: return@runCatching
-                        u.levels.forEach { (id, level) -> companion.setBrightness(id, level) }
-                    }
+                    is Undo.Mute -> if (volume == null) { waiting.addFirst(u); return@runCatching } else volume.setMuted(u.sink, u.muted)
+                    is Undo.Volume -> if (volume == null) { waiting.addFirst(u); return@runCatching } else volume.setVolume(u.sink, u.volume)
+                    is Undo.PcMedia -> if (pc == null) { waiting.addFirst(u); return@runCatching } else c.media.control { p, n -> p.action(n, if (u.play) MprisPlugin.MediaAction.PLAY else MprisPlugin.MediaAction.PAUSE) }
+                    is Undo.Brightness -> if (companion == null) { waiting.addFirst(u); return@runCatching } else u.levels.forEach { (display, level) -> companion.setBrightness(display, level) }
                     is Undo.Ringer -> audio.ringerMode = u.mode
                     Undo.PhoneMedia -> mediaKey(audio, KeyEvent.KEYCODE_MEDIA_PLAY)
                 }
                 done++
-            }.onFailure { VLog.w(TAG, "${rule.name}: undo failed", it) }
+            }.onFailure { VLog.w(TAG, "$name: undo failed", it) }
         }
-        if (done > 0) record(rule, label)
+        if (waiting.isNotEmpty()) owed[id] = Owed(name, owed[id]?.undos.orEmpty() + waiting)
+        if (done > 0) store.record(RunEntry(id, name, System.currentTimeMillis(), label, false))
     }
 
     private fun sink(pc: Device): Pair<SystemVolumePlugin, dev.vyoma.connect.protocol.plugin.builtin.AudioSink> {
@@ -305,18 +313,28 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
         store.record(RunEntry(rule.id, rule.name, System.currentTimeMillis(), text, failed))
     }
 
-    // What the PC should do on its own when the phone leaves: the enabled "PC goes away" rules, merged.
+    // What the PC should do on its own when the phone leaves: the enabled "PC goes away" rules whose
+    // conditions hold as the phone goes (the PC can't check them, and the phone can't tell it later),
+    // each action timed by the rules that ask for it.
 
-    private fun awayRules(rules: List<Rule>): AwayRules {
-        val away = rules.filter { it.enabled && (it.trigger as? Trigger.PcLink)?.connected == false }
-        val actions = away.flatMap { it.actions }
-        return AwayRules(
-            lock = Action.LockPc in actions,
-            pause = Action.PcMedia(play = false) in actions,
-            mute = Action.MutePc(mute = true) in actions,
-            afterSeconds = away.minOfOrNull { (it.trigger as Trigger.PcLink).afterMin * 60 } ?: 0,
-            undo = away.any { it.undo },
-        )
+    private suspend fun tellCompanions(s: Snapshot, rules: List<Rule>, now: Long) {
+        if (!s.ready) return
+        val wanted = awayRules(rules, s, now)
+        if (wanted == CompanionPlugin.away.value) return
+        CompanionPlugin.away.value = wanted
+        companions().forEach { it.sendAway() }
+    }
+
+    private fun awayRules(rules: List<Rule>, s: Snapshot, now: Long): AwayRules {
+        val away = rules.filter { r ->
+            r.enabled && (r.trigger as? Trigger.PcLink)?.connected == false && r.conditions.all { it.holds(s, now, false) }
+        }
+        fun wanted(action: Action): AwayAction? {
+            val asking = away.filter { action in it.actions }
+            if (asking.isEmpty()) return null
+            return AwayAction(asking.minOf { (it.trigger as Trigger.PcLink).afterMin * 60 }, asking.any { it.undo })
+        }
+        return AwayRules(wanted(Action.LockPc), wanted(Action.PcMedia(play = false)), wanted(Action.MutePc(mute = true)))
     }
 
     // Persistence of which rules are on, with their undo records.
@@ -326,21 +344,33 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
             val o = JSONObject(prefs.getString(ON, "{}")!!)
             o.keys().forEach { id -> on[id] = Undo.decode(o.getJSONArray(id)) }
         }
+        runCatching {
+            val o = JSONObject(prefs.getString(OWED, "{}")!!)
+            o.keys().forEach { id -> o.getJSONObject(id).let { owed[id] = Owed(it.getString("name"), Undo.decode(it.getJSONArray("undos"))) } }
+        }
     }
 
     private fun saveOn() {
         val o = JSONObject()
         on.forEach { (id, undos) -> o.put(id, JSONArray().apply { undos.forEach { put(it.encode()) } }) }
-        prefs.edit().putString(ON, o.toString()).apply()
+        val waiting = JSONObject()
+        owed.forEach { (id, was) ->
+            waiting.put(id, JSONObject().put("name", was.name).put("undos", JSONArray().apply { was.undos.forEach { put(it.encode()) } }))
+        }
+        prefs.edit().putString(ON, o.toString()).putString(OWED, waiting.toString()).apply()
     }
 
     private companion object {
         const val TAG = "Rules"
         const val ON = "on"
+        const val OWED = "owed"
+        const val DELETED_RULE = "Deleted rule"
         const val SETTLE_MS = 3_000L
         const val HYSTERESIS = 3
     }
 }
+
+private class Owed(val name: String, val undos: List<Undo>)
 
 /** How to put one change back. */
 sealed interface Undo {

@@ -290,7 +290,16 @@ object Notifications {
             .setTimeoutAfter(30_000)
             .setCategory(Notification.CATEGORY_RECOMMENDATION)
             .addAction(0, "Decline", PairActionReceiver.intent(context, device.id, accept = false))
-            .addAction(0, "Pair", PairActionReceiver.intent(context, device.id, accept = true))
+            // Trusting a PC opens up messages and contacts: not for whoever holds a locked phone.
+            .addAction(NotificationCompat.Action.Builder(0, "Pair", PairActionReceiver.intent(context, device.id, accept = true)).setAuthenticationRequired(true).build())
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CH_PAIRING)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentTitle("Pairing request")
+                    .setContentText("Unlock to respond")
+                    .build(),
+            )
             .build()
         notify(context, pairId(device.id), n)
     }

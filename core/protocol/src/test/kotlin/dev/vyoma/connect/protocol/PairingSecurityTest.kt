@@ -147,6 +147,17 @@ class PairingSecurityTest {
         assertTrue(pingGetsThrough(pc))
     }
 
+    @Test fun unpairingAPcEndsTrustInItsCompanion() = runBlocking {
+        val store = Memory()
+        val companionId = DeviceIdentity.newDeviceId()
+        store.put(TrustedDevice(pcId, "pc", DeviceType.DESKTOP, pcCreds.certificate))
+        store.put(TrustedDevice(companionId, "companion", DeviceType.DESKTOP, attackerCreds.certificate, companionOf = pcId))
+        val phone = hub(phoneCreds, store)
+        phone.device(pcId)!!.unpair()
+        waitFor { store.get(companionId) == null }
+        assertNull(store.get(pcId))
+    }
+
     @Test fun aPairedDeviceRefusesAnyOtherCertificate() = runBlocking {
         val phone = hub(phoneCreds, trust)
         val pc = hub(pcCreds)

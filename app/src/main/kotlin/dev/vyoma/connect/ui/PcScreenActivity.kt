@@ -115,11 +115,14 @@ import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.ThemeSettings
 import dev.vyoma.connect.designsystem.VyomaTheme
 import dev.vyoma.connect.platform.ScreenDecoder
+import dev.vyoma.connect.platform.ViewerTimings
 import dev.vyoma.connect.platform.AppLock
 import dev.vyoma.connect.protocol.plugin.builtin.CaptureState
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.typeable
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
@@ -131,7 +134,11 @@ import kotlinx.coroutines.launch
 class PcScreenActivity : ComponentActivity() {
     private val phase = MutableStateFlow<Phase>(Phase.Connecting)
     private var decoder: ScreenDecoder? = null
-    private var plugin: CompanionPlugin? = null
+    /** Looked up afresh on every start: a companion that reconnects is a new plugin. */
+    private var plugin by mutableStateOf<CompanionPlugin?>(null)
+    private var pcId: String? = null
+    private var opening: Job? = null
+    private val timings = ViewerTimings()
     private var surface: Surface? = null
     private var pending: CompanionPlugin.ScreenStream? = null
     /** Keeps the phone's Wi-Fi out of power save while watching: dozing radios hold packets for 100+ ms. */
@@ -166,13 +173,8 @@ class PcScreenActivity : ComponentActivity() {
             hide(WindowInsetsCompat.Type.systemBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
-        val pcId = intent.getStringExtra(EXTRA_PC)
-        val hub = application.container.hub.value
-        plugin = pcId?.let { id ->
-            hub?.devices?.value?.values?.firstOrNull { it.identity.companionOf == id && it.state.value.isReachable }
-                ?.plugin(CompanionPlugin.ID)
-        }
-        val clipboard = pcId?.let { hub?.device(it)?.plugin<dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin>(dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin.ID) }
+        pcId = intent.getStringExtra(EXTRA_PC)
+        plugin = findCompanion()
         setContent {
             val theme by application.container.settings.theme.collectAsStateWithLifecycle(ThemeSettings())
             // Video wants a dark room whatever the app's theme.
@@ -182,8 +184,9 @@ class PcScreenActivity : ComponentActivity() {
                     phase = p,
                     plugin = plugin,
                     // What no key types goes by the PC's clipboard for a moment: not a copy to sync here.
-                    onPasting = { clipboard?.ignoreIncomingFor(PASTE_ECHO_MS) },
+                    onPasting = { clipboardPlugin()?.ignoreIncomingFor(PASTE_ECHO_MS) },
                     stats = { decoder },
+                    onPicture = timings::pictureArrived,
                     onSurface = ::surfaceChanged,
                     onClose = ::finish,
                     onRetry = ::start,
@@ -200,24 +203,40 @@ class PcScreenActivity : ComponentActivity() {
             return
         }
         runCatching { wifiLock.acquire() }
+        timings.start(window)
         start()
     }
 
     override fun onStop() {
         super.onStop()
+        timings.stop(window)
         stop()
         runCatching { wifiLock.release() }
     }
 
+    private fun findCompanion(): CompanionPlugin? = pcId?.let { id ->
+        application.container.hub.value?.devices?.value?.values
+            ?.firstOrNull { it.identity.companionOf == id && it.state.value.isReachable }
+            ?.plugin(CompanionPlugin.ID)
+    }
+
+    private fun clipboardPlugin() = pcId?.let { id ->
+        application.container.hub.value?.device(id)?.plugin<dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin>(dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin.ID)
+    }
+
     private fun start() {
-        val plugin = plugin ?: run {
+        if (decoder != null || pending != null || opening?.isActive == true) return
+        val found = findCompanion()
+        plugin = found
+        if (found == null) {
             phase.value = Phase.Failed("Vyoma's companion isn't connected on the PC")
             return
         }
-        if (decoder != null || pending != null) return
         phase.value = Phase.Connecting
-        lifecycleScope.launch {
-            plugin.openScreen(ScreenDecoder.maxFps(display)).fold(
+        opening = lifecycleScope.launch {
+            val opened = found.openScreen(ScreenDecoder.maxFps(display))
+            ensureActive() // left meanwhile: a late answer mustn't replace what came after it
+            opened.fold(
                 onSuccess = { stream ->
                     pending = stream
                     phase.value = Phase.Live(stream.width, stream.height, control = stream.control)
@@ -233,19 +252,23 @@ class PcScreenActivity : ComponentActivity() {
         val stream = pending ?: return
         val target = surface ?: return
         pending = null
-        decoder = ScreenDecoder(
+        lateinit var mine: ScreenDecoder
+        mine = ScreenDecoder(
             stream.video, target,
             onSize = { w, h -> phase.value = Phase.Live(w, h, control = stream.control) },
             onFirstFrame = { (phase.value as? Phase.Live)?.let { phase.value = it.copy(showing = true) } },
             onEnd = { error ->
                 runOnUiThread {
+                    if (decoder !== mine) return@runOnUiThread // an older one ending late
                     decoder = null
                     if (phase.value is Phase.Live && !isFinishing && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
                         phase.value = Phase.Failed(error?.message?.let { "The stream stopped: $it" } ?: "The PC stopped sharing its screen")
                     }
                 }
             },
-        ).also { it.start() }
+        )
+        decoder = mine
+        mine.start()
     }
 
     private fun surfaceChanged(s: Surface?) {
@@ -259,6 +282,8 @@ class PcScreenActivity : ComponentActivity() {
     }
 
     private fun stop() {
+        opening?.cancel()
+        opening = null
         pending?.video?.let { runCatching { it.close() } }
         pending = null
         decoder?.stop()
@@ -281,6 +306,7 @@ private fun ScreenView(
     plugin: CompanionPlugin?,
     onPasting: () -> Unit,
     stats: () -> ScreenDecoder?,
+    onPicture: () -> Unit,
     onSurface: (Surface?) -> Unit,
     onClose: () -> Unit,
     onRetry: () -> Unit,
@@ -494,7 +520,7 @@ private fun ScreenView(
                             return true
                         }
                         override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) = Unit
-                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) = Unit
+                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) = onPicture()
                     }
                 }
             },

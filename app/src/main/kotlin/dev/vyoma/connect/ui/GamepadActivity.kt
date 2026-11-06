@@ -643,8 +643,8 @@ private fun GamepadScreen(
                                 val left = p.x < w / 2
                                 val r = if (left) leftR else rightR
                                 val o = Offset(
-                                    if (left) p.x.coerceIn(r, w / 2 - r) else p.x.coerceIn(w / 2 + r, w - r),
-                                    p.y.coerceIn(minOf(lt.bottom, rt.bottom) + r, h - r),
+                                    if (left) p.x.keptIn(r, w / 2 - r) else p.x.keptIn(w / 2 + r, w - r),
+                                    p.y.keptIn(minOf(lt.bottom, rt.bottom) + r, h - r),
                                 )
                                 Grip.Stick(left, o, at, p) to 0
                             }
@@ -1170,3 +1170,6 @@ private fun DrawScope.stick(origin: Offset, knob: Offset, stickR: Float, knobR: 
         knobR - 0.5.dp.toPx(), k, style = Stroke(1.dp.toPx()),
     )
 }
+
+/** [coerceIn], but a layout can leave no room at all (both triggers moved low): then [high] wins. */
+internal fun Float.keptIn(low: Float, high: Float): Float = coerceIn(minOf(low, high), high)

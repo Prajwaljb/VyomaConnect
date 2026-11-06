@@ -11,6 +11,8 @@ import dev.vyoma.connect.protocol.putStrings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.put
 import java.io.ByteArrayInputStream
 
@@ -79,8 +81,11 @@ class NotificationsPlugin(private val ctx: PluginContext, private val source: No
         return true
     }
 
+    /** Icons a PC already has hold a port for the whole wait: a burst mustn't take them all from file transfers. */
+    private val iconPorts = Semaphore(MAX_ICONS_AT_ONCE)
+
     private fun send(n: PhoneNotification) {
-        val body = packet(PacketTypes.NOTIFICATION) {
+        fun body(withIcon: Boolean) = packet(PacketTypes.NOTIFICATION) {
             put("id", n.id)
             put("appName", n.appName)
             put("title", n.title)
@@ -91,18 +96,24 @@ class NotificationsPlugin(private val ctx: PluginContext, private val source: No
             put("silent", n.silent)
             if (n.actions.isNotEmpty()) putStrings("actions", n.actions)
             n.replyId?.let { put("requestReplyId", it) }
-            n.iconHash?.let { put("payloadHash", it) }
+            if (withIcon) n.iconHash?.let { put("payloadHash", it) }
         }
         val icon = n.icon
         ctx.scope.launch(Dispatchers.IO) {
-            if (icon == null || n.iconHash == null || !ctx.device.canCarryPayloads) {
-                ctx.send(body)
+            val hasPort = icon != null && n.iconHash != null && ctx.device.canCarryPayloads &&
+                withTimeoutOrNull(ICON_PORT_WAIT_MS) { iconPorts.acquire() } != null
+            if (!hasPort) {
+                ctx.send(body(withIcon = false)) // late or without its icon, never lost
                 return@launch
             }
             // The PC skips the download when it has this icon cached, so don't hold a port for long.
             // A timeout is harmless: the packet itself was already delivered.
-            runCatching {
-                ctx.device.sendWithPayload(body, PayloadSource(icon.size.toLong()) { ByteArrayInputStream(icon) }, timeoutMs = ICON_ACCEPT_MS)
+            try {
+                runCatching {
+                    ctx.device.sendWithPayload(body(withIcon = true), PayloadSource(icon!!.size.toLong()) { ByteArrayInputStream(icon) }, timeoutMs = ICON_ACCEPT_MS)
+                }
+            } finally {
+                iconPorts.release()
             }
         }
     }
@@ -110,6 +121,8 @@ class NotificationsPlugin(private val ctx: PluginContext, private val source: No
     companion object {
         const val ID = "notifications"
         private const val ICON_ACCEPT_MS = 4_000
+        private const val MAX_ICONS_AT_ONCE = 8
+        private const val ICON_PORT_WAIT_MS = 1_000L
 
         fun spec(source: NotificationSource) = PluginSpec(
             ID,

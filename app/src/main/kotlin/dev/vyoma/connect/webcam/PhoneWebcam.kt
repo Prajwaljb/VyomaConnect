@@ -28,6 +28,7 @@ import dev.vyoma.connect.container
 import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.service.LinkService
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -209,7 +210,13 @@ object PhoneWebcam {
         val video = LiveStream(VIDEO_BACKLOG)
         val encoder = H264Encoder(size.width, size.height, if (hd) 8_000_000 else 4_000_000, FPS, video, "webcam-encoder")
         val turns = Turns(app)
+        // Losing the camera once it's open: the encoder would keep repeating its last picture.
+        val lost = CompletableDeferred<Unit>()
         try {
+            launch {
+                lost.await()
+                error("lost the camera")
+            }
             launch {
                 plugin.webcam.collect { s -> _status.value = _status.value.copy(camera = s.camera, mic = s.mic) }
             }
@@ -225,7 +232,7 @@ object PhoneWebcam {
                     zoom.value = 1f
                     torch.value = false
                     _status.value = _status.value.copy(zoomRange = range, torchable = torchable)
-                    val camera = open(cameras, id, encoder.handler)
+                    val camera = open(cameras, id, encoder.handler) { lost.complete(Unit) }
                     try {
                         VLog.i(TAG, "camera ${if (f) "front" else "back"} ${size.width}x${size.height}")
                         preview.collectLatest { shown ->
@@ -302,18 +309,18 @@ object PhoneWebcam {
     }
 
     @SuppressLint("MissingPermission")
-    private suspend fun open(cameras: CameraManager, id: String, handler: Handler): CameraDevice = suspendCancellableCoroutine { k ->
+    private suspend fun open(cameras: CameraManager, id: String, handler: Handler, onLost: () -> Unit): CameraDevice = suspendCancellableCoroutine { k ->
         cameras.openCamera(id, object : CameraDevice.StateCallback() {
             override fun onOpened(camera: CameraDevice) {
                 if (k.isActive) k.resume(camera) else camera.close()
             }
             override fun onDisconnected(camera: CameraDevice) {
                 camera.close()
-                if (k.isActive) k.resumeWithException(IllegalStateException("another app took the camera"))
+                if (k.isActive) k.resumeWithException(IllegalStateException("another app took the camera")) else onLost()
             }
             override fun onError(camera: CameraDevice, error: Int) {
                 camera.close()
-                if (k.isActive) k.resumeWithException(IllegalStateException("camera error $error"))
+                if (k.isActive) k.resumeWithException(IllegalStateException("camera error $error")) else onLost()
             }
         }, handler)
     }

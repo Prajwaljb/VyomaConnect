@@ -83,7 +83,8 @@ fn unescape(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+            // By bytes: what follows a % can be the middle of a multi-byte character.
+            if let Some(v) = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
                 out.push(v);
                 i += 3;
                 continue;
@@ -105,6 +106,7 @@ mod tests {
         assert_eq!(image_setting(text).as_deref(), Some("file:///home/me/My%20Pics/a.jpg"));
         assert_eq!(unescape("/home/me/My%20Pics/a.jpg"), "/home/me/My Pics/a.jpg");
         assert_eq!(unescape("/a%2"), "/a%2");
+        assert_eq!(unescape("/home/me/100%日本.jpg"), "/home/me/100%日本.jpg");
     }
 
     #[tokio::test]

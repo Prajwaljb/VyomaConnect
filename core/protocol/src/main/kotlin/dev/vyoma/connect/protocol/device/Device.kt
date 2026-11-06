@@ -57,6 +57,8 @@ interface DeviceEnvironment {
     val pluginSpecs: List<PluginSpec>
     val scope: CoroutineScope
     fun onPairRequest(device: Device)
+    /** [deviceId] stopped being trusted, whichever side ended it. */
+    fun onUnpaired(deviceId: String) {}
     /** Whether [deviceId] is linked over the USB tunnel right now. */
     fun usbTunnelUp(deviceId: String): Boolean = false
 }
@@ -275,7 +277,9 @@ class Device internal constructor(
 
     suspend fun acceptPairing() = withContext(serial) {
         if (_state.value.pairState != PairState.REQUESTED_BY_PEER) return@withContext
-        if (send(packet(PacketTypes.PAIR) { put("pair", true) })) becomePaired()
+        val cert = pairingCertificate ?: return@withContext
+        // Sending lets go of this dispatcher: the request can end meanwhile.
+        if (send(packet(PacketTypes.PAIR) { put("pair", true) }) && pairingCertificate === cert) becomePaired(cert)
     }
 
     suspend fun rejectPairing() = withContext(serial) {
@@ -289,7 +293,7 @@ class Device internal constructor(
         becomeUnpaired()
     }
 
-    private suspend fun handlePair(packet: NetworkPacket) {
+    private suspend fun handlePair(packet: NetworkPacket, link: DeviceLink) {
         val wantsPair = packet.bool("pair") ?: return
         val current = _state.value.pairState
         if (!wantsPair) {
@@ -298,13 +302,18 @@ class Device internal constructor(
             return
         }
         when (current) {
-            PairState.REQUESTED_BY_US -> becomePaired()
+            PairState.REQUESTED_BY_US -> pairingCertificate?.let { becomePaired(it) }
             // Peer lost its trust (reinstall, cleared data) but we still trust it: re-confirm.
             PairState.PAIRED -> send(packet(PacketTypes.PAIR) { put("pair", true) })
             PairState.UNPAIRED, PairState.REQUESTED_BY_PEER -> {
-                if (isProvenCompanion(packet)) {
+                if (isProvenCompanion(packet, link.peerCertificate)) {
                     VLog.i(TAG, "$name: companion of a trusted PC, pairing without a prompt")
-                    if (send(packet(PacketTypes.PAIR) { put("pair", true) })) becomePaired()
+                    // Sending lets go of this dispatcher, and an unpaired id takes the newest link:
+                    // hold on to the certificate that was proved, so only that one can be pinned.
+                    val cert = link.peerCertificate
+                    pairingCertificate = cert
+                    if (send(packet(PacketTypes.PAIR) { put("pair", true) }) && pairingCertificate === cert) becomePaired(cert)
+                    else if (pairingCertificate === cert && _state.value.pairState == PairState.UNPAIRED) pairingCertificate = null
                     return
                 }
                 val timestamp = packet.long("timestamp")
@@ -332,20 +341,18 @@ class Device internal constructor(
     }
 
     /** A pair request signed by the key of the PC this peer claims to belong to (see [CompanionProof]). */
-    private fun isProvenCompanion(packet: NetworkPacket): Boolean {
+    private fun isProvenCompanion(packet: NetworkPacket, ownCert: X509Certificate): Boolean {
         val host = _state.value.identity.companionOf ?: return false
         if (packet.string("vyomaHost") != host) return false
         val hostCert = env.trustStore.get(host)?.certificate ?: return false
-        val ownCert = links.firstOrNull()?.peerCertificate ?: return false
         val ts = packet.long("timestamp") ?: return false
         val proof = packet.string("vyomaHostProof") ?: return false
         return CompanionProof.verify(hostCert, id, ownCert, env.localDeviceId, ts, proof)
     }
 
-    private suspend fun becomePaired() {
-        val cert = pairingCertificate ?: links.firstOrNull()?.peerCertificate ?: return
+    private suspend fun becomePaired(cert: X509Certificate) {
         val identity = _state.value.identity
-        val link = links.firstOrNull()
+        val link = links.firstOrNull { it.peerCertificate == cert }
         env.trustStore.put(
             TrustedDevice(id, identity.deviceName, identity.deviceType, cert, link?.remoteAddress?.hostAddress, identity.tcpPort, identity.companionOf),
         )
@@ -355,9 +362,11 @@ class Device internal constructor(
     }
 
     private fun becomeUnpaired() {
+        val wasTrusted = env.trustStore.get(id) != null
         env.trustStore.remove(id)
         setPairState(PairState.UNPAIRED)
         stopPlugins()
+        if (wasTrusted) env.onUnpaired(id)
     }
 
     private fun setPairState(state: PairState) {
@@ -395,7 +404,7 @@ class Device internal constructor(
         // Read just before a refused or replaced link was closed.
         if (link.isClosed) return
         when {
-            packet.type == PacketTypes.PAIR -> handlePair(packet)
+            packet.type == PacketTypes.PAIR -> handlePair(packet, link)
             // v8 peers may resend identity; capabilities can change (plugins toggled on the desktop).
             packet.type == PacketTypes.IDENTITY -> Unit
             !isPaired() -> {

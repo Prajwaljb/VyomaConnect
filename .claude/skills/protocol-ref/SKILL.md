@@ -100,8 +100,8 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
 - `vyoma.pc.wake` (no reply), sent with every unlock from the phone: kdeconnectd unlocks via logind but a screen that
   idled off stayed dark. The companion runs `kscreen-doctor --dpms on`, ScreenSaver `SimulateUserActivity`, then logind
   `Session.Unlock` on `session/auto`.
-- `vyoma.away {lock, pause, mute, after, undo}` (no reply), the phone's walk-away rules merged (enabled "PC goes away"
-  rules; `after` = the shortest wait in seconds). Sent on every companion link (`onStart`/`onLinkAdded`) and whenever the
+- `vyoma.away {lock?, pause?, mute?}` (no reply; each `{after, undo}`, absent = not wanted), the phone's walk-away rules whose conditions hold now, merged per action (enabled "PC goes away"
+  rules; `after` = the shortest wait in seconds among those asking for that action). Sent on every companion link (`onStart`/`onLinkAdded`) and whenever the
   rules change (`CompanionPlugin.away`). When all of that phone's links close and it stays gone `max(after, 10)` s
   (plus the ~30 s keepalive), the companion pauses every playing MPRIS player, mutes the default sink (`pactl`) and
   locks via logind `Session.Lock` on `session/auto` (desktop/companion/src/away.rs); with `undo`, its next link unmutes
