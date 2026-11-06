@@ -80,7 +80,8 @@ internal class LanPayloads(
                 if (usbMirror && !link.remoteAddress.isLoopbackAddress) put("usbPort", server.localPort + USB_FORWARD_SHIFT)
             })
             if (!link.send(announced)) return@closeOnCancel false
-            val secure = acceptPeer(server, link.peerCertificate, timeoutMs).also { ssl = it }
+            val secure = acceptPeer(server, link.peerCertificate, timeoutMs, packet.type).also { ssl = it }
+            VLog.d(TAG, "payload port ${server.localPort} (${packet.type}): peer connected")
             secure.use {
                 it.soTimeout = IO_TIMEOUT_MS
                 source.open().use { input -> input.copyWithProgress(it.outputStream, onProgress) }
@@ -95,7 +96,7 @@ internal class LanPayloads(
      * one that's wrong or stalls is dropped and the wait goes on, for [timeoutMs] in all. Proofs run
      * side by side, each with a time limit, so a few idle connections can't hold up the real one.
      */
-    private suspend fun acceptPeer(server: ServerSocket, expected: X509Certificate, timeoutMs: Int): SSLSocket = coroutineScope {
+    private suspend fun acceptPeer(server: ServerSocket, expected: X509Certificate, timeoutMs: Int, what: String): SSLSocket = coroutineScope {
         val peer = CompletableDeferred<SSLSocket>()
         val proving = ConcurrentHashMap.newKeySet<Socket>()
         val slots = Semaphore(MAX_PROOFS)
@@ -107,22 +108,26 @@ internal class LanPayloads(
                     server.soTimeout = (deadline - System.nanoTime() / 1_000_000).coerceAtLeast(1).toInt()
                     val plain = server.accept()
                     proving += plain
+                    val acceptedAt = System.nanoTime()
                     launch {
+                        var wrapped: SSLSocket? = null
                         val limit = launch {
                             delay(PROOF_LIMIT_MS)
                             runCatching { plain.close() }
                         }
                         try {
                             tuneSocket(plain)
-                            val secure = tls.wrap(plain, asServer = true)
+                            val secure = tls.wrap(plain, asServer = true).also { wrapped = it }
                             secure.startHandshake()
                             verifyPeer(secure, expected)
                             limit.cancel()
                             proving -= plain // before it's handed over: the rest get closed then
                             if (!peer.complete(secure)) runCatching { secure.close() }
                         } catch (e: Exception) {
-                            VLog.d(TAG, "payload port: dropped a connection: ${e.message}")
+                            val ms = (System.nanoTime() - acceptedAt) / 1_000_000
+                            VLog.d(TAG, "payload port ${server.localPort} ($what): dropped a connection from ${plain.inetAddress?.hostAddress}:${plain.port} after $ms ms: ${e.message}")
                             proving -= plain
+                            runCatching { wrapped?.close() }
                             runCatching { plain.close() }
                         } finally {
                             limit.cancel()
@@ -151,17 +156,19 @@ internal class LanPayloads(
         val host = via ?: link.remoteAddress
         val target = if (host.isLoopbackAddress) port + USB_PAYLOAD_SHIFT else port
         val plain = Socket()
+        var secure: SSLSocket? = null
         try {
             route(plain, host)
             plain.connect(InetSocketAddress(host, target), CONNECT_TIMEOUT_MS)
             tuneSocket(plain)
-            val ssl = tls.wrap(plain, asServer = false)
+            val ssl = tls.wrap(plain, asServer = false).also { secure = it }
             ssl.soTimeout = IO_TIMEOUT_MS
             ssl.startHandshake()
             verifyPeer(ssl, link.peerCertificate)
             // An open-ended stream (the PC's live screen) goes quiet whenever nothing changes: no read timeout.
             if (packet.payloadSize < 0) ssl.also { it.soTimeout = 0 }.inputStream else BoundedInputStream(ssl.inputStream, packet.payloadSize, ssl)
         } catch (e: Exception) {
+            runCatching { secure?.close() }
             runCatching { plain.close() }
             throw e
         }
@@ -177,13 +184,14 @@ internal class LanPayloads(
 
     private fun bindPayloadPort(): ServerSocket {
         for (port in PAYLOAD_PORTS) {
+            val server = ServerSocket()
             try {
-                return ServerSocket().apply {
-                    reuseAddress = true
-                    bind(InetSocketAddress(port))
-                }
+                server.reuseAddress = true
+                server.bind(InetSocketAddress(port))
+                return server
             } catch (_: IOException) {
                 // in use (another transfer), try the next one
+                runCatching { server.close() }
             }
         }
         throw IOException("No free payload port in $PAYLOAD_PORTS")

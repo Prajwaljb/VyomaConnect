@@ -112,6 +112,19 @@ fn public_hello(identity: &Value) -> Value {
     hello
 }
 
+/// What answered isn't the phone that was asked for. Known apart from other failures because trying
+/// again won't change it: the address now belongs to something else (that phone was reinstalled, say).
+#[derive(Debug)]
+pub struct NotTrusted;
+
+impl std::fmt::Display for NotTrusted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("certificate isn't one KDE Connect trusts")
+    }
+}
+
+impl std::error::Error for NotTrusted {}
+
 /// Like [connect], to whichever of the [trusted] phones (id to certificate) answers at [addr];
 /// for an address found without knowing who's there (a USB tethering link).
 pub async fn connect_trusted(addr: SocketAddr, me: &Identity, identity: &Value, trusted: &HashMap<String, Vec<u8>>) -> Result<(String, Link)> {
@@ -126,7 +139,7 @@ pub async fn connect_trusted(addr: SocketAddr, me: &Identity, identity: &Value, 
     let tls = tokio::time::timeout(Duration::from_secs(10), acceptor.accept(tcp)).await.context("TLS timed out")??;
     let peer = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).context("phone sent no certificate")?;
     let Some(phone_id) = trusted.iter().find(|(_, cert)| peer.as_ref() == cert.as_slice()).map(|(id, _)| id.clone()) else {
-        bail!("certificate isn't one KDE Connect trusts");
+        return Err(NotTrusted.into());
     };
 
     let (read, write) = tokio::io::split(tls);

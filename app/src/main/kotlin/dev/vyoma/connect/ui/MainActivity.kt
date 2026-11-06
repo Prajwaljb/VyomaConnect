@@ -57,10 +57,12 @@ import androidx.lifecycle.withResumed
 import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.VyomaTheme
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val PAGE_SWIPE_MS = 420
 private const val PC_FILES = "To open the PC's files"
+private const val UNLOCK_SETTLE_MS = 500L
 
 sealed interface Screen {
     /** The tabs (Home, Files, Settings) under the floating bar. */
@@ -141,7 +143,16 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         // Came back after the phone was locked or left for a while: these are asked for again.
-        if (!AppLock.isOpen(this)) backStack.removeAll { it is Screen.Files || it is Screen.Touchpad || it is Screen.Presenter || it == Screen.Clipboard }
+        if (!AppLock.isOpen(this)) {
+            backStack.removeAll { it is Screen.Files || it is Screen.Touchpad || it == Screen.Clipboard }
+            // Not mid-talk: the page stays and the fingerprint decides. Saying no leaves it.
+            if (backStack.lastOrNull() is Screen.Presenter) lifecycleScope.launch {
+                delay(UNLOCK_SETTLE_MS) // "Phone unlock counts" hears of the unlock just after this
+                withResumed {
+                    AppLock.ask(this@MainActivity, AppLock.PRESENTER, onDenied = { backStack.removeAll { it is Screen.Presenter } }) {}
+                }
+            } else backStack.removeAll { it is Screen.Presenter }
+        }
     }
 
     private fun handleIntent(intent: Intent?) {
@@ -165,7 +176,7 @@ class MainActivity : ComponentActivity() {
 
     /** These arrive while the activity is still coming up, and Android only asks for an app on screen. */
     private fun askOnScreen(why: String, then: () -> Unit) {
-        lifecycleScope.launch { withResumed { AppLock.ask(this@MainActivity, why, then) } }
+        lifecycleScope.launch { withResumed { AppLock.ask(this@MainActivity, why, then = then) } }
     }
 
     companion object {

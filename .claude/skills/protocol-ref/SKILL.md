@@ -30,7 +30,7 @@ Peers mix up number and string types, so always use the lenient `NetworkPacket.s
   on an older cable link means the tunnel died on its side: accept it and drop the USB link (`LanBackend.Config.refuses`,
   `DeviceHub.onLink`). Unplug (USB_STATE) closes USB links at once and refreshes; the companion rechecks the
   tunnel every 12 s (an adb server restart kills it while the phone's end stays half-open).
-- Cable in (or app start with it in): Wi-Fi is held back 4 s so the tunnel wins the race. Never dial a paired
+- Cable in (or app start with it in): Wi-Fi is held back 4 s so the tunnel wins the race, companions included (the companion dials the cable every 2 s while unlinked). The phone keeps dialling its tunnel until the PC itself is on the cable; a companion there doesn't count. Never dial a paired
   device's address while a device at that address is on the cable, and never dial companions (no listener; their
   address:1716 is kdeconnectd, which would swap our cable link out).
 

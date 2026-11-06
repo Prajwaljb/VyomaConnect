@@ -111,7 +111,7 @@ object AppLock {
 
     /** Runs [then] once a marked command may go: the same one pass per go at using Vyoma. */
     fun askForCommand(context: Context, why: String, then: () -> Unit) {
-        if (session.open || !canAsk(context)) then() else prompt(context, why, then)
+        if (session.open || !canAsk(context)) then() else prompt(context, why, then = then)
     }
 
     /** False on a phone with no screen lock: there's nothing to ask for, so nothing is asked. */
@@ -124,17 +124,20 @@ object AppLock {
     fun isOpen(context: Context) = session.open || !enabled(context) || !canAsk(context)
 
     /** Runs [then] on the main thread once the person is known to be the owner, asking if needed. */
-    fun ask(context: Context, why: String, then: () -> Unit) {
-        if (isOpen(context)) then() else prompt(context, why, then)
+    fun ask(context: Context, why: String, onDenied: () -> Unit = {}, then: () -> Unit) {
+        if (isOpen(context)) then() else prompt(context, why, onDenied, then)
     }
 
     /** Like [ask], but always asks: for what would loosen the lock itself. */
     fun confirm(context: Context, why: String, then: () -> Unit) {
-        if (canAsk(context)) prompt(context, why, then) else then()
+        if (canAsk(context)) prompt(context, why, then = then) else then()
     }
 
-    private fun prompt(context: Context, why: String, then: () -> Unit) {
-        if (asking) return
+    private fun prompt(context: Context, why: String, onDenied: () -> Unit = {}, then: () -> Unit) {
+        if (asking) {
+            onDenied()
+            return
+        }
         asking = true
         BiometricPrompt.Builder(context)
             .setTitle("Confirm it's you")
@@ -151,6 +154,7 @@ object AppLock {
 
                 override fun onAuthenticationError(code: Int, message: CharSequence) {
                     asking = false
+                    onDenied()
                     if (code != BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED && code != BiometricPrompt.BIOMETRIC_ERROR_CANCELED) {
                         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                     }
