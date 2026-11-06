@@ -10,13 +10,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 use zbus::Connection;
-use zbus::zvariant::OwnedValue;
+use zbus::OwnedVariant;
 
 /// Whether the open Overview is in its grid mode. KWin shows both as one effect, so this is
 /// remembered from the steps taken here (and forgotten once the Overview closes).
 static GRID: AtomicBool = AtomicBool::new(false);
 
-async fn get(conn: &Connection, path: &str, iface: &str, name: &str) -> Result<OwnedValue> {
+async fn get(conn: &Connection, path: &str, iface: &str, name: &str) -> Result<OwnedVariant> {
     Ok(conn
         .call_method(Some("org.kde.KWin"), path, Some("org.freedesktop.DBus.Properties"), "Get", &(iface, name))
         .await?

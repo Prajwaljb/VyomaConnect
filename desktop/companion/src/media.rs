@@ -13,8 +13,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use tracing::warn;
-use zbus::zvariant::OwnedValue;
-use zbus::{Connection, MatchRule, MessageStream};
+use zbus::{Connection, MatchRule, MessageStream, OwnedVariant};
 
 const PREFIX: &str = "org.mpris.MediaPlayer2.";
 const PATH: &str = "/org/mpris/MediaPlayer2";
@@ -139,7 +138,7 @@ impl Media {
 
     async fn watch(&self) -> Result<()> {
         let rule = |iface: &'static str, member: &'static str| -> Result<MatchRule<'static>> {
-            Ok(MatchRule::builder().msg_type(zbus::message::Type::Signal).interface(iface)?.member(member)?.build())
+            Ok(MatchRule::builder().msg_type(zbus::message::Type::Signal).interface(iface).member(member).build()?)
         };
         let mut changed = MessageStream::for_match_rule(rule("org.freedesktop.DBus.Properties", "PropertiesChanged")?, &self.conn, None).await?;
         let mut seeked = MessageStream::for_match_rule(rule(PLAYER, "Seeked")?, &self.conn, None).await?;
@@ -148,7 +147,7 @@ impl Media {
             tokio::select! {
                 Some(Ok(msg)) = changed.next() => {
                     let Some(sender) = msg.header().sender().map(|s| s.to_string()) else { continue };
-                    let Ok((iface, props, _)) = msg.body().deserialize::<(String, HashMap<String, OwnedValue>, Vec<String>)>() else { continue };
+                    let Ok((iface, props, _)) = msg.body().deserialize::<(String, HashMap<String, OwnedVariant>, Vec<String>)>() else { continue };
                     if iface == PLAYER {
                         self.on_changed(&sender, &props);
                     }
@@ -172,7 +171,7 @@ impl Media {
         Ok(())
     }
 
-    fn on_changed(&self, sender: &str, props: &HashMap<String, OwnedValue>) {
+    fn on_changed(&self, sender: &str, props: &HashMap<String, OwnedVariant>) {
         let mut tracks = self.tracks.lock().unwrap();
         let Some(t) = tracks.get_mut(sender) else { return };
         let now = Instant::now();
@@ -196,7 +195,7 @@ impl Media {
         Ok(self.conn.call_method(Some("org.freedesktop.DBus"), "/org/freedesktop/DBus", Some("org.freedesktop.DBus"), "GetNameOwner", &name).await?.body().deserialize()?)
     }
 
-    async fn props(&self, name: &str) -> Result<HashMap<String, OwnedValue>> {
+    async fn props(&self, name: &str) -> Result<HashMap<String, OwnedVariant>> {
         Ok(self.conn.call_method(Some(name), PATH, Some("org.freedesktop.DBus.Properties"), "GetAll", &PLAYER).await?.body().deserialize()?)
     }
 
@@ -211,18 +210,18 @@ fn is_web(url: &str) -> bool {
 }
 
 /// `xesam:url` and `xesam:title` from an MPRIS Metadata value.
-fn metadata(value: &OwnedValue) -> (String, String) {
-    let Ok(map) = HashMap::<String, OwnedValue>::try_from(value.try_clone().unwrap_or_else(|_| OwnedValue::from(0u8))) else {
+fn metadata(value: &OwnedVariant) -> (String, String) {
+    let Ok(map) = HashMap::<String, OwnedVariant>::try_from(value.try_clone().unwrap_or_else(|_| OwnedVariant::from(0u8))) else {
         return Default::default();
     };
     (map.get("xesam:url").and_then(text).unwrap_or_default(), map.get("xesam:title").and_then(text).unwrap_or_default())
 }
 
-fn text(v: &OwnedValue) -> Option<String> {
+fn text(v: &OwnedVariant) -> Option<String> {
     <&str>::try_from(&**v).ok().map(str::to_owned)
 }
 
-fn int(v: &OwnedValue) -> Option<i64> {
+fn int(v: &OwnedVariant) -> Option<i64> {
     i64::try_from(&**v).ok()
 }
 
@@ -262,7 +261,7 @@ mod live {
     use std::time::Duration;
 
     use zbus::object_server::SignalEmitter;
-    use zbus::zvariant::{OwnedValue, Value};
+    use zbus::{OwnedVariant, Variant};
 
     struct Fake {
         status: String,
@@ -275,10 +274,10 @@ mod live {
             self.status.clone()
         }
         #[zbus(property)]
-        fn metadata(&self) -> HashMap<String, OwnedValue> {
+        fn metadata(&self) -> HashMap<String, OwnedVariant> {
             let mut m = HashMap::new();
-            m.insert("xesam:url".into(), Value::from("https://www.youtube.com/watch?v=test&t=30s").try_into().unwrap());
-            m.insert("xesam:title".into(), Value::from("Vyoma test").try_into().unwrap());
+            m.insert("xesam:url".into(), Variant::from("https://www.youtube.com/watch?v=test&t=30s").try_into().unwrap());
+            m.insert("xesam:title".into(), Variant::from("Vyoma test").try_into().unwrap());
             m
         }
         #[zbus(property)]
@@ -301,9 +300,9 @@ mod live {
     #[tokio::test]
     #[ignore]
     async fn fake_firefox() {
-        let conn = zbus::connection::Builder::session().unwrap()
-            .name("org.mpris.MediaPlayer2.vyomatest").unwrap()
-            .serve_at(super::PATH, Fake { status: "Paused".into() }).unwrap()
+        let conn = zbus::connection::Builder::session()
+            .name("org.mpris.MediaPlayer2.vyomatest")
+            .serve_at(super::PATH, Fake { status: "Paused".into() })
             .build().await.unwrap();
         let media = super::Media::start().await.unwrap();
         let pos = || async { media.handoff_where(|t| t.bus.ends_with("vyomatest")).await.and_then(|h| h.position_ms) };

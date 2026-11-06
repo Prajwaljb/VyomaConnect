@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 use zbus::Connection;
-use zbus::zvariant::OwnedValue;
+use zbus::OwnedVariant;
 
 use crate::link::{Sender, packet};
 
@@ -139,7 +139,7 @@ async fn displays() -> Result<Vec<Value>> {
     let mut out = Vec::new();
     for name in names {
         let path = format!("{BRIGHTNESS_PATH}/{name}");
-        let all: std::collections::HashMap<String, OwnedValue> = conn
+        let all: std::collections::HashMap<String, OwnedVariant> = conn
             .call_method(Some(BRIGHTNESS), path.as_str(), Some("org.freedesktop.DBus.Properties"), "GetAll", &format!("{BRIGHTNESS}.Display"))
             .await?
             .body()
@@ -170,7 +170,7 @@ async fn set_brightness(display: &str, level: f64) -> Result<()> {
         .call_method(Some(BRIGHTNESS), path.as_str(), Some("org.freedesktop.DBus.Properties"), "Get", &(format!("{BRIGHTNESS}.Display"), "MaxBrightness"))
         .await?
         .body()
-        .deserialize::<OwnedValue>()?
+        .deserialize::<OwnedVariant>()?
         .try_into()?;
     // Never fully dark from the phone: a black screen with no way back from the PC itself is a trap.
     let value = ((level.clamp(0.01, 1.0)) * max as f64).round() as i32;
@@ -181,7 +181,7 @@ async fn set_brightness(display: &str, level: f64) -> Result<()> {
     Ok(())
 }
 
-async fn prop(conn: &Connection, path: &str, name: &str) -> Result<OwnedValue> {
+async fn prop(conn: &Connection, path: &str, name: &str) -> Result<OwnedVariant> {
     Ok(conn
         .call_method(Some(BRIGHTNESS), path, Some("org.freedesktop.DBus.Properties"), "Get", &(BRIGHTNESS, name))
         .await?
