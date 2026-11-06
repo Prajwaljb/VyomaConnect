@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.protocol.device.DeviceHub
+import dev.vyoma.connect.protocol.device.DeviceState
 import dev.vyoma.connect.protocol.link.LanBackend
 import dev.vyoma.connect.protocol.link.TransportKind
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -90,10 +91,16 @@ class UsbLink(private val context: Context, private val hub: DeviceHub, private 
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun usbLinked(): Flow<Boolean> = hub.devices.flatMapLatest { all ->
         if (all.isEmpty()) flowOf(false)
-        else combine(all.values.map { it.state }) { states -> states.any { TransportKind.USB in it.transports } }
+        else combine(all.values.map { it.state }) { states -> pcOnCable(states.asList()) }
     }.distinctUntilChanged()
 
-    private companion object {
+    internal companion object {
+        /**
+         * Whether the tunnel has nothing left to do. Not a companion: it reaches the phone through its
+         * own adb forward, often first, and the PC's link still needs this tunnel or it ends up on Wi-Fi.
+         */
+        fun pcOnCable(states: List<DeviceState>) = states.any { !it.isCompanion && TransportKind.USB in it.transports }
+
         const val TAG = "UsbLink"
         const val FAST_DIAL_MS = 30_000L
         const val ACTION_USB_STATE = "android.hardware.usb.action.USB_STATE"

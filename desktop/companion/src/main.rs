@@ -191,6 +191,12 @@ fn dial_attempt(shared: &Arc<Shared>, id: &str, attempt: u32) {
         // Once a round: with the phone off this network, the retries would say the same every few seconds.
         let result = session(&shared, &id, addr, &cert).await;
         let failed = result.as_ref().is_err();
+        // Something else lives at that address now: stop calling it until mDNS finds this phone again.
+        if result.as_ref().is_err_and(|e| e.is::<link::NotTrusted>()) {
+            info!("{id}: no longer at {addr}");
+            forget_at(&mut shared.seen.lock().unwrap(), &id, addr);
+            return;
+        }
         if let Err(e) = result {
             if attempt == 0 {
                 warn!("{id}: {e:#}");
@@ -203,6 +209,13 @@ fn dial_attempt(shared: &Arc<Shared>, id: &str, attempt: u32) {
             dial_attempt(&shared, &id, attempt + 1);
         }
     });
+}
+
+/// Forgets [id]'s address, unless mDNS has since found it somewhere else.
+fn forget_at(seen: &mut HashMap<String, SocketAddr>, id: &str, addr: SocketAddr) {
+    if seen.get(id) == Some(&addr) {
+        seen.remove(id);
+    }
 }
 
 /// Phones are remembered before they're trusted, so one paired later gets dialled. But anyone on the
@@ -232,9 +245,12 @@ const TAKE_OVER_TRIES: u32 = 60;
 const TAKE_OVER_WAIT: Duration = Duration::from_millis(50);
 /// The port Vyoma listens on (KDE Connect's).
 const PHONE_PORT: u16 = 1716;
-const TETHER_POLL: Duration = Duration::from_secs(5);
+const TETHER_POLL: Duration = Duration::from_secs(2);
 /// After a tethered address didn't answer as a trusted phone, leave it this long.
 const TETHER_BACKOFF: Duration = Duration::from_secs(30);
+/// The same for the cable, which is only dialled while no phone is linked and costs next to nothing:
+/// the app is usually back within seconds of restarting, and the phone holds Wi-Fi back only 4 s.
+const CABLE_BACKOFF: Duration = Duration::from_secs(2);
 
 /// Phones tethered over USB (see tether.rs): dialled when a trusted phone isn't linked yet. The
 /// link is the same as over Wi-Fi, so everything works with no USB debugging.
@@ -258,7 +274,8 @@ async fn watch_tether(shared: Arc<Shared>) {
             if free.is_empty() {
                 continue;
             }
-            next_try.lock().unwrap().insert(addr, Instant::now() + TETHER_BACKOFF);
+            let backoff = if via == tether::Via::Cable { CABLE_BACKOFF } else { TETHER_BACKOFF };
+            next_try.lock().unwrap().insert(addr, Instant::now() + backoff);
             let (shared, next_try) = (shared.clone(), next_try.clone());
             tokio::spawn(async move {
                 match link::connect_trusted(addr, &shared.me, &identity_packet(&shared), &free).await {
@@ -282,7 +299,8 @@ async fn watch_tether(shared: Arc<Shared>) {
                     }
                     // A router (most Wi-Fi gateways) refuses, and a cable may lead to a phone this PC
                     // doesn't trust (an emulator): not worth a line every 30 s.
-                    Err(e) if via != tether::Via::Usb => tracing::debug!("{via:?} {addr}: {e:#}"),
+                    // Nor is the phone that's already linked some other way answering here.
+                    Err(e) if via != tether::Via::Usb || e.is::<link::NotTrusted>() => tracing::debug!("{via:?} {addr}: {e:#}"),
                     Err(e) => info!("tethered {}: {e:#}", addr.ip()),
                 }
             });
@@ -816,6 +834,16 @@ async fn stream_stats(sender: Sender, lease: Arc<Mutex<Instant>>, media: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_address_that_answered_wrongly_is_forgotten() {
+        let (old, new): (SocketAddr, SocketAddr) = ("10.0.0.1:1716".parse().unwrap(), "10.0.0.2:1716".parse().unwrap());
+        let mut seen = HashMap::from([("phone".to_string(), old)]);
+        forget_at(&mut seen, "phone", new);
+        assert_eq!(seen.get("phone"), Some(&old));
+        forget_at(&mut seen, "phone", old);
+        assert!(seen.is_empty());
+    }
 
     #[test]
     fn strangers_cant_grow_the_list_of_phones_forever() {

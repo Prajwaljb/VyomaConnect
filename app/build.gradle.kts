@@ -1,6 +1,15 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+// The release key lives outside the repo, and only on the machine that makes releases. Without it a
+// release build falls back to the debug key, which can't update a phone running the real one.
+val releaseSigning = Properties().apply {
+    val file = File(System.getenv("VYOMA_SIGNING") ?: "${System.getProperty("user.home")}/.local/share/vyoma-signing/signing.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
 }
 
 android {
@@ -16,13 +25,21 @@ android {
         buildConfigField("boolean", "DEMO", "false")
     }
 
+    signingConfigs {
+        if (!releaseSigning.isEmpty) create("release") {
+            storeFile = File(releaseSigning.getProperty("storeFile"))
+            storePassword = releaseSigning.getProperty("storePassword")
+            keyAlias = releaseSigning.getProperty("keyAlias")
+            keyPassword = releaseSigning.getProperty("keyPassword")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Sideload builds: sign with the debug key until a release key is set up.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
         debug {
             applicationIdSuffix = ".debug"
@@ -30,6 +47,8 @@ android {
         // Self-contained showcase: a simulated PC inside the app, no network. Installs beside the real app.
         create("demo") {
             initWith(getByName("release"))
+            // For showing around: anyone can build one, so never the real key.
+            signingConfig = signingConfigs.getByName("debug")
             applicationIdSuffix = ".demo"
             versionNameSuffix = "-demo"
             matchingFallbacks += "release"

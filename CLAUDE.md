@@ -11,6 +11,7 @@ source scripts/env.sh            # user-local JDK 21 + Android SDK; required bef
 ./gradlew :core:protocol:test    # unit tests
 VYOMA_INTEROP=1 ./gradlew :core:protocol:test --rerun   # live test vs this PC's kdeconnectd
 scripts/deploy.sh debug          # install + launch on phone
+./gradlew :app:assembleRelease   # signed with the release key in ~/.local/share/vyoma-signing/ (not in the repo; back it up, losing it means reinstalling)
 ./gradlew :app:assembleDemo      # demo build (.demo): simulated laptop + companion in-app over loopback, no network;
                                  # Settings > Generate log writes perf/device diagnostics to Downloads (app/.../demo/)
 (cd desktop/companion && cargo build --release)   # Linux companion (Rust); run inside it for its .cargo linker fix

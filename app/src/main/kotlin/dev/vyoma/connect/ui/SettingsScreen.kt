@@ -727,14 +727,19 @@ private fun FingerprintLockRow(resumeTick: Int) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var on by remember { mutableStateOf(AppLock.enabled(context)) }
     val usable = remember(resumeTick) { AppLock.canAsk(context) }
+    val scope = rememberCoroutineScope()
+    // The clipboard widget hides what was copied while the lock is on.
+    fun widgets() { scope.launch { dev.vyoma.connect.widget.Widgets.refresh(context) } }
     fun toggle(want: Boolean) {
         if (want) {
             AppLock.setEnabled(context, true)
             on = true
+            widgets()
         } else {
             AppLock.confirm(context, "To turn off the fingerprint lock") {
                 AppLock.setEnabled(context, false)
                 on = false
+                widgets()
             }
         }
     }

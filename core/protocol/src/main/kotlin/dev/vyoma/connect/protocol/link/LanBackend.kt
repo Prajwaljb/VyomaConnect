@@ -191,6 +191,7 @@ class LanBackend(
     private suspend fun connectOutgoing(address: InetAddress, port: Int, peer: DeviceIdentity?, expectedId: String?, tunnel: TransportKind? = null) {
         val plain = Socket()
         val deadline = handshakeDeadline(plain)
+        var ssl: SSLSocket? = null
         try {
             config.route(plain, address)
             plain.connect(InetSocketAddress(address, port), CONNECT_TIMEOUT_MS)
@@ -204,9 +205,11 @@ class LanBackend(
                 flush()
             }
             // We opened the TCP connection, so we are the TLS server.
-            val ssl = tls.wrap(plain, asServer = true)
-            finishHandshake(ssl, deadline, preTlsIdentity = peer, tunnel = tunnel)
+            val secure = tls.wrap(plain, asServer = true).also { ssl = it }
+            finishHandshake(secure, deadline, preTlsIdentity = peer, tunnel = tunnel)
         } catch (e: Exception) {
+            // The TLS socket too, once there is one: closing only the one under it leaks it.
+            runCatching { ssl?.close() }
             runCatching { plain.close() }
             throw e
         } finally {
@@ -245,6 +248,7 @@ class LanBackend(
 
     private suspend fun acceptOn(plain: Socket, tunnel: TransportKind?) {
         val deadline = handshakeDeadline(plain)
+        var ssl: SSLSocket? = null
         try {
             config.tuneSocket(plain)
             plain.soTimeout = HANDSHAKE_TIMEOUT_MS
@@ -264,10 +268,11 @@ class LanBackend(
             if (config.refuses(identity.deviceId, tunnel ?: config.transportOf(plain.localAddress, plain.inetAddress), true)) {
                 throw ProtocolException("already linked over a better transport")
             }
-            val ssl = tls.wrap(plain, asServer = false)
-            finishHandshake(ssl, deadline, identity, tunnel)
+            val secure = tls.wrap(plain, asServer = false).also { ssl = it }
+            finishHandshake(secure, deadline, identity, tunnel)
         } catch (e: Exception) {
             VLog.d(TAG, "incoming from ${plain.inetAddress.hostAddress} rejected: ${e.message}")
+            runCatching { ssl?.close() }
             runCatching { plain.close() }
         } finally {
             deadline.cancel()
@@ -313,13 +318,14 @@ class LanBackend(
 
     private fun bindFirstFree(range: IntRange): ServerSocket {
         for (port in range) {
+            val server = ServerSocket()
             try {
-                return ServerSocket().apply {
-                    reuseAddress = true
-                    bind(InetSocketAddress(port))
-                }
+                server.reuseAddress = true
+                server.bind(InetSocketAddress(port))
+                return server
             } catch (_: IOException) {
                 // in use, try next
+                runCatching { server.close() }
             }
         }
         throw IOException("No free TCP port in $range")

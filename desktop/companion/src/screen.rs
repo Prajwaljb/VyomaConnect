@@ -249,8 +249,11 @@ impl Pointer {
     }
 
     async fn tap(&self, code: i32) -> Result<()> {
-        self.key(code, true).await?;
-        self.key(code, false).await
+        chord(self, &[], code).await
+    }
+
+    async fn tap_with(&self, mods: &[i32], code: i32) -> Result<()> {
+        chord(self, mods, code).await
     }
 
     /// Typed text: each character by the key that types it, and what no key types (emoji, other
@@ -275,9 +278,7 @@ impl Pointer {
         crate::paste::put(text).await?;
         text.clear();
         let Some(v) = keycode("v") else { return Ok(()) };
-        self.key(KEY_LEFTCTRL, true).await?;
-        self.tap(v).await?;
-        self.key(KEY_LEFTCTRL, false).await?;
+        self.tap_with(&[KEY_LEFTCTRL], v).await?;
         // The app fetches the text on its own time; a key sent now could land before it.
         tokio::time::sleep(std::time::Duration::from_millis(120)).await;
         Ok(())
@@ -291,14 +292,7 @@ impl Pointer {
         let sym = char_keysym(c);
         match crate::mirror::layout().keys.get(&(sym as u32)) {
             Some(&(code, shift)) => {
-                if shift {
-                    self.key(KEY_LEFTSHIFT, true).await?;
-                }
-                self.tap(code as i32).await?;
-                if shift {
-                    self.key(KEY_LEFTSHIFT, false).await?;
-                }
-                Ok(())
+                self.tap_with(if shift { &[KEY_LEFTSHIFT] } else { &[] }, code as i32).await
             }
             None => Ok(()),
         }
@@ -363,19 +357,48 @@ impl Pointer {
                         _ => None,
                     })
                     .collect();
-                for m in &mods {
-                    self.key(*m, true).await?;
-                }
-                self.tap(code).await?;
-                for m in mods.iter().rev() {
-                    self.key(*m, false).await?;
-                }
-                Ok(())
+                self.tap_with(&mods, code).await
             }
             "scrollend" => self.call("NotifyPointerAxis", &(&self.session, opts([("finish", Value::Bool(true))]), 0.0f64, 0.0f64)).await,
             _ => Ok(()),
         }
     }
+}
+
+/// What presses and releases keys: the desktop's, or a test's.
+trait Keys: Sync {
+    fn press(&self, code: i32, down: bool) -> impl Future<Output = Result<()>> + Send;
+}
+
+impl Keys for Pointer {
+    fn press(&self, code: i32, down: bool) -> impl Future<Output = Result<()>> + Send {
+        self.key(code, down)
+    }
+}
+
+/// Presses [code] with [mods] held. Whatever goes wrong, what was pressed is let go: a Ctrl left down
+/// would change every key and click on the PC until the session ends.
+async fn chord(keys: &impl Keys, mods: &[i32], code: i32) -> Result<()> {
+    let mut held = 0;
+    let mut result = Ok(());
+    for m in mods {
+        result = keys.press(*m, true).await;
+        if result.is_err() {
+            break;
+        }
+        held += 1;
+    }
+    if result.is_ok() {
+        result = keys.press(code, true).await;
+        if result.is_ok() {
+            result = keys.press(code, false).await;
+        }
+    }
+    for m in mods[..held].iter().rev() {
+        let released = keys.press(*m, false).await;
+        result = result.and(released);
+    }
+    result
 }
 
 /// evdev key codes (linux/input-event-codes.h).
@@ -713,6 +736,40 @@ mod tests {
         let _ = editor.kill();
         let _ = gst.kill().await;
         for d in &delays { println!("frames around a letter, ms: {d:?}"); }
+    }
+
+    struct Log {
+        pressed: std::sync::Mutex<Vec<(i32, bool)>>,
+        fail_on: Option<(i32, bool)>,
+    }
+
+    impl Keys for Log {
+        async fn press(&self, code: i32, down: bool) -> Result<()> {
+            self.pressed.lock().unwrap().push((code, down));
+            if self.fail_on == Some((code, down)) { bail!("no") }
+            Ok(())
+        }
+    }
+
+    async fn pressed(fail_on: Option<(i32, bool)>) -> (Vec<(i32, bool)>, bool) {
+        let log = Log { pressed: Default::default(), fail_on };
+        let result = chord(&log, &[1, 2], 9).await;
+        (log.pressed.into_inner().unwrap(), result.is_ok())
+    }
+
+    #[tokio::test]
+    async fn a_chord_presses_in_order_and_lets_go_backwards() {
+        assert_eq!(pressed(None).await, (vec![(1, true), (2, true), (9, true), (9, false), (2, false), (1, false)], true));
+    }
+
+    #[tokio::test]
+    async fn a_failed_key_still_lets_the_modifiers_go() {
+        assert_eq!(pressed(Some((9, true))).await, (vec![(1, true), (2, true), (9, true), (2, false), (1, false)], false));
+    }
+
+    #[tokio::test]
+    async fn a_failed_modifier_lets_go_only_what_was_held() {
+        assert_eq!(pressed(Some((2, true))).await, (vec![(1, true), (2, true), (1, false)], false));
     }
 
     #[tokio::test]

@@ -78,10 +78,8 @@ class DeviceHub(
             refuses = { id, transport, incoming ->
                 // Bluetooth is only for when nothing else is there.
                 if (transport == TransportKind.BLUETOOTH) return@copy linkedWell(id)
-                // A companion keeps whichever link it got first and has no kdeconnectd to knock out,
-                // so holding Wi-Fi back for the tunnel only delayed it after every app start.
-                val companion = _devices.value[id]?.identity?.companionOf != null
-                if (transport != TransportKind.USB && holdingWifi() && !companion) return@copy true
+                // Companions too: one keeps whichever link it got first, and it tries the cable every 2 s.
+                if (transport != TransportKind.USB && holdingWifi()) return@copy true
                 val usbAge = if (transport == TransportKind.USB) null else _devices.value[id]?.linkAge(TransportKind.USB)
                 usbAge != null && (!incoming || usbAge < FRESH_CABLE_MS)
             },

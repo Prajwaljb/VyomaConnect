@@ -67,6 +67,7 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import dev.vyoma.connect.R
+import dev.vyoma.connect.platform.AppLock
 import dev.vyoma.connect.container
 import dev.vyoma.connect.protocol.plugin.builtin.BatteryPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
@@ -98,6 +99,8 @@ data class WidgetSnapshot(
     val playing: Boolean = false,
     val art: Bitmap? = null,
     val clips: List<String> = emptyList(),
+    /** The fingerprint lock is on: a widget can't ask, so what was copied stays out of it (and off the disk). */
+    val clipsHidden: Boolean = false,
     val transferFraction: Float? = null,
     val transferLabel: String? = null,
 )
@@ -193,7 +196,8 @@ object Widgets {
             playing = np?.player?.isPlaying == true,
             // RemoteViews have a hard bitmap budget; 480px is still sharp full-bleed on a 4x2 widget.
             art = np?.art?.let { if (it.width > 480) it.scale(480, 480 * it.height / it.width) else it },
-            clips = c.clipboard.history.value.take(4).map { it.text.replace('\n', ' ').take(80) },
+            clips = if (AppLock.enabled(context)) emptyList() else c.clipboard.history.value.take(4).map { it.text.replace('\n', ' ').take(80) },
+            clipsHidden = AppLock.enabled(context),
             transferFraction = running.takeIf { it.isNotEmpty() }?.let { list ->
                 val total = list.sumOf { it.totalBytes.coerceAtLeast(0) }
                 if (total > 0) list.sumOf { it.doneBytes }.toFloat() / total else 0f
@@ -213,6 +217,7 @@ object Widgets {
             .put("phoneBattery", s.phoneBattery).put("phoneCharging", s.phoneCharging)
             .put("title", s.title).put("artist", s.artist).put("playing", s.playing)
             .put("clips", JSONArray(s.clips))
+            .put("clipsHidden", s.clipsHidden)
         File(dir(context), "snapshot.json").writeText(json.toString())
         // The art only when it's a different image: a lossless PNG of a 1024 px frame took most
         // of the background CPU when it was re-encoded on every refresh.
@@ -244,6 +249,7 @@ object Widgets {
             playing = false,
             art = File(dir(context), "art.webp").takeIf { it.exists() }?.let { BitmapFactory.decodeFile(it.path) },
             clips = clips,
+            clipsHidden = j.optBoolean("clipsHidden"),
         )
     }
 
@@ -822,7 +828,7 @@ class ClipboardWidget : VyomaWidget() {
                             Text("clipboard", maxLines = 1, style = style(11.sp, Ink.secondary, FontWeight.Medium))
                         } else {
                             Text("Clipboard", maxLines = 1, style = style(11.sp, Ink.secondary, FontWeight.Medium))
-                            Text(s.clips.firstOrNull() ?: "Nothing copied yet", maxLines = 1, style = style(13.sp, Ink.primary, FontWeight.Medium))
+                            Text(s.clips.firstOrNull() ?: if (s.clipsHidden) "Tap to see your history" else "Nothing copied yet", maxLines = 1, style = style(13.sp, Ink.primary, FontWeight.Medium))
                         }
                     }
                     HGap(8.dp)
@@ -834,7 +840,9 @@ class ClipboardWidget : VyomaWidget() {
                         RoundButton(R.drawable.ic_w_send, "Send clipboard", send, size = if (d.narrow) 32.dp else 36.dp, accent = true)
                     }
                     VGap(6.dp)
-                    if (s.clips.isEmpty()) {
+                    if (s.clipsHidden) {
+                        Text("Tap to see your history", style = style(12.sp, Ink.secondary), modifier = GlanceModifier.fillMaxWidth().clickable(open))
+                    } else if (s.clips.isEmpty()) {
                         Text("Copied text shows up here", style = style(12.sp, Ink.secondary))
                     }
                     // Each row is ~36dp: 9dp padding, one 13sp line, 1dp hairline.
