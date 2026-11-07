@@ -259,7 +259,10 @@ object Notifications {
                 .setCategory(Notification.CATEGORY_ALARM)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setOngoing(true)
-                .setContentIntent(full)
+                // A tap does what the text says. Opening the ringing screen instead left it ringing when
+                // the screen didn't come up (heads-up tapped with the app open, 2026-11-07); a locked
+                // phone still gets that screen as the full-screen intent.
+                .setContentIntent(Commands.pending(context, Commands.STOP_RINGING))
                 .setFullScreenIntent(full, true)
                 .addAction(0, "Found it", Commands.pending(context, Commands.STOP_RINGING))
                 .build(),

@@ -8,11 +8,14 @@
 //! - `VYOMA_ANNOUNCE`: addresses to announce to instead of the broadcast address.
 
 mod notify;
+mod plugins;
+mod system;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
@@ -25,24 +28,41 @@ use vyoma_core::trust::TrustStore;
 use zbus::fdo;
 
 use notify::{Notice, Notifier, Pressed};
+use system::{Ringer, Session};
 
 const BUS_NAME: &str = "dev.vyoma.Desktop";
 const OBJECT_PATH: &str = "/dev/vyoma/Desktop";
+/// How often the PC's battery is read; it's sent on when it changed.
+const BATTERY_EVERY: Duration = Duration::from_secs(30);
 
-/// What the GUI is shown of one device.
+/// What the GUI is shown of one device, and what its plugins keep.
 #[derive(Clone, Default)]
-struct DeviceView {
-    name: String,
-    kind: String,
-    paired: bool,
-    linked: bool,
+pub struct DeviceView {
+    pub name: String,
+    pub kind: String,
+    pub paired: bool,
+    pub linked: bool,
     /// The code while a pairing is on screen.
-    key: String,
+    pub key: String,
+    /// The packet types it takes.
+    pub incoming: Vec<String>,
+    /// Charge, charging, low.
+    pub battery: Option<(i64, bool, bool)>,
+    /// Each SIM's network and level (0..4).
+    pub signal: Option<Vec<Value>>,
+}
+
+type Devices = Arc<Mutex<HashMap<String, DeviceView>>>;
+
+/// What the D-Bus side asks of the main loop beyond the hub's commands.
+enum Ask {
+    StopRinging,
 }
 
 struct Control {
     commands: mpsc::UnboundedSender<Command>,
-    devices: Arc<Mutex<HashMap<String, DeviceView>>>,
+    asks: mpsc::UnboundedSender<Ask>,
+    devices: Devices,
     lan: Arc<Lan>,
     targets: Vec<SocketAddr>,
 }
@@ -76,12 +96,48 @@ impl Control {
         out.sort();
         out
     }
+
+    /// One device's state as JSON: battery, signal and the rest of [devices].
+    fn details(&self, id: String) -> fdo::Result<String> {
+        let all = self.devices.lock().unwrap();
+        let d = all.get(&id).ok_or_else(|| fdo::Error::UnknownObject(id.clone()))?;
+        let battery = d.battery.map(|(charge, charging, low)| json!({ "charge": charge, "charging": charging, "low": low }));
+        Ok(json!({ "name": d.name, "type": d.kind, "paired": d.paired, "linked": d.linked, "key": d.key, "battery": battery, "signal": d.signal }).to_string())
+    }
+
+    /// Makes the device ring, to find it.
+    fn ring(&self, id: String) -> fdo::Result<()> {
+        let takes = self.devices.lock().unwrap().get(&id).is_some_and(|d| plugins::takes(d, plugins::FIND));
+        if !takes {
+            return Err(fdo::Error::NotSupported(format!("{id} can't be rung")));
+        }
+        self.command(Command::Send(id, packet(plugins::FIND, json!({}))))
+    }
+
+    /// Stops this PC ringing for a device that's looking for it.
+    fn stop_ringing(&self) -> fdo::Result<()> {
+        self.asks.send(Ask::StopRinging).map_err(|_| fdo::Error::Failed("stopping".into()))
+    }
 }
 
 impl Control {
     fn command(&self, c: Command) -> fdo::Result<()> {
         self.commands.send(c).map_err(|_| fdo::Error::Failed("stopping".into()))
     }
+}
+
+/// The main loop's own state.
+struct Desk {
+    devices: Devices,
+    commands: mpsc::UnboundedSender<Command>,
+    notifier: Notifier,
+    session: Option<Session>,
+    ringer: Ringer,
+    ring_notice: Option<u32>,
+    /// Device id to the notification showing its pairing.
+    prompts: HashMap<String, u32>,
+    battery: Option<system::Battery>,
+    locked: Option<bool>,
 }
 
 #[tokio::main]
@@ -93,7 +149,7 @@ async fn main() -> Result<()> {
     let dir = std::env::var_os("VYOMA_DIR").map(PathBuf::from).unwrap_or_else(default_dir);
     let me = Arc::new(Identity::load_or_create_in(&dir)?);
     let trust = TrustStore::open(&dir)?;
-    let devices: Arc<Mutex<HashMap<String, DeviceView>>> = Arc::default();
+    let devices: Devices = Arc::default();
     for id in trust.ids() {
         let t = trust.get(id).unwrap();
         devices.lock().unwrap().insert(id.clone(), DeviceView { name: t.name.clone(), kind: t.kind.clone(), paired: true, ..Default::default() });
@@ -118,7 +174,8 @@ async fn main() -> Result<()> {
     tokio::spawn(hub.run(links, commands_rx));
 
     let conn = zbus::Connection::session().await.context("no session bus")?;
-    let control = Control { commands: commands.clone(), devices: devices.clone(), lan: lan.clone(), targets: targets.clone() };
+    let (asks_tx, mut asks) = mpsc::unbounded_channel();
+    let control = Control { commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone() };
     conn.object_server().at(OBJECT_PATH, control).await?;
     conn.request_name(BUS_NAME).await.context("another Vyoma desktop app is running")?;
     let notifier = Notifier::new(conn.clone());
@@ -132,119 +189,196 @@ async fn main() -> Result<()> {
         });
     }
 
+    // The screen lock, if logind is there to ask.
+    let session = match zbus::Connection::system().await {
+        Ok(system) => Session::find(system).await.map_err(|e| tracing::warn!("no logind session, so no lock: {e:#}")).ok(),
+        Err(e) => {
+            tracing::warn!("no system bus, so no lock: {e:#}");
+            None
+        }
+    };
+    let (lock_tx, mut lock_changes) = mpsc::unbounded_channel();
+    if let Some(session) = session.clone() {
+        tokio::spawn(async move {
+            if let Err(e) = session.watch(lock_tx).await {
+                tracing::warn!("can't follow the screen lock: {e:#}");
+            }
+        });
+    }
+
+    let mut desk = Desk {
+        devices,
+        commands,
+        notifier,
+        locked: match &session {
+            Some(s) => s.locked().await.ok(),
+            None => None,
+        },
+        session,
+        ringer: Ringer::default(),
+        ring_notice: None,
+        prompts: HashMap::new(),
+        battery: system::battery(),
+    };
+
     lan.announce(&targets).await?;
     tracing::info!("{} is up as {}", env!("CARGO_PKG_NAME"), me.device_id);
 
-    // Device id to the notification showing its pairing.
-    let mut prompts: HashMap<String, u32> = HashMap::new();
+    let mut battery_tick = tokio::time::interval(BATTERY_EVERY);
     loop {
         tokio::select! {
-            Some(event) = events.recv() => on_event(event, &devices, &notifier, &mut prompts).await,
-            Some(Pressed { notification, action }) = pressed.recv() => {
-                let Some(id) = prompts.iter().find(|(_, n)| **n == notification).map(|(id, _)| id.clone()) else { continue };
-                let _ = commands.send(match action.as_str() {
-                    "accept" => Command::Accept(id),
-                    "reject" => Command::Reject(id),
-                    _ => continue,
-                });
+            Some(event) = events.recv() => desk.on_event(event).await,
+            Some(Pressed { notification, action }) = pressed.recv() => desk.on_pressed(notification, &action).await,
+            Some(Ask::StopRinging) = asks.recv() => plugins::stop_ringing(&desk.notifier, &mut desk.ringer, &mut desk.ring_notice).await,
+            Some(locked) = lock_changes.recv() => {
+                if desk.locked != Some(locked) {
+                    desk.locked = Some(locked);
+                    desk.broadcast(plugins::LOCK, plugins::lock_packet(locked));
+                }
+            }
+            _ = battery_tick.tick() => {
+                let now = system::battery();
+                if now != desk.battery {
+                    desk.battery = now;
+                    if let Some(b) = now {
+                        desk.broadcast(plugins::BATTERY, plugins::battery_packet(b));
+                    }
+                }
             }
             _ = tokio::signal::ctrl_c() => break,
         }
     }
-    for n in prompts.values() {
-        notifier.close(*n).await;
+    for n in desk.prompts.values() {
+        desk.notifier.close(*n).await;
     }
+    plugins::stop_ringing(&desk.notifier, &mut desk.ringer, &mut desk.ring_notice).await;
     Ok(())
 }
 
-async fn on_event(event: Event, devices: &Mutex<HashMap<String, DeviceView>>, notifier: &Notifier, prompts: &mut HashMap<String, u32>) {
-    match event {
-        Event::Linked { id, name, kind, paired } => {
-            let mut all = devices.lock().unwrap();
-            let d = all.entry(id).or_default();
-            (d.name, d.kind, d.paired, d.linked) = (name, kind, paired, true);
+impl Desk {
+    fn send(&self, id: &str, packet: Value) {
+        let _ = self.commands.send(Command::Send(id.to_owned(), packet));
+    }
+
+    /// [packet] to every linked, paired device that takes [kind].
+    fn broadcast(&self, kind: &str, packet: Value) {
+        let ids: Vec<String> = self.devices.lock().unwrap().iter().filter(|(_, d)| d.linked && plugins::takes(d, kind)).map(|(id, _)| id.clone()).collect();
+        for id in ids {
+            self.send(&id, packet.clone());
         }
-        Event::Gone { id } => {
-            let mut all = devices.lock().unwrap();
-            // Unpaired devices are only listed while they're here.
-            if all.get(&id).is_some_and(|d| d.paired) {
-                all.get_mut(&id).unwrap().linked = false;
-            } else {
-                all.remove(&id);
+    }
+
+    /// The device is linked and paired: send it what it should know at once.
+    fn start(&self, id: &str) {
+        let Some(device) = self.devices.lock().unwrap().get(id).cloned() else { return };
+        for p in plugins::started(&device, self.battery, self.locked) {
+            self.send(id, p);
+        }
+    }
+
+    async fn on_pressed(&mut self, notification: u32, action: &str) {
+        if self.ring_notice == Some(notification) && action == "found" {
+            plugins::stop_ringing(&self.notifier, &mut self.ringer, &mut self.ring_notice).await;
+            return;
+        }
+        let Some(id) = self.prompts.iter().find(|(_, n)| **n == notification).map(|(id, _)| id.clone()) else { return };
+        let _ = self.commands.send(match action {
+            "accept" => Command::Accept(id),
+            "reject" => Command::Reject(id),
+            _ => return,
+        });
+    }
+
+    async fn on_event(&mut self, event: Event) {
+        match event {
+            Event::Linked { id, name, kind, paired, incoming, .. } => {
+                {
+                    let mut all = self.devices.lock().unwrap();
+                    let d = all.entry(id.clone()).or_default();
+                    (d.name, d.kind, d.paired, d.linked, d.incoming) = (name, kind, paired, true, incoming);
+                }
+                if paired {
+                    self.start(&id);
+                }
             }
-        }
-        Event::Prompt { id, name, key } => {
-            set_key(devices, &id, &key);
-            let body = format!("Code {key}. Accept only if {name} shows the same code.");
-            let notice = Notice { icon: "smartphone", title: &format!("Pair with {name}?"), body: &body, actions: &[("accept", "Accept"), ("reject", "Reject")], sticky: true, replaces: prompts.get(&id).copied() };
-            show_prompt(notifier, prompts, id, notice).await;
-        }
-        Event::Asked { id, name, key } => {
-            set_key(devices, &id, &key);
-            let body = format!("Code {key}. Accept on {name} if it shows the same code.");
-            let notice = Notice { icon: "smartphone", title: &format!("Pairing with {name}"), body: &body, actions: &[], sticky: true, replaces: prompts.get(&id).copied() };
-            show_prompt(notifier, prompts, id, notice).await;
-        }
-        Event::PairingOver { id } => {
-            set_key(devices, &id, "");
-            if let Some(n) = prompts.remove(&id) {
-                notifier.close(n).await;
-            }
-        }
-        Event::Paired { id, name } => {
-            if let Some(d) = devices.lock().unwrap().get_mut(&id) {
-                (d.paired, d.key) = (true, String::new());
-            }
-            if let Some(n) = prompts.remove(&id) {
-                notifier.close(n).await;
-            }
-            tell(notifier, "smartphone", &format!("Paired with {name}"), "").await;
-        }
-        Event::Unpaired { id, name } => {
-            {
-                let mut all = devices.lock().unwrap();
-                if all.get(&id).is_some_and(|d| d.linked) {
-                    all.get_mut(&id).unwrap().paired = false;
+            Event::Gone { id } => {
+                let mut all = self.devices.lock().unwrap();
+                // Unpaired devices are only listed while they're here.
+                if all.get(&id).is_some_and(|d| d.paired) {
+                    let d = all.get_mut(&id).unwrap();
+                    (d.linked, d.battery, d.signal) = (false, None, None);
                 } else {
                     all.remove(&id);
                 }
             }
-            tell(notifier, "smartphone", &format!("Unpaired from {name}"), "").await;
+            Event::Prompt { id, name, key } => {
+                self.set_key(&id, &key);
+                let body = format!("Code {key}. Accept only if {name} shows the same code.");
+                let notice = Notice { icon: "smartphone", title: &format!("Pair with {name}?"), body: &body, actions: &[("accept", "Accept"), ("reject", "Reject")], sticky: true, replaces: self.prompts.get(&id).copied() };
+                self.show_prompt(id, notice).await;
+            }
+            Event::Asked { id, name, key } => {
+                self.set_key(&id, &key);
+                let body = format!("Code {key}. Accept on {name} if it shows the same code.");
+                let notice = Notice { icon: "smartphone", title: &format!("Pairing with {name}"), body: &body, actions: &[], sticky: true, replaces: self.prompts.get(&id).copied() };
+                self.show_prompt(id, notice).await;
+            }
+            Event::PairingOver { id } => {
+                self.set_key(&id, "");
+                if let Some(n) = self.prompts.remove(&id) {
+                    self.notifier.close(n).await;
+                }
+            }
+            Event::Paired { id, name } => {
+                if let Some(d) = self.devices.lock().unwrap().get_mut(&id) {
+                    (d.paired, d.key) = (true, String::new());
+                }
+                if let Some(n) = self.prompts.remove(&id) {
+                    self.notifier.close(n).await;
+                }
+                plugins::tell(&self.notifier, &format!("Paired with {name}"), "").await;
+                self.start(&id);
+            }
+            Event::Unpaired { id, name } => {
+                {
+                    let mut all = self.devices.lock().unwrap();
+                    if all.get(&id).is_some_and(|d| d.linked) {
+                        let d = all.get_mut(&id).unwrap();
+                        (d.paired, d.battery, d.signal) = (false, None, None);
+                    } else {
+                        all.remove(&id);
+                    }
+                }
+                plugins::tell(&self.notifier, &format!("Unpaired from {name}"), "").await;
+            }
+            Event::Packet { id, packet } => {
+                let Some(mut device) = self.devices.lock().unwrap().get(&id).cloned() else { return };
+                let cx = plugins::Context { notifier: &self.notifier, session: self.session.as_ref(), ringer: &mut self.ringer, ring_notice: &mut self.ring_notice };
+                let replies = plugins::on_packet(cx, &mut device, &packet).await;
+                // Only what the plugin keeps; the rest may have changed meanwhile.
+                if let Some(d) = self.devices.lock().unwrap().get_mut(&id) {
+                    (d.battery, d.signal) = (device.battery, device.signal);
+                }
+                for p in replies {
+                    self.send(&id, p);
+                }
+            }
         }
-        Event::Packet { id, packet } => on_packet(&id, &packet, devices, notifier).await,
     }
-}
 
-/// The stock plugins, as they come.
-async fn on_packet(id: &str, packet: &Value, devices: &Mutex<HashMap<String, DeviceView>>, notifier: &Notifier) {
-    let name = devices.lock().unwrap().get(id).map(|d| d.name.clone()).unwrap_or_default();
-    match packet["type"].as_str().unwrap_or("") {
-        "kdeconnect.ping" => {
-            let message = packet["body"]["message"].as_str().unwrap_or("Ping!");
-            tell(notifier, "smartphone", &name, message).await;
+    fn set_key(&self, id: &str, key: &str) {
+        if let Some(d) = self.devices.lock().unwrap().get_mut(id) {
+            d.key = key.to_owned();
         }
-        other => tracing::debug!("{id}: no plugin for {other}"),
     }
-}
 
-fn set_key(devices: &Mutex<HashMap<String, DeviceView>>, id: &str, key: &str) {
-    if let Some(d) = devices.lock().unwrap().get_mut(id) {
-        d.key = key.to_owned();
-    }
-}
-
-async fn show_prompt(notifier: &Notifier, prompts: &mut HashMap<String, u32>, id: String, notice: Notice<'_>) {
-    match notifier.show(notice).await {
-        Ok(n) => {
-            prompts.insert(id, n);
+    async fn show_prompt(&mut self, id: String, notice: Notice<'_>) {
+        match self.notifier.show(notice).await {
+            Ok(n) => {
+                self.prompts.insert(id, n);
+            }
+            Err(e) => tracing::warn!("couldn't show the pairing prompt: {e:#}"),
         }
-        Err(e) => tracing::warn!("couldn't show the pairing prompt: {e:#}"),
-    }
-}
-
-async fn tell(notifier: &Notifier, icon: &str, title: &str, body: &str) {
-    if let Err(e) = notifier.show(Notice { icon, title, body, actions: &[], sticky: false, replaces: None }).await {
-        tracing::warn!("couldn't show \"{title}\": {e:#}");
     }
 }
 
@@ -268,10 +402,10 @@ fn identity(me: &Identity) -> Value {
         json!({
             "deviceId": me.device_id,
             "deviceName": host_name(),
-            "deviceType": if has_battery() { "laptop" } else { "desktop" },
+            "deviceType": if system::battery().is_some() { "laptop" } else { "desktop" },
             "protocolVersion": 8,
-            "incomingCapabilities": ["kdeconnect.ping"],
-            "outgoingCapabilities": ["kdeconnect.ping"],
+            "incomingCapabilities": plugins::INCOMING,
+            "outgoingCapabilities": plugins::OUTGOING,
         }),
     )
 }
@@ -279,13 +413,4 @@ fn identity(me: &Identity) -> Value {
 fn host_name() -> String {
     let name = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default();
     vyoma_core::lan::device_name(name.trim())
-}
-
-/// A system battery (not a mouse's or a phone's): this is a laptop.
-fn has_battery() -> bool {
-    let Ok(dir) = std::fs::read_dir("/sys/class/power_supply") else { return false };
-    dir.flatten().any(|e| {
-        let read = |f: &str| std::fs::read_to_string(e.path().join(f)).unwrap_or_default();
-        read("type").trim() == "Battery" && read("scope").trim() != "Device"
-    })
 }
