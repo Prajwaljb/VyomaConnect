@@ -126,7 +126,8 @@ async fn open(me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value) -> Re
         }
     }
     let lan = connect(me, pinned, phone, port).await?;
-    tracing::info!("payload on port {port} over Wi-Fi");
+    // A link from loopback is the adb tunnel: the cable, not the network.
+    tracing::info!("payload on port {port} over {}", if phone.is_loopback() { "USB" } else { "Wi-Fi" });
     Ok(Either::Lan(lan))
 }
 
