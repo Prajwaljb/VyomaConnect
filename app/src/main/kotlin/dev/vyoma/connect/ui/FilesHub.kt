@@ -42,6 +42,7 @@ import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.DriveFolderUpload
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material3.Icon
@@ -102,9 +103,8 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
             Row(Modifier.animateItem().fillMaxWidth().pressGroup(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 SendTile(Icons.Rounded.UploadFile, "Files", SystemColor.BLUE, pc != null, Modifier.weight(1f)) { vm.pickFiles(context) }
                 SendTile(Icons.Rounded.PhotoLibrary, "Photos", SystemColor.PINK, pc != null, Modifier.weight(1f)) { vm.pickPhotos(context) }
-                SendTile(Icons.Rounded.ContentPasteGo, "Clipboard", SystemColor.ORANGE, pc != null, Modifier.weight(1f)) {
-                    if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied to send", failure = true)
-                }
+                // Folders travel through the companion (stock KDE Connect sends files only).
+                if (companion) SendTile(Icons.Rounded.DriveFolderUpload, "Folder", SystemColor.ORANGE, true, Modifier.weight(1f)) { vm.pickFolder(context) }
             }
         }
 
@@ -142,8 +142,7 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
 
         item(key = "captures-label") { SectionLabel("Captures", Modifier.animateItem()) }
         item(key = "captures") {
-            val plugin = remember(companion, pc?.identity?.deviceId, devices) { pc?.let { vm.companionOf(it.identity.deviceId) } }
-            CapturesStrip(onTake = plugin?.let { c -> { AppLock.ask(context, AppLock.SCREENSHOT) { vm.capture(c.screenshot) } } }, onSeeAll = onCaptures, modifier = Modifier.animateItem())
+            CapturesStrip(onTake = null, onSeeAll = onCaptures, modifier = Modifier.animateItem())
         }
 
         if (moving.isNotEmpty() || done.isNotEmpty()) {

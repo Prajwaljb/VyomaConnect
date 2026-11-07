@@ -264,17 +264,27 @@ internal object SoftShadow {
     private val hole = Path()
 
     /** [outside]: only where the shape isn't (opaque or frosted panes); false draws all of it. */
-    fun DrawScope.draw(rect: Rect, corner: Float, color: Color, blur: Float, drop: Float, dx: Float = 0f, outside: Boolean = true) {
+    fun DrawScope.draw(
+        rect: Rect, corner: Float, color: Color, blur: Float, drop: Float, dx: Float = 0f, outside: Boolean = true,
+        /** The shape itself, when it isn't the rounded rect (a [Blob]): cast and cut out as it is. */
+        shape: Path? = null,
+    ) {
         if (color.alpha <= 0f || blur < 1f || rect.width < 1f || rect.height < 1f) return
         val key = blur.roundToInt()
         paint.maskFilter = filters.getOrPut(key) { android.graphics.BlurMaskFilter(key.toFloat(), android.graphics.BlurMaskFilter.Blur.NORMAL) }
         paint.color = color.toArgb()
         val c = corner.coerceAtMost(rect.minDimension / 2)
-        val cast = { drawIntoCanvas { it.nativeCanvas.drawRoundRect(rect.left + dx, rect.top + drop, rect.right + dx, rect.bottom + drop, c, c, paint) } }
+        val cast = {
+            drawIntoCanvas {
+                if (shape == null) it.nativeCanvas.drawRoundRect(rect.left + dx, rect.top + drop, rect.right + dx, rect.bottom + drop, c, c, paint)
+                else { it.nativeCanvas.save(); it.nativeCanvas.translate(dx, drop); it.nativeCanvas.drawPath(shape.asAndroidPath(), paint); it.nativeCanvas.restore() }
+            }
+        }
         if (!outside) return cast()
-        hole.reset()
-        hole.addRoundRect(RoundRect(rect, CornerRadius(c)))
-        clipPath(hole, ClipOp.Difference) { cast() }
+        // Cut out by the shape's own outline: a blob cut by its bounds' rounded rect left a bare ring
+        // where it's narrower, which read as a second rim.
+        val cut = shape ?: hole.apply { reset(); addRoundRect(RoundRect(rect, CornerRadius(c))) }
+        clipPath(cut, ClipOp.Difference) { cast() }
     }
 }
 
@@ -282,13 +292,17 @@ internal object SoftShadow {
  * The shadow under floating glass, per theme and size: bigger panes (menus, dialogs) cast wider ones,
  * as Apple's do. Dark mode's is deep, for when chrome floats over lighter content (on black it's moot).
  */
-internal fun DrawScope.chromeShadow(rect: Rect, corner: Float, dark: Boolean) {
+internal fun DrawScope.chromeShadow(rect: Rect, corner: Float, dark: Boolean, light: Float = SpecularLight.angle, strength: Float = 1f, shape: Path? = null) {
     val blur = (rect.minDimension * 0.22f).coerceIn(8.dp.toPx(), 22.dp.toPx())
     // Apple's light-mode buttons (Voice Memos) cast theirs clearly downwards.
-    val color = if (dark) Color.Black.copy(alpha = 0.5f) else Color(0xFF0B1220).copy(alpha = 0.16f)
+    val color = if (dark) Color.Black.copy(alpha = 0.5f * strength) else Color(0xFF0B1220).copy(alpha = 0.16f * strength)
     // Away from the light: it slides sideways as the phone tilts, as the rims' light swings.
-    val fall = SpecularLight.cast(blur * if (dark) 0.45f else 0.7f)
-    with(SoftShadow) { draw(rect, corner, color, blur, drop = fall.y, dx = fall.x) }
+    // Under a light in the picture, cast clear of the glass on its side: a blur wider than the
+    // shadow's offset left a dark fringe facing the sun.
+    val sun = SpecularLight.source != null
+    val spread = if (sun) blur * 0.7f else blur
+    val fall = SpecularLight.cast(if (sun) spread * 0.95f else blur * if (dark) 0.45f else 0.7f, light)
+    with(SoftShadow) { draw(rect, corner, color, spread, drop = fall.y, dx = fall.x, shape = shape) }
 }
 
 /** Where [specularRim]'s sweep puts the light before turning it (0.625 of a turn from 3 o'clock). */
@@ -407,6 +421,7 @@ internal object RimShadow {
         shader.setFloatUniform("exponent", exponent)
         shader.setFloatUniform("light", cos(a).toFloat(), sin(a).toFloat())
         shader.setFloatUniform("strength", strength)
+        shader.setFloatUniform("follow", if (SpecularLight.source != null) 1f else 0f)
         drawOutline(outline, ShaderBrush(shader), style = Stroke(width))
     }
 
@@ -416,6 +431,7 @@ uniform float radius;
 uniform float exponent;
 uniform float2 light;
 uniform float strength;
+uniform float follow;
 
 float2 edgeNormal(float2 p, float2 c, float radius, float exponent) {
     float2 sg = float2(p.x < 0.0 ? -1.0 : 1.0, p.y < 0.0 ? -1.0 : 1.0);
@@ -440,7 +456,9 @@ half4 main(float2 xy) {
     // it), with the rim light's own spread.
     float f = dot(n, light);
     float lit = clamp(pow(max(f, 0.0), 3.5) + 0.8 * pow(max(-f, 0.0), 3.5), 0.0, 1.0);
-    k *= 1.0 - lit;
+    // Under a light in the picture (the first run's sun) the edges facing it can't be dark at all:
+    // the dark is only on the side away from it (user, 2026-11-07).
+    k *= mix(1.0 - lit, 1.0 - smoothstep(-0.4, 0.1, f), follow);
     // Black over the glass's edge darkens what shows there in its own colour.
     return half4(0.0, 0.0, 0.0, half(strength * k));
 }
@@ -683,12 +701,23 @@ internal class LiquidGlass {
         gloss: Float = 0f,
         /** 1 = a lifted drop's optics (see the shader) instead of the plain Snell rim. */
         drop: Float = 0f,
+        /** Words on it: 1 under light text, -1 under dark text, 0 clear (see the shader). */
+        legible: Float = 0f,
+        /** How far, in px, the face of a [legible] pane spreads what's behind it. */
+        soften: Float = 0f,
+        /** Where its light is, and how bright the far edge catches it (see [SpecularLight]). */
+        light: Float = SpecularLight.angle,
+        opposite: Float = 0.8f,
+        /** The colour of that light, for the gloss and the highlight. */
+        glow: Color = Color.White,
+        /** A soft round shape centred in [size] instead of the rounded rect (see [Blob]), in px. */
+        blob: Blob? = null,
     ): RenderEffect {
         // Where the light is (see SpecularLight), as a unit vector in screen axes.
-        val a = Math.toRadians(SpecularLight.angle.toDouble())
+        val a = Math.toRadians(light.toDouble())
         val lx = cos(a).toFloat()
         val ly = sin(a).toFloat()
-        val args = floatArrayOf(size.width, size.height, margin, radius, bevel, refract, zoom, disperse, tint.red, tint.green, tint.blue, tint.alpha, spec, shade, blur, lx, ly, vibrance, gloss, drop)
+        val args = floatArrayOf(size.width, size.height, margin, radius, bevel, refract, zoom, disperse, tint.red, tint.green, tint.blue, tint.alpha, spec, shade, blur, lx, ly, vibrance, gloss, drop, legible, soften, opposite, glow.red, glow.green, glow.blue, blob?.radius ?: 0f, blob?.wave1?.x ?: 0f, blob?.wave1?.y ?: 0f, blob?.wave2?.x ?: 0f, blob?.wave2?.y ?: 0f, blob?.wave3?.x ?: 0f, blob?.wave3?.y ?: 0f, blob?.wave4?.x ?: 0f, blob?.wave4?.y ?: 0f)
         effect?.let { if (args.contentEquals(last)) return it }
         last = args
         shader.setFloatUniform("size", size.width, size.height)
@@ -705,6 +734,15 @@ internal class LiquidGlass {
         shader.setFloatUniform("vibrance", vibrance)
         shader.setFloatUniform("gloss", gloss)
         shader.setFloatUniform("drop", drop)
+        shader.setFloatUniform("legible", legible)
+        shader.setFloatUniform("soften", soften)
+        shader.setFloatUniform("opposite", opposite)
+        shader.setFloatUniform("glow", glow.red, glow.green, glow.blue)
+        shader.setFloatUniform("blobR", blob?.radius ?: 0f)
+        shader.setFloatUniform("wave1", blob?.wave1?.x ?: 0f, blob?.wave1?.y ?: 0f)
+        shader.setFloatUniform("wave2", blob?.wave2?.x ?: 0f, blob?.wave2?.y ?: 0f)
+        shader.setFloatUniform("wave3", blob?.wave3?.x ?: 0f, blob?.wave3?.y ?: 0f)
+        shader.setFloatUniform("wave4", blob?.wave4?.x ?: 0f, blob?.wave4?.y ?: 0f)
         val glass = android.graphics.RenderEffect.createRuntimeShaderEffect(shader, "content")
         val full = if (blur > 0f) {
             android.graphics.RenderEffect.createChainEffect(
@@ -732,17 +770,49 @@ uniform float shade;
 uniform float2 light;
 uniform float vibrance;
 uniform float gloss;
+uniform float opposite;
+uniform float3 glow;
+uniform float blobR;
+uniform float2 wave1;
+uniform float2 wave2;
+uniform float2 wave3;
+uniform float2 wave4;
 uniform float drop;
+uniform float legible;
+uniform float soften;
 
 half4 main(float2 p) {
-    float2 c = size * 0.5;
-    float2 rel = p - margin - c;
-    float2 q = abs(rel) - (c - radius);
-    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
+    float2 cb = size * 0.5;
+    float2 rel = p - margin - cb;
+    // The shape's half size, for what's lit by where on it a point is.
+    float2 c = cb;
+    float d;
+    float2 n;
+    if (blobR > 0.0) {
+        // A blob (see Blob): a circle whose edge three waves bend. Its distance and outward normal
+        // come from the radius at this angle and how fast that changes going round.
+        float rho = max(length(rel), 0.001);
+        float2 u = rel / rho;
+        float2 w2 = float2(u.x * u.x - u.y * u.y, 2.0 * u.x * u.y);
+        float2 w3 = float2(w2.x * u.x - w2.y * u.y, w2.y * u.x + w2.x * u.y);
+        float2 w4 = float2(w2.x * w2.x - w2.y * w2.y, 2.0 * w2.x * w2.y);
+        float r = blobR * (1.0 + dot(wave1, u) + dot(wave2, w2) + dot(wave3, w3) + dot(wave4, w4));
+        float dr = blobR * (dot(wave1, float2(-u.y, u.x)) + 2.0 * dot(wave2, float2(-w2.y, w2.x)) + 3.0 * dot(wave3, float2(-w3.y, w3.x)) + 4.0 * dot(wave4, float2(-w4.y, w4.x)));
+        // The slope round it only matters near the edge; towards the middle it grew without bound
+        // and put a speck of rim at the very centre.
+        float2 g = u - (dr / max(rho, blobR * 0.5)) * float2(-u.y, u.x);
+        float gl = length(g);
+        d = (rho - r) / gl;
+        n = g / gl;
+        c = float2(blobR);
+    } else {
+        float2 q = abs(rel) - (c - radius);
+        d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
+        // Outward normal of the rounded rect.
+        n = (q.x > 0.0 && q.y > 0.0) ? normalize(q) : (q.x > q.y ? float2(1.0, 0.0) : float2(0.0, 1.0));
+        n *= sign(rel);
+    }
     if (d > 1.0) return half4(0.0);
-    // Outward normal of the rounded rect.
-    float2 n = (q.x > 0.0 && q.y > 0.0) ? normalize(q) : (q.x > q.y ? float2(1.0, 0.0) : float2(0.0, 1.0));
-    n *= sign(rel);
     // The rim is a rounded slope (quarter circle, `bevel` wide) on a flat slab. Its surface normal
     // tilts from straight up (t = 0) to sideways at the edge (t = 1); a ray looking straight down
     // refracts through it (Snell, glass ≈ 1.5) and travels on through the slab's depth, so near the
@@ -750,7 +820,7 @@ half4 main(float2 p) {
     float t = clamp(1.0 + d / bevel, 0.0, 1.0);
     float2 lo = float2(0.5);
     float2 hi = size + 2.0 * margin - 0.5;
-    float2 at = margin + c + rel / zoom;
+    float2 at = margin + cb + rel / zoom;
     half4 col;
     if (t <= 0.0) {
         // The flat middle (most pixels): straight through, one sample.
@@ -765,7 +835,10 @@ half4 main(float2 p) {
         float3 normal = normalize(float3(n * tilt, sqrt(max(1.0 - tilt * tilt, 0.0))));
         float3 ray = refract(float3(0.0, 0.0, -1.0), normal, 1.0 / 1.5);
         float h = bevel * sqrt(max(1.0 - tilt * tilt, 0.0));
-        float2 shift = ray.xy * (h + bendBy) / -ray.z;
+        // Unblurred (a blob is the drag lens, with no blur), the last pixels of the rim, refracted at a
+        // grazing angle, sampled far across the picture a pixel apart and showed as dotted, fringed
+        // pixels: their reach is capped there. Blurred glass hides it and keeps the plain optics.
+        float2 shift = ray.xy * (h + bendBy) / (blobR > 0.0 ? max(-ray.z, 0.45) : -ray.z);
         at = clamp(at + shift, lo, hi);
         col = content.eval(at);
         if (disperse > 0.0) {
@@ -779,10 +852,40 @@ half4 main(float2 p) {
     half lum = dot(col.rgb, half3(0.2126, 0.7152, 0.0722));
     col.rgb = clamp(mix(half3(lum), col.rgb, half(vibrance)), half3(0.0), half3(col.a));
     col.rgb = mix(col.rgb, half3(tint.rgb) * col.a, half(tint.a));
+    // Words on the glass. The rim stays as clear as any glass; from a rim's width inside it, the face
+    // spreads what's behind (fine detail is what fights letters) and tone-maps it into the range
+    // that gives the text its contrast. Scaled, not tinted: colours keep their hue, black stays black.
+    if (legible != 0.0) {
+        // A long, soft ramp: over anything bright, a short one drew the pane's outline again inside it.
+        // Reaching full strength short of a thin pane's middle, or it's a dark streak down the centre.
+        float reach = min(bevel * 3.0, min(size.x, size.y) * 0.5 - margin - bevel * 0.4);
+        float face = smoothstep(0.0, max(reach * 0.7, 1.0), -d - bevel * 0.4);
+        if (face > 0.0) {
+            float3 soft = float3(col.rgb);
+            for (int i = 0; i < 12; i++) {
+                float a = float(i) * 0.5236;
+                float r = soften * (mod(float(i), 2.0) < 0.5 ? 1.0 : 0.55);
+                soft += float3(content.eval(clamp(at + float2(cos(a), sin(a)) * r, lo, hi)).rgb);
+            }
+            soft /= 13.0;
+            float l = dot(soft, float3(0.2126, 0.7152, 0.0722));
+            float3 toned;
+            if (legible > 0.0) {
+                // Light text: nothing behind it brighter than the cap, approached softly.
+                float m = 0.34 * (1.0 - exp(-l / 0.34));
+                toned = soft * (m / max(l, 0.001));
+            } else {
+                // Dark text: nothing behind it darker than the floor.
+                float m = 1.0 - 0.24 * (1.0 - exp(-(1.0 - l) / 0.24));
+                toned = soft + (m - l);
+            }
+            col.rgb = mix(col.rgb, half3(clamp(toned, float3(0.0), float3(1.0))) * col.a, half(face));
+        }
+    }
     // The gloss: what's under the bevel glows, brightest where the edge faces the light and its
     // opposite (iOS 26 tiles over blue: the rim reads as a brighter, still saturated blue).
     float f0 = dot(normalize(rel / max(c, float2(1.0)) + 1e-4), light);
-    float face0 = pow(max(f0, 0.0), 1.6) + 0.8 * pow(max(-f0, 0.0), 1.6);
+    float face0 = pow(max(f0, 0.0), 1.6) + opposite * pow(max(-f0, 0.0), 1.6);
     // Side-on to the light (the same tight band as RimShadow's dark hairline, s^10 of the true
     // normal): no always-on light there. On Apple's round buttons the sides carry none, only the
     // dark line; ours kept a light ring all round that read as a border on the phone (2026-11-05).
@@ -791,16 +894,16 @@ half4 main(float2 p) {
     float sideS2 = sideS * sideS; float sideS4 = sideS2 * sideS2;
     float quiet = 1.0 - sideS4 * sideS4 * sideS2;
     float g = gloss * t * t * (0.3 * quiet + 0.7 * face0);
-    col.rgb += (half3(col.a) - col.rgb) * half(g);
+    col.rgb += (half3(glow) * col.a - col.rgb) * half(g);
     // A thin specular rim, brightest where it faces the light and its opposite.
     float rim = 1.0 - smoothstep(0.0, 1.8, -d);
     // Lit by the same facing as the inner band and the rim stroke (the shape's normalised position,
     // not its true normal), so bars and cards catch the light alike.
     float f = dot(normalize(rel / max(c, float2(1.0)) + 1e-4), light);
     // As the band: full facing the light, 0.8 on the far side, gathered towards both.
-    float facing = pow(max(f, 0.0), 1.6) + 0.8 * pow(max(-f, 0.0), 1.6);
+    float facing = pow(max(f, 0.0), 1.6) + opposite * pow(max(-f, 0.0), 1.6);
     float light = rim * (0.25 * quiet + 0.75 * facing) + t * t * t * 0.12 * quiet;
-    col.rgb += half3(light * spec) * col.a;
+    col.rgb += half3(glow) * half(light * spec) * col.a;
     // On light backgrounds a highlight alone vanishes: a faint shaded underside gives the edge.
     col.rgb -= half3(rim * shade * (0.4 + 0.6 * max(n.y, 0.0))) * col.a;
     return col * half(clamp(0.5 - d, 0.0, 1.0));

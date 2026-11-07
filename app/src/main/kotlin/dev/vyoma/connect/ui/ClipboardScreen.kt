@@ -139,7 +139,7 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
             }
         }
     }
-    if (setup) ClipboardAdbDialog { setup = false }
+    if (setup) ClipboardSetupDialog(vm) { setup = false }
     if (clearing) {
         GlassDialog(
             onDismissRequest = { clearing = false },

@@ -79,7 +79,7 @@ class FrameBudget(private val onSlow: (ratio: Float) -> Unit) {
     }
 
     private fun sample(m: FrameMetrics, interval: Long) {
-        if (done || m.getMetric(FrameMetrics.FIRST_DRAW_FRAME) == 1L) return
+        if (done || paused || m.getMetric(FrameMetrics.FIRST_DRAW_FRAME) == 1L) return
         if (SystemClock.uptimeMillis() - Process.getStartUptimeMillis() < WARMUP_MS) return
         val vsync = m.getMetric(FrameMetrics.INTENDED_VSYNC_TIMESTAMP)
         // Back to back means within two intervals: a slow phone misses some vsyncs while scrolling.
@@ -112,6 +112,9 @@ class FrameBudget(private val onSlow: (ratio: Float) -> Unit) {
             val ram = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }.totalMem
             return Build.VERSION.MEDIA_PERFORMANCE_CLASS < Build.VERSION_CODES.TIRAMISU && ram < 7_000_000_000L
         }
+
+        /** First run's show is far heavier than the app: what it costs says nothing about the glass. */
+        @Volatile var paused = false
 
         private const val TAG = "FrameBudget"
         private const val WINDOW = 240

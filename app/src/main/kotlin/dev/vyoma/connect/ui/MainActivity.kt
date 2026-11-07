@@ -55,6 +55,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.withResumed
 import dev.vyoma.connect.designsystem.VyomaMotion
+import dev.vyoma.connect.designsystem.DarkMode
+import dev.vyoma.connect.designsystem.Palette
 import dev.vyoma.connect.designsystem.VyomaTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -74,6 +76,7 @@ sealed interface Screen {
     data class Presenter(val deviceId: String?) : Screen
     data class Files(val pcId: String, val path: String = "") : Screen
     data object Automation : Screen
+    data object Connection : Screen
     data object Notifications : Screen
     /** [ruleId] null: a new rule; "suggestion:key": a suggestion as a new rule. */
     data class RuleEditor(val ruleId: String?) : Screen
@@ -92,7 +95,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) handleIntent(intent) // a recreated activity already acted on it
         setContent {
-            val theme by vm.theme.collectAsStateWithLifecycle()
+            val chosenTheme by vm.theme.collectAsStateWithLifecycle()
+            val onboarding by vm.showOnboarding.collectAsStateWithLifecycle()
+            // First run is drawn on its own picture: white words, and the sand's accent, whatever's chosen.
+            val theme = if (onboarding == true) chosenTheme.copy(darkMode = DarkMode.DARK, palette = Palette.EMBER) else chosenTheme
             VyomaTheme(theme) {
                 // Bar icons follow the app's theme, which can differ from the system's.
                 val darkUi = MaterialTheme.colorScheme.background.luminance() < 0.5f
@@ -101,10 +107,13 @@ class MainActivity : ComponentActivity() {
                     val style = if (darkUi) SystemBarStyle.dark(clear) else SystemBarStyle.light(clear, clear)
                     enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
                 }
-                val onboarding by vm.showOnboarding.collectAsStateWithLifecycle()
                 StatusHost { MenuHost { Crossfade(onboarding, animationSpec = VyomaMotion.effects(), label = "onboarding") { show ->
                     when (show) {
-                        true -> OnboardingScreen(vm, onDone = { vm.finishOnboarding() })
+                        true -> OnboardingScreen(vm, onDone = {
+                            // Setup ends on Home, even replayed from Settings.
+                            tab.value = Tab.HOME
+                            vm.finishOnboarding()
+                        })
                         false -> {
                             PermissionGate { vm.startService() }
                             AppNavigation(backStack, tab, vm)
@@ -223,6 +232,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
             Screen.Clipboard -> "Clipboard"
             Screen.Captures -> "Captures"
             Screen.Automation -> "Automation"
+            Screen.Connection -> "Connection"
             Screen.Notifications -> "Notifications"
             is Screen.RuleEditor -> "Rule"
         }
@@ -327,6 +337,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                             vm = vm,
                             onOpenDevice = { backStack.add(Screen.DeviceDetail(it)) },
                             onTouchpad = { id -> AppLock.ask(context, AppLock.TOUCHPAD) { backStack.add(Screen.Touchpad(id, keyboard = false)) } },
+                            onPresenter = { id -> AppLock.ask(context, AppLock.PRESENTER) { backStack.add(Screen.Presenter(id)) } },
                             onClipboard = { AppLock.ask(context, AppLock.CLIPBOARD) { backStack.add(Screen.Clipboard) } },
                             onBrowseFiles = { id -> AppLock.ask(context, PC_FILES) { backStack.add(Screen.Files(id)) } },
                             onFiles = { toTab(Tab.FILES) },
@@ -341,6 +352,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                         Tab.SETTINGS -> SettingsScreen(
                             vm, onAutomation = { backStack.add(Screen.Automation) },
                             onNotifications = { backStack.add(Screen.Notifications) },
+                            onConnection = { backStack.add(Screen.Connection) },
                         )
                     }
                 }
@@ -365,6 +377,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                 Screen.Clipboard -> ClipboardScreen(vm, onBack = pop)
                 Screen.Captures -> CapturesScreen(onBack = pop)
                 Screen.Notifications -> NotificationAppsScreen(onBack = pop)
+                Screen.Connection -> ConnectionChecksScreen(vm, onBack = pop)
                 Screen.Automation -> AutomationScreen(vm, onBack = pop, onEdit = { backStack.add(Screen.RuleEditor(it)) })
                 is Screen.RuleEditor -> RuleEditorScreen(vm, screen.ruleId, onBack = pop)
             }

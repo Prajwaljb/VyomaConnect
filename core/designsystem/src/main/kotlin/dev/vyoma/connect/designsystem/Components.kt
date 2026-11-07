@@ -1,5 +1,7 @@
 package dev.vyoma.connect.designsystem
 
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.ui.layout.boundsInRoot
 
 import androidx.compose.ui.input.pointer.PointerInputChange
@@ -577,6 +579,30 @@ fun ListRow(
             )
         }
     }
+}
+
+/**
+ * What a choice brings into its card (a setting that only exists once another is on): the card swells
+ * to take it in, overshooting like liquid finding its level, and what's new surfaces into the room.
+ * Never just `if (on) Row()`: a row popping in moves everything under it in one frame.
+ */
+@Composable
+fun LiquidReveal(visible: Boolean, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    androidx.compose.animation.AnimatedVisibility(visible, modifier, enter = REVEAL_IN, exit = REVEAL_OUT) { content() }
+}
+
+private val REVEAL_IN = androidx.compose.animation.expandVertically(
+    spring(dampingRatio = 0.6f, stiffness = 260f, visibilityThreshold = androidx.compose.ui.unit.IntSize.VisibilityThreshold), expandFrom = Alignment.Top,
+) + androidx.compose.animation.fadeIn(spring(stiffness = 140f)) +
+    androidx.compose.animation.slideInVertically(spring(dampingRatio = 0.75f, stiffness = 240f, visibilityThreshold = androidx.compose.ui.unit.IntOffset.VisibilityThreshold)) { -it / 3 }
+private val REVEAL_OUT = androidx.compose.animation.shrinkVertically(
+    spring(stiffness = 420f, visibilityThreshold = androidx.compose.ui.unit.IntSize.VisibilityThreshold), shrinkTowards = Alignment.Top,
+) + androidx.compose.animation.fadeOut(spring(stiffness = 800f))
+
+/** The line above a [ListRow] that comes and goes with it, inside a [LiquidReveal]. */
+@Composable
+fun RowDivider(hasIcon: Boolean = true) {
+    HorizontalDivider(Modifier.padding(start = 20.dp + if (hasIcon) 50.dp else 0.dp, end = 20.dp), color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 /**

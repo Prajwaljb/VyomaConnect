@@ -12,6 +12,8 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
@@ -68,6 +70,13 @@ fun VyomaTheme(settings: ThemeSettings = ThemeSettings(), content: @Composable (
         buildScheme(settings, dark, accentSource, pc)
     }
     TrackSpecularLight()
+    // One choice: the PC accent also takes the glow, and the light, from the PC's wallpaper.
+    val inPcColours = settings.palette == Palette.PC
+    SideEffect { AppCanvas.useWallpaper = inPcColours }
+    val restingLight = (AppCanvas.wallpaper.takeIf { inPcColours && AppCanvas.glow }?.lightAngle() ?: SpecularLight.REST)
+    LaunchedEffect(restingLight) {
+        androidx.compose.animation.core.animate(SpecularLight.rest, restingLight, animationSpec = VyomaMotion.effects()) { at, _ -> SpecularLight.aim(at) }
+    }
     MaterialTheme(
         colorScheme = target.animated(),
         typography = VyomaTypography,
@@ -131,6 +140,42 @@ private fun Color.blend(other: Color, otherWeight: Float) = Color(
 
 /** More (or less) chroma at the same HSL lightness. */
 private fun Color.saturate(by: Float): Color = toned(saturation = by)
+
+/**
+ * Where a wallpaper's light comes from, as a [SpecularLight] angle: above its brightest part, so the
+ * highlights on the glass agree with what's behind it. Only the sideways position: the page fades
+ * out lower down, so the top rows count most. A wallpaper with no bright side leaves it straight up.
+ */
+fun CanvasWallpaper.lightAngle(): Float {
+    val rowWeights = FloatArray(rows) { r -> 1f / (1f + 1.5f * r * 4f / rows) }
+    val columns = FloatArray(cols) { x ->
+        var sum = 0f
+        var weight = 0f
+        for (y in 0 until rows) {
+            val c = colors[y * cols + x]
+            val luma = (0.2126f * (c shr 16 and 255) + 0.7152f * (c shr 8 and 255) + 0.0722f * (c and 255)) / 255f
+            sum += luma * rowWeights[y]
+            weight += rowWeights[y]
+        }
+        sum / weight
+    }
+    val low = columns.min()
+    val contrast = columns.max() - low
+    if (contrast < 0.01f) return SpecularLight.REST
+    var at = 0f
+    var total = 0f
+    columns.forEachIndexed { x, l ->
+        val w = (l - low) * (l - low)
+        at += w * (x + 0.5f) / cols
+        total += w
+    }
+    // Faint differences barely move it; a clear bright side moves it all the way.
+    val t = ((contrast - 0.04f) / 0.16f).coerceIn(0f, 1f)
+    return SpecularLight.REST + ((at / total) - 0.5f) * 2f * MAX_WALLPAPER_SWAY * t * t * (3f - 2f * t)
+}
+
+/** How far from straight up a wallpaper can put the light: tilting sways it from there. */
+private const val MAX_WALLPAPER_SWAY = 40f
 
 /**
  * The accent a desktop wallpaper gives: its most vivid colour (saturated and mid-light, so neither

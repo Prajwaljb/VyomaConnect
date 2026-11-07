@@ -117,6 +117,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun finishOnboarding() = viewModelScope.launch { settings.setOnboarded() }
+    fun replayOnboarding() = viewModelScope.launch { settings.setOnboarded(false) }
 
     fun startService() = LinkService.start(getApplication(), visible = true)
 
@@ -128,7 +129,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun requestPair(id: String) = act(id) { it.requestPairing() }
     fun acceptPair(id: String) = act(id) { it.acceptPairing() }
     fun rejectPair(id: String) = act(id) { it.rejectPairing() }
-    fun unpair(id: String) = act(id) { it.unpair() }
+    fun unpair(id: String) = act(id) {
+        it.unpair()
+        dev.vyoma.connect.data.PcSpecsStore.forget(getApplication(), id)
+    }
     fun ping(id: String) = act(id) { it.plugin<PingPlugin>(PingPlugin.ID)?.ping("Ping from Vyoma") }
     fun lockPc(id: String) = act(id) { it.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(true) }
     fun setPcLocked(id: String, locked: Boolean) = act(id) {
@@ -194,6 +198,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun copyClip(text: String) = container.clipboard.copy(text)
     fun clearClipHistory() = container.clipboard.clearHistory()
     fun backgroundClipboardSync() = container.clipboard.backgroundSyncAvailable()
+
+    /** Opens [url] in the PC's browser, as a shared link. */
+    suspend fun openOnPc(id: String, url: String): Boolean = device(id)?.plugin<dev.vyoma.connect.protocol.plugin.builtin.SharePlugin>(dev.vyoma.connect.protocol.plugin.builtin.SharePlugin.ID)?.sendUrl(url) == true
 
     /** Called when the app comes to the front: read the clipboard and (re)start background sync. */
     fun onForeground() {
@@ -271,8 +278,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setDarkMode(m: DarkMode) = viewModelScope.launch { settings.setDarkMode(m) }
     fun setLiteGlass(enabled: Boolean) = viewModelScope.launch { settings.setLiteGlass(enabled) }
     fun setCanvasGlow(enabled: Boolean) = viewModelScope.launch { settings.setCanvasGlow(enabled) }
-    val canvasWallpaper: StateFlow<Boolean> = settings.canvasWallpaper.stateIn(viewModelScope, SharingStarted.Eagerly, true)
-    fun setCanvasWallpaper(enabled: Boolean) = viewModelScope.launch { settings.setCanvasWallpaper(enabled) }
     val outdoorMode: StateFlow<Boolean> = settings.outdoorMode.stateIn(viewModelScope, SharingStarted.Eagerly, true)
     fun setOutdoorMode(enabled: Boolean) = viewModelScope.launch { settings.setOutdoorMode(enabled) }
 

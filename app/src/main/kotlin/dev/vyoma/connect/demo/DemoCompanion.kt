@@ -12,6 +12,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlin.random.Random
@@ -72,6 +73,21 @@ internal class DemoCompanion(credentials: LocalCredentials, private val pc: Demo
                 put("colors", kotlinx.serialization.json.JsonArray(DEMO_WALLPAPER.map { c ->
                     kotlinx.serialization.json.JsonArray(listOf(c shr 16 and 255, c shr 8 and 255, c and 255).map { kotlinx.serialization.json.JsonPrimitive(it) })
                 }))
+            })
+            // A believable laptop for the PC details page.
+            CompanionPlugin.SPECS_REQUEST -> send(packet(CompanionPlugin.SPECS) {
+                put("os", "Fedora Linux 43")
+                put("kernel", "6.17.4-300.fc43.x86_64")
+                put("desktop", "KDE Plasma")
+                put("session", "Wayland")
+                put("cpu", "AMD Ryzen 7 7840U")
+                put("cores", 8)
+                put("threads", 16)
+                put("gpus", kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("AMD Radeon 780M"))))
+                put("memTotal", 32_856_000_000L)
+                put("diskTotal", 1_000_204_886_016L)
+                put("diskFree", 612_384_000_000L)
+                put("displays", kotlinx.serialization.json.JsonArray(listOf(buildJsonObject { put("w", 2880); put("h", 1800); put("internal", true) })))
             })
             CompanionPlugin.PC_SET -> {
                 packet.string("display")?.let { d -> packet.double("brightness")?.let { if (d == "display0") brightness = it.coerceIn(0.01, 1.0) } }
@@ -259,12 +275,12 @@ internal class DemoCompanion(credentials: LocalCredentials, private val pc: Demo
             protocolVersion = DeviceIdentity.PROTOCOL_VERSION,
             incomingCapabilities = setOf(
                 CompanionPlugin.STATS_REQUEST, CompanionPlugin.SCREENSHOT_REQUEST, CompanionPlugin.CAMERA_REQUEST, CompanionPlugin.HANDOFF_REQUEST,
-                CompanionPlugin.FILES_LIST, CompanionPlugin.FILES_GET, CompanionPlugin.FILES_PUT, CompanionPlugin.WALLPAPER_REQUEST,
+                CompanionPlugin.FILES_LIST, CompanionPlugin.FILES_GET, CompanionPlugin.FILES_PUT, CompanionPlugin.WALLPAPER_REQUEST, CompanionPlugin.SPECS_REQUEST,
                 CompanionPlugin.GAMEPAD_STATE, CompanionPlugin.GAMEPAD_CLOSE,
             ),
             outgoingCapabilities = setOf(
                 CompanionPlugin.STATS, CompanionPlugin.SCREENSHOT, CompanionPlugin.CAMERA, CompanionPlugin.HANDOFF,
-                CompanionPlugin.FILES_LISTING, CompanionPlugin.FILES_FILE, CompanionPlugin.FILES_SAVED, CompanionPlugin.WALLPAPER, CompanionPlugin.GAMEPAD_RUMBLE,
+                CompanionPlugin.FILES_LISTING, CompanionPlugin.FILES_FILE, CompanionPlugin.FILES_SAVED, CompanionPlugin.WALLPAPER, CompanionPlugin.SPECS, CompanionPlugin.GAMEPAD_RUMBLE,
             ),
             companionOf = pcId,
         )

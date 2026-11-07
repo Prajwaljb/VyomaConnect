@@ -1,5 +1,19 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.NetworkCheck
+import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import dev.vyoma.connect.designsystem.LiquidReveal
+import dev.vyoma.connect.designsystem.PillButton
+import dev.vyoma.connect.designsystem.RowDivider
 import dev.vyoma.connect.designsystem.fadingVerticalScroll
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.rounded.TouchApp
@@ -8,12 +22,10 @@ import androidx.compose.material.icons.rounded.Park
 import dev.vyoma.connect.designsystem.LocalStatus
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.text.BasicText
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.SolidColor
 import dev.vyoma.connect.designsystem.Haptic
-import dev.vyoma.connect.designsystem.fitTogether
 import dev.vyoma.connect.designsystem.toned
 import dev.vyoma.connect.designsystem.DialogButton
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -118,7 +130,7 @@ import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.pressable
 
 @Composable
-fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation: () -> Unit = {}, onNotifications: () -> Unit = {}) {
+fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation: () -> Unit = {}, onConnection: () -> Unit = {}, onNotifications: () -> Unit = {}) {
     val theme by vm.theme.collectAsStateWithLifecycle()
     val name by vm.deviceName.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -150,114 +162,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
         title = "Settings",
         navigation = onBack?.let { back -> { BounceIconButton(onClick = back) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } } },
     ) {
-        item(key = "device-label") { SectionLabel("This phone") }
-        item(key = "device") {
-            SectionCard {
-                ListRow(
-                    title = "Device name",
-                    subtitle = name,
-                    icon = Icons.Rounded.Edit,
-                    iconTint = SystemColor.BLUE.color,
-                    trailing = { RowChevron() },
-                    onClick = { editingName = true },
-                )
-            }
-        }
-
-        item(key = "look-label") { SectionLabel("Appearance") }
-        item(key = "look") {
-            SectionCard(contentPadding = PaddingValues(vertical = 16.dp)) {
-                Text("Accent", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(horizontal = 20.dp))
-                Spacer(Modifier.height(12.dp))
-                // All seven in view, evenly spread: a sixth sliver at the edge hid one choice.
-                BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-                // One size for all seven names (see fitTogether), each allowed a little past its share.
-                val label = fitTogether(
-                    Palette.entries.map { it.label }, MaterialTheme.typography.labelSmall, maxWidth / Palette.entries.size + SWATCH_BLEED,
-                )
-                // Each circle leaves a gap in its share (seven at 44 dp touched on a 412 dp phone).
-                val swatch = (maxWidth / Palette.entries.size - 8.dp).coerceAtMost(44.dp)
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Palette.entries.forEach { p ->
-                        PaletteSwatch(p, selected = theme.palette == p, label, swatch, Modifier.weight(1f)) { vm.setPalette(p) }
-                    }
-                }
-                }
-                Spacer(Modifier.height(20.dp))
-                SegmentedControl(
-                    options = DarkMode.entries.map { it.name.lowercase().replaceFirstChar(Char::uppercase) },
-                    selected = theme.darkMode.ordinal,
-                    onSelect = { vm.setDarkMode(DarkMode.entries[it]) },
-                    modifier = Modifier.padding(horizontal = 20.dp),
-                )
-            }
-        }
-
-        // The look's on/off effects, apart from the choices above (four kinds of control in one card read busy).
-        item(key = "effects-label") { SectionLabel("Effects") }
-        item(key = "effects") {
-            SectionCard {
-                val canvasGlow by vm.canvasGlow.collectAsStateWithLifecycle()
-                ListRow(
-                    title = "Background glow",
-                    subtitle = "A soft glow behind each screen",
-                    icon = Icons.Rounded.Gradient,
-                    iconTint = SystemColor.BLUE.color,
-                    showDivider = true,
-                    // The whole row toggles (like every other row acts), with the switch's haptic.
-                    haptic = if (canvasGlow) Haptic.ToggleOff else Haptic.ToggleOn,
-                    onClick = { vm.setCanvasGlow(!canvasGlow) },
-                    trailing = { VyomaSwitch(checked = canvasGlow, onCheckedChange = { vm.setCanvasGlow(it) }, contentDescription = "Background glow") },
-                )
-                val wallpaper by vm.canvasWallpaper.collectAsStateWithLifecycle()
-                ListRow(
-                    title = "PC wallpaper colours",
-                    subtitle = if (AppCanvas.wallpaper == null) "Needs the companion on your PC" else "Glow in your desktop's colours",
-                    icon = Icons.Rounded.Wallpaper,
-                    iconTint = SystemColor.CYAN.color,
-                    showDivider = true,
-                    enabled = canvasGlow,
-                    haptic = if (wallpaper) Haptic.ToggleOff else Haptic.ToggleOn,
-                    onClick = { vm.setCanvasWallpaper(!wallpaper) },
-                    trailing = { VyomaSwitch(checked = wallpaper && canvasGlow, onCheckedChange = { vm.setCanvasWallpaper(it) }, contentDescription = "PC wallpaper colours") },
-                )
-                val glass by vm.liteGlass.collectAsStateWithLifecycle()
-                ListRow(
-                    title = "Lighter glass",
-                    subtitle = when {
-                        glass.detected && !glass.chosen -> "Turned on for this phone, so it stays smooth"
-                        else -> "Frosted bars for slower phones"
-                    },
-                    icon = Icons.Rounded.Speed,
-                    iconTint = SystemColor.GRAY.color,
-                    haptic = if (glass.on) Haptic.ToggleOff else Haptic.ToggleOn,
-                    onClick = { vm.setLiteGlass(!glass.on) },
-                    trailing = { VyomaSwitch(checked = glass.on, onCheckedChange = { vm.setLiteGlass(it) }, contentDescription = "Lighter glass") },
-                    showDivider = false,
-                )
-            }
-        }
-
-        item(key = "auto-label") { SectionLabel("Automation") }
-        item(key = "auto") {
-            val rules by vm.rules.collectAsStateWithLifecycle()
-            val on = rules.count { it.enabled }
-            SectionCard {
-                ListRow(
-                    title = "Rules",
-                    subtitle = "When this happens, do that: calls, leaving, bedtime…",
-                    icon = Icons.Rounded.AutoMode,
-                    iconTint = SystemColor.ORANGE.color,
-                    trailing = { RowChevron(if (rules.isEmpty()) null else "$on on") },
-                    onClick = onAutomation,
-                )
-            }
-        }
-
-        item(key = "sync-label") { SectionLabel("Sync") }
+        item(key = "sync-label") { SectionLabel("Share with your PC") }
         item(key = "sync") {
             val notifOn = remember(resumeTick) { NotificationBridge.isEnabled(context) }
             val clipOn = remember(resumeTick) { vm.backgroundClipboardSync() }
@@ -294,8 +199,6 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                     trailing = { RowChevron(if (phoneOn) "On" else "Off") },
                     onClick = { if (!phoneOn) askPhone.launch(PhonePermissions.all) },
                 )
-                BluetoothRow(resumeTick)
-                SteadierRow(resumeTick)
                 ListRow(
                     // Named as on the Clipboard tab: one feature, one name.
                     title = "Sync when closed",
@@ -309,40 +212,64 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
             }
         }
 
-        item(key = "security-label") { SectionLabel("Security") }
-        item(key = "security") { SectionCard { FingerprintLockRow(resumeTick) } }
-
-        item(key = "hosts-label") { SectionLabel("Connect by address") }
-        item(key = "hosts") {
+        item(key = "auto-label") { SectionLabel("Automation") }
+        item(key = "auto") {
+            val rules by vm.rules.collectAsStateWithLifecycle()
+            val on = rules.count { it.enabled }
             SectionCard {
-                hosts.forEach { host ->
-                    ListRow(
-                        title = host,
-                        subtitle = if (host.startsWith("100.") || host.endsWith(".ts.net")) "Tailscale" else "Added manually",
-                        icon = Icons.Rounded.Lan,
-                        iconTint = SystemColor.TEAL.color,
-                        showDivider = true,
-                        trailing = {
-                            BounceIconButton(onClick = { vm.removeManualHost(host) }) { Icon(Icons.Rounded.Close, "Remove $host") }
-                        },
-                    )
-                }
                 ListRow(
-                    title = "Add a PC by IP or name",
-                    subtitle = "For Tailscale, or when it isn't found",
-                    icon = Icons.Rounded.Add,
+                    title = "Rules",
+                    subtitle = "When this happens, do that: calls, leaving, bedtime…",
+                    icon = Icons.Rounded.AutoMode,
+                    iconTint = SystemColor.ORANGE.color,
+                    trailing = { RowChevron(if (rules.isEmpty()) null else "$on on") },
+                    onClick = onAutomation,
+                )
+            }
+        }
+
+        item(key = "look-label") { SectionLabel("Appearance") }
+        item(key = "look") {
+            SectionCard(contentPadding = PaddingValues(vertical = 16.dp)) {
+                AccentPicker(theme.palette, vm::setPalette)
+                Spacer(Modifier.height(18.dp))
+                SegmentedControl(
+                    options = DarkMode.entries.map { it.name.lowercase().replaceFirstChar(Char::uppercase) },
+                    selected = theme.darkMode.ordinal,
+                    onSelect = { vm.setDarkMode(DarkMode.entries[it]) },
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                )
+            }
+        }
+
+        // The look's on/off effects, apart from the choices above (four kinds of control in one card read busy).
+        item(key = "effects") {
+            SectionCard {
+                val canvasGlow by vm.canvasGlow.collectAsStateWithLifecycle()
+                ListRow(
+                    title = "Background glow",
+                    subtitle = "A soft glow behind each screen",
+                    icon = Icons.Rounded.Gradient,
                     iconTint = SystemColor.BLUE.color,
                     showDivider = true,
-                    trailing = { RowChevron() },
-                    onClick = { addingHost = true },
+                    // The whole row toggles (like every other row acts), with the switch's haptic.
+                    haptic = if (canvasGlow) Haptic.ToggleOff else Haptic.ToggleOn,
+                    onClick = { vm.setCanvasGlow(!canvasGlow) },
+                    trailing = { VyomaSwitch(checked = canvasGlow, onCheckedChange = { vm.setCanvasGlow(it) }, contentDescription = "Background glow") },
                 )
+                val glass by vm.liteGlass.collectAsStateWithLifecycle()
                 ListRow(
-                    title = "Over a USB cable",
-                    subtitle = "Faster and steadier than Wi-Fi",
-                    icon = Icons.Rounded.Usb,
-                    iconTint = SystemColor.CYAN.color,
-                    trailing = { RowChevron() },
-                    onClick = { showUsbHelp = true },
+                    title = "Lighter glass",
+                    subtitle = when {
+                        glass.detected && !glass.chosen -> "Turned on for this phone, so it stays smooth"
+                        else -> "Frosted bars for slower phones"
+                    },
+                    icon = Icons.Rounded.Speed,
+                    iconTint = SystemColor.GRAY.color,
+                    haptic = if (glass.on) Haptic.ToggleOff else Haptic.ToggleOn,
+                    onClick = { vm.setLiteGlass(!glass.on) },
+                    trailing = { VyomaSwitch(checked = glass.on, onCheckedChange = { vm.setLiteGlass(it) }, contentDescription = "Lighter glass") },
+                    showDivider = false,
                 )
             }
         }
@@ -371,6 +298,55 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                 )
             }
         }
+
+        item(key = "hosts-label") { SectionLabel("Ways to connect") }
+        item(key = "hosts") {
+            SectionCard(Modifier.animateContentSize(VyomaMotion.spatial())) {
+                BluetoothRow(resumeTick)
+                SteadierRow(resumeTick)
+                hosts.forEach { host ->
+                    ListRow(
+                        title = host,
+                        subtitle = if (host.startsWith("100.") || host.endsWith(".ts.net")) "Tailscale" else "Added manually",
+                        icon = Icons.Rounded.Lan,
+                        iconTint = SystemColor.TEAL.color,
+                        showDivider = true,
+                        trailing = {
+                            BounceIconButton(onClick = { vm.removeManualHost(host) }) { Icon(Icons.Rounded.Close, "Remove $host") }
+                        },
+                    )
+                }
+                ListRow(
+                    title = "Add a PC by IP or name",
+                    subtitle = "For Tailscale, or when it isn't found",
+                    icon = Icons.Rounded.Add,
+                    iconTint = SystemColor.BLUE.color,
+                    showDivider = true,
+                    trailing = { RowChevron() },
+                    onClick = { addingHost = true },
+                )
+                ListRow(
+                    title = "Over a USB cable",
+                    subtitle = "Faster and steadier than Wi-Fi",
+                    icon = Icons.Rounded.Usb,
+                    iconTint = SystemColor.CYAN.color,
+                    trailing = { RowChevron() },
+                    showDivider = true,
+                    onClick = { showUsbHelp = true },
+                )
+                ListRow(
+                    title = "Connection checks",
+                    subtitle = "What's working, and what to do if it isn't",
+                    icon = Icons.Rounded.NetworkCheck,
+                    iconTint = SystemColor.GREEN.color,
+                    trailing = { RowChevron() },
+                    onClick = onConnection,
+                )
+            }
+        }
+
+        item(key = "security-label") { SectionLabel("Security") }
+        item(key = "security") { SectionCard { FingerprintLockRow(resumeTick) } }
 
         if (BuildConfig.DEMO) {
             item(key = "demo-label") { SectionLabel("Demo") }
@@ -408,8 +384,26 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
             }
         }
 
-        item(key = "about") {
+        item(key = "device-label") { SectionLabel("This phone") }
+        item(key = "device") {
             SectionCard {
+                ListRow(
+                    title = "Device name",
+                    subtitle = name,
+                    icon = Icons.Rounded.Edit,
+                    iconTint = SystemColor.BLUE.color,
+                    trailing = { RowChevron() },
+                    showDivider = true,
+                    onClick = { editingName = true },
+                )
+                ListRow(
+                    title = "Show setup again",
+                    subtitle = "The first-run steps and tips",
+                    icon = Icons.Rounded.Refresh,
+                    iconTint = SystemColor.BLUE.color,
+                    trailing = { RowChevron() },
+                    onClick = vm::replayOnboarding,
+                )
                 ListRow(
                     title = "Vyoma",
                     subtitle = "Version ${context.packageManager.getPackageInfo(context.packageName, 0).versionName} · KDE Connect protocol v8",
@@ -418,9 +412,10 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                 )
             }
         }
+
     }
 
-    if (showAdbHelp) ClipboardAdbDialog { showAdbHelp = false }
+    if (showAdbHelp) ClipboardSetupDialog(vm) { showAdbHelp = false }
     if (showUsbHelp) UsbHelpDialog { showUsbHelp = false }
 
     if (addingHost) AddHostDialog(vm) { addingHost = false }
@@ -442,18 +437,70 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
     }
 }
 
+/**
+ * Seven colours in a row, no words under them: seven names in a row couldn't breathe. The chosen one
+ * is named in the heading; the two that come from a wallpaper say which by their icon, set apart
+ * from the fixed colours.
+ */
 @Composable
-private fun PaletteSwatch(palette: Palette, selected: Boolean, label: TextStyle, size: androidx.compose.ui.unit.Dp, modifier: Modifier, onClick: () -> Unit) {
+private fun AccentPicker(chosen: Palette, onPick: (Palette) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Accent", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+        androidx.compose.animation.AnimatedContent(chosen, label = "accent name") { p ->
+            Text(
+                when (p) {
+                    Palette.PC -> "PC wallpaper"
+                    Palette.PHONE -> "Phone wallpaper"
+                    else -> p.label
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (chosen == Palette.PC) Spacer(Modifier.height(2.dp))
+    LiquidReveal(chosen == Palette.PC) {
+        Text(
+            if (AppCanvas.wallpaper == null) "Needs the companion on your PC" else "Colours and light follow your desktop",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 20.dp),
+        )
+    }
+    Spacer(Modifier.height(14.dp))
+    val gap = 17.dp // the line between the wallpapers and the fixed colours
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+        val share = (maxWidth - gap) / Palette.entries.size
+        val size = (share - 10.dp).coerceAtMost(40.dp)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Palette.entries.forEach { p ->
+                PaletteSwatch(p, selected = chosen == p, size, Modifier.width(share)) { onPick(p) }
+                if (p == Palette.PHONE) {
+                    Box(Modifier.width(gap), contentAlignment = Alignment.Center) {
+                        Box(Modifier.width(1.dp).height(size * 0.6f).background(MaterialTheme.colorScheme.outlineVariant))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PaletteSwatch(palette: Palette, selected: Boolean, size: androidx.compose.ui.unit.Dp, modifier: Modifier, onClick: () -> Unit) {
     val dark = MaterialTheme.colorScheme.background.red < 0.5f
     val ring by animateColorAsState(if (selected) MaterialTheme.colorScheme.onSurface else Color.Transparent, label = "ring")
-    val inset by animateDpAsState(if (selected) 5.dp else 0.dp, VyomaMotion.spatial(), label = "inset")
-    // Equal shares (labels differ in width, so spreading the columns spaced the circles unevenly).
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.pressable(haptic = Haptic.Select, onClick = onClick)) {
+    val inset by animateDpAsState(if (selected) 4.dp else 0.dp, VyomaMotion.spatial(), label = "inset")
+    Box(
+        modifier
+            .semantics(mergeDescendants = true) { contentDescription = "Accent: ${palette.label}"; this.selected = selected; role = Role.RadioButton }
+            .pressable(haptic = Haptic.Select, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
         Box(
             Modifier.size(size).clip(CircleShape).border(2.dp, ring, CircleShape).padding(inset.coerceAtLeast(0.dp)), // the spring overshoots below zero
             contentAlignment = Alignment.Center,
         ) {
-            val context = androidx.compose.ui.platform.LocalContext.current
+            val context = LocalContext.current
             val pcWall = AppCanvas.wallpaper
             val fill = if (palette == Palette.PC && pcWall != null) {
                 // The PC option previews its accent over the wallpaper's own colours.
@@ -471,28 +518,15 @@ private fun PaletteSwatch(palette: Palette, selected: Boolean, label: TextStyle,
                 SolidColor(if (dark) palette.dark.toned(1.2f, 0.5f) else palette.light)
             }
             Box(Modifier.size(size).clip(CircleShape).background(fill), contentAlignment = Alignment.Center) {
-                if (selected) Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                when {
+                    palette == Palette.PC -> Icon(Icons.Rounded.Computer, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    palette == Palette.PHONE -> Icon(Icons.Rounded.PhoneAndroid, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    selected -> Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                }
             }
         }
-        Spacer(Modifier.height(6.dp))
-        // One line, allowed a little past its share ("Wallpaper" is a hair wider than a sixth of the
-        // card), at the row's shared size: at larger text sizes they ran into each other on a OnePlus.
-        BasicText(
-            palette.label,
-            style = label.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
-            maxLines = 1,
-            softWrap = false,
-            modifier = Modifier.layout { m, c ->
-                val share = c.maxWidth
-                val p = m.measure(c.copy(minWidth = 0, maxWidth = share + SWATCH_BLEED.roundToPx()))
-                layout(share, p.height) { p.place((share - p.width) / 2, 0) }
-            },
-        )
     }
 }
-
-/** How far a swatch's label may reach past its share, half into each gap. */
-private val SWATCH_BLEED = 6.dp
 
 @SuppressLint("BatteryLife") // Core function: the app must stay connected in the background.
 internal fun requestUnrestricted(context: android.content.Context) {
@@ -534,38 +568,90 @@ internal fun AddHostDialog(vm: AppViewModel, onDismiss: () -> Unit) {
     )
 }
 
-/** How to grant automatic clipboard sync once over ADB (no root). */
+/**
+ * Sync when closed: Android only lets a computer grant this, and the companion is that computer. Three
+ * steps with the first and last ticking themselves off, so it's clear how far along it is. The
+ * command is folded away for anyone without the companion.
+ */
 @Composable
-internal fun ClipboardAdbDialog(onDismiss: () -> Unit) {
+internal fun ClipboardSetupDialog(vm: AppViewModel, onDismiss: () -> Unit) {
     val context = LocalContext.current
+    var debugging by remember { mutableStateOf(false) }
+    var granted by remember { mutableStateOf(vm.backgroundClipboardSync()) }
+    var manual by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        while (!granted) {
+            debugging = Settings.Global.getInt(context.contentResolver, Settings.Global.ADB_ENABLED, 0) == 1
+            granted = vm.backgroundClipboardSync()
+            kotlinx.coroutines.delay(1_000)
+        }
+    }
     val cmd = "adb shell pm grant ${context.packageName} android.permission.READ_LOGS && " +
         "adb shell appops set ${context.packageName} SYSTEM_ALERT_WINDOW allow"
     GlassDialog(
-        onDismissRequest = { onDismiss() },
-        title = { Text("Automatic clipboard sync") },
+        onDismissRequest = onDismiss,
+        title = { Text(if (granted) "Clipboard sync is on" else "Sync when closed") },
         text = {
-            Column {
-                Text("Android only lets the app in front read the clipboard. Two permissions lift that, and Android only lets a computer grant them, once.")
-                Spacer(Modifier.height(12.dp))
-                Text("With the Vyoma companion on your PC: turn on USB debugging, plug in, then allow it when the PC asks. Without it, run this from any computer with adb:")
-                Spacer(Modifier.height(8.dp))
-                Text(cmd, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    "Then reopen Vyoma and tap Allow when Android asks about log access. The permissions stay until you uninstall, so you can turn USB debugging off again right after.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Column(Modifier.heightIn(max = 460.dp).fadingVerticalScroll(rememberScrollState())) {
+                if (granted) {
+                    Text("Anything you copy now reaches your PC, even with Vyoma closed. It stays until you uninstall, so you can turn USB debugging off again.")
+                } else {
+                    Text("Android only lets the app in front read the clipboard. A computer can lift that once, and your PC can do it for you.")
+                    Spacer(Modifier.height(16.dp))
+                    SetupStep(1, "Turn on USB debugging", if (debugging) "On" else "It's under Developer options. Not there? Tap Build number 7 times in About phone.", debugging) {
+                        val options = Settings.Global.getInt(context.contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1
+                        runCatching { context.startActivity(Intent(if (options) Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS else Settings.ACTION_DEVICE_INFO_SETTINGS)) }
+                    }
+                    SetupStep(2, "Plug into your PC", "Then tap Allow when this phone asks about USB debugging.", done = false)
+                    SetupStep(3, "Click Allow on your PC", "The Vyoma companion asks in a notification. This turns on by itself after that.", done = false)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        if (manual) "Hide the command" else "No companion on the PC?",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(vertical = 8.dp).pressable(haptic = Haptic.Tap) { manual = !manual },
+                    )
+                    LiquidReveal(manual) {
+                        Column {
+                            Text("Run this from any computer with adb, then reopen Vyoma:", style = MaterialTheme.typography.bodySmall)
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                cmd,
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                modifier = Modifier.pressable(haptic = Haptic.Tap) {
+                                    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("adb", cmd))
+                                },
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text("Tap it to copy.", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
             }
         },
-        confirmButton = {
-            DialogButton(onClick = {
-                context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("adb", cmd))
-                onDismiss()
-            }) { Text("Copy command") }
-        },
-        dismissButton = { DialogButton(onClick = { onDismiss() }) { Text("Close") } },
+        confirmButton = { DialogButton(onClick = onDismiss) { Text(if (granted) "Done" else "Close") } },
     )
+}
+
+/** One numbered step in a how-to: a tick once it's done, and a button if the phone can take you there. */
+@Composable
+private fun SetupStep(number: Int, title: String, body: String, done: Boolean, onOpen: (() -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth().padding(bottom = 14.dp)) {
+        val tone by animateColorAsState(if (done) SystemColor.GREEN.color else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f), label = "step")
+        Box(Modifier.size(26.dp).clip(CircleShape).background(tone), contentAlignment = Alignment.Center) {
+            if (done) Icon(Icons.Rounded.Check, "Done", tint = Color.White, modifier = Modifier.size(16.dp))
+            else Text("$number", style = MaterialTheme.typography.labelMedium)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(body, style = MaterialTheme.typography.bodySmall)
+            if (onOpen != null && !done) {
+                Spacer(Modifier.height(8.dp))
+                PillButton("Open settings", onClick = onOpen, prominent = false)
+            }
+        }
+    }
 }
 
 /** The two ways to link over the cable; Vyoma picks either up on its own and prefers it to Wi-Fi. */
@@ -670,7 +756,7 @@ private fun SteadierRow(resumeTick: Int) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (on && waiting != null) Text(waiting, style = MaterialTheme.typography.bodySmall, color = SystemColor.ORANGE.color)
+                LiquidReveal(on && waiting != null) { Text(waiting.orEmpty(), style = MaterialTheme.typography.bodySmall, color = SystemColor.ORANGE.color) }
                 ListRow(
                     title = "Use Bluetooth for both",
                     horizontalPadding = 0.dp,
@@ -752,11 +838,15 @@ private fun FingerprintLockRow(resumeTick: Int) {
         icon = Icons.Rounded.Fingerprint,
         iconTint = SystemColor.MINT.color,
         haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
-        showDivider = on && usable,
         onClick = { toggle(!on) },
         trailing = { VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Fingerprint lock") },
     )
-    if (on && usable) UnlockCountsRow()
+    LiquidReveal(on && usable) {
+        Column {
+            RowDivider()
+            UnlockCountsRow()
+        }
+    }
 }
 
 @Composable

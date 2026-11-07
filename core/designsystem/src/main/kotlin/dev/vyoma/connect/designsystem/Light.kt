@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
@@ -22,8 +23,8 @@ import kotlin.math.tanh
 
 /**
  * Where the light comes from, as seen on the screen: the angle the specular edges are brightest
- * at, in degrees clockwise from 3 o'clock (270 = straight up). At rest it's straight up, centred
- * (the user asked for it there, not up-left); tilting the phone sways it up to 45° either way (55° at a 2.2x gain was too twitchy), so a small turn carries
+ * at, in degrees clockwise from 3 o'clock (270 = straight up). At rest it's above the brightest part
+ * of the wallpaper behind the app (see [CanvasWallpaper.lightAngle]), straight up without one; tilting the phone sways it up to 45° either way (55° at a 2.2x gain was too twitchy), so a small turn carries
  * it to straight up (a 35° soft limit made the top centre take a deliberate tilt), without circling. Read it only
  * while drawing: a change then redraws the highlights, never recomposes or relayouts.
  */
@@ -32,6 +33,52 @@ object SpecularLight {
 
     var angle by mutableFloatStateOf(REST)
         private set
+
+    /**
+     * A light at a place on screen (the first run's sun). While set, each glass element is lit from
+     * wherever it is, in the light's colour, instead of all from [angle]. Its lambdas are read while
+     * drawing, so what they read redraws the glass and nothing else.
+     */
+    var source: Source? by mutableStateOf(null)
+
+    class Source(
+        val at: () -> androidx.compose.ui.geometry.Offset,
+        val colour: () -> androidx.compose.ui.graphics.Color,
+        /** How far it is across the whole picture, in px: what it fades over. */
+        val across: () -> Float,
+    )
+
+    /** The way to the light from [center], in root coordinates. A tilt still sways it, by half: the sun stays the sun. */
+    fun from(center: androidx.compose.ui.geometry.Offset): Float {
+        val s = source ?: return angle
+        val to = s.at() - center
+        return Math.toDegrees(kotlin.math.atan2(to.y, to.x).toDouble()).toFloat() + (angle - rest) * 0.5f
+    }
+
+    /** How much of it gets to [center]: all beside it, down to a little under half across the picture. */
+    fun reach(center: androidx.compose.ui.geometry.Offset): Float {
+        val s = source ?: return 1f
+        return (1f - (s.at() - center).getDistance() / s.across().coerceAtLeast(1f) * 0.8f).coerceIn(0.45f, 1f)
+    }
+
+    /** What colour the highlights are. */
+    val colour: androidx.compose.ui.graphics.Color get() = source?.colour?.invoke() ?: androidx.compose.ui.graphics.Color.White
+
+    /**
+     * How bright the edge across from the light catches it. A real source lights one side more
+     * clearly, so that you can tell where it is.
+     */
+    val opposite: Float get() = if (source != null) 0.45f else 0.8f
+
+    /** Where the light rests before any tilt. */
+    internal var rest = REST
+        private set
+
+    /** Moves the resting light, and the light with it. */
+    internal fun aim(at: Float) {
+        angle += at - rest
+        rest = at
+    }
 
     /**
      * The light as content (cards) sees it: the same as the floating chrome. At 40% of it the
@@ -49,6 +96,11 @@ object SpecularLight {
         return androidx.compose.ui.geometry.Offset(-kotlin.math.cos(a).toFloat() * by, -kotlin.math.sin(a).toFloat() * by)
     }
 
+    /** Back to where it rests, untilted. */
+    internal fun settle() {
+        angle = rest
+    }
+
     internal fun publish(a: Float) {
         // Hand tremor is a degree or two: below that nothing is redrawn.
         if (abs(a - angle) >= 1.5f) angle = a
@@ -59,12 +111,20 @@ object SpecularLight {
  * Follows the phone's tilt into [SpecularLight] while the UI is started (visible); the sensor is off
  * otherwise. Gravity is fused and cheap; the game rate keeps the highlight's travel smooth, and a
  * low-pass filter plus [SpecularLight]'s dead band keeps a still phone from redrawing.
+ *
+ * Not with Lighter glass: a hand is never still enough, and each sway redraws every lit thing on
+ * screen. A moto g52 drew Settings non-stop, each frame ~86 ms (2026-11-07). The light rests instead.
  */
 @Composable
 internal fun TrackSpecularLight() {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
-    DisposableEffect(context, owner) {
+    val lite = GlassQuality.lite
+    DisposableEffect(context, owner, lite) {
+        if (lite) {
+            SpecularLight.settle()
+            return@DisposableEffect onDispose { }
+        }
         val sensors = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
         val sensor = sensors.getDefaultSensor(Sensor.TYPE_GRAVITY) ?: sensors.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         val listener = TiltListener(context)
@@ -124,7 +184,7 @@ private class TiltListener(private val context: Context) : SensorEventListener {
         val upright = ((hypot(sx, sy) / SensorManager.GRAVITY_EARTH - 0.08f) / 0.18f).coerceIn(0f, 1f)
         // The light stays put, straight up: tilting only sways it, and a
         // bigger turn eases into the limit instead of carrying it round the element.
-        SpecularLight.publish(SpecularLight.REST + MAX_SWAY * tanh(turn * GAIN / MAX_SWAY) * upright)
+        SpecularLight.publish(SpecularLight.rest + MAX_SWAY * tanh(turn * GAIN / MAX_SWAY) * upright)
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
