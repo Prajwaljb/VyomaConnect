@@ -47,7 +47,7 @@ const OPEN_TRIES: u32 = 10;
 const OPEN_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// What the user is told when the loopback device is missing.
-const SETUP: &str = "The PC needs a one-time setup for the phone camera (v4l2loopback): see desktop/companion/webcam/README";
+const SETUP: &str = "The PC needs a one-time setup for the phone camera: run vyoma-companion --setup on it";
 
 // VIDIOC_S_FMT = _IOWR('V', 5, struct v4l2_format), 208 bytes on 64-bit.
 const VIDIOC_S_FMT: libc::c_ulong = 0xc0d0_5605;

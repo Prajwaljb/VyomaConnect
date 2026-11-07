@@ -1,8 +1,6 @@
-Phone as webcam: one-time setup (needs sudo; the module ships with the CachyOS/Arch kernel).
-
-  sudo install -Dm644 desktop/companion/webcam/vyoma-webcam.conf /etc/modprobe.d/vyoma-webcam.conf
-  echo v4l2loopback | sudo tee /etc/modules-load.d/vyoma-webcam.conf
-  sudo modprobe v4l2loopback
+Phone as webcam: the companion sets this up itself (`vyoma-companion --setup`, or the Install button
+in its notification). It installs vyoma-webcam.conf to /etc/modprobe.d/, loads v4l2loopback at boot,
+and on kernels without the module installs v4l2loopback-dkms.
 
 Then /dev/video20 is "Vyoma Phone Camera". If v4l2loopback is already loaded for something else
 (OBS), unload it first (sudo modprobe -r v4l2loopback) or merge the options. The microphone needs

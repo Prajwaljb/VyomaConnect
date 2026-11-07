@@ -277,8 +277,8 @@ fn ask_to_allow(adb: PathBuf, serial: String, pkg: &'static str, digest: String)
     tokio::spawn(async move {
         let model = run(&adb, &serial, &["shell", "getprop", "ro.product.model"]).await.unwrap_or_else(|| "this phone".to_string());
         let body = format!(
-            "Background clipboard sync needs log access and drawing over other apps, which only a computer can grant. \
-             Allow it only if you installed this app yourself. Signing key {}.",
+            "This lets clipboard sync work with the app closed. Only a computer can grant it, and it only needs doing once. \
+             Allow it if you installed Vyoma yourself. Signing key {}.",
             digest[..8].to_uppercase(),
         );
         let answer = tokio::time::timeout(
