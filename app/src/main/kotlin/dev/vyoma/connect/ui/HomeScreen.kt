@@ -223,9 +223,9 @@ fun HomeScreen(
                     PcDashboard(vm, primary, DashboardSection.VOLUME, { onTouchpad(id) }, onClipboard)
                 }
             }
-            // The rest of what you'd adjust on the PC: its screens, and each app's sound.
+            // The rest of what you'd adjust on the PC: its screens (each app's sound is in PC details).
             if (live) companionPlugin?.let { plugin ->
-                item(key = "levels") { Staggered(3, Modifier.animateItem()) { LevelsCard(plugin) } }
+                item(key = "levels") { Staggered(3, Modifier.animateItem()) { LevelsCard(plugin, apps = false) } }
             }
             item(key = "controls") {
                 // Free-floating tiles need air from the card above them.

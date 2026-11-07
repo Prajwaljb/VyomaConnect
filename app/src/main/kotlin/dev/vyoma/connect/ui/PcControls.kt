@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -114,16 +115,20 @@ fun PcPowerDialog(plugin: CompanionPlugin, pcName: String, action: PcPower, onDi
 }
 
 /**
- * Each screen's brightness and the volume of each app playing sound, on Home under the PC's own
- * volume. Sliders own their value while touched and briefly after (the PC's echoes lag). Rows come
- * and go with what's playing, and it's nothing at all with neither (the companion hasn't answered,
- * or a desktop with no dimmable screen and silence): a "nothing playing" row would be noise on Home.
+ * Each screen's brightness (on Home, under the PC's own volume) or the volume of each app playing
+ * sound (PC details: the user didn't want it on Home, 2026-11-07). Sliders own their value while
+ * touched and briefly after (the PC's echoes lag). Rows come and go with what's playing, and the
+ * card is nothing at all, [label] included, with none: a "nothing playing" row would be noise.
  */
 @Composable
-internal fun LevelsCard(plugin: CompanionPlugin, modifier: Modifier = Modifier) {
-    val c = rememberPcControls(plugin)
+internal fun LevelsCard(plugin: CompanionPlugin, apps: Boolean, modifier: Modifier = Modifier, label: String? = null) {
+    val c = rememberPcControls(plugin)?.let { if (apps) it.copy(displays = emptyList()) else it.copy(apps = emptyList()) }
     LiquidReveal(c != null && (c.displays.isNotEmpty() || c.apps.isNotEmpty()), modifier) {
-        if (c != null) Levels(plugin, c)
+        // The list's own 12 dp gap, as between a label and its card in their own items.
+        if (c != null) Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            label?.let { SectionLabel(it) }
+            Levels(plugin, c)
+        }
     }
 }
 
