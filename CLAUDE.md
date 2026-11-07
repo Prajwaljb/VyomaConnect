@@ -55,3 +55,6 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - Device/plugin state is mutated only on the device's serial dispatcher; never block in `Plugin.onPacket`.
 - Widgets and tiles never do network I/O; they read cached state and send intents to the service.
 - The user's real phone is paired with desktop KDE Connect; never unpair or alter it in tests.
+- Since 2026-11-07 this PC runs `vyoma-desktop` (systemd user unit, identity taken over from kdeconnectd) instead of
+  kdeconnectd + the companion; logs: `journalctl --user -u vyoma-desktop`; `desktop/daemon/install.sh --undo` goes back.
+  The kdeconnectd interop test needs kdeconnectd running, so ask before switching back for it.

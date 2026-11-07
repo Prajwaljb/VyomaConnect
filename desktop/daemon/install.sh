@@ -43,8 +43,9 @@ install -Dm755 "$here/target/release/vyoma-desktop" "$HOME/.local/bin/vyoma-desk
 # KDE Connect's ports, as its own packages open them.
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
     firewall-cmd --query-service=kdeconnect >/dev/null 2>&1 || as_root sh -c 'firewall-cmd --permanent --add-service=kdeconnect && firewall-cmd --reload'
-elif command -v ufw >/dev/null 2>&1 && as_root ufw status | grep -q "Status: active"; then
-    as_root sh -c 'ufw allow 1714:1764/udp && ufw allow 1714:1764/tcp'
+elif command -v ufw >/dev/null 2>&1 && systemctl is-active --quiet ufw; then
+    grep -q "allow udp 1714:1764" /etc/ufw/user.rules 2>/dev/null && grep -q "allow tcp 1714:1764" /etc/ufw/user.rules 2>/dev/null ||
+        as_root sh -c 'ufw allow 1714:1764/udp && ufw allow 1714:1764/tcp'
 fi
 
 # Phones paired with this PC stay paired: its identity is kdeconnectd's.
