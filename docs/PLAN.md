@@ -255,7 +255,18 @@ Phase 1 so far:
     - The phone's signal report, stored and shown in `Details`.
   - Checked with the phone's debug build (2026-11-07): pairing from the phone, battery both ways, signal,
     ping, ringing the phone, and lock then unlock of the PC from the phone (the tile follows logind).
-  - Next: clipboard and share.
+  - Clipboard (`clipboard.rs`): wl-clipboard's `wl-paste --watch`, so KWin, wlroots and COSMIC; GNOME has no
+    data-control and needs its own way. Each change goes out; a linking device gets the current one with its
+    time (`clipboard.connect`), and a device's newer one replaces ours. Our own echo is ignored, password-manager
+    copies (`x-kde-passwordManagerHint`) are never sent, and nothing over 1 MiB goes out.
+  - Share (`share.rs`), both ways: files into XDG Downloads under a free name, never over a file; text as a
+    notification with Copy; http(s) links open at once, and any other scheme is shown as text. D-Bus
+    `SendFiles(id, paths)` and `SendText(id, text)`; a lone link goes as `url`. The core's `payload::Offer`
+    lets the announcement go through the hub.
+  - Checked with the phone's debug build (2026-11-07): files both ways (hash checked, empty file, a second copy
+    landed as `name (2)`), text both ways, and the clipboard both ways: on linking, a live copy, the phone's
+    Send clipboard, our own echo ignored, and an older copy from the phone declined.
+  - Next: media (MPRIS), volume, input, notifications, run commands.
 
 ### GUI (decided 2026-11-07)
 Slint, in Vyoma's own look, on every desktop. First version: pairing and phones (the code to

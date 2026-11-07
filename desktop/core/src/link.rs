@@ -92,6 +92,8 @@ pub struct Link {
     pub phone_identity: Value,
     /// The certificate the device showed (DER).
     pub peer_cert: Vec<u8>,
+    /// Where it is: payloads it offers are fetched from here.
+    pub remote: SocketAddr,
 }
 
 /// Notices a phone that went away without a word (app reinstalled or killed, Wi-Fi dropped, its
@@ -179,6 +181,7 @@ fn peer_cert(tls: &Stream) -> Result<Vec<u8>> {
 /// The v8 exchange inside TLS: our identity out, theirs in, and it must be [peer_id]'s.
 async fn finish(tls: Stream, identity: &Value, peer_id: &str, limit: usize) -> Result<Link> {
     let peer_cert = peer_cert(&tls)?;
+    let remote = tls.get_ref().0.peer_addr()?;
     let (read, write) = tokio::io::split(tls);
     let sender = Sender(Arc::new(Mutex::new(write)));
     let mut receiver = Receiver::new(read, UNPAIRED_PACKET_BYTES);
@@ -191,7 +194,7 @@ async fn finish(tls: Stream, identity: &Value, peer_id: &str, limit: usize) -> R
         bail!("unexpected identity from peer");
     }
     receiver.limit = limit;
-    Ok(Link { sender, receiver, phone_identity, peer_cert })
+    Ok(Link { sender, receiver, phone_identity, peer_cert, remote })
 }
 
 /// A device not paired yet must show a certificate made out to the id it claims.

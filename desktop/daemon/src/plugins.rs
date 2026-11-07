@@ -1,12 +1,15 @@
 //! The stock KDE Connect plugins, the PC's part of each, as the phone's plugins expect it
 //! (core/protocol's SimplePlugins.kt and PhonePlugins.kt): ping, battery both ways, the PC's screen
-//! lock, ringing either side, and the phone's mobile signal.
+//! lock, ringing either side, and the phone's mobile signal. The clipboard and sharing are in their
+//! own modules.
 //!
 //! A packet only goes to a paired device whose identity says it takes that type.
 
 use serde_json::{Value, json};
 
 use crate::DeviceView;
+use crate::clipboard::{CLIPBOARD, CLIPBOARD_CONNECT};
+use crate::share::{SHARE, SHARE_UPDATE};
 use crate::notify::{Notice, Notifier};
 use crate::system::{Battery, Ringer, Session};
 use vyoma_core::link::packet;
@@ -20,8 +23,8 @@ pub const SIGNAL: &str = "kdeconnect.connectivity_report";
 pub const SIGNAL_REQUEST: &str = "kdeconnect.connectivity_report.request";
 
 /// What we take. Not lock requests outward: phones can't be locked that way, and a KDE PC would lock.
-pub const INCOMING: &[&str] = &[PING, BATTERY, FIND, LOCK_REQUEST, SIGNAL];
-pub const OUTGOING: &[&str] = &[PING, BATTERY, FIND, LOCK, SIGNAL_REQUEST];
+pub const INCOMING: &[&str] = &[PING, BATTERY, FIND, LOCK_REQUEST, SIGNAL, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE];
+pub const OUTGOING: &[&str] = &[PING, BATTERY, FIND, LOCK, SIGNAL_REQUEST, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE];
 
 /// Whether [device] is paired and its identity says it takes [kind].
 pub fn takes(device: &DeviceView, kind: &str) -> bool {
