@@ -24,8 +24,12 @@ pub fn dir() -> PathBuf {
 
 impl Identity {
     pub fn load_or_create() -> Result<Self> {
-        let dir = dir();
-        lock_down(&dir);
+        Self::load_or_create_in(&dir())
+    }
+
+    /// The identity kept in [dir] (a development run keeps its own, apart from the companion's).
+    pub fn load_or_create_in(dir: &Path) -> Result<Self> {
+        lock_down(dir);
         let (id_path, cert_path, key_path) = (dir.join("device_id"), dir.join("certificate.pem"), dir.join("privateKey.pem"));
         if id_path.exists() && cert_path.exists() && key_path.exists() {
             let device_id = std::fs::read_to_string(&id_path)?.trim().to_string();
@@ -34,7 +38,7 @@ impl Identity {
             return Ok(Self { device_id, cert, key });
         }
 
-        std::fs::create_dir_all(&dir).context("creating companion config dir")?;
+        std::fs::create_dir_all(dir).context("creating companion config dir")?;
         // Same shape as KDE Connect's own ids and certificates, so every peer accepts it.
         let device_id = uuid::Uuid::new_v4().to_string().replace('-', "_");
         let key_pair = KeyPair::generate()?;
@@ -50,7 +54,7 @@ impl Identity {
         write_private(&key_path, key_pair.serialize_pem().as_bytes())?;
         std::fs::write(&id_path, &device_id)?;
         tracing::info!("created companion identity {device_id}");
-        Self::load_or_create()
+        Self::load_or_create_in(dir)
     }
 }
 

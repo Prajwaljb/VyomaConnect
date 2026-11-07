@@ -235,6 +235,16 @@ The vyoma.* extras (screen, files, camera, controller, webcam, mirror, specs) mo
    No virtual controller, phone webcam or mic at first (a camera extension and audio driver need
    signing); Gatekeeper wants a paid Apple Developer ID. Needs a Mac to build and test on.
 
+Phase 1 so far:
+- Done: the core is its own crate, `desktop/core` (vyoma-core), shared by the companion.
+- Done: the core links and pairs on its own, checked live against kdeconnectd.
+  - Discovery shares UDP 1716 and listens on the first free TCP port, IPv6 and IPv4.
+  - Links are made both ways, unpaired certificates must name their id, and there are handshake limits.
+  - Pairing follows the phone's rules, with the code, timeouts and clock check; there is a trust store.
+  - `examples/devpair.rs` runs it against allowlisted ids only.
+- Next: the daemon itself. It keeps its own identity and per-device state across links, and shows the code in
+  a desktop notification with Accept and Reject. Then the stock plugins, in the order above.
+
 ### GUI (decided 2026-11-07)
 Slint, in Vyoma's own look, on every desktop. First version: pairing and phones (the code to
 compare, how each is connected, unpair), setup and health (missing tools, firewall, udev, what's
