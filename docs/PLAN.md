@@ -266,7 +266,26 @@ Phase 1 so far:
   - Checked with the phone's debug build (2026-11-07): files both ways (hash checked, empty file, a second copy
     landed as `name (2)`), text both ways, and the clipboard both ways: on linking, a live copy, the phone's
     Send clipboard, our own echo ignored, and an older copy from the phone declined.
-  - Next: media (MPRIS), volume, input, notifications, run commands.
+  - Media (`media.rs`): every MPRIS player by its Identity (" [2]" on a second of the same name), its state
+    out on each change (not on position alone), actions, volume, seek, loop and shuffle, and the cover of a
+    local file as a payload: only the cover the player itself shows, never a file a device names, 8 MiB at most.
+  - Volume (`volume.rs`): pactl, so PulseAudio or PipeWire; outputs, volume (100% is the slider's top, 150%
+    the most a device may set), mute, the default; only outputs we listed are touched.
+  - Run commands (`commands.rs`): `commands.json` in the daemon's folder, D-Bus `AddCommand`, `RemoveCommand`
+    and `Commands`; the phone sends only a key.
+  - The phone's notifications (`notifications.rs`): shown here with their buttons, KDE's inline reply, and the
+    app icon cached by hash; dismissing here dismisses on the phone when it's clearable. The backlog the
+    phone sends when asked (`silent`) waits for the GUI's list.
+  - Checked with the phone's debug build (2026-11-07), against a fake player and a null sink so nothing of
+    the user's was touched (`VYOMA_PLAYERS` limits the players for tests): player list, state, Pause and
+    Next from the phone, the cover (7.8 KB), the output's level as on the PC, a command run from the
+    phone, and a phone notification shown with its icon. Live tests: `cargo test --release -- --ignored`.
+  - Input (`input.rs`): the touchpad and keyboard through the RemoteDesktop portal (asked once, then a restore
+    token), characters pressed as the real key of the desktop's layout (portal keysyms doubled and lost keys).
+    Checked with the phone's debug build: the user allowed it, the pointer moved and typing arrived. Over this
+    home's Wi-Fi (22% ping loss, 0.4 s round trips) it lags badly, in bursts up to 5 s apart: TCP holds what
+    follows a lost packet. The release app is on the cable, which the standalone app can't use yet. No
+    presenter pointer yet (stock draws it as a KDE overlay).
 
 ### GUI (decided 2026-11-07)
 Slint, in Vyoma's own look, on every desktop. First version: pairing and phones (the code to

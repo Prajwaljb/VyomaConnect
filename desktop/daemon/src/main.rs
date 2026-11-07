@@ -6,12 +6,19 @@
 //! - `VYOMA_DIR`: where its identity and pairings live (default `~/.config/vyoma-desktop`).
 //! - `VYOMA_ALLOW`: device ids, comma-separated; when set, every other device is ignored.
 //! - `VYOMA_ANNOUNCE`: addresses to announce to instead of the broadcast address.
+//! - `VYOMA_PLAYERS`: MPRIS bus names (after `org.mpris.MediaPlayer2.`), comma-separated; when set,
+//!   only those players are shown, so tests never reach the user's own.
 
 mod clipboard;
+mod commands;
+mod input;
+mod media;
+mod notifications;
 mod notify;
 mod plugins;
 mod share;
 mod system;
+mod volume;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -30,7 +37,8 @@ use vyoma_core::trust::TrustStore;
 use zbus::fdo;
 
 use clipboard::{CLIPBOARD, CLIPBOARD_CONNECT, Clipboard};
-use notify::{Notice, Notifier, Pressed};
+use notifications::{Incoming, Note};
+use notify::{Heard, Notice, Notifier};
 use share::{SHARE, SHARE_UPDATE, Shared};
 use system::{Ringer, Session};
 
@@ -67,6 +75,7 @@ enum Ask {
 
 struct Control {
     me: Arc<Identity>,
+    run: commands::Commands,
     notifier: Notifier,
     commands: mpsc::UnboundedSender<Command>,
     asks: mpsc::UnboundedSender<Ask>,
@@ -145,6 +154,29 @@ impl Control {
         self.command(Command::Send(id, share::text_packet(&text)))
     }
 
+    /// Adds a command devices can run here; its key.
+    fn add_command(&self, name: String, command: String) -> fdo::Result<String> {
+        let key = self.run.add(&name, &command).map_err(|e| fdo::Error::Failed(format!("{e:#}")))?;
+        self.commands_changed();
+        Ok(key)
+    }
+
+    fn remove_command(&self, key: String) -> fdo::Result<()> {
+        match self.run.remove(&key) {
+            Ok(true) => {
+                self.commands_changed();
+                Ok(())
+            }
+            Ok(false) => Err(fdo::Error::UnknownObject(key)),
+            Err(e) => Err(fdo::Error::Failed(format!("{e:#}"))),
+        }
+    }
+
+    /// The commands as JSON: {key: {name, command}}.
+    fn commands(&self) -> String {
+        Value::Object(self.run.all().into_iter().collect()).to_string()
+    }
+
     /// Stops this PC ringing for a device that's looking for it.
     fn stop_ringing(&self) -> fdo::Result<()> {
         self.asks.send(Ask::StopRinging).map_err(|_| fdo::Error::Failed("stopping".into()))
@@ -152,6 +184,14 @@ impl Control {
 }
 
 impl Control {
+    /// Every linked device that takes the list gets it again.
+    fn commands_changed(&self) {
+        let ids: Vec<String> = self.devices.lock().unwrap().iter().filter(|(_, d)| d.linked && plugins::takes(d, commands::RUNCOMMAND)).map(|(id, _)| id.clone()).collect();
+        for id in ids {
+            let _ = self.command(Command::Send(id, self.run.list_packet()));
+        }
+    }
+
     /// The device's certificate, if it takes shares.
     fn sharing(&self, id: &str) -> fdo::Result<Vec<u8>> {
         let all = self.devices.lock().unwrap();
@@ -188,6 +228,17 @@ struct Desk {
     batches: HashMap<String, Batch>,
     /// What a notification's buttons open.
     opens: HashMap<u32, Open>,
+    run: commands::Commands,
+    /// The phones' notifications shown here.
+    mirror: notifications::Mirror,
+    /// Phone notifications whose icon has just been fetched.
+    notes: mpsc::UnboundedSender<(String, Note)>,
+    /// Media requests from devices, for the players' task.
+    media: mpsc::UnboundedSender<(String, Value)>,
+    /// Touchpad and keyboard requests, for the input task.
+    input: mpsc::UnboundedSender<(std::time::Instant, String, Value)>,
+    /// Volume requests, for the outputs' task.
+    volume: mpsc::UnboundedSender<(String, Value)>,
 }
 
 /// A file fetched from a device, or why not.
@@ -249,7 +300,8 @@ async fn main() -> Result<()> {
     let conn = zbus::Connection::session().await.context("no session bus")?;
     let (asks_tx, mut asks) = mpsc::unbounded_channel();
     let notifier = Notifier::new(conn.clone());
-    let control = Control { me: me.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone() };
+    let run = commands::Commands::new(&dir);
+    let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone() };
     conn.object_server().at(OBJECT_PATH, control).await?;
     conn.request_name(BUS_NAME).await.context("another Vyoma desktop app is running")?;
     let (pressed_tx, mut pressed) = mpsc::unbounded_channel();
@@ -292,6 +344,24 @@ async fn main() -> Result<()> {
         }
     });
     let (received, mut arrivals) = mpsc::unbounded_channel();
+    let (notes, mut iconed) = mpsc::unbounded_channel();
+    let (input, input_requests) = mpsc::unbounded_channel();
+    let (echo_tx, mut echoes) = mpsc::unbounded_channel::<(String, Value)>();
+    tokio::spawn(input::run(dir.clone(), input_requests, echo_tx));
+    let (volume, volume_requests) = mpsc::unbounded_channel();
+    let (volume_tx, mut volume_out) = mpsc::unbounded_channel::<(Option<String>, Value)>();
+    tokio::spawn(async move {
+        if let Err(e) = volume::run(volume_requests, volume_tx).await {
+            tracing::warn!("no volume control: {e:#}");
+        }
+    });
+    let (media, media_requests) = mpsc::unbounded_channel();
+    let (media_tx, mut media_out) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        if let Err(e) = media::run(media_requests, media_tx).await {
+            tracing::warn!("no media players: {e:#}");
+        }
+    });
 
     let mut desk = Desk {
         me: me.clone(),
@@ -301,6 +371,12 @@ async fn main() -> Result<()> {
         received,
         batches: HashMap::new(),
         opens: HashMap::new(),
+        mirror: notifications::Mirror::default(),
+        input,
+        notes,
+        run,
+        media,
+        volume,
         devices,
         commands,
         notifier,
@@ -322,7 +398,9 @@ async fn main() -> Result<()> {
     loop {
         tokio::select! {
             Some(event) = events.recv() => desk.on_event(event).await,
-            Some(Pressed { notification, action }) = pressed.recv() => desk.on_pressed(notification, &action).await,
+            Some(h) = pressed.recv() => desk.on_heard(h).await,
+            Some((id, note)) = iconed.recv() => desk.show_note(&id, note).await,
+            Some((id, p)) = echoes.recv() => desk.send(&id, p),
             Some(text) = copies.recv() => {
                 if let Some(p) = desk.clipboard.changed(text) {
                     tracing::info!("clipboard copied here, {} chars", p["body"]["content"].as_str().unwrap_or("").chars().count());
@@ -330,6 +408,11 @@ async fn main() -> Result<()> {
                 }
             }
             Some(r) = arrivals.recv() => desk.on_received(r).await,
+            Some(o) = media_out.recv() => desk.on_media(o),
+            Some((to, p)) = volume_out.recv() => match to {
+                Some(id) => desk.send(&id, p),
+                None => desk.broadcast(volume::VOLUME, p),
+            },
             Some(Ask::StopRinging) = asks.recv() => plugins::stop_ringing(&desk.notifier, &mut desk.ringer, &mut desk.ring_notice).await,
             Some(locked) = lock_changes.recv() => {
                 if desk.locked != Some(locked) {
@@ -378,6 +461,9 @@ impl Desk {
         if let Some(p) = self.clipboard.connect_packet().filter(|_| plugins::takes(&device, CLIPBOARD_CONNECT)) {
             self.send(id, p);
         }
+        if plugins::takes(&device, input::MOUSEPAD_KEYBOARDSTATE) {
+            self.send(id, input::keyboard_state());
+        }
     }
 
     /// Shows a notification whose buttons [open] something.
@@ -389,6 +475,23 @@ impl Desk {
             self.opens.remove(&oldest);
         }
         Some(n)
+    }
+
+    fn on_media(&self, o: media::Out) {
+        match o {
+            media::Out::All(p) => self.broadcast(media::MPRIS, p),
+            media::Out::To(id, p) => self.send(&id, p),
+            media::Out::Art { id, packet, path, size } => {
+                let Some(pinned) = self.devices.lock().unwrap().get(&id).map(|d| d.cert.clone()) else { return };
+                let (me, commands) = (self.me.clone(), self.commands.clone());
+                tokio::spawn(async move {
+                    match share::offer_file(&commands, &id, &me, &pinned, packet, &path, size).await {
+                        Ok(()) => tracing::info!("{id}: album art sent, {size} bytes"),
+                        Err(e) => tracing::info!("{id}: album art not sent: {e:#}"),
+                    }
+                });
+            }
+        }
     }
 
     /// A share from a device.
@@ -442,6 +545,52 @@ impl Desk {
         };
         if let Some(b) = self.batches.get_mut(&r.id) {
             b.notice = n;
+        }
+    }
+
+    async fn on_heard(&mut self, h: Heard) {
+        if let Some((id, p)) = self.mirror.heard(&h) {
+            self.send(&id, p);
+        } else if let Heard::Pressed { notification, action } = h {
+            self.on_pressed(notification, &action).await;
+        }
+    }
+
+    /// A notification from a phone: shown once its icon is here, if it brings one we haven't.
+    fn on_note(&mut self, id: String, device: &DeviceView, packet: Value, from: IpAddr) -> Option<Note> {
+        let note = match notifications::parse(&packet) {
+            Incoming::Show(note) => note,
+            Incoming::Cancel(phone_id) => {
+                if let Some(n) = self.mirror.cancelled(&id, &phone_id) {
+                    let notifier = self.notifier.clone();
+                    tokio::spawn(async move { notifier.close(n).await });
+                }
+                return None;
+            }
+            Incoming::Ignore => return None,
+        };
+        let path = note.icon.as_deref().map(notifications::icon_path);
+        let Some(path) = path.filter(|p| !p.exists() && packet["payloadSize"].as_u64().is_some()) else { return Some(note) };
+        let (me, pinned, notes) = (self.me.clone(), device.cert.clone(), self.notes.clone());
+        tokio::spawn(async move {
+            if let Err(e) = tokio::time::timeout(Duration::from_secs(5), notifications::fetch_icon(&me, &pinned, from, &packet, &path)).await.unwrap_or_else(|_| Err(anyhow::anyhow!("timed out"))) {
+                tracing::debug!("{id}: icon not fetched: {e:#}");
+            }
+            let _ = notes.send((id, note));
+        });
+        None
+    }
+
+    async fn show_note(&mut self, id: &str, note: Note) {
+        let heading = note.heading();
+        let buttons = note.buttons();
+        let actions: Vec<(&str, &str)> = buttons.iter().map(|(k, l)| (k.as_str(), l.as_str())).collect();
+        let image = note.icon.as_deref().map(notifications::icon_path).filter(|p| p.exists());
+        let notice = Notice { icon: "smartphone", title: &heading, body: &note.text, actions: &actions, sticky: false, replaces: self.mirror.showing(id, &note.id) };
+        let reply = note.replies().then(|| format!("Reply to {}", if note.title.is_empty() { &note.app } else { &note.title }));
+        match self.notifier.show_with(notice, image.as_deref(), reply.as_deref()).await {
+            Ok(n) => self.mirror.shown(id, note, n),
+            Err(e) => tracing::warn!("couldn't show a notification from {id}: {e:#}"),
         }
     }
 
@@ -542,6 +691,37 @@ impl Desk {
                         return;
                     }
                     SHARE => return self.on_share(id, device, packet, from).await,
+                    notifications::NOTIFICATION => {
+                        if let Some(note) = self.on_note(id.clone(), &device, packet, from) {
+                            self.show_note(&id, note).await;
+                        }
+                        return;
+                    }
+                    media::MPRIS_REQUEST => {
+                        let _ = self.media.send((id, packet));
+                        return;
+                    }
+                    input::MOUSEPAD_REQUEST => {
+                        let _ = self.input.send((std::time::Instant::now(), id, packet));
+                        return;
+                    }
+                    commands::RUNCOMMAND_REQUEST => {
+                        let body = &packet["body"];
+                        if body["requestCommandList"].as_bool() == Some(true) {
+                            self.send(&id, self.run.list_packet());
+                        }
+                        if let Some(key) = body["key"].as_str() {
+                            match self.run.run(key) {
+                                Some(name) => tracing::info!("{id}: ran {name}"),
+                                None => tracing::info!("{id}: no command {key}"),
+                            }
+                        }
+                        return;
+                    }
+                    volume::VOLUME_REQUEST => {
+                        let _ = self.volume.send((id, packet));
+                        return;
+                    }
                     // Each file says how many there are too.
                     SHARE_UPDATE => return,
                     _ => {}

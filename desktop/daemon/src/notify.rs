@@ -12,11 +12,18 @@ use zbus::{Connection, MatchRule, MessageStream};
 const BUS: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
 
-/// A notification's button, by the key it was given.
-pub struct Pressed {
-    pub notification: u32,
-    pub action: String,
+/// What happened to one of our notifications.
+pub enum Heard {
+    /// A button, by the key it was given.
+    Pressed { notification: u32, action: String },
+    /// Text typed into its inline reply (KDE).
+    Replied { notification: u32, text: String },
+    /// Gone; [by_user]: dismissed, rather than timed out or taken down by us.
+    Closed { notification: u32, by_user: bool },
 }
+
+/// The action key of an inline reply, as KDE's notification server knows it.
+pub const INLINE_REPLY: &str = "inline-reply";
 
 #[derive(Clone)]
 pub struct Notifier {
@@ -42,8 +49,21 @@ impl Notifier {
 
     /// Shows [notice]; its id, to take it down or match its buttons by.
     pub async fn show(&self, notice: Notice<'_>) -> Result<u32> {
-        let actions: Vec<&str> = notice.actions.iter().flat_map(|(key, label)| [*key, *label]).collect();
-        let hints: HashMap<&str, Variant> = HashMap::from([("desktop-entry", Variant::from("vyoma-desktop"))]);
+        self.show_with(notice, None, None).await
+    }
+
+    /// [show] with a picture (a file) and, where the desktop has it, a reply field showing
+    /// [reply] as its placeholder; what's typed comes back as [Heard::Replied].
+    pub async fn show_with(&self, notice: Notice<'_>, image: Option<&std::path::Path>, reply: Option<&str>) -> Result<u32> {
+        let mut actions: Vec<&str> = notice.actions.iter().flat_map(|(key, label)| [*key, *label]).collect();
+        let mut hints: HashMap<&str, Variant> = HashMap::from([("desktop-entry", Variant::from("vyoma-desktop"))]);
+        if let Some(path) = image.and_then(|p| p.to_str()) {
+            hints.insert("image-path", Variant::from(path.to_owned()));
+        }
+        if let Some(placeholder) = reply {
+            actions.extend([INLINE_REPLY, "Reply"]);
+            hints.insert("x-kde-reply-placeholder-text", Variant::from(placeholder.to_owned()));
+        }
         // 0: never times out on its own (a request ends after 30 s anyway, and is taken down then).
         let timeout: i32 = if notice.sticky { 0 } else { -1 };
         let reply = self
@@ -65,13 +85,22 @@ impl Notifier {
         }
     }
 
-    /// Every button pressed on any of our notifications, until the bus goes.
-    pub async fn presses(&self, out: tokio::sync::mpsc::UnboundedSender<Pressed>) -> Result<()> {
-        let rule = MatchRule::builder().msg_type(zbus::message::Type::Signal).interface(BUS).member("ActionInvoked").path(PATH).build()?;
+    /// Every button pressed, reply typed and notification closed, until the bus goes. The ids are
+    /// the server's, so others' notifications come through too: callers match their own.
+    pub async fn presses(&self, out: tokio::sync::mpsc::UnboundedSender<Heard>) -> Result<()> {
+        let rule = MatchRule::builder().msg_type(zbus::message::Type::Signal).interface(BUS).path(PATH).build()?;
         let mut stream = MessageStream::for_match_rule(rule, &self.conn, None).await?;
         while let Some(Ok(msg)) = stream.next().await {
-            if let Ok((notification, action)) = msg.body().deserialize::<(u32, String)>()
-                && out.send(Pressed { notification, action }).is_err()
+            let body = msg.body();
+            let heard = match msg.header().member().map(|m| m.as_str()) {
+                Some("ActionInvoked") => body.deserialize::<(u32, String)>().map(|(notification, action)| Heard::Pressed { notification, action }),
+                Some("NotificationReplied") => body.deserialize::<(u32, String)>().map(|(notification, text)| Heard::Replied { notification, text }),
+                // Reason 2: dismissed by the user.
+                Some("NotificationClosed") => body.deserialize::<(u32, u32)>().map(|(notification, reason)| Heard::Closed { notification, by_user: reason == 2 }),
+                _ => continue,
+            };
+            if let Ok(h) = heard
+                && out.send(h).is_err()
             {
                 break;
             }

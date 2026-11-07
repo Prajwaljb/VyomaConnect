@@ -173,12 +173,17 @@ pub async fn send_files(commands: &mpsc::UnboundedSender<Command>, id: &str, me:
             send(packet(SHARE, body))?;
             continue;
         }
-        let source = tokio::fs::File::open(&f.path).await.with_context(|| format!("can't read {}", f.path.display()))?;
-        let mut offer = Offer::open().await?;
-        send(offer.announce(packet(SHARE, body), f.size as i64)?)?;
-        offer.serve(me, pinned, source).await.with_context(|| format!("{} wasn't sent", f.name))?;
+        offer_file(commands, id, me, pinned, packet(SHARE, body), &f.path, f.size).await.with_context(|| format!("{} wasn't sent", f.name))?;
     }
     Ok(())
+}
+
+/// Sends [packet] with the file at [path] as its payload, and waits for the device to fetch it.
+pub async fn offer_file(commands: &mpsc::UnboundedSender<Command>, id: &str, me: &Identity, pinned: &[u8], packet: Value, path: &Path, size: u64) -> Result<()> {
+    let source = tokio::fs::File::open(path).await.with_context(|| format!("can't read {}", path.display()))?;
+    let mut offer = Offer::open().await?;
+    commands.send(Command::Send(id.to_owned(), offer.announce(packet, size as i64)?)).map_err(|_| anyhow::anyhow!("stopping"))?;
+    offer.serve(me, pinned, source).await
 }
 
 /// Text, or a link when it's one alone.
