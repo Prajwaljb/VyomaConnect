@@ -178,7 +178,7 @@ object Widgets {
         val pcBattery = primary?.plugin<BatteryPlugin>(BatteryPlugin.ID)?.remote?.value
         // On its charger at a charge limit, stock KDE Connect says "not charging"; the companion knows better.
         val pcOnAc = primary?.let { pc ->
-            c.hub.value?.devices?.value?.values?.firstOrNull { it.state.value.identity.companionOf == pc.state.value.identity.deviceId }
+            c.hub.value?.devices?.value?.values?.firstOrNull { it.state.value.identity.featuresOf == pc.state.value.identity.deviceId }
                 ?.plugin<CompanionPlugin>(CompanionPlugin.ID)?.stats?.value?.ac
         } == true
         val phone = c.battery.state.value

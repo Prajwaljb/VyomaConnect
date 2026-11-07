@@ -1,0 +1,15 @@
+[Unit]
+Description=Vyoma desktop (pairs with and serves Vyoma on your phone, instead of KDE Connect)
+After=graphical-session.target network-online.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/vyoma-desktop
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=graphical-session.target

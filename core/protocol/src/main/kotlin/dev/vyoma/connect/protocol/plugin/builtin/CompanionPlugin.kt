@@ -810,7 +810,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     @Volatile var radio: RadioChannel? = null
 
     /** The PC this companion belongs to. */
-    val pcId: String? get() = ctx.device.identity.companionOf
+    val pcId: String? get() = ctx.device.identity.featuresOf
 
     /**
      * Sends [states] to the PC's virtual pad for as long as this runs: every change at once (the flow

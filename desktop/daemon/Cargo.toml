@@ -7,6 +7,7 @@ description = "Vyoma's standalone desktop app: pairs and talks with phones on it
 
 [dependencies]
 vyoma-core = { path = "../core" }
+vyoma-companion = { path = "../companion" }
 anyhow = "1.0.104"
 futures-util = { version = "0.3", default-features = false }
 serde = "1.0.229"

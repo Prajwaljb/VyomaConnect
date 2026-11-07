@@ -76,6 +76,9 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
   dedicated socket (UDP with AEAD for input, TLS/TCP for video).
 
 ### Companion packets (desktop/companion ⇄ CompanionPlugin)
+- The standalone desktop app (desktop/daemon) serves all of these itself over its own link. A PC whose identity takes
+  `vyoma.stats.request` is its own companion: `DeviceIdentity.featuresOf` (companion → its PC, such a PC → itself) is how the
+  app finds a PC's features; `companionOf` stays only for the separate companion device.
 - `vyoma.stats.request` → 12 s lease of `vyoma.stats` every 2 s: `cpu, memUsed, memTotal, cpuTemp?, gpu?, uptime?,
   handoff?` (`handoff` = title of a web video the phone could continue; the phone shows "Continue on phone" only
   when it matches the playing title, so local players like mpv never offer it).

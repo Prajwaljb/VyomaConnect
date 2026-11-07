@@ -16,8 +16,8 @@ use tracing::{info, warn};
 
 static RECHECKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 const PACKAGES: [&str; 2] = ["dev.vyoma.connect", "dev.vyoma.connect.debug"];
-/// Must match LanBackend.USB_REVERSE_PORT on the phone; kdeconnectd listens on 1716.
-const REVERSE: [&str; 2] = ["tcp:1765", "tcp:1716"];
+/// Must match LanBackend.USB_REVERSE_PORT on the phone; it leads to [crate::desk_port].
+const REVERSE: &str = "tcp:1765";
 /// kdeconnectd offers payloads (album art, files) on one of these ports. Each is mirrored on the
 /// phone at port + PAYLOAD_SHIFT, clear of the phone's own payload ports; must match
 /// LanPayloads.USB_PAYLOAD_SHIFT. Without them album art never arrived over the cable.
@@ -137,7 +137,7 @@ async fn recheck_tunnels(adb: &PathBuf) {
         let forwards = run(adb, &serial, &["forward", "--list"]).await.unwrap_or_default();
         let forward = format!("tcp:{} tcp:{}", PAYLOAD_PORTS.start() + FORWARD_SHIFT, PAYLOAD_PORTS.start());
         let cable = CABLE.lock().unwrap().iter().find(|(s, _)| *s == serial).map(|(_, p)| format!("tcp:{p} {PHONE_LISTENER}"));
-        if !list.contains(REVERSE[0]) || !list.contains(&mirror) || !list.contains(WIRED[0]) || !forwards.contains(&forward)
+        if !list.contains(REVERSE) || !list.contains(&mirror) || !list.contains(WIRED[0]) || !forwards.contains(&forward)
             || !cable.is_some_and(|c| forwards.contains(&c))
         {
             info!("{serial}: USB tunnel was gone (adb server restarted?); setting it up again");
@@ -176,7 +176,7 @@ async fn set_up(adb: &PathBuf, serial: &str) {
         return; // Not a Vyoma phone: leave it alone.
     }
     NOT_VYOMA.lock().unwrap().retain(|s| s != serial);
-    match run(adb, serial, &["reverse", REVERSE[0], REVERSE[1]]).await {
+    match run(adb, serial, &["reverse", REVERSE, &format!("tcp:{}", crate::desk_port())]).await {
         Some(_) => info!("{serial}: USB tunnel ready"),
         None => warn!("{serial}: couldn't set up the USB tunnel"),
     }

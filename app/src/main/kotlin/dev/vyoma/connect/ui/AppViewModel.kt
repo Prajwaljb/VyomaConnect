@@ -214,7 +214,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The companion beside PC [pcId], when it's connected. */
     fun companionOf(pcId: String): CompanionPlugin? =
-        devices.value.firstOrNull { it.identity.companionOf == pcId && it.isPaired && it.isReachable }
+        devices.value.firstOrNull { it.identity.featuresOf == pcId && it.isPaired && it.isReachable }
             ?.let { device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
 
     /**
@@ -272,7 +272,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         AppLock.commandLocked(getApplication(), it.id, key)
     } == true
     /** Whether a companion has ever paired (walk-away rules and some actions need it). */
-    fun hasCompanion(): Boolean = container.hub.value?.devices?.value?.values?.any { it.state.value.isCompanion && it.state.value.isPaired } == true
+    fun hasCompanion(): Boolean = container.hub.value?.devices?.value?.values?.any { it.state.value.identity.featuresOf != null && it.state.value.isPaired } == true
 
     fun setPalette(p: Palette) = viewModelScope.launch { settings.setPalette(p) }
     fun setDarkMode(m: DarkMode) = viewModelScope.launch { settings.setDarkMode(m) }

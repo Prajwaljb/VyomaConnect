@@ -14,12 +14,22 @@ pub struct Identity {
     pub key: PrivateKeyDer<'static>,
 }
 
-/// Where Vyoma keeps its own state (`~/.config/vyoma-companion`, 0700).
+static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Where Vyoma keeps its own state: `~/.config/vyoma-companion` (0700), unless the process chose
+/// another with [use_dir] (the standalone desktop app has its own).
 pub fn dir() -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"))
-        .join("vyoma-companion")
+    DIR.get().cloned().unwrap_or_else(|| {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"))
+            .join("vyoma-companion")
+    })
+}
+
+/// Makes [dir] this one for the rest of the process; only the first call counts.
+pub fn use_dir(dir: PathBuf) {
+    let _ = DIR.set(dir);
 }
 
 impl Identity {

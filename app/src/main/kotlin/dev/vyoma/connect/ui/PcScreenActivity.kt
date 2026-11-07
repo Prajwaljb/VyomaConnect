@@ -218,7 +218,7 @@ class PcScreenActivity : ComponentActivity() {
 
     private fun findCompanion(): CompanionPlugin? = pcId?.let { id ->
         application.container.hub.value?.devices?.value?.values
-            ?.firstOrNull { it.identity.companionOf == id && it.state.value.isReachable }
+            ?.firstOrNull { it.identity.featuresOf == id && it.state.value.isReachable }
             ?.plugin(CompanionPlugin.ID)
     }
 

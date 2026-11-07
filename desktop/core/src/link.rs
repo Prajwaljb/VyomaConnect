@@ -43,15 +43,32 @@ type Stream = TlsStream<TcpStream>;
 
 /// The sending half, shared by every task that talks to the phone.
 #[derive(Clone)]
-pub struct Sender(Arc<Mutex<WriteHalf<Stream>>>);
+pub struct Sender(Out);
+
+#[derive(Clone)]
+enum Out {
+    Stream(Arc<Mutex<WriteHalf<Stream>>>),
+    /// Into a queue whose owner sends it on (the desktop daemon's device hub, which picks the link).
+    Queue(tokio::sync::mpsc::UnboundedSender<Value>),
+}
 
 impl Sender {
+    /// A sender whose packets go into [queue] instead of onto a link.
+    pub fn queue(queue: tokio::sync::mpsc::UnboundedSender<Value>) -> Self {
+        Self(Out::Queue(queue))
+    }
+
     pub async fn send(&self, packet: &Value) -> Result<()> {
-        let mut line = serde_json::to_vec(packet)?;
-        line.push(b'\n');
-        let mut w = self.0.lock().await;
-        w.write_all(&line).await?;
-        w.flush().await?;
+        match &self.0 {
+            Out::Stream(w) => {
+                let mut line = serde_json::to_vec(packet)?;
+                line.push(b'\n');
+                let mut w = w.lock().await;
+                w.write_all(&line).await?;
+                w.flush().await?;
+            }
+            Out::Queue(q) => q.send(packet.clone()).map_err(|_| anyhow::anyhow!("the link is closed"))?,
+        }
         Ok(())
     }
 }
@@ -183,7 +200,7 @@ async fn finish(tls: Stream, identity: &Value, peer_id: &str, limit: usize) -> R
     let peer_cert = peer_cert(&tls)?;
     let remote = tls.get_ref().0.peer_addr()?;
     let (read, write) = tokio::io::split(tls);
-    let sender = Sender(Arc::new(Mutex::new(write)));
+    let sender = Sender(Out::Stream(Arc::new(Mutex::new(write))));
     let mut receiver = Receiver::new(read, UNPAIRED_PACKET_BYTES);
     sender.send(identity).await?;
     let phone_identity = tokio::time::timeout(HANDSHAKE_TIMEOUT, receiver.next())

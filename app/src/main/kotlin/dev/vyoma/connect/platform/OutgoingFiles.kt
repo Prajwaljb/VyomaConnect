@@ -39,6 +39,10 @@ fun ContentResolver.outgoingFile(uri: Uri): OutgoingFile {
     }
 }
 
+/** Whether [uri] can be opened at all: one Vyoma wasn't granted would otherwise be announced and then fail. */
+fun ContentResolver.readable(uri: Uri): Boolean =
+    runCatching { openInputStream(uri)?.close() != null }.onFailure { VLog.w("Share", "can't open $uri: ${it.message}") }.getOrDefault(false)
+
 /**
  * Everything in a picked folder ([tree] from the system's folder picker), each at its path inside
  * it ("Photos/2024"), and the folder's name. Empty folders don't travel; neither do files whose

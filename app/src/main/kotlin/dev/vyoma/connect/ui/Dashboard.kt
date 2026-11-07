@@ -342,7 +342,7 @@ fun PcDashboard(
         // one row of gauges (a battery ring, a clipboard tile and a gauge card were three).
         DashboardSection.STATUS -> {
             val devices by vm.devices.collectAsStateWithLifecycle()
-            val companion = devices.firstOrNull { it.identity.companionOf == id && it.isPaired && it.isReachable }
+            val companion = devices.firstOrNull { it.identity.featuresOf == id && it.isPaired && it.isReachable }
             val plugin = remember(companion?.identity?.deviceId, companion?.plugins) {
                 companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
             }
@@ -380,7 +380,7 @@ fun PcDashboard(
         }
         DashboardSection.CONTROLS -> {
           val devices by vm.devices.collectAsStateWithLifecycle()
-          val companion = devices.firstOrNull { it.identity.companionOf == id && it.isPaired && it.isReachable }
+          val companion = devices.firstOrNull { it.identity.featuresOf == id && it.isPaired && it.isReachable }
           val shots = remember(companion?.identity?.deviceId, companion?.plugins) {
               companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
           }

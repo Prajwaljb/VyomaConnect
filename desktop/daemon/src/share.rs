@@ -64,12 +64,19 @@ pub async fn receive(me: &Identity, pinned: &[u8], from: std::net::IpAddr, p: &V
     tokio::fs::create_dir_all(dir).await.with_context(|| format!("couldn't make {}", dir.display()))?;
     let part = Part(dir.join(format!(".{name}.{}-{}.vyoma-part", std::process::id(), next())));
     let mut file = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&part.0).await?;
-    let size = p["payloadSize"].as_u64().unwrap_or(0);
-    if size > 0 {
-        let mut source = payload::fetch(me, pinned, from, p).await?;
-        let got = tokio::io::copy(&mut source, &mut file).await?;
-        if got != size {
+    // -1: a size the sender doesn't know, read to the end. Only no payload at all is an empty file.
+    let size = p["payloadSize"].as_i64().unwrap_or(0);
+    if size != 0 && p["payloadTransferInfo"].is_object() {
+        let got = if size > 0 {
+            tokio::io::copy(&mut payload::fetch(me, pinned, from, p).await?, &mut file).await?
+        } else {
+            tokio::io::copy(&mut payload::fetch_stream(me, pinned, from, p).await?, &mut file).await?
+        };
+        if size > 0 && got != size as u64 {
             bail!("the device sent {got} of {size} bytes");
+        }
+        if size < 0 && got == 0 {
+            bail!("the device sent nothing");
         }
     }
     file.flush().await?;

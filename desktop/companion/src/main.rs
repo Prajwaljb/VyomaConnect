@@ -5,30 +5,6 @@
 //! via their mDNS announcements, and proves to them that it belongs to this PC by signing with
 //! kdeconnectd's key. So there's nothing to pair by hand and nothing new to trust.
 
-mod away;
-mod bluetooth;
-mod camera;
-mod desktop;
-mod files;
-mod accessory;
-mod gamepad;
-mod kde;
-mod media;
-mod mirror;
-mod notice;
-mod paste;
-mod pc;
-mod pointer;
-mod screen;
-mod screenshot;
-mod setup;
-mod stats;
-mod tether;
-mod usb;
-mod specs;
-mod wallpaper;
-mod webcam;
-mod xfer;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
@@ -39,17 +15,15 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use tracing::{info, warn};
 
-// The shared protocol core; `crate::link` and friends keep working for the modules here.
-use vyoma_core::{identity, link, payload};
+use vyoma_companion::session::{self, Host, Phone, phone_name};
+use vyoma_companion::{bluetooth, mirror, gamepad, kde, media, setup, tether, usb, webcam};
+use vyoma_core::{identity, link};
 
 use identity::Identity;
 use kde::KdeHost;
-use link::{Sender, packet};
+use link::packet;
 
 const SERVICE: &str = "_kdeconnect._udp.local.";
-/// How long a stats subscription lasts; the phone renews it while the dashboard is on screen.
-const STATS_LEASE: Duration = Duration::from_secs(12);
-const STATS_EVERY: Duration = Duration::from_secs(2);
 /// How soon a phone unpaired in KDE Connect (lost or stolen, say) loses a session it already has.
 const TRUST_CHECK: Duration = Duration::from_secs(5);
 
@@ -87,14 +61,11 @@ impl Links {
 
 struct Shared {
     host: KdeHost,
-    me: Identity,
+    /// Its features, which each phone's session serves.
+    features: Arc<Host>,
     links: Links,
     /// Last address each trusted phone announced, so we can redial without waiting for mDNS.
     seen: Mutex<HashMap<String, SocketAddr>>,
-    /// Tracks what's playing for handoff; None without a session bus.
-    media: Option<Arc<media::Media>>,
-    /// Walk-away rules each phone asked for.
-    away: Arc<away::Away>,
     /// Ends a phone's running session (see take_over).
     sessions: Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
 }
@@ -129,12 +100,12 @@ async fn daemon() -> Result<()> {
             None
         }
     };
-    let shared = Arc::new(Shared { host, me, links: Links::default(), seen: Mutex::default(), media, away: Arc::default(), sessions: Mutex::default() });
+    let shared = Arc::new(Shared { host, features: Arc::new(Host { me: Arc::new(me), media, away: Arc::default() }), links: Links::default(), seen: Mutex::default(), sessions: Mutex::default() });
 
     tokio::spawn(setup::offer());
     tokio::spawn(usb::watch());
     let (bluetooth_links, bluetooth_ports) = tokio::sync::mpsc::unbounded_channel();
-    tokio::spawn(bluetooth::serve(bluetooth_links));
+    tokio::spawn(bluetooth::serve(Some(bluetooth_links)));
     tokio::spawn(watch_bluetooth(shared.clone(), bluetooth_ports));
     tokio::spawn(gamepad::serve_wired());
     tokio::spawn(webcam::remove_stale_mics());
@@ -236,12 +207,12 @@ fn identity_packet(shared: &Shared) -> Value {
     packet(
         "kdeconnect.identity",
         json!({
-            "deviceId": shared.me.device_id,
+            "deviceId": shared.features.me.device_id,
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.away", "vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.screen.input", "vyoma.screen.touch", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.specs.request", "vyoma.gamepad.state", "vyoma.gamepad.close", "vyoma.desktop.step", "vyoma.usb.accessory", "vyoma.webcam", "vyoma.webcam.mic", "vyoma.webcam.turn", "vyoma.mirror", "vyoma.mirror.audio", "vyoma.mirror.copy", "vyoma.mirror.volume", "vyoma.paste", "vyoma.pointer.request", "vyoma.pointer.close"],
-            "outgoingCapabilities": ["vyoma.bluetooth", "vyoma.pointer.ready", "vyoma.paste.ready", "vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.specs", "vyoma.gamepad.rumble", "vyoma.gamepad.udp", "vyoma.desktop.stepped", "vyoma.webcam.state", "vyoma.mirror.input", "vyoma.mirror.state"],
+            "incomingCapabilities": session::INCOMING,
+            "outgoingCapabilities": session::OUTGOING,
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
         }),
@@ -286,7 +257,7 @@ async fn watch_tether(shared: Arc<Shared>) {
             next_try.lock().unwrap().insert(addr, Instant::now() + backoff);
             let (shared, next_try) = (shared.clone(), next_try.clone());
             tokio::spawn(async move {
-                match link::connect_trusted(addr, &shared.me, &identity_packet(&shared), &free).await {
+                match link::connect_trusted(addr, &shared.features.me, &identity_packet(&shared), &free).await {
                     Ok((id, link)) => {
                         // A Wi-Fi dial may have won meanwhile: then this one just closes.
                         if !shared.links.claim(&id) {
@@ -324,7 +295,7 @@ async fn watch_bluetooth(shared: Arc<Shared>, mut ports: tokio::sync::mpsc::Unbo
         tokio::spawn(async move {
             let addr = SocketAddr::from(([127, 0, 0, 1], port));
             let trusted = shared.host.trusted_phones();
-            match link::connect_trusted(addr, &shared.me, &identity_packet(&shared), &trusted).await {
+            match link::connect_trusted(addr, &shared.features.me, &identity_packet(&shared), &trusted).await {
                 Ok((id, link)) => {
                     if !take_over(&shared, &id).await {
                         return;
@@ -357,7 +328,7 @@ async fn take_over(shared: &Shared, id: &str) -> bool {
 }
 
 async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u8]) -> Result<()> {
-    let dialled = link::connect(addr, &shared.me, &identity_packet(shared), phone_id, pinned).await;
+    let dialled = link::connect(addr, &shared.features.me, &identity_packet(shared), phone_id, pinned).await;
     shared.links.dial_done(phone_id);
     let link = dialled?;
     // The cable or Bluetooth may have won meanwhile: then this one just closes.
@@ -369,58 +340,29 @@ async fn session(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned:
     result
 }
 
-/// The phone picks its own name, and it ends up in notifications and logs (the protocol's rule).
-fn phone_name(raw: &str) -> String {
-    let clean: String = raw.chars().filter(|c| !matches!(c, '"' | '\'' | ',' | ';' | ':' | '.' | '!' | '?' | '(' | ')' | '[' | ']' | '<' | '>') && !c.is_control()).take(32).collect();
-    let clean = clean.trim().trim_start_matches('-').trim();
-    if clean.is_empty() { "Phone".to_string() } else { clean.to_string() }
-}
-
 async fn run(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u8], mut link: link::Link) -> Result<()> {
     let name = phone_name(link.phone_identity["body"]["deviceName"].as_str().unwrap_or(phone_id));
     info!("linked with {name} at {addr}");
 
     // Ask to pair with a proof signed by kdeconnectd's key; Vyoma accepts it without a prompt.
     let ts = link::now_ms() / 1000;
-    let proof = shared.host.sign(&kde::proof_message(&shared.me.device_id, shared.me.cert.as_ref(), phone_id, ts));
+    let proof = shared.host.sign(&kde::proof_message(&shared.features.me.device_id, shared.features.me.cert.as_ref(), phone_id, ts));
     link.sender
         .send(&packet("kdeconnect.pair", json!({ "pair": true, "timestamp": ts, "vyomaHost": shared.host.device_id, "vyomaHostProof": proof })))
         .await?;
 
-    shared.away.linked(phone_id, shared.media.as_ref()).await;
+    shared.features.away.linked(phone_id, shared.features.media.as_ref()).await;
     let result = serve(shared, phone_id, addr, pinned, &mut link, &name).await;
-    shared.away.unlinked(phone_id, shared.media.clone());
+    shared.features.away.unlinked(phone_id, shared.features.media.clone());
     result
 }
 
+/// Feeds the link's packets to the phone's session while it stays paired in KDE Connect and no
+/// Bluetooth link takes over, then ends the session.
 async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u8], link: &mut link::Link, name: &str) -> Result<()> {
-    let name = name.to_string();
-    let lease = Arc::new(Mutex::new(Instant::now()));
-    let mut stats_task: Option<tokio::task::JoinHandle<()>> = None;
-    let mut shot_task: Option<tokio::task::JoinHandle<()>> = None;
-    let mut photo_task: Option<tokio::task::JoinHandle<()>> = None;
-    let mut screen_task: Option<tokio::task::JoinHandle<()>> = None;
-    // Touches from the phone's view of this screen, for the running cast.
-    let mut screen_input: Option<tokio::sync::mpsc::UnboundedSender<Value>> = None;
-    let mut touch_task: Option<tokio::task::JoinHandle<()>> = None;
-    let mut webcam_task: Option<tokio::task::JoinHandle<()>> = None;
-    let mut mic_task: Option<tokio::task::JoinHandle<()>> = None;
-    let mut mirror_task: Option<tokio::task::JoinHandle<()>> = None;
-    let mut sound_task: Option<tokio::task::JoinHandle<()>> = None;
-    let (turn_tx, _) = tokio::sync::watch::channel(0u32);
-    let pc = pc::worker(link.sender.clone(), name.clone());
-    // Listings and downloads; dropping the set when the link closes cancels whatever is left.
-    let mut file_tasks = tokio::task::JoinSet::new();
-    // The phone as a controller: its pad lives while states keep coming (see gamepad.rs).
-    let mut pad: Option<(tokio::sync::mpsc::Sender<gamepad::Input>, tokio::task::JoinHandle<()>)> = None;
-    // The touchpad over Bluetooth, while its page is open on the phone.
-    let mut touchpad: Option<(tokio::sync::mpsc::Sender<pointer::Frame>, tokio::task::JoinHandle<()>)> = None;
-    // A new wallpaper reaches the phone's background without waiting for it to ask.
-    let wall_task = tokio::spawn(watch_wallpaper(link.sender.clone()));
-    // So the phone can find this PC over Bluetooth once Wi-Fi is gone.
-    if let Some(address) = bluetooth::address().await {
-        let _ = link.sender.send(&packet("vyoma.bluetooth", json!({ "address": address }))).await;
-    }
+    let (packets, rx) = tokio::sync::mpsc::unbounded_channel();
+    let phone = Phone { id: phone_id.to_string(), name: name.to_string(), pinned: pinned.to_vec() };
+    let session = tokio::spawn(session::serve(shared.features.clone(), phone, link.sender.clone(), rx));
     let mut trust_check = tokio::time::interval(TRUST_CHECK);
     let replaced = Arc::new(tokio::sync::Notify::new());
     shared.sessions.lock().unwrap().insert(phone_id.to_string(), replaced.clone());
@@ -445,413 +387,25 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
             // Through the cleanup below too: the screen, camera and controller must end with the link.
             Err(e) => break Err(e),
         };
-        while file_tasks.try_join_next().is_some() {}
         match p["type"].as_str().unwrap_or_default() {
             "kdeconnect.pair" => match p["body"]["pair"].as_bool() {
                 Some(true) => info!("{name}: paired"),
                 _ => warn!("{name}: declined pairing (needs Vyoma with companion support)"),
             },
-            "vyoma.stats.request" => {
-                *lease.lock().unwrap() = Instant::now() + STATS_LEASE;
-                if stats_task.as_ref().is_none_or(|t| t.is_finished()) {
-                    info!("{name}: streaming stats while the dashboard is open");
-                    stats_task = Some(tokio::spawn(stream_stats(link.sender.clone(), lease.clone(), shared.media.clone())));
-                }
+            _ => {
+                let _ = packets.send((p, addr.ip()));
             }
-            "vyoma.screenshot.request" => {
-                // One at a time; repeated taps while one is in flight are ignored.
-                if shot_task.as_ref().is_none_or(|t| t.is_finished()) {
-                    let (sender, shared, pinned, name) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone());
-                    shot_task = Some(tokio::spawn(async move {
-                        match screenshot::capture_and_send(&sender, &shared.me, &pinned, &name).await {
-                            Ok(()) => info!("{name}: sent a screenshot"),
-                            Err(e) => warn!("{name}: screenshot failed: {e:#}"),
-                        }
-                    }));
-                }
-            }
-            "vyoma.camera.request" => {
-                // One at a time, like screenshots.
-                if photo_task.as_ref().is_none_or(|t| t.is_finished()) {
-                    let (sender, shared, pinned, name) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone());
-                    photo_task = Some(tokio::spawn(async move {
-                        match camera::capture_and_send(&sender, &shared.me, &pinned, &name).await {
-                            Ok(()) => info!("{name}: sent a camera photo"),
-                            Err(e) => warn!("{name}: camera photo failed: {e:#}"),
-                        }
-                    }));
-                }
-            }
-            "vyoma.screen.request" => {
-                // A new request replaces a cast still running (the phone reopened the viewer).
-                if let Some(t) = screen_task.take() {
-                    t.abort();
-                }
-                let (sender, shared, pinned, name) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone());
-                let (touches, inputs) = tokio::sync::mpsc::unbounded_channel();
-                screen_input = Some(touches);
-                let fps = screen::fps_for(p["body"]["maxFps"].as_u64());
-                screen_task = Some(tokio::spawn(async move {
-                    if let Err(e) = screen::stream(&sender, &shared.me, &pinned, &name, fps, inputs).await {
-                        warn!("{name}: screen cast failed: {e:#}");
-                    }
-                }));
-            }
-            "vyoma.webcam" => {
-                // A new stream replaces one still running (the phone switched cameras).
-                if let Some(t) = webcam_task.take() {
-                    t.abort();
-                }
-                turn_tx.send_replace(p["body"]["rotate"].as_u64().unwrap_or(0) as u32);
-                let (sender, shared, pinned, name, phone, turn) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone(), addr.ip(), turn_tx.subscribe());
-                webcam_task = Some(tokio::spawn(async move {
-                    if let Err(e) = webcam::camera(&sender, &shared.me, &pinned, phone, &p, turn, &name).await {
-                        warn!("{name}: phone camera: {e:#}");
-                    }
-                }));
-            }
-            "vyoma.mirror" => {
-                // A new stream (the phone restarted it) replaces the window.
-                if let Some(t) = mirror_task.take() {
-                    t.abort();
-                }
-                let (sender, shared, pinned, name, phone) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone(), addr.ip());
-                mirror_task = Some(tokio::spawn(async move {
-                    if let Err(e) = mirror::show(&sender, &shared.me, &pinned, phone, &p, &name).await {
-                        warn!("{name}: mirror: {e:#}");
-                    }
-                }));
-            }
-            "vyoma.mirror.copy" => {
-                if let Some(text) = p["body"]["text"].as_str() {
-                    let text = text.to_string();
-                    tokio::spawn(async move { mirror::copy(&text).await });
-                }
-            }
-            "vyoma.paste" => {
-                if let Some(text) = p["body"]["text"].as_str() {
-                    let (text, sender) = (text.to_string(), link.sender.clone());
-                    tokio::spawn(async move {
-                        let body = match paste::put(&text).await {
-                            Ok(()) => json!({}),
-                            Err(e) => json!({ "error": format!("{e:#}") }),
-                        };
-                        let _ = sender.send(&packet("vyoma.paste.ready", body)).await;
-                    });
-                }
-            }
-            "vyoma.mirror.volume" => {
-                let up = p["body"]["up"].as_bool().unwrap_or(true);
-                tokio::spawn(mirror::volume(up));
-            }
-            "vyoma.mirror.audio" => {
-                if let Some(t) = sound_task.take() {
-                    t.abort();
-                }
-                let (shared, pinned, name, phone) = (shared.clone(), pinned.to_vec(), name.clone(), addr.ip());
-                sound_task = Some(tokio::spawn(async move {
-                    if let Err(e) = mirror::sound(&shared.me, &pinned, phone, &p, &name).await {
-                        warn!("{name}: phone sound: {e:#}");
-                    }
-                }));
-            }
-            "vyoma.webcam.turn" => {
-                turn_tx.send_replace(p["body"]["rotate"].as_u64().unwrap_or(0) as u32);
-            }
-            "vyoma.webcam.mic" => {
-                if let Some(t) = mic_task.take() {
-                    t.abort();
-                }
-                let (sender, shared, pinned, name, phone) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone(), addr.ip());
-                mic_task = Some(tokio::spawn(async move {
-                    let _ = webcam::mic(&sender, &shared.me, &pinned, phone, &p, &name).await;
-                }));
-            }
-            "vyoma.screen.touch" => {
-                // The viewer's touches as a live stream (over the cable when it's in): one JSON line each.
-                if let Some(t) = touch_task.take() {
-                    t.abort();
-                }
-                if let Some(touches) = screen_input.clone() {
-                    let (shared, pinned, phone) = (shared.clone(), pinned.to_vec(), addr.ip());
-                    touch_task = Some(tokio::spawn(async move {
-                        use tokio::io::AsyncBufReadExt;
-                        let Ok(stream) = payload::fetch_stream(&shared.me, &pinned, phone, &p).await else { return };
-                        info!("touch control stream open");
-                        let mut lines = tokio::io::BufReader::new(stream).lines();
-                        let (mut chars, mut keys, mut texts, mut biggest) = (0usize, 0usize, 0usize, 0usize);
-                        while let Ok(Some(line)) = lines.next_line().await {
-                            let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
-                            match v["kind"].as_str() {
-                                Some("text") => {
-                                    let n = v["text"].as_str().map_or(0, |t| t.chars().count());
-                                    chars += n;
-                                    texts += 1;
-                                    biggest = biggest.max(n);
-                                }
-                                Some("key") => keys += 1,
-                                _ => {}
-                            }
-                            if touches.send(v).is_err() {
-                                break;
-                            }
-                        }
-                        info!("touch control stream closed ({chars} characters typed in {texts} messages, at most {biggest} at once; {keys} keys)");
-                    }));
-                }
-            }
-            "vyoma.screen.input" => {
-                if let Some(t) = &screen_input {
-                    let _ = t.send(p["body"].clone());
-                }
-            }
-            "vyoma.screen.stop" => {
-                screen_input = None;
-                if let Some(t) = touch_task.take() {
-                    t.abort();
-                }
-                if let Some(t) = screen_task.take() {
-                    t.abort();
-                    info!("{name}: screen cast stopped");
-                }
-            }
-            "vyoma.wallpaper.request" => {
-                let sender = link.sender.clone();
-                tokio::spawn(async move {
-                    let reply = match wallpaper::colors().await {
-                        Ok(c) => json!({ "cols": wallpaper::COLS, "rows": wallpaper::ROWS, "colors": c }),
-                        Err(e) => json!({ "error": format!("{e:#}") }),
-                    };
-                    let _ = sender.send(&packet("vyoma.wallpaper", reply)).await;
-                });
-            }
-            "vyoma.specs.request" => {
-                let sender = link.sender.clone();
-                tokio::spawn(async move {
-                    let reply = tokio::task::spawn_blocking(specs::read).await.unwrap_or_else(|e| json!({ "error": e.to_string() }));
-                    let _ = sender.send(&packet("vyoma.specs", reply)).await;
-                });
-            }
-            "vyoma.gamepad.state" => {
-                let s = gamepad::State::parse(&p["body"]);
-                if pad.as_ref().is_none_or(|(_, t)| t.is_finished()) {
-                    let (tx, rx) = tokio::sync::mpsc::channel(64);
-                    pad = Some((tx, tokio::spawn(gamepad::run(rx, link.sender.clone(), name.clone()))));
-                }
-                if let Some((tx, _)) = &pad {
-                    // Full means the PC is behind; the next state carries everything anyway.
-                    let _ = tx.try_send(gamepad::Input::State(s));
-                }
-            }
-            "vyoma.usb.accessory" => {
-                // The phone's controller is on a cable without USB debugging: accessory mode.
-                let name = name.clone();
-                // "open": false means the phone couldn't open an accessory it already sees (its permission
-                // went with a reinstall): switch it again so Android hands the accessory over afresh.
-                let reswitch = !p["body"]["open"].as_bool().unwrap_or(false);
-                tokio::task::spawn_blocking(move || {
-                    if let Err(e) = accessory::start(reswitch) {
-                        warn!("{name}: controller over the cable: {e:#}");
-                    }
-                });
-            }
-            "vyoma.desktop.step" => {
-                let (sender, up, name) = (link.sender.clone(), p["body"]["up"].as_bool().unwrap_or(true), name.clone());
-                tokio::spawn(async move {
-                    let reply = match desktop::step(up).await {
-                        Ok(view) => json!({ "view": view }),
-                        Err(e) => {
-                            warn!("{name}: desktop gesture failed: {e:#}");
-                            json!({ "error": format!("{e:#}") })
-                        }
-                    };
-                    let _ = sender.send(&packet("vyoma.desktop.stepped", reply)).await;
-                });
-            }
-            "vyoma.pointer.request" => {
-                // A new request replaces the last (the radio dropped and the phone came back).
-                if let Some((tx, _)) = touchpad.take() {
-                    let _ = tx.try_send(pointer::Frame::Close);
-                }
-                let (tx, rx) = tokio::sync::mpsc::channel(256);
-                touchpad = Some((tx.clone(), tokio::spawn(pointer::serve(link.sender.clone(), name.clone(), tx, rx))));
-            }
-            "vyoma.pointer.close" => {
-                if let Some((tx, _)) = touchpad.take() {
-                    let _ = tx.try_send(pointer::Frame::Close);
-                }
-            }
-            "vyoma.gamepad.close" => {
-                if let Some((tx, _)) = &pad {
-                    let _ = tx.try_send(gamepad::Input::Close);
-                }
-            }
-            "vyoma.handoff.request" => {
-                let reply = match &shared.media {
-                    None => json!({ "error": "can't see the PC's media players" }),
-                    Some(media) => match media.handoff().await {
-                        None => json!({ "error": "nothing with a link is playing on the PC" }),
-                        Some(h) => {
-                            // The phone takes over: stop it here so they don't play over each other.
-                            if p["body"]["pause"].as_bool().unwrap_or(true) {
-                                media.pause(&h).await;
-                            }
-                            json!({ "url": h.url, "title": h.title, "position": h.position_ms, "exact": h.exact })
-                        }
-                    },
-                };
-                // Not `?`: leaving here skips the cleanup below, and a dead link ends the loop anyway.
-                let _ = link.sender.send(&packet("vyoma.handoff", reply)).await;
-            }
-            "vyoma.files.list" => {
-                let (sender, rel) = (link.sender.clone(), p["body"]["path"].as_str().unwrap_or_default().to_string());
-                file_tasks.spawn(async move {
-                    let _ = files::list(&sender, &rel).await;
-                });
-            }
-            "vyoma.files.get" => {
-                let (sender, shared, pinned, name) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone());
-                let rel = p["body"]["path"].as_str().unwrap_or_default().to_string();
-                file_tasks.spawn(async move {
-                    match files::send(&sender, &shared.me, &pinned, &rel, &name).await {
-                        Ok(()) => info!("{name}: sent a file"),
-                        Err(e) => warn!("{name}: file transfer failed: {e:#}"),
-                    }
-                });
-            }
-            "vyoma.files.put" => {
-                let (sender, shared, pinned, name, phone) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone(), addr.ip());
-                file_tasks.spawn(async move {
-                    match files::receive(&sender, &shared.me, &pinned, phone, &p, &name).await {
-                        Ok(()) => info!("{name}: received a file"),
-                        Err(e) => warn!("{name}: upload failed: {e:#}"),
-                    }
-                });
-            }
-            "vyoma.xfer.begin" => {
-                let (sender, phone_id) = (link.sender.clone(), phone_id.to_string());
-                file_tasks.spawn(async move {
-                    if let Err(e) = xfer::begin(&sender, &phone_id, &p["body"]).await {
-                        warn!("couldn't answer a transfer: {e:#}");
-                    }
-                });
-            }
-            "vyoma.xfer.data" => {
-                let (sender, shared, pinned, name, phone) = (link.sender.clone(), shared.clone(), pinned.to_vec(), name.clone(), addr.ip());
-                file_tasks.spawn(async move {
-                    match xfer::data(&sender, &shared.me, &pinned, phone, &name, &p).await {
-                        Ok(()) => info!("{name}: received a file"),
-                        Err(e) => warn!("{name}: transfer stopped: {e:#}"),
-                    }
-                });
-            }
-            "vyoma.xfer.end" => xfer::end(&name, &p["body"]),
-            "vyoma.away" => shared.away.configure(phone_id, &p["body"]),
-            "vyoma.pc.request" | "vyoma.pc.set" | "vyoma.pc.power" | "vyoma.pc.wake" => {
-                let _ = pc.send(p);
-            }
-            _ => {}
         }
     };
-    wall_task.abort();
-    // The phone's camera and mic go with its link (the mic's PipeWire source is removed on drop).
-    for t in [webcam_task.take(), mic_task.take(), mirror_task.take(), sound_task.take()].into_iter().flatten() {
-        t.abort();
-    }
-    // Lets go of whatever the touchpad held, then ends by itself.
-    if let Some((tx, t)) = touchpad {
-        if tx.try_send(pointer::Frame::Close).is_err() {
-            t.abort();
-        }
-    }
-    // Dropping the pad lets go of every button.
-    if let Some((_, t)) = pad {
-        t.abort();
-    }
-    for t in [shot_task, photo_task, screen_task, touch_task].into_iter().flatten() {
-        t.abort();
-    }
-    if let Some(t) = stats_task {
-        t.abort();
-    }
+    // Closing the channel ends the session, and with it the screen, camera and controller.
+    drop(packets);
+    let _ = session.await;
     shared.sessions.lock().unwrap().remove(phone_id);
-    info!("{name}: link closed");
     result
 }
 
 fn still_trusted(trusted: &HashMap<String, Vec<u8>>, phone_id: &str, pinned: &[u8]) -> bool {
     trusted.get(phone_id).is_some_and(|cert| cert.as_slice() == pinned)
-}
-
-/// Sends the wallpaper's colours whenever it changes (checked every few seconds; the phone asks for
-/// the current one itself when it connects).
-async fn watch_wallpaper(sender: Sender) {
-    let mut last = wallpaper::signature();
-    let mut tick = tokio::time::interval(Duration::from_secs(3));
-    loop {
-        tick.tick().await;
-        let now = wallpaper::signature();
-        if now == last {
-            continue;
-        }
-        last = now;
-        // Plasma writes the setting a moment before it's done switching; give it a breath.
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        if let Ok(c) = wallpaper::colors().await {
-            info!("wallpaper changed: sending its colours");
-            if sender.send(&packet("vyoma.wallpaper", json!({ "cols": wallpaper::COLS, "rows": wallpaper::ROWS, "colors": c }))).await.is_err() {
-                return;
-            }
-        }
-    }
-}
-
-/// Whether the PC runs from a charger (mains or a USB-C power source); None with no such supply (a desktop).
-fn on_ac() -> Option<bool> {
-    let mut seen = false;
-    for entry in std::fs::read_dir("/sys/class/power_supply").ok()?.flatten() {
-        let read = |f: &str| std::fs::read_to_string(entry.path().join(f)).map(|s| s.trim().to_owned()).unwrap_or_default();
-        if !matches!(read("type").as_str(), "Mains" | "USB") {
-            continue;
-        }
-        seen = true;
-        if read("online") == "1" {
-            return Some(true);
-        }
-    }
-    seen.then_some(false)
-}
-
-/// Stats, plus `handoff`: the title of a web video the phone could continue (absent otherwise),
-/// so the phone only offers "Continue on phone" when it would work; and `camera`: whether a photo
-/// can be taken (false behind a closed lid with no other camera); and `ac`: on a charger.
-async fn stream_stats(sender: Sender, lease: Arc<Mutex<Instant>>, media: Option<Arc<media::Media>>) {
-    let mut stats = match stats::Stats::new() {
-        Ok(s) => s,
-        Err(e) => return warn!("stats unavailable: {e:#}"),
-    };
-    let mut tick = tokio::time::interval(STATS_EVERY);
-    while Instant::now() < *lease.lock().unwrap() {
-        tick.tick().await;
-        let mut body = stats.sample();
-        if let Some(title) = media.as_ref().and_then(|m| m.offer()) {
-            body["handoff"] = json!(title);
-        }
-        // So the phone can say "Camera unavailable" up front instead of after a failed tap.
-        let camera = camera::available();
-        body["camera"] = json!(camera);
-        if !camera {
-            body["cameraLid"] = json!(camera::behind_lid());
-        }
-        // Stock battery packets only say "charging": a laptop on its charger that holds at a
-        // charge limit (or is full) reads as on battery without this.
-        if let Some(ac) = on_ac() {
-            body["ac"] = json!(ac);
-        }
-        if sender.send(&packet("vyoma.stats", body)).await.is_err() {
-            return;
-        }
-    }
 }
 
 #[cfg(test)]

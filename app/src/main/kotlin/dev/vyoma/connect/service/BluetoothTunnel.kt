@@ -203,7 +203,7 @@ class BluetoothTunnel(private val context: Context, private val hub: DeviceHub, 
     private suspend fun tick() {
         // Learn addresses whether or not the switch is on, so turning it on works with Wi-Fi gone.
         for (device in hub.devices.value.values) {
-            val pc = device.identity.companionOf ?: continue
+            val pc = device.identity.featuresOf ?: continue
             device.plugin<CompanionPlugin>(CompanionPlugin.ID)?.bluetoothAddress?.value?.let { BluetoothFallback.remember(context, pc, it) }
         }
         val on = BluetoothFallback.enabled.value

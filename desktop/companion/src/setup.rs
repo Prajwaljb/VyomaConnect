@@ -96,6 +96,18 @@ const NEEDS: &[Need] = &[
     need("phone as webcam", Probe::Module("v4l2loopback"), "v4l2loopback-dkms", "v4l2loopback-dkms", ""),
 ];
 
+/// Set by the desktop app, which pairs by itself and so needs no kdeconnectd.
+static STANDALONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn standalone() {
+    STANDALONE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The program the user runs: the companion, or the desktop app.
+fn program() -> &'static str {
+    if STANDALONE.load(std::sync::atomic::Ordering::Relaxed) { "vyoma-desktop" } else { "vyoma-companion" }
+}
+
 const UDEV_RULE: &str = include_str!("../udev/70-vyoma-usb.rules");
 const UDEV_PATH: &str = "/etc/udev/rules.d/70-vyoma-usb.rules";
 const WEBCAM_CONF: &str = include_str!("../webcam/vyoma-webcam.conf");
@@ -150,7 +162,8 @@ impl Missing {
 pub fn check() -> Missing {
     let distro = Distro::detect();
     let mut missing = Missing::default();
-    for need in NEEDS {
+    let standalone = STANDALONE.load(std::sync::atomic::Ordering::Relaxed);
+    for need in NEEDS.iter().filter(|n| !(standalone && n.feature == "pairing")) {
         if need.met() {
             continue;
         }
@@ -282,7 +295,7 @@ pub async fn offer() {
         .output()
         .await;
     let Ok(answer) = answer else {
-        tracing::warn!("can't ask to install ({}): run vyoma-companion --setup", missing.summary());
+        tracing::warn!("can't ask to install ({}): run {} --setup", missing.summary(), program());
         return;
     };
     match String::from_utf8_lossy(&answer.stdout).trim() {
@@ -298,14 +311,14 @@ async fn install_from_service(missing: &Missing) {
     let script = script(missing, Distro::detect());
     // Out of this service's sandbox: NoNewPrivileges would stop pkexec working at all.
     let status = tokio::process::Command::new("systemd-run")
-        .args(["--user", "--wait", "--collect", "--quiet", "--unit=vyoma-companion-setup", "pkexec", "sh", "-c"])
+        .args(["--user", "--wait", "--collect", "--quiet", &format!("--unit={}-setup", program()), "pkexec", "sh", "-c"])
         .arg(script)
         .status()
         .await;
     if status.is_ok_and(|s| s.success()) {
         crate::notice::tell("emblem-success", "Vyoma is set up", "Everything it needs is installed.").await;
     } else {
-        crate::notice::tell("dialog-warning", "Vyoma's install didn't finish", "Run vyoma-companion --setup in a terminal to see why.").await;
+        crate::notice::tell("dialog-warning", "Vyoma's install didn't finish", &format!("Run {} --setup in a terminal to see why.", program())).await;
     }
 }
 

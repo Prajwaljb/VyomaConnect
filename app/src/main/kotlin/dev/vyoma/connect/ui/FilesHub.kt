@@ -85,7 +85,7 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
     val status = LocalStatus.current
     val devices by vm.devices.collectAsStateWithLifecycle()
     val pc = devices.firstOrNull { it.identity.companionOf == null && it.isPaired && it.isReachable }
-    val companion = pc?.let { p -> devices.any { it.identity.companionOf == p.identity.deviceId && it.isPaired && it.isReachable } } == true
+    val companion = pc?.let { p -> devices.any { it.identity.featuresOf == p.identity.deviceId && it.isPaired && it.isReachable } } == true
     val running by Transfers.all.collectAsStateWithLifecycle()
     val recent by remember { TransferLog.recent(context) }.collectAsStateWithLifecycle()
     val clips by vm.clipHistory.collectAsStateWithLifecycle()

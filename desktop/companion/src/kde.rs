@@ -1,9 +1,10 @@
 //! What the companion borrows from the user's own KDE Connect daemon: which phones it trusts,
-//! and its identity key, which signs the proof that this companion belongs to that PC.
+//! and its identity key, which signs the proof that this companion belongs to that PC. The
+//! desktop app takes both over when it replaces kdeconnectd, so phones stay paired.
 //! Read-only: nothing here ever writes to kdeconnectd's config.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
@@ -29,7 +30,10 @@ fn config_dir() -> PathBuf {
 
 impl KdeHost {
     pub fn load() -> Result<Self> {
-        let config = config_dir();
+        Self::load_from(config_dir())
+    }
+
+    fn load_from(config: PathBuf) -> Result<Self> {
         let cert = std::fs::read(config.join("certificate.pem")).context("reading kdeconnect certificate")?;
         let der = CertificateDer::from_pem_slice(&cert).map_err(|e| anyhow!("kdeconnect certificate: {e:?}"))?;
         let device_id = common_name(&der).context("kdeconnect certificate has no CN")?;
@@ -45,30 +49,25 @@ impl KdeHost {
 
     /// Phones kdeconnectd is paired with, by device id, with the certificate it pinned (DER).
     pub fn trusted_phones(&self) -> HashMap<String, Vec<u8>> {
-        let text = std::fs::read_to_string(self.config.join("trusted_devices")).unwrap_or_default();
-        let mut out = HashMap::new();
-        let mut section: Option<String> = None;
-        let mut is_phone = false;
-        let mut cert: Option<Vec<u8>> = None;
-        let mut flush = |section: &Option<String>, is_phone: bool, cert: &mut Option<Vec<u8>>| {
-            if let (Some(id), true, Some(der)) = (section, is_phone, cert.take()) {
-                out.insert(id.clone(), der);
-            }
-        };
-        for line in text.lines() {
-            if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-                flush(&section, is_phone, &mut cert);
-                section = Some(name.to_string());
-                is_phone = false;
-            } else if let Some(v) = line.strip_prefix("certificate=") {
-                let pem = v.trim_matches('"').replace("\\n", "\n");
-                cert = CertificateDer::from_pem_slice(pem.as_bytes()).ok().map(|c| c.to_vec());
-            } else if let Some(v) = line.strip_prefix("type=") {
-                is_phone = matches!(v, "phone" | "tablet");
-            }
-        }
-        flush(&section, is_phone, &mut cert);
-        out
+        self.trusted().into_iter().filter(|d| matches!(d.kind.as_str(), "phone" | "tablet")).map(|d| (d.id, d.cert)).collect()
+    }
+
+    /// Every device kdeconnectd is paired with.
+    pub fn trusted(&self) -> Vec<KdeDevice> {
+        parse_trusted(&std::fs::read_to_string(self.config.join("trusted_devices")).unwrap_or_default())
+    }
+
+    /// Writes kdeconnectd's identity into [dir] as the desktop app keeps its own: the same id,
+    /// certificate and key, so phones paired with this PC find it unchanged.
+    pub fn copy_identity(&self, dir: &Path) -> Result<()> {
+        let cert = std::fs::read(self.config.join("certificate.pem")).context("reading kdeconnect certificate")?;
+        let key = std::fs::read(self.config.join("privateKey.pem")).context("reading kdeconnect key")?;
+        std::fs::create_dir_all(dir)?;
+        std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
+        vyoma_core::identity::write_private(&dir.join("privateKey.pem"), &key)?;
+        std::fs::write(dir.join("certificate.pem"), cert)?;
+        std::fs::write(dir.join("device_id"), &self.device_id)?;
+        Ok(())
     }
 
     /// Signs the companion pairing proof (see [proof_message]); base64 of a DER ECDSA signature.
@@ -76,6 +75,43 @@ impl KdeHost {
         let sig: Signature = self.signing.sign(message.as_bytes());
         base64::engine::general_purpose::STANDARD.encode(sig.to_der().as_bytes())
     }
+}
+
+/// A device in kdeconnectd's `trusted_devices`.
+#[derive(Debug, PartialEq)]
+pub struct KdeDevice {
+    pub id: String,
+    pub name: String,
+    /// phone, tablet, desktop…
+    pub kind: String,
+    pub cert: Vec<u8>,
+}
+
+fn parse_trusted(text: &str) -> Vec<KdeDevice> {
+    let mut out = Vec::new();
+    let mut device: Option<(String, String, String, Option<Vec<u8>>)> = None;
+    let mut flush = |d: &mut Option<(String, String, String, Option<Vec<u8>>)>| {
+        if let Some((id, name, kind, Some(cert))) = d.take() {
+            out.push(KdeDevice { id, name, kind, cert });
+        }
+    };
+    for line in text.lines() {
+        if let Some(id) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            flush(&mut device);
+            device = Some((id.to_string(), String::new(), String::new(), None));
+        } else if let Some((_, name, kind, cert)) = device.as_mut() {
+            if let Some(v) = line.strip_prefix("certificate=") {
+                let pem = v.trim_matches('"').replace("\\n", "\n");
+                *cert = CertificateDer::from_pem_slice(pem.as_bytes()).ok().map(|c| c.to_vec());
+            } else if let Some(v) = line.strip_prefix("type=") {
+                *kind = v.to_string();
+            } else if let Some(v) = line.strip_prefix("name=") {
+                *name = v.to_string();
+            }
+        }
+    }
+    flush(&mut device);
+    out
 }
 
 /// Binds the proof to this companion's certificate and to one phone, so it can't be replayed.
@@ -127,6 +163,43 @@ mod tests {
         let verifier = ring::signature::UnparsedPublicKey::new(&ring::signature::ECDSA_P256_SHA256_ASN1, pair.public_key_raw());
         verifier.verify(b"message", &proof).expect("a valid signature");
         assert!(verifier.verify(b"other message", &proof).is_err());
+    }
+
+    #[test]
+    fn takes_over_kdeconnectds_identity_and_pairings() {
+        let base = std::env::temp_dir().join(format!("vyoma-kde-test-{}", std::process::id()));
+        let (kde, ours) = (base.join("kdeconnect"), base.join("ours"));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&kde).unwrap();
+        let cert_for = |cn: &str| {
+            let pair = rcgen::KeyPair::generate().unwrap();
+            let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+            params.distinguished_name.push(rcgen::DnType::CommonName, cn);
+            (params.self_signed(&pair).unwrap(), pair)
+        };
+        let (pc, pc_key) = cert_for("pc_0123456789abcdef");
+        let sec1 = p256::SecretKey::from_pkcs8_pem(&pc_key.serialize_pem()).unwrap().to_sec1_pem(Default::default()).unwrap();
+        std::fs::write(kde.join("certificate.pem"), pc.pem()).unwrap();
+        std::fs::write(kde.join("privateKey.pem"), sec1.as_bytes()).unwrap();
+        let (phone, _) = cert_for("phone_0123456789abcdef");
+        let (laptop, _) = cert_for("laptop_0123456789abcdef");
+        let entry = |id: &str, name: &str, kind: &str, pem: String| format!("[{id}]\ncertificate=\"{}\"\nname={name}\nprotocolVersion=8\ntype={kind}\n\n", pem.trim_end().replace('\n', "\\n"));
+        let list = entry("phone_0123456789abcdef", "Phone", "phone", phone.pem()) + &entry("laptop_0123456789abcdef", "Laptop", "laptop", laptop.pem());
+        std::fs::write(kde.join("trusted_devices"), list).unwrap();
+
+        let host = KdeHost::load_from(kde).unwrap();
+        assert_eq!(host.device_id, "pc_0123456789abcdef");
+        let all = host.trusted();
+        assert_eq!(all.iter().map(|d| (d.id.as_str(), d.name.as_str(), d.kind.as_str())).collect::<Vec<_>>(), [("phone_0123456789abcdef", "Phone", "phone"), ("laptop_0123456789abcdef", "Laptop", "laptop")]);
+        assert_eq!(all[0].cert, phone.der().to_vec());
+        assert_eq!(host.trusted_phones().keys().collect::<Vec<_>>(), ["phone_0123456789abcdef"]);
+
+        host.copy_identity(&ours).unwrap();
+        let me = vyoma_core::identity::Identity::load_or_create_in(&ours).unwrap();
+        assert_eq!((me.device_id.as_str(), me.cert.as_ref()), ("pc_0123456789abcdef", pc.der().as_ref()));
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(ours.join("privateKey.pem")).unwrap().permissions().mode() & 0o777, 0o600);
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

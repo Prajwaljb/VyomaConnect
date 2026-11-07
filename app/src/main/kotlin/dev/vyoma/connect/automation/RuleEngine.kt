@@ -318,11 +318,11 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
     }
 
     private fun companionOf(pc: Device): CompanionPlugin? = c.hub.value?.devices?.value?.values
-        ?.firstOrNull { it.state.value.identity.companionOf == pc.id && it.state.value.isPaired && it.state.value.isReachable }
+        ?.firstOrNull { it.state.value.identity.featuresOf == pc.id && it.state.value.isPaired && it.state.value.isReachable }
         ?.plugin(CompanionPlugin.ID)
 
     private fun companions(): List<CompanionPlugin> = c.hub.value?.devices?.value?.values.orEmpty()
-        .filter { it.state.value.isCompanion && it.state.value.isReachable }
+        .filter { it.state.value.identity.featuresOf != null && it.state.value.isReachable }
         .mapNotNull { it.plugin(CompanionPlugin.ID) }
 
     private fun <T> T?.need(what: String): T = this ?: error("$what isn't available")

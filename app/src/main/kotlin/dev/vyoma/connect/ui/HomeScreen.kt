@@ -125,7 +125,7 @@ fun HomeScreen(
     val allDevices by vm.devices.collectAsStateWithLifecycle()
     // Companions are part of their PC, never a separate computer.
     val devices = allDevices.filter { it.identity.companionOf == null }
-    val companionOnline = allDevices.any { it.identity.companionOf != null && it.isPaired && it.isReachable }
+    val companionOnline = allDevices.any { it.identity.featuresOf != null && it.isPaired && it.isReachable }
     val nowPlaying by vm.nowPlaying.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val status = LocalStatus.current
@@ -200,7 +200,7 @@ fun HomeScreen(
             if (live && np != null) item(key = "media") {
                 // Only when the companion says this exact video can continue here (a web page,
                 // not mpv playing a local file).
-                val companionUp = allDevices.any { it.identity.companionOf == id && it.isPaired && it.isReachable }
+                val companionUp = allDevices.any { it.identity.featuresOf == id && it.isPaired && it.isReachable }
                 val stats by remember(companionUp, id) { vm.companionOf(id)?.stats ?: flowOf(null) }.collectAsStateWithLifecycle(null)
                 val offered = stats?.handoff?.let { sameVideo(it, np.player.title) } == true
                 Staggered(1, Modifier.animateItem()) {

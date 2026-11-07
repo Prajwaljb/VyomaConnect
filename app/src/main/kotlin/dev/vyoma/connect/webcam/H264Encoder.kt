@@ -27,7 +27,7 @@ internal fun companionLink(hub: DeviceHub): Flow<Pair<CompanionPlugin, String>?>
     hub.devices.flatMapLatest { all ->
         val each = all.values.map { d ->
             d.state.map { st ->
-                val pc = d.identity.companionOf ?: return@map null
+                val pc = d.identity.featuresOf ?: return@map null
                 if (!st.isReachable) return@map null
                 d.plugin<CompanionPlugin>(CompanionPlugin.ID)?.let { it to (all[pc]?.identity?.deviceName ?: "the PC") }
             }
