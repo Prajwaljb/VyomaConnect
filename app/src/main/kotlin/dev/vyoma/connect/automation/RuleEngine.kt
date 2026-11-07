@@ -55,6 +55,9 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
     private val on = HashMap<String, List<Undo>>()
     /** What couldn't be put back because the PC wasn't there, by rule: goes back when it returns. */
     private val owed = HashMap<String, Owed>()
+    /** Rules whose every action failed, and when to try them again: they aren't on, so they get another go while they hold. */
+    private val retryAt = HashMap<String, Long>()
+    private var pcWasHere = false
     private var started = false
     private var startedAt = 0L
     private var wake: Job? = null
@@ -117,19 +120,35 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
                 if (undos.isNotEmpty()) revert(id, rule?.name ?: DELETED_RULE, undos, "Switched off")
             }
         }
-        if (Commands.primary(c) != null) {
+        val pcHere = Commands.primary(c) != null
+        if (pcHere && !pcWasHere) retryAt.clear() // what it was waiting for
+        pcWasHere = pcHere
+        if (pcHere) {
             for ((id, was) in owed.toList()) {
                 owed.remove(id)
                 revert(id, was.name, was.undos, "Put back now the PC is here")
             }
         }
         for (rule in rules) {
-            if (!rule.enabled) continue
+            if (!rule.enabled) {
+                retryAt.remove(rule.id)
+                continue
+            }
             val wasOn = rule.id in on
             val holds = rule.trigger.holds(s, now, wasOn) && rule.conditions.all { it.holds(s, now, wasOn) }
+            if (!holds) retryAt.remove(rule.id)
             if (holds && !wasOn) {
+                val due = retryAt[rule.id]
+                if (due != null && now < due) continue
                 val away = rule.trigger is Trigger.PcLink && !rule.trigger.connected
                 val (ran, failed, undos) = perform(rule, away)
+                // Nothing happened, and that can change. Not a rule for when the PC is away: trying again won't bring it.
+                if (ran.isEmpty() && failed.isNotEmpty() && !away) {
+                    if (due == null) record(rule, outcome(ran, failed).removePrefix(": "), failed = true)
+                    retryAt[rule.id] = now + RETRY_MS
+                    continue
+                }
+                retryAt.remove(rule.id)
                 // On again before the PC returned: what's owed now goes back when this turns off.
                 on[rule.id] = owed.remove(rule.id)?.undos.orEmpty() + undos.takeIf { rule.undo }.orEmpty()
                 record(rule, if (ran.isEmpty() && failed.isEmpty()) "Ran on the PC" else outcome(ran, failed).removePrefix(": "), failed.isNotEmpty() && ran.isEmpty())
@@ -165,6 +184,7 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
         val times = enabled.flatMap { r -> (listOf(r.trigger) + r.conditions).filterIsInstance<Trigger.Time>() }
         val next = buildList {
             times.forEach { add(TimeRules.nextBoundary(it, now)) }
+            addAll(retryAt.values)
             s.pcAwaySince?.let { since ->
                 enabled.forEach { r -> (r.trigger as? Trigger.PcLink)?.takeIf { !it.connected && it.afterMin > 0 }?.let { add(since + it.afterMin * 60_000L) } }
             }
@@ -370,6 +390,7 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
         const val OWED = "owed"
         const val DELETED_RULE = "Deleted rule"
         const val SETTLE_MS = 3_000L
+        const val RETRY_MS = 60_000L
         const val HYSTERESIS = 3
     }
 }
