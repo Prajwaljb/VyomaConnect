@@ -43,6 +43,19 @@ Peers mix up number and string types, so always use the lenient `NetworkPacket.s
   compared unsigned. This is verified against kdeconnectd over D-Bus.
 - Paired peer re-requests → we re-confirm with `pair:true`. Packets from unpaired peer → reply `pair:false` once.
 
+## Desktop core (desktop/core, standalone side)
+- Mirrors the rules above:
+  - `lan.rs` covers discovery and the listener, `link::dial`/`accept`/`read_hello` the links, `cert.rs` the CN and SPKI read from the DER.
+  - `pairing.rs` is a pure state machine: time is passed in, it returns the reply plus a `Change`.
+  - `trust.rs` keeps `trusted.json`, 0600, with hex DER certs.
+- UDP 1716 is shared with kdeconnectd via SO_REUSEADDR (plain bind and REUSEPORT fail). TCP takes the first free port, 1717 beside kdeconnectd.
+  - The TCP listener is dual-stack: a peer dials back the address it heard from.
+  - Announcing to a v6 target uses a v6 socket.
+- kdeconnectd ignores identity datagrams from loopback.
+  - On one host, announce to the PC's own global IPv6, which reaches only its `*:1716` socket: 127.x is unicast and lands on ours.
+  - Each announcement to a linked kdeconnectd makes it dial a new link, so a daemon must keep per-device state across links and announce only while unlinked.
+- Checked live (2026-11-07): both directions of pairing had matching codes with kdeconnectd, plus ping, and the discovery dial to its 1716.
+
 ## Plugins
 `PluginSpec(id, incoming, outgoing, create)`. Loaded when paired+reachable and
 `incoming ∩ peer.outgoing ≠ ∅ || outgoing ∩ peer.incoming ≠ ∅`. Our identity advertises the union of all specs.

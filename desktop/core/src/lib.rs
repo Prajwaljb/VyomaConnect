@@ -2,6 +2,10 @@
 //! to a phone and payloads over it. Pure protocol: nothing here calls a desktop's own APIs, so it
 //! builds and tests the same on any Linux desktop and on macOS (see docs/PLAN.md section 10).
 
+pub mod cert;
 pub mod identity;
+pub mod lan;
 pub mod link;
+pub mod pairing;
 pub mod payload;
+pub mod trust;

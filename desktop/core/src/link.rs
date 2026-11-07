@@ -1,9 +1,10 @@
-//! One KDE Connect link to a phone, from the dialling side.
+//! One KDE Connect link to a device.
 //!
-//! We connect over TCP and send our identity in plaintext, then act as the TLS server (the side
-//! that dials is the server in KDE Connect). TLS accepts any certificate; trust is an exact match
-//! against the certificate kdeconnectd pinned for that phone. Protocol v8: identities are
-//! exchanged again inside TLS, and only that copy counts.
+//! Whoever dials sends its identity in plaintext, then is the TLS server; whoever accepts reads
+//! that line and is the TLS client. TLS accepts any certificate: trust is an exact match against
+//! one pinned at pairing, and a device not paired yet must at least show a certificate whose
+//! common name is the id it claims. Protocol v8: identities are exchanged again inside TLS, and
+//! only that copy counts.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -17,13 +18,18 @@ use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::{DigitallySignedStruct, DistinguishedName, SignatureScheme};
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tokio_rustls::TlsAcceptor;
-use tokio_rustls::server::TlsStream;
+use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream};
 
+use crate::cert;
 use crate::identity::Identity;
+
+/// The most one packet may be from a device not paired yet, and from one that is.
+pub const UNPAIRED_PACKET_BYTES: usize = 64 * 1024;
+pub const MAX_PACKET_BYTES: usize = 32 * 1024 * 1024;
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
@@ -50,17 +56,32 @@ impl Sender {
     }
 }
 
-pub struct Receiver(tokio::io::Lines<BufReader<ReadHalf<Stream>>>);
+pub struct Receiver {
+    reader: BufReader<ReadHalf<Stream>>,
+    /// The longest line taken; a longer one ends the link.
+    pub limit: usize,
+}
 
 impl Receiver {
+    fn new(read: ReadHalf<Stream>, limit: usize) -> Self {
+        Self { reader: BufReader::new(read), limit }
+    }
+
     /// Next packet, or None when the phone hangs up.
     pub async fn next(&mut self) -> Result<Option<Value>> {
         loop {
-            match self.0.next_line().await? {
-                None => return Ok(None),
-                Some(line) if line.trim().is_empty() => continue,
-                Some(line) => return Ok(Some(serde_json::from_str(&line).context("bad packet")?)),
+            let mut line = Vec::new();
+            let n = (&mut self.reader).take(self.limit as u64 + 1).read_until(b'\n', &mut line).await?;
+            if n == 0 {
+                return Ok(None);
             }
+            if line.last() != Some(&b'\n') && line.len() > self.limit {
+                bail!("packet over {} bytes", self.limit);
+            }
+            if line.trim_ascii().is_empty() {
+                continue;
+            }
+            return Ok(Some(serde_json::from_slice(&line).context("bad packet")?));
         }
     }
 }
@@ -69,6 +90,8 @@ pub struct Link {
     pub sender: Sender,
     pub receiver: Receiver,
     pub phone_identity: Value,
+    /// The certificate the device showed (DER).
+    pub peer_cert: Vec<u8>,
 }
 
 /// Notices a phone that went away without a word (app reinstalled or killed, Wi-Fi dropped, its
@@ -128,32 +151,101 @@ impl std::error::Error for NotTrusted {}
 /// Like [connect], to whichever of the [trusted] phones (id to certificate) answers at [addr];
 /// for an address found without knowing who's there (a USB tethering link).
 pub async fn connect_trusted(addr: SocketAddr, me: &Identity, identity: &Value, trusted: &HashMap<String, Vec<u8>>) -> Result<(String, Link)> {
+    let tls = dial_tls(addr, me, &public_hello(identity)).await?;
+    let peer = peer_cert(&tls)?;
+    let Some(phone_id) = trusted.iter().find(|(_, cert)| peer == **cert).map(|(id, _)| id.clone()) else {
+        return Err(NotTrusted.into());
+    };
+    let link = finish(tls, identity, &phone_id, MAX_PACKET_BYTES).await?;
+    Ok((phone_id, link))
+}
+
+/// Dials [addr], says [hello] in the clear and becomes the TLS server.
+async fn dial_tls(addr: SocketAddr, me: &Identity, hello: &Value) -> Result<Stream> {
     let mut tcp = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr)).await.context("connect timed out")??;
     tcp.set_nodelay(true)?;
     keepalive(&tcp);
-    let mut hello = serde_json::to_vec(&public_hello(identity))?;
-    hello.push(b'\n');
-    tcp.write_all(&hello).await?;
-
+    let mut line = serde_json::to_vec(hello)?;
+    line.push(b'\n');
+    tcp.write_all(&line).await?;
     let acceptor = TlsAcceptor::from(Arc::new(server_config(me)?));
-    let tls = tokio::time::timeout(Duration::from_secs(10), acceptor.accept(tcp)).await.context("TLS timed out")??;
-    let peer = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).context("phone sent no certificate")?;
-    let Some(phone_id) = trusted.iter().find(|(_, cert)| peer.as_ref() == cert.as_slice()).map(|(id, _)| id.clone()) else {
-        return Err(NotTrusted.into());
-    };
+    Ok(tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(tcp)).await.context("TLS timed out")??.into())
+}
 
+fn peer_cert(tls: &Stream) -> Result<Vec<u8>> {
+    Ok(tls.get_ref().1.peer_certificates().and_then(|c| c.first()).context("peer sent no certificate")?.to_vec())
+}
+
+/// The v8 exchange inside TLS: our identity out, theirs in, and it must be [peer_id]'s.
+async fn finish(tls: Stream, identity: &Value, peer_id: &str, limit: usize) -> Result<Link> {
+    let peer_cert = peer_cert(&tls)?;
     let (read, write) = tokio::io::split(tls);
     let sender = Sender(Arc::new(Mutex::new(write)));
-    let mut receiver = Receiver(BufReader::new(read).lines());
+    let mut receiver = Receiver::new(read, UNPAIRED_PACKET_BYTES);
     sender.send(identity).await?;
-    let phone_identity = tokio::time::timeout(Duration::from_secs(10), receiver.next())
+    let phone_identity = tokio::time::timeout(HANDSHAKE_TIMEOUT, receiver.next())
         .await
-        .context("no identity from phone")??
-        .context("phone closed during handshake")?;
-    if phone_identity["type"] != "kdeconnect.identity" || phone_identity["body"]["deviceId"] != phone_id.as_str() {
-        bail!("unexpected identity from phone");
+        .context("no identity from peer")??
+        .context("peer closed during handshake")?;
+    if phone_identity["type"] != "kdeconnect.identity" || phone_identity["body"]["deviceId"] != peer_id {
+        bail!("unexpected identity from peer");
     }
-    Ok((phone_id, Link { sender, receiver, phone_identity }))
+    receiver.limit = limit;
+    Ok(Link { sender, receiver, phone_identity, peer_cert })
+}
+
+/// A device not paired yet must show a certificate made out to the id it claims.
+fn check_name(tls: &Stream, id: &str) -> Result<()> {
+    if cert::common_name(&peer_cert(tls)?).as_deref() != Some(id) {
+        bail!("certificate isn't {id}'s");
+    }
+    Ok(())
+}
+
+/// Dials a device that announced itself as [peer_id] (discovery), with our full identity in the
+/// clear as KDE Connect does (the broadcast says as much). Its certificate must name it, and the
+/// link reads at most [UNPAIRED_PACKET_BYTES] a packet until the caller raises `receiver.limit`.
+pub async fn dial(addr: SocketAddr, me: &Identity, identity: &Value, peer_id: &str) -> Result<Link> {
+    let tls = dial_tls(addr, me, identity).await?;
+    check_name(&tls, peer_id)?;
+    finish(tls, identity, peer_id, UNPAIRED_PACKET_BYTES).await
+}
+
+/// The identity line a dialler sends before TLS, read a byte at a time so nothing of the TLS
+/// handshake behind it is taken, and at most [UNPAIRED_PACKET_BYTES].
+pub async fn read_hello(tcp: &mut TcpStream) -> Result<Value> {
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        if tcp.read(&mut byte).await? == 0 {
+            bail!("closed before its identity");
+        }
+        if byte[0] == b'\n' {
+            break;
+        }
+        line.push(byte[0]);
+        if line.len() > UNPAIRED_PACKET_BYTES {
+            bail!("identity too long");
+        }
+    }
+    let hello: Value = serde_json::from_slice(&line).context("bad identity")?;
+    if hello["type"] != "kdeconnect.identity" {
+        bail!("expected an identity");
+    }
+    Ok(hello)
+}
+
+/// Takes a link the device dialled, once [read_hello] gave [peer_id]: we're the TLS client.
+pub async fn accept(tcp: TcpStream, me: &Identity, identity: &Value, peer_id: &str) -> Result<Link> {
+    tcp.set_nodelay(true)?;
+    keepalive(&tcp);
+    let connector = TlsConnector::from(Arc::new(client_config(me)?));
+    // No name to check (trust is the pin), and an id isn't always a valid DNS name: the address
+    // stands in, which also keeps SNI out of the hello.
+    let name = ServerName::IpAddress(tcp.peer_addr()?.ip().into());
+    let tls: Stream = tokio::time::timeout(HANDSHAKE_TIMEOUT, connector.connect(name, tcp)).await.context("TLS timed out")??.into();
+    check_name(&tls, peer_id)?;
+    finish(tls, identity, peer_id, UNPAIRED_PACKET_BYTES).await
 }
 
 pub fn server_config(me: &Identity) -> Result<rustls::ServerConfig> {

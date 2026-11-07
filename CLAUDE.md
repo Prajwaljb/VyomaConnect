@@ -17,6 +17,10 @@ scripts/deploy.sh debug          # install + launch on phone
                                  # Settings > Generate log writes perf/device diagnostics to Downloads (app/.../demo/)
 (cd desktop/companion && cargo build --release)   # Linux companion (Rust); run inside it for its .cargo linker fix
 (cd desktop/companion && cargo test --release -p vyoma-core && cargo test --release)   # core + companion tests
+(cd desktop/companion && VYOMA_DEV_DIR=<scratch dir> VYOMA_DEV_ALLOW=<ids> cargo run --release -p vyoma-core --example devpair -- <IP to announce to>)
+                                 # standalone pairing check with allowlisted ids only; stdin: pair/accept/reject/unpair/ping.
+                                 # Against this PC's kdeconnectd: announce to the PC's own global IPv6 (it ignores loopback UDP),
+                                 # check codes with qdbus6 verificationKey, unpair at the end, rmdir ~/.config/kdeconnect/<dev id>
 install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ && systemctl --user restart vyoma-companion
                                  # the installed systemd user unit runs ~/.local/bin/vyoma-companion; logs: journalctl --user -u vyoma-companion
 ```
