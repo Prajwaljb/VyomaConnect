@@ -53,7 +53,7 @@ impl Identity {
         std::fs::write(&cert_path, cert.pem())?;
         write_private(&key_path, key_pair.serialize_pem().as_bytes())?;
         std::fs::write(&id_path, &device_id)?;
-        tracing::info!("created companion identity {device_id}");
+        tracing::info!("created identity {device_id}");
         Self::load_or_create_in(dir)
     }
 }

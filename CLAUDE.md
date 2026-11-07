@@ -17,10 +17,11 @@ scripts/deploy.sh debug          # install + launch on phone
                                  # Settings > Generate log writes perf/device diagnostics to Downloads (app/.../demo/)
 (cd desktop/companion && cargo build --release)   # Linux companion (Rust); run inside it for its .cargo linker fix
 (cd desktop/companion && cargo test --release -p vyoma-core && cargo test --release)   # core + companion tests
-(cd desktop/companion && VYOMA_DEV_DIR=<scratch dir> VYOMA_DEV_ALLOW=<ids> cargo run --release -p vyoma-core --example devpair -- <IP to announce to>)
-                                 # standalone pairing check with allowlisted ids only; stdin: pair/accept/reject/unpair/ping.
-                                 # Against this PC's kdeconnectd: announce to the PC's own global IPv6 (it ignores loopback UDP),
-                                 # check codes with qdbus6 verificationKey, unpair at the end, rmdir ~/.config/kdeconnect/<dev id>
+(cd desktop/daemon && cargo build --release && VYOMA_DIR=<scratch dir> VYOMA_ALLOW=<ids> VYOMA_ANNOUNCE=<IPs> ./target/release/vyoma-desktop)
+                                 # standalone desktop app (in development, not installed); drive it with
+                                 # busctl --user call dev.vyoma.Desktop /dev/vyoma/Desktop dev.vyoma.Desktop1 Devices|Pair|Accept|Reject|Unpair|Refresh.
+                                 # Against this PC's kdeconnectd: allow only its id, announce to the PC's own global IPv6 (it ignores
+                                 # loopback UDP), check codes with qdbus6 verificationKey, unpair at the end, rmdir ~/.config/kdeconnect/<dev id>
 install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ && systemctl --user restart vyoma-companion
                                  # the installed systemd user unit runs ~/.local/bin/vyoma-companion; logs: journalctl --user -u vyoma-companion
 ```
@@ -32,7 +33,10 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `core/designsystem`: theme, motion, One UI-style components.
 - `app`: Application/AppContainer (manual lazy DI), `LinkService` (single connectedDevice FGS), UI.
 - `desktop/core` (`vyoma-core`): the desktop side's shared protocol core (identity, links, payloads), no desktop
-  calls, so it serves every desktop and macOS. Becoming the standalone desktop app: `docs/PLAN.md` section 10.
+  calls, so it serves every desktop and macOS: discovery, links, pairing, trust store, the device hub (`device.rs`).
+- `desktop/daemon` (`vyoma-desktop`): the standalone desktop app growing on that core (`docs/PLAN.md` section 10): pairing
+  prompt as a freedesktop notification with Accept/Reject, `dev.vyoma.Desktop1` D-Bus control for the future GUI.
+  Own identity in `~/.config/vyoma-desktop`, separate from the companion's.
 - `desktop/companion`: Rust daemon beside stock kdeconnectd, built on `vyoma-core`. Dials only phones kdeconnectd trusts (mDNS), pairs with
   no prompt via `CompanionProof` (signed with kdeconnectd's key; phone verifies against the pinned PC cert), speaks
   `vyoma.*` packets. Phone folds it into its PC (`DeviceIdentity.companionOf`, `DeviceState.isCompanion`).
