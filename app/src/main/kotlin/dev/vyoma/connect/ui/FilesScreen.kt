@@ -95,7 +95,7 @@ fun FilesScreen(
     val status = LocalStatus.current
     val devices by vm.devices.collectAsStateWithLifecycle()
     val pcName = devices.firstOrNull { it.identity.deviceId == pcId }?.identity?.deviceName ?: "PC"
-    val companion = devices.firstOrNull { it.identity.companionOf == pcId && it.isPaired && it.isReachable }
+    val companion = devices.firstOrNull { it.identity.featuresOf == pcId && it.isPaired && it.isReachable }
     val plugin = remember(companion?.identity?.deviceId, companion?.plugins) {
         companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
     }

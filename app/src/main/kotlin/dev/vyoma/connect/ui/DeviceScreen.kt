@@ -74,7 +74,7 @@ fun DeviceScreen(
     var confirmUnpair by rememberSaveable { mutableStateOf(false) }
     var showCommands by rememberSaveable { mutableStateOf(false) }
     val status = LocalStatus.current
-    val companion = devices.firstOrNull { it.identity.companionOf == deviceId && it.isPaired && it.isReachable }
+    val companion = devices.firstOrNull { it.identity.featuresOf == deviceId && it.isPaired && it.isReachable }
     val companionOnline = companion != null
     val companionPlugin = remember(companion?.identity?.deviceId, companion?.plugins) {
         companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }

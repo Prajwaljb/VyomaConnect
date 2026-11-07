@@ -133,7 +133,7 @@ class VyomaApp : Application() {
                 hub.devices.flatMapLatest { all ->
                     val each = all.values.map { d ->
                         d.state.map { d.plugin<CompanionPlugin>(CompanionPlugin.ID) }.distinctUntilChanged()
-                            .flatMapLatest { p -> p?.specs?.map { s -> d.identity.companionOf?.let { pc -> s?.let { Triple(pc, it.first, it.second) } } } ?: flowOf(null) }
+                            .flatMapLatest { p -> p?.specs?.map { s -> d.identity.featuresOf?.let { pc -> s?.let { Triple(pc, it.first, it.second) } } } ?: flowOf(null) }
                     }
                     if (each.isEmpty()) flowOf(null) else merge(*each.toTypedArray())
                 }

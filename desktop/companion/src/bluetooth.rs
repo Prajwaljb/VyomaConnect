@@ -1,4 +1,4 @@
-//! Bluetooth fallback: a tunnel to kdeconnectd, as the USB cable is. BlueZ hands us each RFCOMM
+//! Bluetooth fallback: a tunnel to kdeconnectd (or the desktop app), as the USB cable is. BlueZ hands us each RFCOMM
 //! connection a bonded phone opens to our service, and we pipe it to kdeconnectd's TCP port, so the
 //! phone's usual TLS link runs end to end and stock KDE Connect's own (beta, unencrypted past the
 //! radio) Bluetooth backend can stay off. Used by the phone only while it has no other way to the PC.
@@ -35,7 +35,6 @@ const PROFILE_PATH: &str = "/dev/vyoma/companion/bluetooth";
 const COMPANION_PATH: &str = "/dev/vyoma/companion/bluetooth_companion";
 const PAD_PATH: &str = "/dev/vyoma/companion/bluetooth_pad";
 const POINTER_PATH: &str = "/dev/vyoma/companion/bluetooth_pointer";
-const KDECONNECTD: &str = "127.0.0.1:1716";
 /// A failed or dropped registration (BlueZ restarted, adapter came back) is retried this often.
 const REGISTER_EVERY: Duration = Duration::from_secs(30);
 /// How long main.rs gets to dial a port we bridged to the radio.
@@ -128,7 +127,7 @@ fn radio_stream(fd: StdFd) -> Result<UnixStream> {
 
 async fn tunnel(fd: StdFd) -> Result<()> {
     let mut radio = radio_stream(fd)?;
-    let mut daemon = TcpStream::connect(KDECONNECTD).await.context("kdeconnectd isn't listening")?;
+    let mut daemon = TcpStream::connect(("127.0.0.1", crate::desk_port())).await.context("KDE Connect isn't listening")?;
     daemon.set_nodelay(true)?;
     tokio::io::copy_bidirectional(&mut radio, &mut daemon).await?;
     Ok(())
@@ -183,8 +182,9 @@ async fn register(system: &Connection, path: &str, service: &str, channel: u16) 
 }
 
 /// Keeps our services registered with BlueZ for as long as the companion runs. Each companion
-/// tunnel's local port goes to [links].
-pub async fn serve(links: UnboundedSender<u16>) {
+/// tunnel's local port goes to [links]; without, there's no companion tunnel (the desktop app is
+/// its own companion, so the PC's tunnel carries everything).
+pub async fn serve(links: Option<UnboundedSender<u16>>) {
     let system = match Connection::system().await {
         Ok(c) => c,
         Err(e) => return warn!("no Bluetooth fallback: no system bus: {e:#}"),
@@ -192,7 +192,10 @@ pub async fn serve(links: UnboundedSender<u16>) {
     if let Err(e) = system.object_server().at(PROFILE_PATH, Profile).await {
         return warn!("no Bluetooth fallback: {e:#}");
     }
-    if let Err(e) = system.object_server().at(COMPANION_PATH, CompanionProfile(links)).await {
+    let companion = links.is_some();
+    if let Some(links) = links
+        && let Err(e) = system.object_server().at(COMPANION_PATH, CompanionProfile(links)).await
+    {
         return warn!("no Bluetooth fallback: {e:#}");
     }
     if let Err(e) = system.object_server().at(PAD_PATH, PadProfile).await {
@@ -204,7 +207,7 @@ pub async fn serve(links: UnboundedSender<u16>) {
     let mut registered = false;
     loop {
         let result = match register(&system, PROFILE_PATH, SERVICE, CHANNEL).await {
-            Ok(()) => match register(&system, COMPANION_PATH, COMPANION_SERVICE, COMPANION_CHANNEL).await {
+            Ok(()) => match if companion { register(&system, COMPANION_PATH, COMPANION_SERVICE, COMPANION_CHANNEL).await } else { Ok(()) } {
                 Ok(()) => match register(&system, PAD_PATH, PAD_SERVICE, PAD_CHANNEL).await {
                     Ok(()) => register(&system, POINTER_PATH, POINTER_SERVICE, POINTER_CHANNEL).await,
                     failed => failed,

@@ -45,7 +45,7 @@ pub enum Command {
 pub enum Event {
     /// Its first link came up. [incoming] and [outgoing]: the packet types it takes and sends;
     /// [cert]: the certificate its links show, to pin payloads to.
-    Linked { id: String, name: String, kind: String, paired: bool, incoming: Vec<String>, outgoing: Vec<String>, cert: Vec<u8> },
+    Linked { id: String, name: String, kind: String, paired: bool, incoming: Vec<String>, outgoing: Vec<String>, cert: Vec<u8>, remote: IpAddr },
     /// Its last link closed.
     Gone { id: String },
     /// It asks to pair: show [key] with Accept and Reject.
@@ -237,12 +237,12 @@ impl Hub {
             }
             let _ = tx.send(Incoming { id: reader_id, link: no, packet: None });
         });
-        let cert = link.peer_cert.clone();
-        device.links.push(LinkHandle { no, cert: link.peer_cert, remote: link.remote.ip().to_canonical(), queue, reader });
+        let (cert, remote) = (link.peer_cert.clone(), link.remote.ip().to_canonical());
+        device.links.push(LinkHandle { no, cert: link.peer_cert, remote, queue, reader });
         if first {
             self.linked.lock().unwrap().insert(id.clone());
             tracing::info!("{id}: linked{}", if paired { ", paired" } else { "" });
-            self.emit(Event::Linked { id, name, kind, paired, incoming: takes, outgoing: sends, cert });
+            self.emit(Event::Linked { id, name, kind, paired, incoming: takes, outgoing: sends, cert, remote });
         }
     }
 

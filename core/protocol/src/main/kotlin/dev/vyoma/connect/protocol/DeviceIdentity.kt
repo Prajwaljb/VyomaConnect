@@ -27,6 +27,12 @@ data class DeviceIdentity(
     /** Set when this peer is the Vyoma companion of another device (the PC's KDE Connect daemon). */
     val companionOf: String? = null,
 ) {
+    /**
+     * The PC whose Vyoma features (stats, live screen, files…) this device serves: its PC for a
+     * companion, itself for Vyoma's own desktop app, which needs no companion; null for stock peers.
+     */
+    val featuresOf: String? get() = companionOf ?: deviceId.takeIf { OWN_FEATURES in incomingCapabilities }
+
     fun toPacket(tcpPort: Int? = this.tcpPort): NetworkPacket = packet(PacketTypes.IDENTITY) {
         put("deviceId", deviceId)
         put("deviceName", deviceName)
@@ -40,6 +46,9 @@ data class DeviceIdentity(
     companion object {
         const val PROTOCOL_VERSION = 8
         const val MIN_PROTOCOL_VERSION = 7
+
+        /** What a PC that serves Vyoma's features itself takes. */
+        private const val OWN_FEATURES = "vyoma.stats.request"
 
         // KDE Connect v8 generates [a-zA-Z0-9_]{32,38}; older peers used shorter hex ids and dashes.
         private val validId = Regex("^[a-zA-Z0-9_-]{16,64}$")

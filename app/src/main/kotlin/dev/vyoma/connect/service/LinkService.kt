@@ -6,6 +6,7 @@ import android.content.pm.ServiceInfo
 import android.net.Uri
 import dev.vyoma.connect.platform.Handoff
 import dev.vyoma.connect.platform.outgoingFile
+import dev.vyoma.connect.platform.readable
 import dev.vyoma.connect.platform.folderItems
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionUploads
@@ -339,7 +340,13 @@ class LinkService : LifecycleService() {
                 }
                 runCatching { contentResolver.releasePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             } else if (uris.isNotEmpty()) {
-                val files = withContext(Dispatchers.IO) { uris.map(contentResolver::outgoingFile) }
+                val (open, closed) = withContext(Dispatchers.IO) { uris.partition(contentResolver::readable) }
+                if (closed.isNotEmpty()) {
+                    val what = if (closed.size == 1) "that file" else "${closed.size} of those files"
+                    android.widget.Toast.makeText(this@LinkService, "Vyoma can't read $what, so it wasn't sent", android.widget.Toast.LENGTH_LONG).show()
+                }
+                if (open.isEmpty()) return@launch
+                val files = withContext(Dispatchers.IO) { open.map(contentResolver::outgoingFile) }
                 // The PC needs a file's size to resume it; a provider that won't say goes the stock way.
                 if (uploads != null && files.all { it.size >= 0 }) uploads.send(files.map { SendItem(it) }) else share?.sendFiles(files)
             } else if (share != null && text != null) {
@@ -350,7 +357,7 @@ class LinkService : LifecycleService() {
 
     /** The companion beside PC [pcId], while it's linked. */
     private fun companionOf(hub: DeviceHub, pcId: String): CompanionPlugin? =
-        hub.devices.value.values.firstOrNull { it.state.value.identity.companionOf == pcId && it.state.value.isPaired && it.state.value.isReachable }
+        hub.devices.value.values.firstOrNull { it.state.value.identity.featuresOf == pcId && it.state.value.isPaired && it.state.value.isReachable }
             ?.plugin(CompanionPlugin.ID)
 
     /**

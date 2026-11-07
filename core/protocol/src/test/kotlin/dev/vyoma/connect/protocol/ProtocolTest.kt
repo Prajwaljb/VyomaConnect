@@ -74,6 +74,14 @@ class ProtocolTest {
     }
 
     @Test
+    fun whoServesAPcsVyomaFeatures() {
+        val pc = DeviceIdentity("pc_0123456789abcdef", "PC", DeviceType.DESKTOP, 8, setOf("kdeconnect.ping"), emptySet())
+        kotlin.test.assertNull(pc.featuresOf, "stock kdeconnectd")
+        assertEquals(pc.deviceId, pc.copy(incomingCapabilities = setOf("vyoma.stats.request")).featuresOf, "Vyoma's own desktop app")
+        assertEquals(pc.deviceId, pc.copy(deviceId = "companion_0123456789", companionOf = pc.deviceId).featuresOf)
+    }
+
+    @Test
     fun certificateAndVerificationKey() {
         val a = LocalCredentials.generate(DeviceIdentity.newDeviceId())
         val b = LocalCredentials.generate(DeviceIdentity.newDeviceId())

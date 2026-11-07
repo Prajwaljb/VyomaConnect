@@ -186,7 +186,7 @@ class GamepadActivity : ComponentActivity() {
                 hub.devices.flatMapLatest { all ->
                     val each = all.values.map { d ->
                         d.state.map { st ->
-                            val pc = d.identity.companionOf
+                            val pc = d.identity.featuresOf
                             if (!st.isReachable || pc == null || (wanted != null && pc != wanted)) return@map null
                             d.plugin<CompanionPlugin>(CompanionPlugin.ID)?.let { it to all[pc]?.identity?.deviceName }
                         }

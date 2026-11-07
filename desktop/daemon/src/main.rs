@@ -2,6 +2,9 @@
 //! kdeconnectd. This process is the daemon; the GUI will be another one, talking to it over the
 //! `dev.vyoma.Desktop1` D-Bus interface below, so closing it never drops a link.
 //!
+//! `--import-kde` takes over kdeconnectd's identity and pairings, so phones paired with this PC stay
+//! paired; `--check` and `--setup` report and install what its features run (the companion's setup).
+//!
 //! Environment, for development beside the user's own KDE Connect:
 //! - `VYOMA_DIR`: where its identity and pairings live (default `~/.config/vyoma-desktop`).
 //! - `VYOMA_ALLOW`: device ids, comma-separated; when set, every other device is ignored.
@@ -34,6 +37,7 @@ use vyoma_core::identity::Identity;
 use vyoma_core::lan::{Lan, Ports, Rules, UDP_PORT};
 use vyoma_core::link::packet;
 use vyoma_core::trust::TrustStore;
+use vyoma_companion::session::{self as features, Host, Phone};
 use zbus::fdo;
 
 use clipboard::{CLIPBOARD, CLIPBOARD_CONNECT, Clipboard};
@@ -44,6 +48,8 @@ use system::{Ringer, Session};
 
 const BUS_NAME: &str = "dev.vyoma.Desktop";
 const OBJECT_PATH: &str = "/dev/vyoma/Desktop";
+/// How often phones tethered to this PC (or whose hotspot it's on) are told it's here, while unlinked.
+const TETHER_EVERY: Duration = Duration::from_secs(3);
 /// How often the PC's battery is read; it's sent on when it changed.
 const BATTERY_EVERY: Duration = Duration::from_secs(30);
 
@@ -64,6 +70,8 @@ pub struct DeviceView {
     pub signal: Option<Vec<Value>>,
     /// The certificate its links show, which its payloads must show too.
     pub cert: Vec<u8>,
+    /// Where its first link comes from.
+    pub remote: Option<IpAddr>,
 }
 
 type Devices = Arc<Mutex<HashMap<String, DeviceView>>>;
@@ -239,6 +247,10 @@ struct Desk {
     input: mpsc::UnboundedSender<(std::time::Instant, String, Value)>,
     /// Volume requests, for the outputs' task.
     volume: mpsc::UnboundedSender<(String, Value)>,
+    /// What the companion did beside kdeconnectd (screen, files, controller…), served here.
+    host: Arc<Host>,
+    /// Device id to its running features session, which takes its vyoma.* packets.
+    sessions: HashMap<String, mpsc::UnboundedSender<(Value, IpAddr)>>,
 }
 
 /// A file fetched from a device, or why not.
@@ -264,13 +276,45 @@ enum Open {
 /// Notifications whose buttons are remembered; older ones are long gone from the screen.
 const OPENS_KEPT: usize = 32;
 
+fn main() -> Result<()> {
+    vyoma_companion::setup::standalone();
+    let dir = std::env::var_os("VYOMA_DIR").map(PathBuf::from).unwrap_or_else(default_dir);
+    match std::env::args().nth(1).as_deref() {
+        // The phone's screen window runs as a child process (the companion's mirror.rs).
+        Some(vyoma_companion::mirror::WINDOW_ARG) => vyoma_companion::mirror::window(&std::env::args().skip(2).collect::<Vec<_>>()),
+        Some("--check") => std::process::exit(if vyoma_companion::setup::print_check() { 0 } else { 1 }),
+        Some("--setup") => vyoma_companion::setup::run(std::env::args().nth(2).is_some_and(|a| a == "--dry-run")),
+        Some("--import-kde") => import_kde(&dir),
+        Some(other) => anyhow::bail!("unknown option {other}: try --import-kde, --check or --setup [--dry-run]"),
+        None => daemon(dir),
+    }
+}
+
+/// Becomes the PC kdeconnectd was: its id, certificate and pairings. Only into an empty folder, so
+/// pairings made here are never lost.
+fn import_kde(dir: &std::path::Path) -> Result<()> {
+    if dir.join("device_id").exists() {
+        anyhow::bail!("{} already has an identity: move it away first", dir.display());
+    }
+    let kde = vyoma_companion::kde::KdeHost::load()?;
+    kde.copy_identity(dir)?;
+    let mut trust = TrustStore::open(dir)?;
+    let devices = kde.trusted();
+    for d in &devices {
+        trust.put(&d.id, vyoma_core::trust::Trusted { name: d.name.clone(), kind: d.kind.clone(), cert: d.cert.clone() })?;
+    }
+    println!("Now {} with its {} pairing(s). Stop kdeconnectd before starting vyoma-desktop.", kde.name, devices.len());
+    Ok(())
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn daemon(dir: PathBuf) -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "vyoma_desktop=info,vyoma_core=info".into()))
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "vyoma_desktop=info,vyoma_core=info,vyoma_companion=info".into()))
         .init();
 
-    let dir = std::env::var_os("VYOMA_DIR").map(PathBuf::from).unwrap_or_else(default_dir);
+    // The companion's features keep their tokens and caches here too.
+    vyoma_core::identity::use_dir(dir.clone());
     let me = Arc::new(Identity::load_or_create_in(&dir)?);
     let trust = TrustStore::open(&dir)?;
     let devices: Devices = Arc::default();
@@ -298,6 +342,10 @@ async fn main() -> Result<()> {
     tokio::spawn(hub.run(links, commands_rx));
 
     let conn = zbus::Connection::session().await.context("no session bus")?;
+    let beside_kde = kde_running(&conn).await;
+    if beside_kde && vyoma_companion::kde::KdeHost::load().is_ok_and(|k| k.device_id == me.device_id) {
+        anyhow::bail!("kdeconnectd is running as this same PC: stop it first");
+    }
     let (asks_tx, mut asks) = mpsc::unbounded_channel();
     let notifier = Notifier::new(conn.clone());
     let run = commands::Commands::new(&dir);
@@ -363,7 +411,18 @@ async fn main() -> Result<()> {
         }
     });
 
+    let player = match vyoma_companion::media::Media::start().await {
+        Ok(m) => Some(m),
+        Err(e) => {
+            tracing::warn!("no handoff or walk-away pause: {e:#}");
+            None
+        }
+    };
+    let host = Arc::new(Host { me: me.clone(), media: player, away: Arc::default() });
+
     let mut desk = Desk {
+        host,
+        sessions: HashMap::new(),
         me: me.clone(),
         conn: conn.clone(),
         clipboard: Clipboard::default(),
@@ -393,6 +452,11 @@ async fn main() -> Result<()> {
 
     lan.announce(&targets).await?;
     tracing::info!("{} is up as {}", env!("CARGO_PKG_NAME"), me.device_id);
+    if beside_kde {
+        tracing::info!("kdeconnectd is running: the cable, tethering and Bluetooth stay its own");
+    } else {
+        transports(lan.clone(), desk.devices.clone());
+    }
 
     let mut battery_tick = tokio::time::interval(BATTERY_EVERY);
     loop {
@@ -453,7 +517,7 @@ impl Desk {
     }
 
     /// The device is linked and paired: send it what it should know at once.
-    fn start(&self, id: &str) {
+    fn start(&mut self, id: &str) {
         let Some(device) = self.devices.lock().unwrap().get(id).cloned() else { return };
         for p in plugins::started(&device, self.battery, self.locked) {
             self.send(id, p);
@@ -464,6 +528,30 @@ impl Desk {
         if plugins::takes(&device, input::MOUSEPAD_KEYBOARDSTATE) {
             self.send(id, input::keyboard_state());
         }
+        self.start_features(id, &device);
+    }
+
+    /// Serves the device's vyoma.* packets, if it sends any, until it's gone or unpaired.
+    fn start_features(&mut self, id: &str, device: &DeviceView) {
+        if self.sessions.contains_key(id) || !device.incoming.iter().any(|t| features::OUTGOING.contains(&t.as_str())) {
+            return;
+        }
+        let (packets, rx) = mpsc::unbounded_channel();
+        let (replies, mut out) = mpsc::unbounded_channel();
+        let phone = Phone { id: id.to_owned(), name: features::phone_name(&device.name), pinned: device.cert.clone() };
+        let (host, commands, id) = (self.host.clone(), self.commands.clone(), id.to_owned());
+        self.sessions.insert(id.clone(), packets);
+        tokio::spawn(async move {
+            let to = id.clone();
+            tokio::spawn(async move {
+                while let Some(p) = out.recv().await {
+                    let _ = commands.send(Command::Send(to.clone(), p));
+                }
+            });
+            host.away.linked(&id, host.media.as_ref()).await;
+            features::serve(host.clone(), phone, vyoma_core::link::Sender::queue(replies), rx).await;
+            host.away.unlinked(&id, host.media.clone());
+        });
     }
 
     /// Shows a notification whose buttons [open] something.
@@ -620,17 +708,19 @@ impl Desk {
 
     async fn on_event(&mut self, event: Event) {
         match event {
-            Event::Linked { id, name, kind, paired, incoming, cert, .. } => {
+            Event::Linked { id, name, kind, paired, incoming, cert, remote, .. } => {
                 {
                     let mut all = self.devices.lock().unwrap();
                     let d = all.entry(id.clone()).or_default();
-                    (d.name, d.kind, d.paired, d.linked, d.incoming, d.cert) = (name, kind, paired, true, incoming, cert);
+                    (d.name, d.kind, d.paired, d.linked, d.incoming, d.cert, d.remote) = (name, kind, paired, true, incoming, cert, Some(remote));
                 }
                 if paired {
                     self.start(&id);
                 }
             }
             Event::Gone { id } => {
+                // Dropping its packets' channel ends the session, and the screen, camera and controller with it.
+                self.sessions.remove(&id);
                 let mut all = self.devices.lock().unwrap();
                 // Unpaired devices are only listed while they're here.
                 if all.get(&id).is_some_and(|d| d.paired) {
@@ -669,6 +759,7 @@ impl Desk {
                 self.start(&id);
             }
             Event::Unpaired { id, name } => {
+                self.sessions.remove(&id);
                 {
                     let mut all = self.devices.lock().unwrap();
                     if all.get(&id).is_some_and(|d| d.linked) {
@@ -682,6 +773,12 @@ impl Desk {
             }
             Event::Packet { id, packet, from } => {
                 let Some(mut device) = self.devices.lock().unwrap().get(&id).cloned() else { return };
+                if packet["type"].as_str().is_some_and(|t| t.starts_with("vyoma.")) {
+                    if let Some(session) = self.sessions.get(&id) {
+                        let _ = session.send((packet, from));
+                    }
+                    return;
+                }
                 match packet["type"].as_str().unwrap_or("") {
                     CLIPBOARD | CLIPBOARD_CONNECT => {
                         if let Some(text) = self.clipboard.received(&packet) {
@@ -755,6 +852,34 @@ impl Desk {
     }
 }
 
+async fn kde_running(conn: &zbus::Connection) -> bool {
+    let reply = conn.call_method(Some("org.freedesktop.DBus"), "/org/freedesktop/DBus", Some("org.freedesktop.DBus"), "NameHasOwner", &("org.kde.kdeconnect",)).await;
+    reply.is_ok_and(|r| r.body().deserialize::<bool>().unwrap_or(false))
+}
+
+/// The other ways to a phone: the USB cable (adb), USB tethering and hotspots, and Bluetooth; and
+/// the offer to install what's missing. Not while kdeconnectd runs: then they're its and the
+/// companion's, and a second claim would steal them.
+fn transports(lan: Arc<Lan>, devices: Devices) {
+    tokio::spawn(vyoma_companion::setup::offer());
+    vyoma_companion::set_desk_port(lan.tcp_port());
+    tokio::spawn(vyoma_companion::usb::watch());
+    tokio::spawn(vyoma_companion::bluetooth::serve(None));
+    tokio::spawn(vyoma_companion::gamepad::serve_wired());
+    tokio::spawn(vyoma_companion::webcam::remove_stale_mics());
+    // A tethered phone isn't on the network we announce to: announce to it directly, and it dials back.
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(TETHER_EVERY).await;
+            let linked: Vec<IpAddr> = devices.lock().unwrap().values().filter(|d| d.linked).filter_map(|d| d.remote).collect();
+            let phones: Vec<SocketAddr> = vyoma_companion::tether::phones().into_iter().filter(|(ip, _)| !linked.contains(ip)).map(|(ip, _)| SocketAddr::new(ip, UDP_PORT)).collect();
+            if !phones.is_empty() {
+                let _ = lan.announce(&phones).await;
+            }
+        }
+    });
+}
+
 fn default_dir() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -777,8 +902,8 @@ fn identity(me: &Identity) -> Value {
             "deviceName": host_name(),
             "deviceType": if system::battery().is_some() { "laptop" } else { "desktop" },
             "protocolVersion": 8,
-            "incomingCapabilities": plugins::INCOMING,
-            "outgoingCapabilities": plugins::OUTGOING,
+            "incomingCapabilities": ([plugins::INCOMING, features::INCOMING].concat()),
+            "outgoingCapabilities": ([plugins::OUTGOING, features::OUTGOING].concat()),
         }),
     )
 }

@@ -287,6 +287,44 @@ Phase 1 so far:
     follows a lost packet. The release app is on the cable, which the standalone app can't use yet. No
     presenter pointer yet (stock draws it as a KDE overlay).
 
+### Milestone 5: everything the companion setup does (asked 2026-11-07)
+The standalone app must match kdeconnectd plus the companion, "Bluetooth and all". The companion's
+feature code is reused, not rewritten:
+1. **Companion as a library.** `desktop/companion` becomes lib + bin: its session loop (main.rs `serve`)
+   takes packets from a channel instead of a link, so both the companion and the daemon run it. The core's
+   `link::Sender` gets a second form that queues packets (into the daemon's hub) besides the TLS writer.
+2. **The daemon hosts it**: each paired phone's `vyoma.*` packets go to a session; the daemon advertises
+   the vyoma capabilities, and its own identity carries what the phone needs to know it isn't a companion
+   beside kdeconnectd (no `vyomaHost`, no proof: it paired itself).
+3. **Phone: a PC can be its own companion.** Every `companionOf == pcId` lookup (about 15, app and
+   service) goes through one helper that also takes the PC itself when it speaks vyoma.*; `pcId` in
+   CompanionPlugin falls back to the device's own id.
+4. Each feature checked with the debug build: stats, screenshot, camera, files (list/get/put), resumable
+   sends (xfer), PC controls (brightness, app volume, power, wake), walk-away, handoff, paste, specs,
+   wallpaper, desktop gestures, screen view and touch control, mirror, webcam and mic, controller (uinput,
+   UDP, rumble, cable accessory), the Bluetooth touchpad.
+5. **Transports the companion gave**, owned by the daemon once it replaces kdeconnectd: the USB cable
+   (`adb reverse` 1765 → its own TCP port, payload mirrors, the READ_LOGS / overlay grants), USB tethering,
+   and the Bluetooth backup link (RFCOMM `…f801` piped to its own port, `…f802`–`…f804`).
+6. **Setup**: one systemd unit, its runtime dependencies (`setup.rs` NEEDS), the firewall, and taking
+   over from kdeconnectd (stop and mask it, keep its pairings via the trust store, or pair afresh).
+Transports can only be tried for real once kdeconnectd is off on this PC: the user decides when.
+
+Progress (2026-11-07): steps 1–3, 5 and 6 are written, and tests pass.
+- The companion is lib + bin. The daemon runs `session::serve` per paired phone, fed by its hub, with packets carrying their source address.
+- The phone finds features through `DeviceIdentity.featuresOf`.
+- Cable, tethering (unicast announce), Bluetooth (`…f801` to the daemon's port; no `…f802`, nothing to bridge), the wired controller and the setup offer all start only while kdeconnectd isn't running.
+- `--import-kde` copies kdeconnectd's id, key and pairings into an empty folder. `install.sh` builds and sets up, opens the firewall, imports, keeps kdeconnectd from starting (autostart Hidden, D-Bus activation to /bin/false), stops the companion and enables `vyoma-desktop.service`. `--undo` reverses it.
+
+Checked with the debug build over Wi-Fi: stats and PC controls on Home, and a resumable send (vyoma.xfer, 3 MB, hash matched).
+
+Still to do:
+- Step 4 for the rest.
+- The transports for real.
+- The release app needs this phone build before any takeover.
+- Shares via xfer still land in kdeconnectd's `incoming_path`.
+- The portal touchpad (`pointer-token`) and the daemon's input (`remotedesktop-token`) are separate sessions, so Plasma may ask twice.
+
 ### GUI (decided 2026-11-07)
 Slint, in Vyoma's own look, on every desktop. First version: pairing and phones (the code to
 compare, how each is connected, unpair), setup and health (missing tools, firewall, udev, what's

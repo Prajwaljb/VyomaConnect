@@ -229,7 +229,7 @@ internal fun ConnectionChecksScreen(vm: AppViewModel, onBack: () -> Unit) {
             val id = pc.identity.deviceId
             if (pcs.size > 1) item(key = "label-$id") { SectionLabel(pc.identity.deviceName, Modifier.animateItem()) }
             item(key = "checks-$id") {
-                val companion = devices.firstOrNull { it.identity.companionOf == id && it.isPaired && it.isReachable }
+                val companion = devices.firstOrNull { it.identity.featuresOf == id && it.isPaired && it.isReachable }
                 val plugin = remember(companion?.identity?.deviceId, companion?.plugins) {
                     companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
                 }

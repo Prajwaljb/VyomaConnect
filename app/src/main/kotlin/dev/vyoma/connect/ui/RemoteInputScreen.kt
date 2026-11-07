@@ -169,7 +169,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
         ?: devices.firstOrNull { it.isPaired && it.isReachable && !it.isCompanion }
     val pad: MousePadPlugin? = remember(target?.plugins) { target?.let { vm.device(it.identity.deviceId)?.plugin(MousePadPlugin.ID) } }
     // The PC's companion, for desktop gestures that know where the PC is.
-    val companionDevice = devices.firstOrNull { it.identity.companionOf == target?.identity?.deviceId && it.isReachable && it.isPaired }
+    val companionDevice = devices.firstOrNull { it.identity.featuresOf == target?.identity?.deviceId && it.isReachable && it.isPaired }
     val companionPlugin: CompanionPlugin? = remember(companionDevice?.plugins) { companionDevice?.let { vm.device(it.identity.deviceId)?.plugin(CompanionPlugin.ID) } }
     // Where the three-finger ladder is, when only the phone keeps track (no companion, or not Plasma).
     var desktopView by remember { mutableStateOf(DesktopView.WINDOWS) }
@@ -361,7 +361,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             ) { Icon(Icons.Rounded.Slideshow, "Presenter") }
             Spacer(Modifier.width(8.dp))
             // The phone as a game controller: the other way to drive the PC by hand (needs the companion).
-            val hasCompanion = target != null && devices.any { it.identity.companionOf == target.identity.deviceId && it.isReachable }
+            val hasCompanion = target != null && devices.any { it.identity.featuresOf == target.identity.deviceId && it.isReachable }
             if (hasCompanion) {
                 val context = LocalContext.current
                 Box(
