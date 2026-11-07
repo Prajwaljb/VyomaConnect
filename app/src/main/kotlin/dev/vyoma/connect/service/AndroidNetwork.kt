@@ -147,7 +147,8 @@ class AndroidNetwork(private val context: Context) {
             .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
             .addTransportType(NetworkCapabilities.TRANSPORT_VPN)
             .addTransportType(NetworkCapabilities.TRANSPORT_USB)
-                .build()
+            .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) // on by default, and no VPN would match
+            .build()
         connectivity.registerNetworkCallback(request, cb)
         callback = cb
     }

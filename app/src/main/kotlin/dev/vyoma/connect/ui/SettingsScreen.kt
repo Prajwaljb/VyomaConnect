@@ -624,6 +624,9 @@ private fun SteadierRow(resumeTick: Int) {
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         asked++
         if (granted) BluetoothFallback.setSteadier(context, true)
+        else runCatching {
+            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + context.packageName)))
+        }
     }
     fun toggle(want: Boolean) {
         if (want && !BluetoothFallback.permitted(context)) ask.launch(android.Manifest.permission.BLUETOOTH_CONNECT)

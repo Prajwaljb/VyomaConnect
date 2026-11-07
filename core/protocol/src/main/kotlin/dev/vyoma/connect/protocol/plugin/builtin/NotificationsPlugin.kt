@@ -66,7 +66,8 @@ class NotificationsPlugin(private val ctx: PluginContext, private val source: No
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         when (packet.type) {
             PacketTypes.NOTIFICATION_REQUEST -> {
-                if (packet.bool("request") == true) source.active().forEach { send(it.copy(silent = true)) }
+                // Off the device's dispatcher: this renders every notification's icon.
+                if (packet.bool("request") == true) ctx.scope.launch(Dispatchers.IO) { source.active().forEach { send(it.copy(silent = true)) } }
                 packet.string("cancel")?.let(source::dismiss)
             }
             PacketTypes.NOTIFICATION_REPLY -> {

@@ -100,7 +100,7 @@ class SmsPlugin(private val ctx: PluginContext, private val store: SmsStore) : P
         }
         when (packet.type) {
             PacketTypes.SMS_REQUEST_CONVERSATIONS -> ctx.scope.launch(Dispatchers.IO) {
-                requested = true
+                markRequested()
                 // One packet per thread so the PC can render progressively.
                 for (m in store.conversations()) ctx.send(messages(listOf(m)))
             }
@@ -109,7 +109,7 @@ class SmsPlugin(private val ctx: PluginContext, private val store: SmsStore) : P
                 val start = packet.long("rangeStartTimestamp")?.takeIf { it >= 0 } ?: Long.MAX_VALUE
                 val limit = packet.long("numberToRequest")?.takeIf { it >= 0 }?.toInt()
                 ctx.scope.launch(Dispatchers.IO) {
-                    requested = true
+                    markRequested()
                     ctx.send(messages(store.thread(thread, start, limit)))
                 }
             }
@@ -129,6 +129,13 @@ class SmsPlugin(private val ctx: PluginContext, private val store: SmsStore) : P
             PacketTypes.SMS_REQUEST_ATTACHMENT -> Unit
         }
         return true
+    }
+
+    /** The PC just asked: only what comes after this is news. (Started without the SMS permission, [newest] never got set.) */
+    private suspend fun markRequested() = newestLock.withLock {
+        if (requested) return@withLock
+        newest = maxOf(newest, runCatching { store.newestTimestamp() }.getOrDefault(Long.MIN_VALUE))
+        requested = true
     }
 
     private suspend fun pushNew() {

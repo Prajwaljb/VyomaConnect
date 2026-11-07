@@ -202,7 +202,9 @@ class CallMonitor(private val context: Context, private val contacts: AndroidCon
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (!intent.hasExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)) return
+            // With the call log allowed each change comes twice, with the number and without: take that
+            // one. Without it the numberless copy is all there is, and a call without a name still counts.
+            if (!intent.hasExtra(TelephonyManager.EXTRA_INCOMING_NUMBER) && PhonePermissions.granted(context, Manifest.permission.READ_CALL_LOG)) return
             @Suppress("DEPRECATION")
             val number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)?.takeIf { it.isNotBlank() }
             val state = when (intent.getStringExtra(TelephonyManager.EXTRA_STATE)) {

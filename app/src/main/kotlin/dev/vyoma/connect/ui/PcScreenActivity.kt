@@ -583,7 +583,8 @@ private fun ScreenView(
             veil.snapTo(0.55f)
             veil.animateTo(0f, tween(320))
         }
-        if (veil.value > 0f) Box(Modifier.fillMaxSize().graphicsLayer { alpha = veil.value }.background(Color.White))
+        // Read in the layer: in composition it rebuilt this whole screen for the length of the flash.
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = veil.value }.background(Color.White))
 
         when (phase) {
             PcScreenActivity.Phase.Connecting -> Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {

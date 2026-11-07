@@ -234,14 +234,15 @@ object Widgets {
         File(dir(context), "snapshot.json").writeText(json.toString())
         // The art only when it's a different image: a lossless PNG of a 1024 px frame took most
         // of the background CPU when it was re-encoded on every refresh.
-        if (s.art === savedArt) return
+        if (s.art === savedArt) return // before the first save this is NOT_SYNCED: a cover left by the last run goes
         val art = File(dir(context), "art.webp")
         if (s.art != null) art.outputStream().use { s.art.compress(Bitmap.CompressFormat.WEBP_LOSSY, 85, it) } else art.delete()
         File(dir(context), "art.png").delete()
         savedArt = s.art
     }
 
-    @Volatile private var savedArt: Bitmap? = null
+    private val NOT_SYNCED = Any()
+    @Volatile private var savedArt: Any? = NOT_SYNCED
 
     private fun load(context: Context): WidgetSnapshot? {
         val file = File(dir(context), "snapshot.json").takeIf { it.exists() } ?: return null

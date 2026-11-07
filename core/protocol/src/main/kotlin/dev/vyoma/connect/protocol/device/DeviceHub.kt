@@ -246,13 +246,13 @@ class DeviceHub(
                 map + (id to created)
             }
         }
-        // Only reachable with a cable link up if that link is stale (see `refuses`): drop it, or
-        // sends would keep going down the dead tunnel.
-        if (link.transport != TransportKind.USB) device!!.disconnect(TransportKind.USB)
         if (link.transport == TransportKind.BLUETOOTH && linkedWell(id)) {
             link.close()
             return
         }
+        // Only reachable with a cable link up if that link is stale (see `refuses`): drop it, or
+        // sends would keep going down the dead tunnel.
+        if (link.transport != TransportKind.USB) device!!.disconnect(TransportKind.USB)
         if (link.transport != TransportKind.BLUETOOTH) {
             device!!.disconnect(TransportKind.BLUETOOTH)
             // The PC is back: let its companion follow, or it stays on the radio with no payloads.

@@ -30,7 +30,7 @@ class NetworkPacket(
     val payloadTransferInfo: JsonObject? = null,
 ) {
     val hasPayload: Boolean
-        get() = payloadSize != 0L && !payloadTransferInfo.isNullOrEmpty()
+        get() = !payloadTransferInfo.isNullOrEmpty() // an empty file still has somewhere to fetch it from
 
     fun withPayload(size: Long, transferInfo: JsonObject) =
         NetworkPacket(type, body, id, size, transferInfo)

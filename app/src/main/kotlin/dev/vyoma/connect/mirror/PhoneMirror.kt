@@ -272,6 +272,9 @@ object PhoneMirror {
      * before the volume, so the PC still gets it all) and back after. The level to restore is saved,
      * so a crash meanwhile doesn't leave the phone silent: [begin] puts it back.
      */
+    /** The app died while the PC played its sound: the phone was left silent. */
+    fun restoreVolume(context: Context) = Speaker(context).restore()
+
     private class Speaker(context: Context) {
         private val audio = context.getSystemService(android.media.AudioManager::class.java)
         private val prefs = context.getSharedPreferences("mirror", Context.MODE_PRIVATE)

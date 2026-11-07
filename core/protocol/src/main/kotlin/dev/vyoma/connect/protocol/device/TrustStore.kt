@@ -36,6 +36,7 @@ interface TrustStore {
 /** One small JSON file; paired-device lists are tiny and rarely written. */
 class FileTrustStore(private val file: File) : TrustStore {
     private val lock = Any()
+    private val backup = File(file.path + ".bak")
     private var cache: MutableMap<String, TrustedDevice>? = null
 
     override fun all(): List<TrustedDevice> = synchronized(lock) { loaded().values.toList() }
@@ -53,18 +54,26 @@ class FileTrustStore(private val file: File) : TrustStore {
     private fun loaded(): MutableMap<String, TrustedDevice> = cache ?: read().also { cache = it }
 
     private fun read(): MutableMap<String, TrustedDevice> {
-        if (!file.exists()) return mutableMapOf()
+        // A file that can't be read falls back to the last good one: an empty answer here gets saved
+        // over it with the next write, and every pairing would be gone.
+        return read(file) ?: read(backup) ?: mutableMapOf()
+    }
+
+    private fun read(from: File): MutableMap<String, TrustedDevice>? {
+        if (!from.exists()) return null
         return runCatching {
-            Json.parseToJsonElement(file.readText()).jsonObject.mapNotNull { (id, value) ->
-                val o = value as? JsonObject ?: return@mapNotNull null
-                val cert = o.str("cert")?.let { Certificates.decode(Base64.getDecoder().decode(it)) } ?: return@mapNotNull null
-                id to TrustedDevice(
-                    id, o.str("name").orEmpty(), DeviceType.fromWire(o.str("type")), cert,
-                    lastAddress = o.str("address"), lastPort = o.str("port")?.toIntOrNull(),
-                    companionOf = o.str("companionOf"),
-                )
+            Json.parseToJsonElement(from.readText()).jsonObject.mapNotNull { (id, value) ->
+                runCatching {
+                    val o = value as? JsonObject ?: return@mapNotNull null
+                    val cert = o.str("cert")?.let { Certificates.decode(Base64.getDecoder().decode(it)) } ?: return@mapNotNull null
+                    id to TrustedDevice(
+                        id, o.str("name").orEmpty(), DeviceType.fromWire(o.str("type")), cert,
+                        lastAddress = o.str("address"), lastPort = o.str("port")?.toIntOrNull(),
+                        companionOf = o.str("companionOf"),
+                    )
+                }.getOrNull()
             }.toMap(LinkedHashMap())
-        }.getOrElse { mutableMapOf() }
+        }.getOrNull()
     }
 
     private fun persist() {
@@ -82,7 +91,12 @@ class FileTrustStore(private val file: File) : TrustStore {
         }
         file.parentFile?.mkdirs()
         val tmp = File(file.parentFile, file.name + ".tmp")
-        tmp.writeText(json.toString())
+        // Written on every link-up, so a power cut can land here: on disk before it replaces the file.
+        java.io.FileOutputStream(tmp).use {
+            it.write(json.toString().toByteArray())
+            it.fd.sync()
+        }
+        if (file.exists() && read(file) != null) file.copyTo(backup, overwrite = true)
         if (!tmp.renameTo(file)) {
             file.delete()
             tmp.renameTo(file)

@@ -84,13 +84,18 @@ class LanBackend(
         tcpPort = server.localPort
         jobs += scope.launch(Dispatchers.IO) { acceptLoop(server) }
         if (config.listenUdp) {
-            val udp = DatagramSocket(null).apply {
-                reuseAddress = true
-                broadcast = true
-                bind(InetSocketAddress(config.udpPort))
+            // Another app holding the port costs us hearing broadcasts, nothing more: we still dial
+            // and accept, and mDNS still finds peers.
+            runCatching {
+                DatagramSocket(null).apply {
+                    reuseAddress = true
+                    broadcast = true
+                    bind(InetSocketAddress(config.udpPort))
+                }
+            }.onFailure { VLog.w(TAG, "can't listen for broadcasts: ${it.message}") }.getOrNull()?.let { udp ->
+                udpSocket = udp
+                jobs += scope.launch(Dispatchers.IO) { udpLoop(udp) }
             }
-            udpSocket = udp
-            jobs += scope.launch(Dispatchers.IO) { udpLoop(udp) }
         }
         VLog.i(TAG, "LAN backend listening on tcp/$tcpPort" + if (config.listenUdp) ", udp/${config.udpPort}" else "")
     }
@@ -168,8 +173,10 @@ class LanBackend(
             try {
                 udp.receive(datagram)
             } catch (e: IOException) {
-                if (!udp.isClosed) VLog.w(TAG, "UDP receive failed", e)
-                break
+                if (udp.isClosed) break
+                VLog.w(TAG, "UDP receive failed", e)
+                Thread.sleep(LOOP_RETRY_MS) // out of file descriptors, say: it passes
+                continue
             }
             val identity = try {
                 DeviceIdentity.fromPacket(NetworkPacket.parse(String(datagram.data, 0, datagram.length, Charsets.UTF_8)))
@@ -228,8 +235,10 @@ class LanBackend(
             val plain = try {
                 server.accept()
             } catch (e: IOException) {
-                if (!server.isClosed) VLog.w(TAG, "accept failed", e)
-                break
+                if (server.isClosed) break
+                VLog.w(TAG, "accept failed", e)
+                delay(LOOP_RETRY_MS)
+                continue
             }
             val from = plain.inetAddress
             if (!handshakes.enter(from)) {
@@ -334,6 +343,7 @@ class LanBackend(
     companion object {
         private const val TAG = "LanBackend"
         private const val CONNECT_TIMEOUT_MS = 5_000
+        private const val LOOP_RETRY_MS = 1_000L
         private const val HANDSHAKE_TIMEOUT_MS = 10_000
         private const val HANDSHAKE_DEADLINE_MS = 20_000L
         /**

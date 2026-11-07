@@ -704,6 +704,16 @@ impl Gaps {
     }
 }
 
+/// However the pad ends (aborted with the link, too): a phone switched to USB accessory mode for
+/// this gets its USB back.
+struct ReleaseAccessory;
+
+impl Drop for ReleaseAccessory {
+    fn drop(&mut self) {
+        crate::accessory::release();
+    }
+}
+
 pub enum Input {
     State(State),
     Close,
@@ -711,6 +721,10 @@ pub enum Input {
 
 /// Runs the pad for one phone while it sends states; returns when it closes or goes quiet.
 pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String) {
+    let _accessory = ReleaseAccessory;
+    // Only the phone's own new states count: a rumbling game or a replayed datagram wakes this loop
+    // too, and mustn't keep a held button down for ever.
+    let mut quiet_at = tokio::time::Instant::now() + IDLE;
     let mut pad: Option<Pad> = None;
     let mut mouse: Option<Mouse> = None;
     let mut fast: Option<Fast> = None;
@@ -733,15 +747,13 @@ pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String)
             }
         };
         let state = tokio::select! {
-            got = tokio::time::timeout(IDLE, input.recv()) => match got {
+            got = tokio::time::timeout_at(quiet_at, input.recv()) => match got {
                 Ok(Some(Input::State(s))) => s,
                 Ok(Some(Input::Close)) | Ok(None) | Err(_) => {
                     if pad.take().is_some() {
                         info!("{name}: controller disconnected");
                     }
                     gaps.report(&name);
-                    // A phone switched to USB accessory mode for this gets its USB back.
-                    crate::accessory::release();
                     return;
                 }
             },
@@ -769,6 +781,7 @@ pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String)
         if !order.fresh(&state) {
             continue;
         }
+        quiet_at = tokio::time::Instant::now() + IDLE;
         // A different pad asked for: the old one goes (letting go of everything) and the new one comes.
         if pad.as_ref().is_some_and(|p| p.kind() != state.kind) {
             pad = None;

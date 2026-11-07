@@ -129,7 +129,7 @@ internal object TimeRules {
         val marks = listOf(t.start, end(t))
         return (0..1).flatMap { d ->
             marks.map { m ->
-                (midnight.clone() as Calendar).apply { add(Calendar.DAY_OF_MONTH, d); add(Calendar.MINUTE, m); add(Calendar.SECOND, 1) }.timeInMillis
+                (midnight.clone() as Calendar).apply { add(Calendar.DAY_OF_MONTH, d); set(Calendar.HOUR_OF_DAY, m / 60); set(Calendar.MINUTE, m % 60); set(Calendar.SECOND, 1) }.timeInMillis // on the clock, as holds() reads it: a day can be 23 hours
             }
         }.filter { it > now }.min()
     }

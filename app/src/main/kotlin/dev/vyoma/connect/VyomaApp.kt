@@ -76,6 +76,7 @@ class VyomaApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        dev.vyoma.connect.mirror.PhoneMirror.restoreVolume(this)
         VLog.sink = VLog.Sink { level, tag, message, error ->
             when (level) {
                 VLog.Level.DEBUG -> Log.d("Vyoma/$tag", message, error)

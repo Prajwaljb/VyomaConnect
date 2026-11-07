@@ -190,7 +190,6 @@ fn dial_attempt(shared: &Arc<Shared>, id: &str, attempt: u32) {
     tokio::spawn(async move {
         // Once a round: with the phone off this network, the retries would say the same every few seconds.
         let result = session(&shared, &id, addr, &cert).await;
-        let failed = result.as_ref().is_err();
         // Something else lives at that address now: stop calling it until mDNS finds this phone again.
         if result.as_ref().is_err_and(|e| e.is::<link::NotTrusted>()) {
             info!("{id}: no longer at {addr}");
@@ -204,7 +203,8 @@ fn dial_attempt(shared: &Arc<Shared>, id: &str, attempt: u32) {
                 tracing::debug!("{id}: {e:#}");
             }
         }
-        if failed && attempt < 3 {
+        // A clean end too: that's what an app restarting looks like.
+        if attempt < 3 {
             tokio::time::sleep(Duration::from_secs(2 * (attempt as u64 + 1))).await;
             dial_attempt(&shared, &id, attempt + 1);
         }

@@ -252,6 +252,7 @@ private fun Preview(size: android.util.Size) {
                     }
                 }
             },
+            update = { it.surfaceTexture?.setDefaultBufferSize(size.width, size.height) }, // the quality can change while it runs
             modifier = Modifier.fillMaxWidth(0.56f).aspectRatio(size.height.toFloat() / size.width).clip(RoundedCornerShape(28.dp)),
         )
     }

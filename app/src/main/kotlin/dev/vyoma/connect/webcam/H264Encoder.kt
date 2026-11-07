@@ -54,56 +54,63 @@ internal class H264Encoder(width: Int, height: Int, bitrate: Int, fps: Int, priv
     private var dropping = false
 
     init {
-        val caps = runCatching { codec.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities }.getOrNull()
-        val (w, h) = caps?.let { fit(it, width, height) } ?: (width to height)
-        this.width = w
-        this.height = h
-        val rate = caps?.let { runCatching { it.getSupportedFrameRatesFor(w, h).upper.toInt() }.getOrNull() }?.coerceIn(15, fps) ?: fps
-        if (w != width || h != height || rate != fps) VLog.i("H264Encoder", "$name: ${width}x$height@$fps fitted to ${w}x$h@$rate for ${codec.name}")
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
-            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-            setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
-            setInteger(MediaFormat.KEY_FRAME_RATE, rate)
-            // A 120 Hz screen doesn't make more frames than asked for.
-            setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, rate.toFloat())
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
-            setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-            setInteger(MediaFormat.KEY_LATENCY, 1)
-            setInteger(MediaFormat.KEY_PRIORITY, 0)
-            // A still scene still sends a frame now and then, so the PC's picture never stalls.
-            setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000)
-        }
-        codec.setCallback(object : MediaCodec.Callback() {
-            override fun onInputBufferAvailable(codec: MediaCodec, index: Int) {}
-            override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
-                val buf = runCatching { codec.getOutputBuffer(index) }.getOrNull() ?: return
-                val bytes = ByteArray(info.size)
-                buf.position(info.offset)
-                buf.get(bytes)
-                runCatching { codec.releaseOutputBuffer(index, false) }
-                if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-                    config = bytes
-                    return
-                }
-                val key = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
-                if (dropping && !key) return
-                // SPS/PPS before every keyframe: a decoder restarted on the PC picks up from it.
-                val frame = if (key) (config ?: ByteArray(0)) + bytes else bytes
-                if (out.offer(frame)) dropping = false
-                else if (!dropping) {
-                    // The link is behind: skip to the next keyframe instead of falling further back.
-                    dropping = true
-                    VLog.i("H264Encoder", "$name: the link is behind, skipping to the next keyframe")
-                    sync()
-                }
+        try {
+            val caps = runCatching { codec.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities }.getOrNull()
+            val (w, h) = caps?.let { fit(it, width, height) } ?: (width to height)
+            this.width = w
+            this.height = h
+            val rate = caps?.let { runCatching { it.getSupportedFrameRatesFor(w, h).upper.toInt() }.getOrNull() }?.coerceIn(15, fps) ?: fps
+            if (w != width || h != height || rate != fps) VLog.i("H264Encoder", "$name: ${width}x$height@$fps fitted to ${w}x$h@$rate for ${codec.name}")
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
+                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+                setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+                setInteger(MediaFormat.KEY_FRAME_RATE, rate)
+                // A 120 Hz screen doesn't make more frames than asked for.
+                setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, rate.toFloat())
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+                setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+                setInteger(MediaFormat.KEY_LATENCY, 1)
+                setInteger(MediaFormat.KEY_PRIORITY, 0)
+                // A still scene still sends a frame now and then, so the PC's picture never stalls.
+                setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000)
             }
-            override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) { VLog.w("H264Encoder", "$name: ${e.message}"); out.close() }
-            override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {}
-        }, handler)
-        codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        surface = codec.createInputSurface()
-        codec.start()
+            codec.setCallback(object : MediaCodec.Callback() {
+                override fun onInputBufferAvailable(codec: MediaCodec, index: Int) {}
+                override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
+                    val buf = runCatching { codec.getOutputBuffer(index) }.getOrNull() ?: return
+                    val bytes = ByteArray(info.size)
+                    buf.position(info.offset)
+                    buf.get(bytes)
+                    runCatching { codec.releaseOutputBuffer(index, false) }
+                    if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                        config = bytes
+                        return
+                    }
+                    val key = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
+                    if (dropping && !key) return
+                    // SPS/PPS before every keyframe: a decoder restarted on the PC picks up from it.
+                    val frame = if (key) (config ?: ByteArray(0)) + bytes else bytes
+                    if (out.offer(frame)) dropping = false
+                    else if (!dropping) {
+                        // The link is behind: skip to the next keyframe instead of falling further back.
+                        dropping = true
+                        VLog.i("H264Encoder", "$name: the link is behind, skipping to the next keyframe")
+                        sync()
+                    }
+                }
+                override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) { VLog.w("H264Encoder", "$name: ${e.message}"); out.close() }
+                override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {}
+            }, handler)
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            surface = codec.createInputSurface()
+            codec.start()
+        } catch (e: Exception) {
+            // Retried every 2 s by the session: each try would leave a codec and a thread behind.
+            codec.release()
+            thread.quitSafely()
+            throw e
+        }
     }
 
     private companion object {

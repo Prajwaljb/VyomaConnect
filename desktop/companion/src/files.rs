@@ -78,8 +78,9 @@ pub async fn receive(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAdd
         }
         let name = safe_name(&wanted)?;
         let mut input = payload::fetch(me, pinned, phone, packet).await?;
-        let part = dir.join(format!(".{name}.vyoma-part"));
-        let mut out = tokio::fs::File::create(&part).await.context("can't write in this folder")?;
+        // Its own name: two uploads of one name at once. Removed however this ends, an aborted task too.
+        let part = PartFile(dir.join(format!(".{name}.{}.vyoma-part", NEXT_PART.fetch_add(1, std::sync::atomic::Ordering::Relaxed))));
+        let mut out = tokio::fs::File::create(&part.0).await.context("can't write in this folder")?;
         let copied = tokio::io::copy(&mut input, &mut out).await;
         out.flush().await?;
         drop(out);
@@ -87,12 +88,10 @@ pub async fn receive(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAdd
         match copied {
             Ok(n) if n == expected => {}
             other => {
-                let _ = tokio::fs::remove_file(&part).await;
                 bail!("the transfer was interrupted ({})", other.map(|n| format!("{n} of {expected} bytes")).unwrap_or_else(|e| e.to_string()));
             }
         }
-        let target = free_name(&dir, &name).await;
-        tokio::fs::rename(&part, &target).await?;
+        let target = settle(&part.0, &dir, &name).await?;
         crate::xfer::notify(phone_name, &target, None);
         Ok::<_, anyhow::Error>(target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(name))
     }
@@ -114,8 +113,38 @@ fn safe_name(name: &str) -> Result<String> {
     Ok(name.to_string())
 }
 
+static NEXT_PART: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+struct PartFile(PathBuf);
+
+impl Drop for PartFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0); // already moved to its place, normally
+    }
+}
+
+/// Moves a finished [part] to a free name in [dir], never over a file: a link fails if the name was
+/// taken since it was checked, which a rename wouldn't.
+pub(crate) async fn settle(part: &Path, dir: &Path, name: &str) -> Result<PathBuf> {
+    loop {
+        let target = free_name(dir, name).await;
+        match tokio::fs::hard_link(part, &target).await {
+            Ok(()) => {
+                let _ = tokio::fs::remove_file(part).await;
+                return Ok(target);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => {
+                // A filesystem without hard links.
+                tokio::fs::rename(part, &target).await?;
+                return Ok(target);
+            }
+        }
+    }
+}
+
 /// `name`, or `name (2).ext`, `name (3).ext`… whichever doesn't exist yet.
-async fn free_name(dir: &Path, name: &str) -> PathBuf {
+pub(crate) async fn free_name(dir: &Path, name: &str) -> PathBuf {
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s, format!(".{e}")),
         _ => (name, String::new()),
@@ -191,6 +220,21 @@ fn home() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn a_finished_upload_never_lands_on_a_file() {
+        let dir = std::env::temp_dir().join(format!("vyoma-settle-{}", std::process::id()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let (taken, part) = (dir.join("a.txt"), dir.join(".a.txt.0.vyoma-part"));
+        tokio::fs::write(&taken, "old").await.unwrap();
+        tokio::fs::write(&part, "new").await.unwrap();
+        let saved = super::settle(&part, &dir, "a.txt").await.unwrap();
+        assert_eq!(saved, dir.join("a (2).txt"));
+        assert_eq!(tokio::fs::read_to_string(&taken).await.unwrap(), "old");
+        assert_eq!(tokio::fs::read_to_string(&saved).await.unwrap(), "new");
+        assert!(!part.exists());
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     use super::*;
 
     #[test]

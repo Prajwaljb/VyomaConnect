@@ -69,9 +69,17 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, f
     };
     let (w, h) = cast.as_ref().and_then(|c| c.size).map(fit).unwrap_or((MAX_WIDTH, MAX_WIDTH * 9 / 16));
     let control = cast.as_ref().and_then(|c| Some(Pointer { conn: c.conn.clone(), session: c.control.clone()?, node: c.node, size: c.size? }));
-    let (conn, mut gst) = match cast {
-        Some(Cast { conn, node, fd, .. }) => (Some(conn), encoder(&format!("pipewiresrc fd=0 path={node} do-timestamp=true keepalive-time=1000"), Some(fd), w, h, fps)?),
-        None => (None, encoder(&format!("videotestsrc is-live=true pattern=smpte horizontal-speed=4 ! capsfilter caps=video/x-raw,width={w},height={h},framerate={fps}/1"), None, w, h, fps)?),
+    let started = match cast {
+        Some(Cast { conn, node, fd, .. }) => encoder(&format!("pipewiresrc fd=0 path={node} do-timestamp=true keepalive-time=1000"), Some(fd), w, h, fps).map(|g| (Some(conn), g)),
+        None => encoder(&format!("videotestsrc is-live=true pattern=smpte horizontal-speed=4 ! capsfilter caps=video/x-raw,width={w},height={h},framerate={fps}/1"), None, w, h, fps).map(|g| (None, g)),
+    };
+    // The viewer is waiting: say why, or it only finds out when it gives up.
+    let (conn, mut gst) = match started {
+        Ok(started) => started,
+        Err(e) => {
+            sender.send(&link::packet("vyoma.screen", json!({ "error": format!("{e:#}") }))).await?;
+            return Err(e);
+        }
     };
     let encoded = gst.stdout.take().context("encoder has no output")?;
     {
@@ -84,7 +92,20 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, f
     // of video piling up on the way.
     let (video, relay) = tokio::io::duplex(RELAY_BYTES);
     let stamping = tokio::spawn(stamp(encoded, relay));
-    let mut errors = gst.stderr.take().context("encoder has no error output")?;
+    // Read all along: a chatty driver filling the pipe would block the encoder and freeze the cast.
+    let mut stderr = gst.stderr.take().context("encoder has no error output")?;
+    let errors = tokio::spawn(async move {
+        let (mut tail, mut buf) = (Vec::new(), [0u8; 4096]);
+        while let Ok(n) = stderr.read(&mut buf).await {
+            if n == 0 {
+                break;
+            }
+            tail.extend_from_slice(&buf[..n]);
+            let extra = tail.len().saturating_sub(16 * 1024);
+            tail.drain(..extra);
+        }
+        tail
+    });
     info!("{name}: casting the screen at {w}x{h}");
     let announce = link::packet("vyoma.screen", json!({ "codec": "h264", "framing": "avc4", "width": w, "height": h, "control": control.is_some() }));
     // The phone's touches, as the pointer on this screen, while the cast runs.
@@ -96,8 +117,7 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, f
     let _ = gst.kill().await;
     stamping.abort();
     if let Err(e) = &result {
-        let mut log = String::new();
-        let _ = errors.read_to_string(&mut log).await;
+        let log = String::from_utf8_lossy(&errors.await.unwrap_or_default()).into_owned();
         if !log.trim().is_empty() {
             warn!("encoder said: {}", log.trim());
         }
@@ -191,6 +211,7 @@ pub struct Pointer {
 
 impl Pointer {
     async fn follow(self, mut inputs: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>, sender: Sender) {
+        let mut held = false;
         while let Some(mut i) = inputs.recv().await {
             // Behind? Only the newest of a run of moves matters.
             while i["kind"] == "move" {
@@ -204,6 +225,11 @@ impl Pointer {
                     Err(_) => break,
                 }
             }
+            match i["kind"].as_str() {
+                Some("down") => held = true,
+                Some("up") => held = false,
+                _ => {}
+            }
             if let Err(e) = self.perform(&i).await {
                 tracing::debug!("pointer: {e:#}");
                 // Text that didn't all arrive: the phone's field no longer matches, so it starts afresh.
@@ -211,6 +237,10 @@ impl Pointer {
                     let _ = sender.send(&link::packet("vyoma.paste.ready", json!({ "error": format!("{e:#}") }))).await;
                 }
             }
+        }
+        // The touches broke off mid-drag, with the picture still up.
+        if held {
+            let _ = self.button(BTN_LEFT, false).await;
         }
     }
 
