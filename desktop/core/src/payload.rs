@@ -31,19 +31,41 @@ pub async fn offer_stream(sender: &Sender, me: &Identity, pinned: &[u8], packet:
     offer_sized(sender, me, pinned, packet, -1, source).await
 }
 
-async fn offer_sized(sender: &Sender, me: &Identity, pinned: &[u8], mut packet: Value, size: i64, mut source: impl AsyncRead + Unpin) -> Result<()> {
-    let listener = bind().await?;
-    packet["payloadSize"] = json!(size);
-    packet["payloadTransferInfo"] = json!({ "port": listener.local_addr()?.port() });
-    sender.send(&packet).await?;
+async fn offer_sized(sender: &Sender, me: &Identity, pinned: &[u8], packet: Value, size: i64, source: impl AsyncRead + Unpin) -> Result<()> {
+    let mut offer = Offer::open().await?;
+    sender.send(&offer.announce(packet, size)?).await?;
+    offer.serve(me, pinned, source).await
+}
 
-    let mut tls = accept_phone(&listener, me, pinned).await?;
-    if size < 0 {
-        live(tls.get_ref().0);
+/// A payload being offered, for a caller that sends the announcement its own way (the device hub):
+/// [Offer::announce] fills in the packet, then [Offer::serve] waits for the device and streams.
+pub struct Offer {
+    listener: TcpListener,
+    size: i64,
+}
+
+impl Offer {
+    pub async fn open() -> Result<Self> {
+        Ok(Self { listener: bind().await?, size: 0 })
     }
-    tokio::io::copy(&mut source, &mut tls).await?;
-    tls.shutdown().await?;
-    Ok(())
+
+    /// [packet] with the payload's size (-1: open-ended) and where to fetch it.
+    pub fn announce(&mut self, mut packet: Value, size: i64) -> Result<Value> {
+        self.size = size;
+        packet["payloadSize"] = json!(size);
+        packet["payloadTransferInfo"] = json!({ "port": self.listener.local_addr()?.port() });
+        Ok(packet)
+    }
+
+    pub async fn serve(self, me: &Identity, pinned: &[u8], mut source: impl AsyncRead + Unpin) -> Result<()> {
+        let mut tls = accept_phone(&self.listener, me, pinned).await?;
+        if self.size < 0 {
+            live(tls.get_ref().0);
+        }
+        tokio::io::copy(&mut source, &mut tls).await?;
+        tls.shutdown().await?;
+        Ok(())
+    }
 }
 
 /// The first connection to prove it's the paired phone. Anyone on the network can reach this port,

@@ -7,8 +7,10 @@
 //! - `VYOMA_ALLOW`: device ids, comma-separated; when set, every other device is ignored.
 //! - `VYOMA_ANNOUNCE`: addresses to announce to instead of the broadcast address.
 
+mod clipboard;
 mod notify;
 mod plugins;
+mod share;
 mod system;
 
 use std::collections::HashMap;
@@ -27,7 +29,9 @@ use vyoma_core::link::packet;
 use vyoma_core::trust::TrustStore;
 use zbus::fdo;
 
+use clipboard::{CLIPBOARD, CLIPBOARD_CONNECT, Clipboard};
 use notify::{Notice, Notifier, Pressed};
+use share::{SHARE, SHARE_UPDATE, Shared};
 use system::{Ringer, Session};
 
 const BUS_NAME: &str = "dev.vyoma.Desktop";
@@ -50,6 +54,8 @@ pub struct DeviceView {
     pub battery: Option<(i64, bool, bool)>,
     /// Each SIM's network and level (0..4).
     pub signal: Option<Vec<Value>>,
+    /// The certificate its links show, which its payloads must show too.
+    pub cert: Vec<u8>,
 }
 
 type Devices = Arc<Mutex<HashMap<String, DeviceView>>>;
@@ -60,6 +66,8 @@ enum Ask {
 }
 
 struct Control {
+    me: Arc<Identity>,
+    notifier: Notifier,
     commands: mpsc::UnboundedSender<Command>,
     asks: mpsc::UnboundedSender<Ask>,
     devices: Devices,
@@ -114,6 +122,29 @@ impl Control {
         self.command(Command::Send(id, packet(plugins::FIND, json!({}))))
     }
 
+    /// Sends files to the device; it fetches them one by one. Fails at once if one can't be read.
+    fn send_files(&self, id: String, paths: Vec<String>) -> fdo::Result<()> {
+        let pinned = self.sharing(&id)?;
+        let files = paths.iter().map(|p| share::outgoing(p)).collect::<Result<Vec<_>>>().map_err(|e| fdo::Error::InvalidArgs(format!("{e:#}")))?;
+        if files.is_empty() {
+            return Ok(());
+        }
+        let (me, commands, notifier) = (self.me.clone(), self.commands.clone(), self.notifier.clone());
+        tokio::spawn(async move {
+            if let Err(e) = share::send_files(&commands, &id, &me, &pinned, files).await {
+                tracing::warn!("{id}: {e:#}");
+                plugins::tell(&notifier, "Couldn't send", &format!("{e:#}")).await;
+            }
+        });
+        Ok(())
+    }
+
+    /// Sends text to the device, or opens a link there.
+    fn send_text(&self, id: String, text: String) -> fdo::Result<()> {
+        self.sharing(&id)?;
+        self.command(Command::Send(id, share::text_packet(&text)))
+    }
+
     /// Stops this PC ringing for a device that's looking for it.
     fn stop_ringing(&self) -> fdo::Result<()> {
         self.asks.send(Ask::StopRinging).map_err(|_| fdo::Error::Failed("stopping".into()))
@@ -121,6 +152,15 @@ impl Control {
 }
 
 impl Control {
+    /// The device's certificate, if it takes shares.
+    fn sharing(&self, id: &str) -> fdo::Result<Vec<u8>> {
+        let all = self.devices.lock().unwrap();
+        match all.get(id) {
+            Some(d) if d.linked && plugins::takes(d, SHARE) => Ok(d.cert.clone()),
+            _ => Err(fdo::Error::NotSupported(format!("{id} can't be sent anything now"))),
+        }
+    }
+
     fn command(&self, c: Command) -> fdo::Result<()> {
         self.commands.send(c).map_err(|_| fdo::Error::Failed("stopping".into()))
     }
@@ -138,7 +178,40 @@ struct Desk {
     prompts: HashMap<String, u32>,
     battery: Option<system::Battery>,
     locked: Option<bool>,
+    me: Arc<Identity>,
+    conn: zbus::Connection,
+    clipboard: Clipboard,
+    /// What goes onto this PC's clipboard, in order.
+    paste: mpsc::UnboundedSender<String>,
+    received: mpsc::UnboundedSender<Received>,
+    /// Device id to the batch of files coming from it.
+    batches: HashMap<String, Batch>,
+    /// What a notification's buttons open.
+    opens: HashMap<u32, Open>,
 }
+
+/// A file fetched from a device, or why not.
+struct Received {
+    id: String,
+    name: String,
+    count: u64,
+    result: Result<PathBuf>,
+}
+
+#[derive(Default)]
+struct Batch {
+    done: u64,
+    notice: Option<u32>,
+}
+
+enum Open {
+    File(PathBuf),
+    Folder(PathBuf),
+    Copy(String),
+}
+
+/// Notifications whose buttons are remembered; older ones are long gone from the screen.
+const OPENS_KEPT: usize = 32;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -175,10 +248,10 @@ async fn main() -> Result<()> {
 
     let conn = zbus::Connection::session().await.context("no session bus")?;
     let (asks_tx, mut asks) = mpsc::unbounded_channel();
-    let control = Control { commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone() };
+    let notifier = Notifier::new(conn.clone());
+    let control = Control { me: me.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone() };
     conn.object_server().at(OBJECT_PATH, control).await?;
     conn.request_name(BUS_NAME).await.context("another Vyoma desktop app is running")?;
-    let notifier = Notifier::new(conn.clone());
     let (pressed_tx, mut pressed) = mpsc::unbounded_channel();
     {
         let notifier = notifier.clone();
@@ -206,7 +279,28 @@ async fn main() -> Result<()> {
         });
     }
 
+    let (copies_tx, mut copies) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        if let Err(e) = clipboard::watch(copies_tx).await {
+            tracing::warn!("can't follow the clipboard: {e:#}");
+        }
+    });
+    let (paste, mut pastes) = mpsc::unbounded_channel::<String>();
+    tokio::spawn(async move {
+        while let Some(text) = pastes.recv().await {
+            clipboard::set(&text).await;
+        }
+    });
+    let (received, mut arrivals) = mpsc::unbounded_channel();
+
     let mut desk = Desk {
+        me: me.clone(),
+        conn: conn.clone(),
+        clipboard: Clipboard::default(),
+        paste,
+        received,
+        batches: HashMap::new(),
+        opens: HashMap::new(),
         devices,
         commands,
         notifier,
@@ -229,6 +323,13 @@ async fn main() -> Result<()> {
         tokio::select! {
             Some(event) = events.recv() => desk.on_event(event).await,
             Some(Pressed { notification, action }) = pressed.recv() => desk.on_pressed(notification, &action).await,
+            Some(text) = copies.recv() => {
+                if let Some(p) = desk.clipboard.changed(text) {
+                    tracing::info!("clipboard copied here, {} chars", p["body"]["content"].as_str().unwrap_or("").chars().count());
+                    desk.broadcast(CLIPBOARD, p);
+                }
+            }
+            Some(r) = arrivals.recv() => desk.on_received(r).await,
             Some(Ask::StopRinging) = asks.recv() => plugins::stop_ringing(&desk.notifier, &mut desk.ringer, &mut desk.ring_notice).await,
             Some(locked) = lock_changes.recv() => {
                 if desk.locked != Some(locked) {
@@ -274,11 +375,90 @@ impl Desk {
         for p in plugins::started(&device, self.battery, self.locked) {
             self.send(id, p);
         }
+        if let Some(p) = self.clipboard.connect_packet().filter(|_| plugins::takes(&device, CLIPBOARD_CONNECT)) {
+            self.send(id, p);
+        }
+    }
+
+    /// Shows a notification whose buttons [open] something.
+    async fn show_open(&mut self, notice: Notice<'_>, open: Open) -> Option<u32> {
+        let n = self.notifier.show(notice).await.map_err(|e| tracing::warn!("couldn't show a notification: {e:#}")).ok()?;
+        self.opens.insert(n, open);
+        while self.opens.len() > OPENS_KEPT {
+            let oldest = *self.opens.keys().min().unwrap();
+            self.opens.remove(&oldest);
+        }
+        Some(n)
+    }
+
+    /// A share from a device.
+    async fn on_share(&mut self, id: String, device: DeviceView, packet: Value, from: IpAddr) {
+        match share::classify(&packet) {
+            Shared::File { name, count } => {
+                let (me, received) = (self.me.clone(), self.received.clone());
+                tokio::spawn(async move {
+                    let result = share::receive(&me, &device.cert, from, &packet, &share::downloads()).await;
+                    let _ = received.send(Received { id, name, count, result });
+                });
+            }
+            Shared::Text(text) => {
+                let title = format!("Text from {}", device.name);
+                let shown: String = text.chars().take(400).collect();
+                let notice = Notice { icon: "edit-paste", title: &title, body: &shown, actions: &[("copy", "Copy")], sticky: false, replaces: None };
+                self.show_open(notice, Open::Copy(text)).await;
+            }
+            Shared::Url(url) => share::open(&url),
+            Shared::Nothing => {}
+        }
+    }
+
+    async fn on_received(&mut self, r: Received) {
+        let device = self.devices.lock().unwrap().get(&r.id).map(|d| d.name.clone()).unwrap_or_default();
+        let path = match r.result {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::warn!("{}: {} not received: {e:#}", r.id, r.name);
+                plugins::tell(&self.notifier, &format!("Couldn't receive {}", r.name), &format!("{e:#}")).await;
+                return;
+            }
+        };
+        tracing::info!("{}: received {}", r.id, path.display());
+        let batch = self.batches.entry(r.id.clone()).or_default();
+        batch.done += 1;
+        let (done, replaces) = (batch.done, batch.notice);
+        if done >= r.count {
+            self.batches.remove(&r.id);
+        }
+        let n = if r.count <= 1 {
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let body = format!("{name} from {device}");
+            let notice = Notice { icon: "document-save", title: "Received", body: &body, actions: &[("open", "Open"), ("folder", "Show in folder")], sticky: false, replaces };
+            self.show_open(notice, Open::File(path)).await
+        } else {
+            let title = if done >= r.count { format!("Received {} files", r.count) } else { format!("Received {done} of {} files", r.count) };
+            let body = format!("from {device}");
+            let notice = Notice { icon: "document-save", title: &title, body: &body, actions: &[("folder", "Show in folder")], sticky: false, replaces };
+            self.show_open(notice, Open::Folder(path)).await
+        };
+        if let Some(b) = self.batches.get_mut(&r.id) {
+            b.notice = n;
+        }
     }
 
     async fn on_pressed(&mut self, notification: u32, action: &str) {
         if self.ring_notice == Some(notification) && action == "found" {
             plugins::stop_ringing(&self.notifier, &mut self.ringer, &mut self.ring_notice).await;
+            return;
+        }
+        if let Some(open) = self.opens.get(&notification) {
+            match (open, action) {
+                (Open::File(p), "open") => share::open(&p.to_string_lossy()),
+                (Open::File(p) | Open::Folder(p), "folder") => share::show_in_folder(&self.conn, p).await,
+                (Open::Copy(text), "copy") => {
+                    let _ = self.paste.send(text.clone());
+                }
+                _ => {}
+            }
             return;
         }
         let Some(id) = self.prompts.iter().find(|(_, n)| **n == notification).map(|(id, _)| id.clone()) else { return };
@@ -291,11 +471,11 @@ impl Desk {
 
     async fn on_event(&mut self, event: Event) {
         match event {
-            Event::Linked { id, name, kind, paired, incoming, .. } => {
+            Event::Linked { id, name, kind, paired, incoming, cert, .. } => {
                 {
                     let mut all = self.devices.lock().unwrap();
                     let d = all.entry(id.clone()).or_default();
-                    (d.name, d.kind, d.paired, d.linked, d.incoming) = (name, kind, paired, true, incoming);
+                    (d.name, d.kind, d.paired, d.linked, d.incoming, d.cert) = (name, kind, paired, true, incoming, cert);
                 }
                 if paired {
                     self.start(&id);
@@ -351,8 +531,21 @@ impl Desk {
                 }
                 plugins::tell(&self.notifier, &format!("Unpaired from {name}"), "").await;
             }
-            Event::Packet { id, packet } => {
+            Event::Packet { id, packet, from } => {
                 let Some(mut device) = self.devices.lock().unwrap().get(&id).cloned() else { return };
+                match packet["type"].as_str().unwrap_or("") {
+                    CLIPBOARD | CLIPBOARD_CONNECT => {
+                        if let Some(text) = self.clipboard.received(&packet) {
+                            tracing::info!("{id}: clipboard, {} chars", text.chars().count());
+                            let _ = self.paste.send(text);
+                        }
+                        return;
+                    }
+                    SHARE => return self.on_share(id, device, packet, from).await,
+                    // Each file says how many there are too.
+                    SHARE_UPDATE => return,
+                    _ => {}
+                }
                 let cx = plugins::Context { notifier: &self.notifier, session: self.session.as_ref(), ringer: &mut self.ringer, ring_notice: &mut self.ring_notice };
                 let replies = plugins::on_packet(cx, &mut device, &packet).await;
                 // Only what the plugin keeps; the rest may have changed meanwhile.

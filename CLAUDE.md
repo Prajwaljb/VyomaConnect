@@ -35,7 +35,8 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `desktop/core` (`vyoma-core`): the desktop side's shared protocol core (identity, links, payloads), no desktop
   calls, so it serves every desktop and macOS: discovery, links, pairing, trust store, the device hub (`device.rs`).
 - `desktop/daemon` (`vyoma-desktop`): the standalone desktop app growing on that core (`docs/PLAN.md` section 10): pairing
-  prompt as a freedesktop notification with Accept/Reject, `dev.vyoma.Desktop1` D-Bus control for the future GUI.
+  prompt as a freedesktop notification with Accept/Reject, `dev.vyoma.Desktop1` D-Bus control for the future GUI;
+  stock plugins in `plugins.rs`, `clipboard.rs` (wl-clipboard) and `share.rs` (files land in XDG Downloads).
   Own identity in `~/.config/vyoma-desktop`, separate from the companion's.
 - `desktop/companion`: Rust daemon beside stock kdeconnectd, built on `vyoma-core`. Dials only phones kdeconnectd trusts (mDNS), pairs with
   no prompt via `CompanionProof` (signed with kdeconnectd's key; phone verifies against the pinned PC cert), speaks

@@ -11,6 +11,7 @@
 //! are public and refusing would let a stranger hold a device's id and keep it out.
 
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -42,8 +43,9 @@ pub enum Command {
 /// What the desktop is told.
 #[derive(Debug, PartialEq)]
 pub enum Event {
-    /// Its first link came up. [incoming] and [outgoing]: the packet types it takes and sends.
-    Linked { id: String, name: String, kind: String, paired: bool, incoming: Vec<String>, outgoing: Vec<String> },
+    /// Its first link came up. [incoming] and [outgoing]: the packet types it takes and sends;
+    /// [cert]: the certificate its links show, to pin payloads to.
+    Linked { id: String, name: String, kind: String, paired: bool, incoming: Vec<String>, outgoing: Vec<String>, cert: Vec<u8> },
     /// Its last link closed.
     Gone { id: String },
     /// It asks to pair: show [key] with Accept and Reject.
@@ -54,13 +56,15 @@ pub enum Event {
     PairingOver { id: String },
     Paired { id: String, name: String },
     Unpaired { id: String, name: String },
-    /// A packet from a paired device, for the plugins.
-    Packet { id: String, packet: Value },
+    /// A packet from a paired device, for the plugins. [from]: the address of the link it came
+    /// over, where a payload it announces is fetched.
+    Packet { id: String, packet: Value, from: IpAddr },
 }
 
 struct LinkHandle {
     no: u64,
     cert: Vec<u8>,
+    remote: IpAddr,
     queue: mpsc::Sender<Value>,
     reader: JoinHandle<()>,
 }
@@ -233,11 +237,12 @@ impl Hub {
             }
             let _ = tx.send(Incoming { id: reader_id, link: no, packet: None });
         });
-        device.links.push(LinkHandle { no, cert: link.peer_cert, queue, reader });
+        let cert = link.peer_cert.clone();
+        device.links.push(LinkHandle { no, cert: link.peer_cert, remote: link.remote.ip().to_canonical(), queue, reader });
         if first {
             self.linked.lock().unwrap().insert(id.clone());
             tracing::info!("{id}: linked{}", if paired { ", paired" } else { "" });
-            self.emit(Event::Linked { id, name, kind, paired, incoming: takes, outgoing: sends });
+            self.emit(Event::Linked { id, name, kind, paired, incoming: takes, outgoing: sends, cert });
         }
     }
 
@@ -275,7 +280,10 @@ impl Hub {
                     device.send(&packet_pair(false));
                 }
             }
-            _ => self.emit(Event::Packet { id: i.id, packet }),
+            _ => {
+                let from = device.links.iter().find(|l| l.no == i.link).map(|l| l.remote).unwrap_or(IpAddr::from([127, 0, 0, 1]));
+                self.emit(Event::Packet { id: i.id, packet, from });
+            }
         }
     }
 
