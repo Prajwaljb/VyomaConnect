@@ -1,6 +1,20 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.vyoma.connect.designsystem.BounceIconButton
+import dev.vyoma.connect.designsystem.CollapsingHeaderScaffold
+import dev.vyoma.connect.designsystem.SectionLabel
+import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
+import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Computer
@@ -190,3 +204,55 @@ private fun CheckKind.tint() = when (this) {
 }
 
 private const val READINESS_POLL_MS = 2_000L
+
+/** What's working and what isn't, for each paired PC: where to look when something's wrong. */
+@Composable
+internal fun ConnectionChecksScreen(vm: AppViewModel, onBack: () -> Unit) {
+    val devices by vm.devices.collectAsStateWithLifecycle()
+    val pcs = devices.filter { it.isPaired && it.identity.companionOf == null }
+    val bluetooth = rememberBluetoothReadiness()
+    CollapsingHeaderScaffold(
+        title = "Connection",
+        subtitle = "What's working right now",
+        navigation = { BounceIconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
+    ) {
+        if (pcs.isEmpty()) item(key = "none") {
+            Text(
+                "Nothing to check yet: pair with a PC first.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 32.dp),
+            )
+        }
+        pcs.forEach { pc ->
+            val id = pc.identity.deviceId
+            if (pcs.size > 1) item(key = "label-$id") { SectionLabel(pc.identity.deviceName, Modifier.animateItem()) }
+            item(key = "checks-$id") {
+                val companion = devices.firstOrNull { it.identity.companionOf == id && it.isPaired && it.isReachable }
+                val plugin = remember(companion?.identity?.deviceId, companion?.plugins) {
+                    companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
+                }
+                val route by (plugin?.gamepadRoute ?: remember { MutableStateFlow(null) }).collectAsState()
+                val trip by (plugin?.gamepadTrip ?: remember { MutableStateFlow(null) }).collectAsState()
+                val pointerOpen by (plugin?.pointerOpen ?: remember { MutableStateFlow(false) }).collectAsState()
+                val pointerTrip by (plugin?.pointerTrip ?: remember { MutableStateFlow(null) }).collectAsState()
+                ConnectionChecksCard(
+                    connectionChecks(
+                        LinkFacts(
+                            pc = pc.transports,
+                            paired = pc.isPaired,
+                            companion = companion?.transports,
+                            bluetooth = bluetooth,
+                            controllerRoute = route,
+                            controllerTrip = trip,
+                            touchpadOpen = pointerOpen,
+                            touchpadTrip = pointerTrip,
+                        ),
+                    ),
+                    Modifier.animateItem(),
+                )
+            }
+        }
+    }
+}

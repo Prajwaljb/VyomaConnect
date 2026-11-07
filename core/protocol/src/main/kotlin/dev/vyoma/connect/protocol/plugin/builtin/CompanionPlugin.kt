@@ -30,6 +30,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.doubleOrNull
@@ -167,6 +168,50 @@ sealed interface CaptureState {
  */
 data class PcWallpaper(val cols: Int, val rows: Int, val colors: List<Int>)
 
+/**
+ * What the PC is, for its details page: each part null (or empty) when the PC can't say. Sizes in
+ * bytes; [displays] built-in first, at their native size.
+ */
+data class PcSpecs(
+    val model: String?,
+    val os: String?,
+    val kernel: String?,
+    val desktop: String?,
+    val session: String?,
+    val cpu: String?,
+    val cores: Int?,
+    val threads: Int?,
+    val gpus: List<String>,
+    val memTotal: Long?,
+    val diskTotal: Long?,
+    val diskFree: Long?,
+    val displays: List<Display>,
+) {
+    data class Display(val width: Int, val height: Int, val internal: Boolean)
+
+    companion object {
+        /** From a `vyoma.specs` body (also how the app keeps the last one); null if it says nothing. */
+        fun parse(body: JsonObject): PcSpecs? {
+            if (body["error"] != null) return null
+            fun str(k: String) = (body[k] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.takeIf { it.isNotEmpty() }?.take(120)
+            fun num(k: String) = (body[k] as? JsonPrimitive)?.longOrNull?.takeIf { it > 0 }
+            val gpus = (body["gpus"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.trim()?.takeIf { s -> s.isNotEmpty() }?.take(120) }.take(4)
+            val displays = (body["displays"] as? JsonArray).orEmpty().mapNotNull { e ->
+                val o = e as? JsonObject ?: return@mapNotNull null
+                val w = (o["w"] as? JsonPrimitive)?.intOrNull ?: return@mapNotNull null
+                val h = (o["h"] as? JsonPrimitive)?.intOrNull ?: return@mapNotNull null
+                if (w <= 0 || h <= 0) null else Display(w, h, (o["internal"] as? JsonPrimitive)?.booleanOrNull == true)
+            }.take(6)
+            val specs = PcSpecs(
+                str("model"), str("os"), str("kernel"), str("desktop"), str("session"), str("cpu"),
+                num("cores")?.toInt(), num("threads")?.toInt(), gpus, num("memTotal"), num("diskTotal"),
+                (body["diskFree"] as? JsonPrimitive)?.longOrNull?.coerceAtLeast(0), displays,
+            )
+            return specs.takeIf { it.os != null || it.cpu != null || it.memTotal != null }
+        }
+    }
+}
+
 /** One entry of a PC folder. Sizes are 0 for folders; [modified] is epoch millis. */
 data class PcFile(val name: String, val isDir: Boolean, val size: Long, val modified: Long)
 
@@ -258,6 +303,12 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     val wallpaper: StateFlow<PcWallpaper?> = _wallpaper.asStateFlow()
 
     suspend fun requestWallpaper() = ctx.send(packet(WALLPAPER_REQUEST))
+
+    private val _specs = MutableStateFlow<Pair<PcSpecs, JsonObject>?>(null)
+    /** What the PC is, with the body it came in (for keeping); asked for on every link. */
+    val specs: StateFlow<Pair<PcSpecs, JsonObject>?> = _specs.asStateFlow()
+
+    suspend fun requestSpecs() = ctx.send(packet(SPECS_REQUEST))
 
     private fun receiveWallpaper(packet: NetworkPacket) {
         val cols = packet.int("cols") ?: return
@@ -364,11 +415,13 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         abandonReplies()
         sendAway()
         requestWallpaper()
+        requestSpecs()
     }
 
     override suspend fun onStart() {
         sendAway()
         requestWallpaper()
+        requestSpecs()
     }
 
     /** Tells the PC the current walk-away rules ([away]); sent on every link too, so a restarted companion knows them. */
@@ -1172,6 +1225,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         if (packet.type == FILES_SAVED) receiveSaved(packet)
         if (packet.type == PC) receiveControls(packet)
         if (packet.type == WALLPAPER) receiveWallpaper(packet)
+        if (packet.type == SPECS) PcSpecs.parse(packet.body)?.let { _specs.value = it to packet.body }
         if (packet.type == BLUETOOTH) packet.string("address")?.let { _bluetoothAddress.value = it }
         if (packet.type == XFER_READY) receiveXfer("ready", packet)
         if (packet.type == XFER_DONE) receiveXfer("done", packet)
@@ -1223,6 +1277,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private const val SCREEN_TIMEOUT_MS = 60_000L
         const val PC = "vyoma.pc"
         const val WALLPAPER = "vyoma.wallpaper"
+        const val SPECS = "vyoma.specs"
+        const val SPECS_REQUEST = "vyoma.specs.request"
         const val BLUETOOTH = "vyoma.bluetooth"
         private const val GAMEPAD_RADIO_RETRY_MS = 10_000L
         private const val GAMEPAD_REPORT_MS = 30_000L
@@ -1287,8 +1343,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(POINTER_READY, BLUETOOTH, PASTE_READY, STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED, WEBCAM_STATE, MIRROR_INPUT, MIRROR_STATE),
-            outgoing = setOf(POINTER_REQUEST, POINTER_CLOSE, PASTE, STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, SCREEN_INPUT, SCREEN_TOUCH, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, USB_ACCESSORY, WEBCAM, WEBCAM_MIC, WEBCAM_TURN, MIRROR, MIRROR_AUDIO, MIRROR_COPY, MIRROR_VOLUME),
+            incoming = setOf(POINTER_READY, BLUETOOTH, PASTE_READY, STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, SPECS, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED, WEBCAM_STATE, MIRROR_INPUT, MIRROR_STATE),
+            outgoing = setOf(POINTER_REQUEST, POINTER_CLOSE, PASTE, STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, SCREEN_INPUT, SCREEN_TOUCH, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, SPECS_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, USB_ACCESSORY, WEBCAM, WEBCAM_MIC, WEBCAM_TURN, MIRROR, MIRROR_AUDIO, MIRROR_COPY, MIRROR_VOLUME),
         ) { CompanionPlugin(it, sink) }
     }
 }

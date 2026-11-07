@@ -95,6 +95,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import kotlinx.coroutines.launch
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
@@ -248,15 +249,18 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
         if (d.shadow.alpha > 0f) maskFilter = android.graphics.BlurMaskFilter(d.shadowBlur * density, android.graphics.BlurMaskFilter.Blur.NORMAL)
     }
 
+    /** Its soft shadow, outside [outline] only; drawn apart from the pane, which is cached and can't spill. */
+    fun DrawScope.shadow(outline: Outline) {
+        if (d.shadow.alpha <= 0f) return
+        val path = Path().apply { addOutline(outline) }
+        // Away from the page's light (it sways with the tilt, as the edge light does).
+        val fall = SpecularLight.cast(drop * 1.6f, SpecularLight.content)
+        val shadow = path.asAndroidPath().let { android.graphics.Path(it).apply { offset(fall.x, fall.y) } }
+        clipPath(path, ClipOp.Difference) { drawIntoCanvas { it.nativeCanvas.drawPath(shadow, shadowPaint) } }
+    }
+
     /** [outline] fills, [edge] (the same shape inset by half the hairline, at [inset]) is stroked. */
     fun DrawScope.paint(outline: Outline, edge: Outline, inset: Float, height: Float, width: Float) {
-        if (d.shadow.alpha > 0f) {
-            val path = Path().apply { addOutline(outline) }
-            // Away from the page's light (it sways with the tilt, as the edge light does).
-            val fall = SpecularLight.cast(drop * 1.6f, SpecularLight.content)
-            val shadow = path.asAndroidPath().let { android.graphics.Path(it).apply { offset(fall.x, fall.y) } }
-            clipPath(path, ClipOp.Difference) { drawIntoCanvas { it.nativeCanvas.drawPath(shadow, shadowPaint) } }
-        }
         val fill = flat ?: d.fill
         val light = SpecularLight.content
         val r = corner ?: (edge as? Outline.Rounded)?.roundRect?.takeIf { it.isSimple }?.topLeftCornerRadius?.x ?: (edge as? Outline.Rectangle)?.let { 0f }
@@ -289,19 +293,32 @@ private class GlassPainter(private val d: GlassDepth, private val flat: Color?, 
  * Card: an opaque slab with a tilt-lit hairline ([lit]; off for slices of a card) and, in light
  * mode, a soft shadow, content clipped to [shape]. Static (no blur), cached per size, so long
  * lists scroll at full speed. [fill] replaces the theme's card tone (e.g. a dialog).
+ *
+ * The card and all inside it are kept as one GPU image (an offscreen layer) that a scroll only
+ * moves: drawn afresh, its smooth corners were ~40 antialiased path fills a frame, ~1 ms of the
+ * render thread on an S24 FE (2026-11-07 trace). It's redrawn when something in it changes (a
+ * switch, a press, the tilt light). The shadow stays outside it, since the layer clips to the card.
  */
 fun Modifier.glassCard(shape: Shape, fill: Color? = null, lit: Boolean = true, ownPressGroup: Boolean = true): Modifier = composed {
     val d = glassDepth
     val light = remember { CardLight() }
     val presses = remember(ownPressGroup) { if (ownPressGroup) PressGroup() else null }
     this
+        .then(
+            if (d.shadow.alpha <= 0f) Modifier else Modifier.drawWithCache {
+                val outline = shape.createOutline(size, layoutDirection, this)
+                val shadows = GlassPainter(d, fill, lit, density)
+                onDrawBehind { with(shadows) { shadow(outline) } }
+            },
+        )
+        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
         .drawWithCache {
             val outline = shape.createOutline(size, layoutDirection, this)
             // Inset by half the hairline so all of it shows inside the clip.
             val half = 0.5f * density
             val edge = shape.createOutline(Size(size.width - 2 * half, size.height - 2 * half), layoutDirection, this)
-            val painter = GlassPainter(d, fill, lit, density, (shape as? SmoothCornerShape)?.radiusPx(size, this))
-            onDrawBehind { with(painter) { paint(outline, edge, half, size.height, size.width) } }
+            val pane = GlassPainter(d, fill, lit, density, (shape as? SmoothCornerShape)?.radiusPx(size, this))
+            onDrawBehind { with(pane) { paint(outline, edge, half, size.height, size.width) } }
         }
         .clip(shape)
         // What's pressed inside lights the card itself, one piece of glass (see pressScale).
@@ -541,7 +558,7 @@ object AppCanvas {
     var glow by mutableStateOf(true)
     /** The PC's wallpaper colours (from its companion), the last ones seen; null before any. */
     var wallpaper by mutableStateOf<CanvasWallpaper?>(null)
-    /** The user's choice: the glow takes [wallpaper]'s colours instead of the accent's. */
+    /** The PC accent is chosen: the glow takes [wallpaper]'s colours too. */
     var useWallpaper by mutableStateOf(true)
 }
 
@@ -603,6 +620,20 @@ fun Modifier.glassChrome(
      * backdrop around inside it).
      */
     interactive: Boolean = false,
+    /** A panel of words (a dialog, a menu, a status): see the lens's `legible`. */
+    legible: Boolean = false,
+    /**
+     * A lens to look through, not a pane: full resolution, no blur, no glow lifting the rim towards
+     * white, a thin bright edge, and a shallow bend that magnifies instead of mirroring. A deep slab
+     * and the gloss read as milk on anything this big (user, 2026-11-07).
+     */
+    clear: Boolean = false,
+    /**
+     * A soft shape instead of [shape] (Android 13+ liquid glass only), centred in the element and
+     * read while drawing: for glass that's pulled and wobbles. See [Blob]. Never turn or scale glass
+     * with a graphicsLayer to deform it: its shader then samples the wrong place.
+     */
+    blob: (() -> Blob)? = null,
 ): Modifier = composed {
     val blurred = rememberGraphicsLayer()
     val press = remember { Animatable(0f) }
@@ -610,8 +641,14 @@ fun Modifier.glassChrome(
     var position by remember { mutableStateOf(Offset.Zero) }
     val fill = tint ?: Glass.chrome
     // Lighter glass: opaque enough that the missing blur isn't missed (content passing under stays a shadow).
-    // (Dark's default tint is a grey that would turn light if made opaque: there it's the grey it shows over black.)
-    val liteFill = fill.copy(alpha = maxOf(fill.alpha, if (tint == null) 0.92f else 0.6f))
+    // Untinted, it's a deep (dark) or pale (light) shade of the accent: the default tint made opaque
+    // was a flat grey slab (user, 2026-11-07).
+    val accent = MaterialTheme.colorScheme.primary
+    val liteFill = if (tint == null) {
+        accent.toned(1.15f, if (isDarkUi) 0.19f else 0.93f).copy(alpha = 0.9f)
+    } else {
+        fill.copy(alpha = maxOf(fill.alpha, 0.6f))
+    }
     // The rim's inner band of light (see InnerGlow).
     val glow = remember { InnerGlow() }
     val band = Color.White.copy(alpha = if (isDarkUi) 0.52f else 0.6f)
@@ -642,7 +679,15 @@ fun Modifier.glassChrome(
             val grow = if (lens == null) 0f else (size.minDimension * 0.08f * press.value).coerceAtLeast(-size.minDimension * 0.04f)
             val corner = ((shape.createOutline(size, layoutDirection, this) as? Outline.Rounded)?.roundRect?.topLeftCornerRadius?.x
                 ?: size.minDimension / 2).coerceAtMost(size.minDimension / 2) + grow
-            chromeShadow(Rect(-grow, -grow, size.width + grow, size.height + grow), corner, dark)
+            val at = position + Offset(size.width / 2, size.height / 2)
+            val b = blob?.takeIf { lens != null }?.invoke()
+            if (b != null) {
+                val outline = b.edge(center)
+                val r = outline.getBounds()
+                chromeShadow(r, r.minDimension / 2, dark, SpecularLight.from(at), shape = outline)
+            } else {
+                chromeShadow(Rect(-grow, -grow, size.width + grow, size.height + grow), corner, dark, SpecularLight.from(at), if (clear) 0.6f else 1f)
+            }
         }
         // The shader clips to the shape itself, and its rim needs to reach past the edge.
         .then(if (lens == null) Modifier.clip(shape) else Modifier)
@@ -650,7 +695,14 @@ fun Modifier.glassChrome(
             // An empty slot (an actions row with nothing in it) draws nothing.
             if (size.width < 1f || size.height < 1f) return@drawBehind
             // Read while drawing, so switching it redraws every element in place.
-            val bandWidth = (size.minDimension * 0.1f).coerceAtMost(4.dp.toPx())
+            val bandWidth = (size.minDimension * 0.1f).coerceAtMost(if (clear) 2.dp.toPx() else 4.dp.toPx())
+            // Everything lit below is lit from here: one light for the element, wherever it's come to.
+            val light = SpecularLight.from(position + Offset(size.width / 2, size.height / 2))
+            val far = SpecularLight.opposite
+            val lit = SpecularLight.colour
+            val sunlit = SpecularLight.source != null
+            val reach = SpecularLight.reach(position + Offset(size.width / 2, size.height / 2))
+            val bandLit = lit.copy(alpha = if (clear) 0.4f else if (sunlit) 0.3f + 0.4f * reach else band.alpha)
             val roll = (size.minDimension * 0.18f).coerceAtMost(10.dp.toPx())
             if (GlassQuality.lite) {
                 val outline = shape.createOutline(size, layoutDirection, this)
@@ -667,14 +719,17 @@ fun Modifier.glassChrome(
                 blurred.record { translate(shift.x, shift.y) { drawLayer(backdrop.layer) } }
                 drawLayer(blurred)
                 drawRect(fill)
-                with(glow) { draw(shape.createOutline(size, layoutDirection, this@drawBehind), band, bandWidth, shade = shade, depth = roll) }
+                with(glow) { draw(shape.createOutline(size, layoutDirection, this@drawBehind), bandLit, bandWidth, light = light, opposite = far, shade = shade, depth = roll) }
                 return@drawBehind
             }
             // The rim stays a fifth of the element at most, so small buttons are still mostly clear.
-            val rim = bevel.toPx().coerceAtMost(size.minDimension * LensStyle.Chrome.rim)
+            val rim = bevel.toPx().coerceAtMost(size.minDimension * if (clear) 0.5f else LensStyle.Chrome.rim)
             // A deep slab throws the edge's view across the element; the margin is what lies
             // beyond its far side.
-            val depth = rim * LensStyle.Chrome.depth
+            // A lens is a dome (give it a bevel of its radius): the middle magnifies about 1.25x and the
+            // edge reaches out to 1.4 radii, gathering in what's round it, so a straight line through
+            // it bows like Apple's lens over a horizon. Deeper (-0.5 and on) it starts to fold.
+            val depth = rim * if (clear) -0.35f else LensStyle.Chrome.depth
             val p = press.value
             // Pressed, the glass grows past its bounds (drawn bigger, sampled bigger: nothing slides);
             // settling, it may dip a little under its size.
@@ -686,21 +741,25 @@ fun Modifier.glassChrome(
             // would show the lower resolution is the outline and the highlight, so the shader's
             // shape is inflated a little past the real one and the visible edge comes from an
             // anti-aliased full-resolution clip, with the specular rim stroked at full resolution.
-            val q = CHROME_RES
+            // Unblurred glass has nothing to hide half resolution behind: its refracted edges showed the pixels.
+            val q = if (clear || r < 0.5f) 1f else CHROME_RES
             val inflate = 2f / q
             val gs = Size(g.width + 2 * inflate, g.height + 2 * inflate)
             // The shape's own corner (a menu is a rounded rect); pills and circles come out as half the height.
             val corner = ((shape.createOutline(size, layoutDirection, this) as? Outline.Rounded)?.roundRect?.topLeftCornerRadius?.x
                 ?: size.minDimension / 2).coerceAtMost(size.minDimension / 2) + grow
+            val b = blob?.invoke()
             blurred.renderEffect = lens.effect(
                 gs * q, (m - inflate) * q, radius = (corner + inflate) * q, bevel = rim * q, refract = depth * q, zoom = 1f,
                 // No tint (user, 2026-11-05: "dont want tint at all"; Apple's tinted glass is an
                 // option, not the default): what's behind keeps its own colour. A caller's tint
                 // (the PC screen's frost over video) still applies.
                 disperse = LensStyle.Chrome.disperse, tint = tint?.let { it.copy(alpha = it.alpha * if (dark) 0.5f else 0.92f) } ?: Color.Transparent,
-                spec = 0.15f + 0.2f * p.coerceIn(0f, 1f), shade = if (dark) 0f else 0.1f, blur = r * q,
+                spec = 0.15f + 0.2f * p.coerceIn(0f, 1f), shade = if (dark) 0f else 0.1f, blur = if (clear) 0f else r * q,
                 // No colour boost either: it turned the pale canvas under the title's bubble blue.
-                vibrance = 1f, gloss = if (dark) 0.22f else 0.3f,
+                vibrance = 1f, gloss = if (clear) 0f else if (dark) 0.22f else 0.3f,
+                legible = if (!legible) 0f else if (dark) 1f else -1f, soften = if (legible) 14.dp.toPx() * q else 0f,
+                light = light, opposite = far, glow = lit, blob = b?.scaled(q),
             )
             val o = m + grow
             blurred.record(IntSize(((g.width + 2 * m) * q).roundToInt(), ((g.height + 2 * m) * q).roundToInt())) {
@@ -708,20 +767,23 @@ fun Modifier.glassChrome(
                     translate(shift.x + o, shift.y + o) { drawLayer(backdrop.layer) }
                 }
             }
-            val edgePath = Path().apply { addRoundRect(RoundRect(-grow, -grow, size.width + grow, size.height + grow, CornerRadius(corner))) }
+            val edgePath = b?.edge(center) ?: Path().apply { addRoundRect(RoundRect(-grow, -grow, size.width + grow, size.height + grow, CornerRadius(corner))) }
             clipPath(edgePath) {
                 translate(-o, -o) { scale(1f / q, 1f / q, pivot = Offset.Zero) { drawLayer(blurred) } }
             }
             // Where the edge faces sideways, the view through it is darker (see RimShadow). Right
             // over the lens's picture of what's behind, under the band and highlight: it darkens
             // only that, so over a black page it's gone and over bright content it shows, as Apple's.
-            translate(-grow, -grow) {
-                with(RimShadow) { stroke(Outline.Rounded(RoundRect(Rect(Offset.Zero, g), CornerRadius(corner))), g, corner, 1.dp.toPx(), if (dark) 0.55f else 0.2f) }
+            // (Rounded rects only: a blob's edge has no corner for it to follow.)
+            if (b == null) translate(-grow, -grow) {
+                with(RimShadow) { stroke(Outline.Rounded(RoundRect(Rect(Offset.Zero, g), CornerRadius(corner))), g, corner, 1.dp.toPx(), if (dark) 0.55f else 0.2f, light = light) }
             }
             // The band and its shading swell with the glass: left at rest size they read as a
-            // second, smaller pane on top of the pressed one.
-            translate(-grow, -grow) {
-                with(glow) { draw(shape.createOutline(g, layoutDirection, this@drawBehind), band, bandWidth, shade = shade, depth = roll, area = g) }
+            // second, smaller pane on top of the pressed one. A blob's follows its outline as strokes.
+            if (b != null) {
+                with(glow) { draw(Outline.Generic(edgePath), bandLit, bandWidth, light = light, opposite = far, area = size) }
+            } else translate(-grow, -grow) {
+                with(glow) { draw(shape.createOutline(g, layoutDirection, this@drawBehind), bandLit, bandWidth, light = light, opposite = far, shade = if (clear) Color.Transparent else shade, depth = if (clear) bandWidth else roll, area = g) }
             }
             // The highlight: brightest where it faces the light and its opposite; it follows the tilt.
             val pr = p.coerceIn(0f, 1f)
@@ -729,15 +791,52 @@ fun Modifier.glassChrome(
                 edgePath,
                 // On a light page a white highlight alone vanishes: the rest of the edge is a soft dark hairline.
                 specularRim(
-                    Color.White.copy(alpha = (if (dark) 0.55f else 1f) * (0.75f + 0.25f * pr) + 0.25f * pr),
-                    if (dark) Color.White.copy(alpha = 0.08f) else Color(0xFF1A2B4C).copy(alpha = 0.12f),
+                    lit.copy(alpha = if (clear) 1f else if (sunlit) reach else (if (dark) 0.55f else 1f) * (0.75f + 0.25f * pr) + 0.25f * pr),
+                    // A clear lens has nothing else to show where it ends: its edge carries on round, faintly.
+                    if (clear) lit.copy(alpha = 0.34f) else if (dark) Color.White.copy(alpha = 0.08f) else Color(0xFF1A2B4C).copy(alpha = 0.12f),
                     center,
+                    light,
+                    far,
                     size = g,
                 ),
-                style = Stroke(1.dp.toPx()),
+                style = Stroke(if (clear) 1.5.dp.toPx() else 1.dp.toPx()),
             )
         }
         .then(if (edge && lens == null) Modifier.border(0.75.dp, edgeBrush, shape) else Modifier)
+}
+
+/**
+ * A soft round shape for glass ([glassChrome]'s `blob`): a circle whose edge is bent by its first
+ * four harmonics, the k-th packed as `(a_k, b_k)` for `a_k·cos kφ + b_k·sin kφ` (as fractions of the
+ * radius): [wave1] bulges one side, [wave2] stretches it, [wave3] and [wave4] are three- and
+ * four-lobed. Smooth however it's bent: no corners, as a polygon would have. Its area stays that of a
+ * circle of the radius it's given.
+ */
+class Blob(radius: Float, val wave1: Offset, val wave2: Offset, val wave3: Offset, val wave4: Offset = Offset.Zero) {
+    private val swell get() = kotlin.math.sqrt(1f + (wave1.getDistanceSquared() + wave2.getDistanceSquared() + wave3.getDistanceSquared() + wave4.getDistanceSquared()) / 2f)
+    val radius = radius / swell
+
+    internal fun scaled(by: Float) = Blob(radius * by * swell, wave1, wave2, wave3, wave4)
+
+    /** How far out the edge is, facing (cos, sin). */
+    fun at(c: Float, s: Float): Float {
+        val c2 = c * c - s * s
+        val s2 = 2 * c * s
+        return radius * (1f + wave1.x * c + wave1.y * s + wave2.x * c2 + wave2.y * s2 + wave3.x * (c2 * c - s2 * s) + wave3.y * (s2 * c + c2 * s) +
+            wave4.x * (c2 * c2 - s2 * s2) + wave4.y * (2 * c2 * s2))
+    }
+
+    /** Its outline round [center]. */
+    fun edge(center: Offset, steps: Int = 120): Path = Path().apply {
+        for (i in 0 until steps) {
+            val a = 2 * PI * i / steps
+            val c = cos(a).toFloat()
+            val s = sin(a).toFloat()
+            val r = at(c, s)
+            if (i == 0) moveTo(center.x + r * c, center.y + r * s) else lineTo(center.x + r * c, center.y + r * s)
+        }
+        close()
+    }
 }
 
 /**

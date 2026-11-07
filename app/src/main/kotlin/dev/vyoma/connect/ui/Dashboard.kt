@@ -39,6 +39,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.Lifecycle
 import dev.vyoma.connect.protocol.plugin.builtin.PcStats
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.PcPower
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Brush
@@ -161,6 +162,10 @@ import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.PhotoCamera
+import androidx.compose.material.icons.rounded.PowerSettingsNew
+import androidx.compose.material.icons.rounded.Slideshow
+import androidx.compose.material.icons.rounded.Smartphone
+import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.NoPhotography
 import androidx.compose.material.icons.rounded.Keyboard
@@ -269,13 +274,20 @@ private class Entrance(played: Boolean) {
     val wobble = Animatable(if (played) 1f else 0f)
 }
 
+/** Just out of first-run setup: Home builds itself in front of you, slower and piece by piece, once. */
+internal object FirstRun {
+    var assembling by mutableStateOf(false)
+    const val PACE = 110L
+}
+
 @Composable
 private fun rememberEntrance(index: Int): Entrance {
     var played by rememberSaveable { mutableStateOf(false) }
-    val e = remember { Entrance(played) }
+    val assembling = remember { FirstRun.assembling }
+    val e = remember { Entrance(played && !assembling) }
     LaunchedEffect(Unit) {
-        if (!played) {
-            delay(40L * index)
+        if (!played || assembling) {
+            delay((if (assembling) FirstRun.PACE else 40L) * index)
             launch { e.wobble.animateTo(1f, VyomaMotion.jelly()) }
             e.rise.animateTo(1f, VyomaMotion.spatialSlow())
             played = true
@@ -318,11 +330,10 @@ fun PcDashboard(
     modifier: Modifier = Modifier,
     onBrowseFiles: () -> Unit = {},
     onFiles: () -> Unit = {},
+    onPresenter: () -> Unit = {},
 ) {
     val id = state.identity.deviceId
     val pc = rememberPcState(vm, state)
-    var showCommands by rememberSaveable { mutableStateOf(false) }
-    if (showCommands) CommandsSheet(vm, id) { showCommands = false }
     val context = LocalContext.current
     val status = LocalStatus.current
     val haptics = LocalHapticFeedback.current
@@ -356,6 +367,15 @@ fun PcDashboard(
             VolumeBar(
                 sink, onVolume = { vm.setSinkVolume(id, sink.name, it) }, modifier,
                 outputs = pc.sinks.takeIf { it.size > 1 }, onOutput = { vm.makeSinkDefault(id, it.name) },
+                // Turned all the way down is as silent as muted, so it reads the same; tapped, it
+                // comes back at a third rather than staying at nothing.
+                onMute = {
+                    when {
+                        sink.muted -> vm.setSinkMuted(id, sink.name, false)
+                        sink.volume <= 0 -> vm.setSinkVolume(id, sink.name, sink.maxVolume / 3)
+                        else -> vm.setSinkMuted(id, sink.name, true)
+                    }
+                },
             )
         }
         DashboardSection.CONTROLS -> {
@@ -370,7 +390,10 @@ fun PcDashboard(
           val pcCamera = (shots?.stats ?: remember { MutableStateFlow(null) }).collectAsStateWithLifecycle().value
           val cameraOk = pcCamera?.camera != false
           val overBluetooth = state.transports == setOf(TransportKind.BLUETOOTH)
-          val commandList by (vm.device(id)?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands ?: remember { MutableStateFlow(emptyList()) }).collectAsStateWithLifecycle()
+          var showCommands by rememberSaveable { mutableStateOf(false) }
+          if (showCommands) CommandsSheet(vm, id) { showCommands = false }
+          var confirmPower by rememberSaveable { mutableStateOf<PcPower?>(null) }
+          confirmPower?.let { action -> shots?.let { PcPowerDialog(it, state.identity.deviceName, action) { confirmPower = null } } }
           CaptureOutcome(shot, "Screenshot")
           CaptureOutcome(photo, "Photo")
           // Live: the Send tile rings with the progress of whatever's moving.
@@ -386,58 +409,49 @@ fun PcDashboard(
                 Control(
                     Icons.Rounded.UploadFile, "Send files", SystemColor.BLUE, progress = sending,
                     menu = listOf(
-                        MenuItem("Choose files", Icons.Rounded.UploadFile) { vm.pickFiles(context) },
                         MenuItem("Photos and videos", Icons.Rounded.PhotoLibrary) { vm.pickPhotos(context) },
                         // Folders travel through the companion (stock KDE Connect sends files only).
                         if (shots != null) MenuItem("A folder", Icons.Rounded.DriveFolderUpload) { vm.pickFolder(context) } else null,
-                        MenuItem("What's copied", Icons.Rounded.ContentPasteGo) {
-                            if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied to send", failure = true)
-                        },
                     ).filterNotNull(),
                 ) { vm.pickFiles(context) },
                 if (shots != null) Control(Icons.Rounded.Folder, "PC files", SystemColor.BLUE, onClick = onBrowseFiles)
                 else Control(Icons.Rounded.Folder, "Files", SystemColor.BLUE, onClick = onFiles),
-                if (shots != null) Control(
-                    Icons.Rounded.ScreenShare, "Screen", SystemColor.PINK,
-                    menu = listOf(
-                        MenuItem("Watch the screen", Icons.Rounded.ScreenShare) { PcScreenActivity.open(context, id) },
-                        MenuItem("Take a screenshot", Icons.Rounded.Screenshot) { AppLock.ask(context, AppLock.SCREENSHOT) { vm.capture(shots.screenshot) } },
-                        MenuItem("Show phone on PC", Icons.Rounded.MobileScreenShare) { MirrorActivity.open(context) },
-                    ),
-                ) { PcScreenActivity.open(context, id) }
+                if (shots != null) Control(Icons.Rounded.ScreenShare, "Screen", SystemColor.PINK) { PcScreenActivity.open(context, id) }
                 else Control(Icons.Rounded.Sensors, "Ping", SystemColor.CYAN) { vm.ping(id); status.show("Pinged: look for it on the PC") },
                 if (shots != null) {
-                    // Held: the phone's own camera as the PC's webcam (handy exactly when the lid is shut).
-                    val webcam = MenuItem("Phone as webcam", Icons.Rounded.Videocam) { WebcamActivity.open(context) }
-                    if (cameraOk) Control(
-                        Icons.Rounded.PhotoCamera, "Camera", SystemColor.ORANGE,
-                        menu = listOf(MenuItem("Take a photo with the PC", Icons.Rounded.PhotoCamera) { AppLock.ask(context, AppLock.CAMERA) { vm.capture(shots.photo) } }, webcam),
-                    ) { AppLock.ask(context, AppLock.CAMERA) { vm.capture(shots.photo) } }
-                    else Control(Icons.Rounded.NoPhotography, "Camera", SystemColor.ORANGE, unavailable = true, menu = listOf(webcam)) {
+                    if (cameraOk) Control(Icons.Rounded.PhotoCamera, "Camera", SystemColor.ORANGE) { AppLock.ask(context, AppLock.CAMERA) { vm.capture(shots.photo) } }
+                    else Control(Icons.Rounded.NoPhotography, "Camera", SystemColor.ORANGE, unavailable = true) {
                         status.show(noCameraMessage(pcCamera?.cameraLid), icon = Icons.Rounded.NoPhotography, failure = true)
                     }
                 }
                 else Control(Icons.Rounded.TouchApp, "Touchpad", SystemColor.ORANGE, opens = true, onClick = onTouchpad),
                 // Find PC's old slot (the user had no use for it, 2026-11).
-                Control(
-                    Icons.Rounded.ContentPasteGo, "Send clip", SystemColor.TEAL,
-                    menu = listOf(
-                        MenuItem("Send what's copied", Icons.Rounded.ContentPasteGo) {
-                            if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied to send", failure = true)
-                        },
-                        MenuItem("Clipboard history", Icons.Rounded.History, onClick = onClipboard),
-                    ),
-                ) {
+                Control(Icons.Rounded.ContentPasteGo, "Send clip", SystemColor.TEAL, onHold = onClipboard) {
                     if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied to send", failure = true)
                 },
-                // Held, the commands themselves: run one straight from Home.
-                Control(
-                    Icons.Rounded.Terminal, "Commands", SystemColor.GRAY, opens = true,
-                    menuTitle = "Run on PC",
-                    menu = commandList.take(6).map { cmd ->
-                        MenuItem(cmd.name) { runGuarded(context, vm, id, cmd, status) }
-                    }.ifEmpty { null },
-                ) { showCommands = true },
+                // What the phone can become: all of it hidden behind long presses before, so a tap opens
+                // the menu. Commands used to be here; the capsules below run them, PC details edits them.
+                // Only the presenter works with plain KDE Connect, so without the companion it's just that.
+                if (shots != null) Control(
+                    Icons.Rounded.Smartphone, "Phone as", SystemColor.CYAN,
+                    menuTitle = "Use this phone as", menuOnTap = true,
+                    menu = listOfNotNull(
+                        MenuItem("Game controller", Icons.Rounded.SportsEsports) { GamepadActivity.open(context, id) },
+                        // Video doesn't fit through Bluetooth.
+                        if (!overBluetooth) MenuItem("Webcam", Icons.Rounded.Videocam) { WebcamActivity.open(context) } else null,
+                        if (!overBluetooth) MenuItem("Mirror on the PC", Icons.Rounded.MobileScreenShare) { MirrorActivity.open(context) } else null,
+                        MenuItem("Presenter", Icons.Rounded.Slideshow, onClick = onPresenter),
+                    ),
+                ) {}
+                else Control(Icons.Rounded.Slideshow, "Presenter", SystemColor.CYAN, opens = true, onClick = onPresenter),
+                // Mute's old slot: the mute itself is the speaker on the volume card. Without the
+                // companion, commands are how plain KDE Connect does sleep and shutdown.
+                if (shots != null) Control(
+                    Icons.Rounded.PowerSettingsNew, "Power", SystemColor.GRAY,
+                    menuTitle = "PC power", menuOnTap = true,
+                    menu = PcPower.entries.map { p -> MenuItem(p.label, p.icon) { confirmPower = p } },
+                ) {}
+                else Control(Icons.Rounded.Terminal, "Commands", SystemColor.GRAY, opens = true) { showCommands = true },
             ).map { c ->
                 // Files and pictures don't fit through Bluetooth: same slots, and a tap says why.
                 if (overBluetooth && c.label in NEEDS_PAYLOADS) c.copy(unavailable = true, menu = null, onClick = { status.show("Needs Wi-Fi or USB", failure = true) }) else c
@@ -454,25 +468,6 @@ fun PcDashboard(
                 ) {
                     if (pc.locked == true) AppLock.ask(context, "To unlock the PC") { vm.setPcLocked(id, false) }
                     else vm.setPcLocked(id, true)
-                },
-                // Turned all the way down is as silent as muted, so it reads the same; tapped, it
-                // comes back at a third rather than staying at nothing.
-                run {
-                    val silent = pc.sink?.let { it.muted || it.volume <= 0 } == true
-                    Control(
-                        if (silent) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
-                        if (silent) "Muted" else "Mute",
-                        SystemColor.RED,
-                        active = silent,
-                        toggle = pc.sink != null,
-                    ) {
-                        val sink = pc.sink ?: return@Control status.show("Volume control isn't on for this PC", failure = true)
-                        when {
-                            sink.muted -> vm.setSinkMuted(id, sink.name, false)
-                            sink.volume <= 0 -> vm.setSinkVolume(id, sink.name, sink.maxVolume / 3)
-                            else -> vm.setSinkMuted(id, sink.name, true)
-                        }
-                    }
                 },
             ),
             modifier = modifier,
@@ -590,6 +585,7 @@ internal fun VolumeBar(
     modifier: Modifier = Modifier,
     outputs: List<AudioSink>? = null,
     onOutput: (AudioSink) -> Unit = {},
+    onMute: () -> Unit = {},
 ) {
     val max = sink.maxVolume.coerceAtLeast(1).toFloat()
     var level by remember(sink.name) { mutableFloatStateOf(sink.volume / max) }
@@ -693,7 +689,16 @@ internal fun VolumeBar(
         }
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.AutoMirrored.Rounded.VolumeMute, null, tint = muted, modifier = Modifier.size(20.dp))
+            // The mute: a speaker at the slider's start, where a finger already looks for it. A 48 dp target
+            // that overhangs the row, so the slider keeps its place.
+            val silent = sink.muted || level <= 0f
+            Box(
+                Modifier.size(48.dp).offset(x = (-14).dp).pressable(haptic = if (silent) Haptic.ToggleOn else Haptic.ToggleOff, onClick = onMute)
+                    .semantics { contentDescription = if (silent) "Turn sound back on" else "Mute" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(if (silent) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null, tint = if (silent) SystemColor.RED.color else MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
+            }
             LiquidSlider(
                 value = { if (dragging) level else shown },
                 onChange = { dragging = true; set(it) },
@@ -701,13 +706,12 @@ internal fun VolumeBar(
                     lastTouch = System.currentTimeMillis()
                     dragging = false
                 },
-                modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                modifier = Modifier.weight(1f).padding(start = 0.dp).offset(x = (-14).dp),
                 fill = fill,
                 track = MaterialTheme.colorScheme.onSurface.copy(alpha = if (isDarkUi) 0.16f else 0.1f),
                 underlay = card,
                 edgeHaptics = false,
             )
-            Icon(if (sink.muted || level <= 0f) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null, tint = muted, modifier = Modifier.size(20.dp))
         }
     }
 }
@@ -734,15 +738,19 @@ private data class Control(
     /** What a long press offers, poured out of the tile as a menu ([LocalMenu]). */
     val menu: List<MenuItem>? = null,
     val menuTitle: String? = null,
+    /** One other thing a long press does, straight away ([menu] is for several). */
+    val onHold: (() -> Unit)? = null,
+    /** The menu is the tile's whole job: a tap opens it too, and [onClick] goes unused. */
+    val menuOnTap: Boolean = false,
     /** Can't do its job right now (the camera behind a closed lid): shown quiet, a tap says why. */
     val unavailable: Boolean = false,
     val onClick: () -> Unit,
 )
 
 /**
- * Apple's Shortcuts widget for the actions, Control Center for the switches. Six one-shot actions
- * are filled square tiles (glyph top left, label bottom left, white ink); the two switches sit in
- * the thumb's corner as clear glass tiles that fill only when on ([ToggleTile]).
+ * Apple's Shortcuts widget for the actions, Control Center for the switch. Seven one-shot actions
+ * are filled square tiles (glyph top left, label bottom left, white ink); the switch sits in
+ * the thumb's corner as a clear glass tile that fills only when on ([ToggleTile]).
  * They float on the canvas like Control Center modules, 16 dp apart: inside a card (8 dp gaps,
  * 12 dp pad) nine lit outlines crowded one small area and the user found Home congested.
  * Rejected before: round buttons (plastic balls), wide tiles two across (a stack of pills), app
@@ -764,12 +772,15 @@ private fun ControlGrid(actions: List<Control>, toggles: List<Control>, modifier
             tile - pad * 2,
         )
         CompositionLocalProvider(LocalTileLabel provides label, LocalTilePad provides pad) { Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+            // The tiles take their turn when Home is assembling itself; otherwise no layer per tile.
+            val pop = remember { FirstRun.assembling }
+            @Composable fun Tile(i: Int, tile: @Composable () -> Unit) = if (pop) Staggered(i + 4) { tile() } else tile()
             Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-                actions.take(4).forEach { ControlTile(it, Modifier.size(tile), enabled) }
+                actions.take(4).forEachIndexed { i, c -> Tile(i) { ControlTile(c, Modifier.size(tile), enabled) } }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-                actions.drop(4).forEach { ControlTile(it, Modifier.size(tile), enabled) }
-                toggles.forEach { ToggleTile(it, Modifier.size(tile), enabled) }
+                actions.drop(4).forEachIndexed { i, c -> Tile(i + 4) { ControlTile(c, Modifier.size(tile), enabled) } }
+                toggles.forEachIndexed { i, c -> Tile(i + actions.size) { ToggleTile(c, Modifier.size(tile), enabled) } }
             }
         } }
     }
@@ -794,6 +805,22 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
     // The menu draws its copy of the face outside the grid, so it carries the grid's label size:
     // without it the label came back bigger and snapped smaller when the tile took over again.
     val labelStyle = LocalTileLabel.current
+    val openMenu: (() -> Unit)? = c.menu?.let { m ->
+        {
+                placed[0]?.takeIf { it.isAttached }?.let {
+                    menus.show(
+                        it.boundsInRoot(), m, c.menuTitle, fromRadius = TileRadius,
+                        // The tile grows into the menu in place, shrinking to its icon, which
+                        // lands in the menu's header.
+                        morph = MenuMorph(placed, fill, icon = c.icon.takeIf { c.progress == null }, iconAt = DpOffset(pad + 2.dp, 12.dp), ink = ink, label = c.label) {
+                            CompositionLocalProvider(LocalTileLabel provides labelStyle, LocalTilePad provides pad) {
+                                TileFace(c, ink, icon = c.progress != null)
+                            }
+                        },
+                    )
+                }
+        }
+    }
     Box(
         modifier
             .graphicsLayer {
@@ -803,23 +830,9 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
             }
             .onPlaced { placed[0] = it }
             .liquidPress(
-                enabled = enabled, onLongClickLabel = "More", onClick = c.onClick,
-                onLongClick = c.menu?.let { m ->
-                    {
-                        placed[0]?.takeIf { it.isAttached }?.let {
-                            menus.show(
-                                it.boundsInRoot(), m, c.menuTitle, fromRadius = TileRadius,
-                                // The tile grows into the menu in place, shrinking to its icon, which
-                                // lands in the menu's header.
-                                morph = MenuMorph(placed, fill, icon = c.icon.takeIf { c.progress == null }, iconAt = DpOffset(pad + 2.dp, 12.dp), ink = ink, label = c.label) {
-                                    CompositionLocalProvider(LocalTileLabel provides labelStyle, LocalTilePad provides pad) {
-                                        TileFace(c, ink, icon = c.progress != null)
-                                    }
-                                },
-                            )
-                        }
-                    }
-                },
+                enabled = enabled, onLongClickLabel = "More",
+                onClick = if (c.menuOnTap && openMenu != null) openMenu else c.onClick,
+                onLongClick = c.onHold ?: openMenu,
             )
             .glassRaised(SmoothCornerShape(TileRadius), fill),
     ) { TileFace(c, ink) }
@@ -854,7 +867,7 @@ private fun TileFace(c: Control, ink: Color, icon: Boolean = true) {
             // Tiles that hold more on a long press say so with a quiet "more" mark (the user wanted
             // an indicator); it takes the chevron's corner, one mark per tile.
             when {
-                c.menu != null -> Icon(Icons.Rounded.MoreHoriz, null, tint = ink.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
+                c.menu != null || c.onHold != null -> Icon(Icons.Rounded.MoreHoriz, null, tint = ink.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
                 c.opens -> Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = ink.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
             }
         }

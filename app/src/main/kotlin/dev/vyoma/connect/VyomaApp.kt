@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import dev.vyoma.connect.automation.RuleEngine
+import dev.vyoma.connect.data.PcSpecsStore
 import dev.vyoma.connect.data.SettingsRepository
 import dev.vyoma.connect.demo.Demo
 import dev.vyoma.connect.demo.DemoDiagnostics
@@ -109,9 +110,6 @@ class VyomaApp : Application() {
         val canvasPrefs = getSharedPreferences("ui", MODE_PRIVATE)
         canvasPrefs.getString("pc_wallpaper", null)?.let(::decodeWallpaper)?.let { AppCanvas.wallpaper = it }
         container.appScope.launch(Dispatchers.Main) {
-            container.settings.canvasWallpaper.collect { AppCanvas.useWallpaper = it }
-        }
-        container.appScope.launch(Dispatchers.Main) {
             @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
             container.hub.filterNotNull().flatMapLatest { hub ->
                 hub.devices.flatMapLatest { all ->
@@ -126,6 +124,20 @@ class VyomaApp : Application() {
                 AppCanvas.wallpaper = grid
                 canvasPrefs.edit().putString("pc_wallpaper", "${w.cols},${w.rows}," + w.colors.joinToString(",")).apply()
             }
+        }
+        // Each PC's specs, kept as its companion sends them (on every link) for its details page.
+        PcSpecsStore.load(this)
+        container.appScope.launch(Dispatchers.Main) {
+            @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+            container.hub.filterNotNull().flatMapLatest { hub ->
+                hub.devices.flatMapLatest { all ->
+                    val each = all.values.map { d ->
+                        d.state.map { d.plugin<CompanionPlugin>(CompanionPlugin.ID) }.distinctUntilChanged()
+                            .flatMapLatest { p -> p?.specs?.map { s -> d.identity.companionOf?.let { pc -> s?.let { Triple(pc, it.first, it.second) } } } ?: flowOf(null) }
+                    }
+                    if (each.isEmpty()) flowOf(null) else merge(*each.toTypedArray())
+                }
+            }.filterNotNull().collect { (pc, specs, body) -> PcSpecsStore.put(this@VyomaApp, pc, specs, body) }
         }
         // Whether any of our activities is started: background work scales down when it isn't.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {

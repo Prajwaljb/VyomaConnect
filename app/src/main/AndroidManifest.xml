@@ -113,7 +113,7 @@
             android:name=".ui.PcScreenActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
-            android:screenOrientation="sensorLandscape"
+            android:screenOrientation="userLandscape"
             android:windowSoftInputMode="adjustResize" />
 
         <activity
@@ -140,7 +140,7 @@
             android:name=".ui.GamepadActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
-            android:screenOrientation="sensorLandscape" />
+            android:screenOrientation="userLandscape" />
 
         <!-- The PC companion's USB accessory (the game controller over a cable without USB debugging):
              Android opens this for it, it hands the accessory over and closes. -->

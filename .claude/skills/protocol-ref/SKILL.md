@@ -264,6 +264,11 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
   average it to 4x4. The phone asks on link and on plugin start and caches the last grid ("pc_wallpaper" in the ui
   prefs) so the background is right before the PC connects. The companion also pushes `vyoma.wallpaper` unasked
   when it changes (polls the wallpaper path, image mtime and appletsrc mtime every 3 s, sends 400 ms after a change).
+- `vyoma.specs.request` → `vyoma.specs {model?, os?, kernel?, desktop?, session?, cpu?, cores?, threads?, gpus:[], memTotal?,
+  diskTotal?, diskFree?, displays:[{w, h, internal}]}` (`specs.rs`), asked on every companion link; the app keeps the
+  last body per PC (`PcSpecsStore`, forgotten on unpair) for the details page's "About this PC". sysinfo and sysfs only;
+  GPUs come from sysfs PCI ids + pci.ids, never sysinfo's `Gpus` (it loads NVML/Vulkan, which wakes the NVIDIA dGPU).
+  No serial number or machine id, ever.
 - `vyoma.desktop.step {up}` → `vyoma.desktop.stepped {view: desktop|windows|overview|grid}` or `{error}`: the
   touchpad's vertical three-finger swipe on Plasma, one rung of desktop ↔ windows ↔ Overview ↔ Grid (desktop.rs).
   It reads KWin first (`/Effects activeEffects` has "overview"; `/KWin showingDesktop`), then invokes kglobalaccel

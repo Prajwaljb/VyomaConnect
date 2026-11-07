@@ -123,7 +123,7 @@ private fun BoxScope.StatusBubble(c: StatusController, backdrop: Backdrop) {
             .semantics { liveRegion = LiveRegionMode.Polite }
             // Liquid glass like the tab bar; it was a flat grey slab whose text fell back to black in dark mode.
             // The corners make one line a capsule; longer messages grow downwards as a rounded pane.
-            .glassChrome(backdrop, RoundedCornerShape(24.dp), blur = 2.5.dp, bevel = 16.dp)
+            .glassChrome(backdrop, RoundedCornerShape(24.dp), blur = 2.5.dp, bevel = 16.dp, legible = true)
             .heightIn(min = 48.dp)
             .widthIn(min = 120.dp)
             .padding(start = 14.dp, end = 20.dp, top = 8.dp, bottom = 8.dp),

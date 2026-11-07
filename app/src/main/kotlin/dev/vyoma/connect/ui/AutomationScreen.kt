@@ -87,6 +87,7 @@ import dev.vyoma.connect.designsystem.GlassDialog
 import dev.vyoma.connect.designsystem.Haptic
 import dev.vyoma.connect.designsystem.LiquidSlider
 import dev.vyoma.connect.designsystem.ListRow
+import dev.vyoma.connect.designsystem.LiquidReveal
 import dev.vyoma.connect.designsystem.LocalStatus
 import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.RowChevron
@@ -350,7 +351,7 @@ fun RuleEditorScreen(vm: AppViewModel, ruleId: String?, onBack: () -> Unit) {
                         trailing = { RowChevron(if (tunable(t)) "Edit" else "Change") },
                         onClick = { if (tunable(t)) tuning = Slot.When to t else picking = Slot.When },
                     )
-                    if (tunable(t)) ListRow(title = "Something else", icon = Icons.Rounded.Edit, iconTint = SystemColor.GRAY.color, trailing = { RowChevron() }, onClick = { picking = Slot.When })
+                    LiquidReveal(tunable(t)) { ListRow(title = "Something else", icon = Icons.Rounded.Edit, iconTint = SystemColor.GRAY.color, trailing = { RowChevron() }, onClick = { picking = Slot.When }) }
                 }
             }
         }
@@ -424,7 +425,8 @@ fun RuleEditorScreen(vm: AppViewModel, ruleId: String?, onBack: () -> Unit) {
                     icon = Icons.Rounded.Edit, iconTint = SystemColor.BLUE.color, trailing = { RowChevron() },
                     onClick = { renaming = true }, showDivider = valid,
                 )
-                if (valid) ListRow(
+                LiquidReveal(valid) {
+                ListRow(
                     title = "Test now", subtitle = "Runs the actions once, right away",
                     icon = Icons.Rounded.PlayArrow, iconTint = SystemColor.GREEN.color,
                     onClick = {
@@ -438,6 +440,7 @@ fun RuleEditorScreen(vm: AppViewModel, ruleId: String?, onBack: () -> Unit) {
                         }
                     },
                 )
+                }
             }
         }
         if (original != null) {

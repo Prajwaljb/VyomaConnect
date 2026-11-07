@@ -116,7 +116,12 @@ fun HomeScreen(
     onBrowseFiles: (String) -> Unit,
     onFiles: () -> Unit = {},
     onCaptures: () -> Unit = {},
+    onPresenter: (String) -> Unit = {},
 ) {
+    if (FirstRun.assembling) LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(3000)
+        FirstRun.assembling = false
+    }
     val allDevices by vm.devices.collectAsStateWithLifecycle()
     // Companions are part of their PC, never a separate computer.
     val devices = allDevices.filter { it.identity.companionOf == null }
@@ -183,7 +188,7 @@ fun HomeScreen(
             }
             if (!live) item(key = "away") { AwayCard(vm, Modifier.animateItem()) }
             if (live && companionOnline.not() && vm.companionPromo()) {
-                item(key = "promo") { CompanionPromoCard(onDismiss = vm::dismissCompanionPromo, modifier = Modifier.animateItem()) }
+                item(key = "promo") { CompanionPromoCard(vm, primary?.identity?.deviceId, onDismiss = vm::dismissCompanionPromo, modifier = Modifier.animateItem()) }
             }
             item(key = "status") {
                 Staggered(0, Modifier.animateItem()) {
@@ -218,10 +223,14 @@ fun HomeScreen(
                     PcDashboard(vm, primary, DashboardSection.VOLUME, { onTouchpad(id) }, onClipboard)
                 }
             }
+            // The rest of what you'd adjust on the PC: its screens, and each app's sound.
+            if (live) companionPlugin?.let { plugin ->
+                item(key = "levels") { Staggered(3, Modifier.animateItem()) { LevelsCard(plugin) } }
+            }
             item(key = "controls") {
                 // Free-floating tiles need air from the card above them.
                 Staggered(2, Modifier.animateItem().padding(top = 8.dp)) {
-                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onTouchpad(id) }, onClipboard, onBrowseFiles = { onBrowseFiles(id) }, onFiles = onFiles)
+                    PcDashboard(vm, primary, DashboardSection.CONTROLS, { onTouchpad(id) }, onClipboard, onPresenter = { onPresenter(id) }, onBrowseFiles = { onBrowseFiles(id) }, onFiles = onFiles)
                 }
             }
             if (live) {
@@ -504,7 +513,8 @@ private fun AwayCard(vm: AppViewModel, modifier: Modifier = Modifier) {
 
 /** Once, after the first pair: what the companion adds. Dismissed for good. */
 @Composable
-private fun CompanionPromoCard(onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+private fun CompanionPromoCard(vm: AppViewModel, pcId: String?, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+    var showing by rememberSaveable { mutableStateOf(false) }
     SectionCard(modifier, contentPadding = PaddingValues(20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(36.dp).clip(SmoothCornerShape(11.dp)).background(SystemColor.BLUE.color), contentAlignment = Alignment.Center) {
@@ -520,8 +530,17 @@ private fun CompanionPromoCard(onDismiss: () -> Unit, modifier: Modifier = Modif
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(16.dp))
-        PillButton("Got it", onClick = onDismiss, prominent = false)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PillButton("Set it up", onClick = { showing = true })
+            PillButton("Not now", onClick = onDismiss, prominent = false)
+        }
     }
+    if (showing) dev.vyoma.connect.designsystem.GlassDialog(
+        onDismissRequest = { showing = false },
+        title = { Text("The Vyoma companion") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { CompanionSetup(vm, online = false, pcId) } },
+        confirmButton = { dev.vyoma.connect.designsystem.DialogButton(onClick = { showing = false }) { Text("Close") } },
+    )
 }
 
 fun DeviceType.icon(): ImageVector = when (this) {

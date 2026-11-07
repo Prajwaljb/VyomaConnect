@@ -56,6 +56,7 @@ import dev.vyoma.connect.designsystem.IconBadge
 import dev.vyoma.connect.designsystem.ListRow
 import dev.vyoma.connect.designsystem.LiquidSlider
 import dev.vyoma.connect.designsystem.LocalStatus
+import dev.vyoma.connect.designsystem.LiquidReveal
 import dev.vyoma.connect.designsystem.SectionCard
 import dev.vyoma.connect.designsystem.SectionLabel
 import dev.vyoma.connect.designsystem.SystemColor
@@ -70,35 +71,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
-
-/**
- * The PC's own controls through the companion: each screen's brightness, the volume of each app
- * playing sound, and sleep / restart / shut down / log out, as list items (a label and its card
- * are separate items like every other section, so the list's spacing sets them apart; one Column
- * put the labels on the cards' rims). Sliders own their value while touched and briefly after
- * (the PC's echoes lag). [controls] comes from [rememberPcControls].
- */
-fun LazyListScope.pcControls(plugin: CompanionPlugin, controls: PcControls?, onPower: (PcPower) -> Unit) {
-    if (controls != null) {
-        item(key = "pc-levels-label") { SectionLabel("Brightness and sound", Modifier.animateItem()) }
-        item(key = "pc-levels") { LevelsCard(plugin, controls, Modifier.animateItem()) }
-    }
-    item(key = "pc-power-label") { SectionLabel("Power", Modifier.animateItem()) }
-    item(key = "pc-power") {
-        SectionCard(Modifier.animateItem()) {
-            val actions = PcPower.entries
-            actions.forEachIndexed { i, p ->
-                ListRow(
-                    title = p.label,
-                    icon = p.icon,
-                    iconTint = p.tint.color,
-                    showDivider = i < actions.lastIndex,
-                    onClick = { onPower(p) },
-                )
-            }
-        }
-    }
-}
 
 /** The PC's levels, kept fresh every few seconds while the page is visible; null until the first answer. */
 @Composable
@@ -141,9 +113,23 @@ fun PcPowerDialog(plugin: CompanionPlugin, pcName: String, action: PcPower, onDi
     )
 }
 
+/**
+ * Each screen's brightness and the volume of each app playing sound, on Home under the PC's own
+ * volume. Sliders own their value while touched and briefly after (the PC's echoes lag). Rows come
+ * and go with what's playing, and it's nothing at all with neither (the companion hasn't answered,
+ * or a desktop with no dimmable screen and silence): a "nothing playing" row would be noise on Home.
+ */
 @Composable
-private fun LevelsCard(plugin: CompanionPlugin, c: PcControls, modifier: Modifier) {
-    SectionCard(modifier.animateContentSize(VyomaMotion.spatial())) {
+internal fun LevelsCard(plugin: CompanionPlugin, modifier: Modifier = Modifier) {
+    val c = rememberPcControls(plugin)
+    LiquidReveal(c != null && (c.displays.isNotEmpty() || c.apps.isNotEmpty()), modifier) {
+        if (c != null) Levels(plugin, c)
+    }
+}
+
+@Composable
+private fun Levels(plugin: CompanionPlugin, c: PcControls) {
+    SectionCard(Modifier.animateContentSize(VyomaMotion.spatial())) {
         c.displays.forEach { d ->
             LevelRow(
                 key = "d:${d.id}",
@@ -152,16 +138,7 @@ private fun LevelsCard(plugin: CompanionPlugin, c: PcControls, modifier: Modifie
                 tint = SystemColor.YELLOW,
                 reported = d.level,
                 onSet = { plugin.setBrightness(d.id, it) },
-                // Sound always follows: an app, or the row saying none is playing.
-                divider = true,
-            )
-        }
-        if (c.apps.isEmpty()) {
-            ListRow(
-                title = "No app is playing sound",
-                subtitle = "Apps show here while they play on the PC",
-                icon = Icons.Rounded.GraphicEq,
-                iconTint = SystemColor.GRAY.color,
+                divider = d != c.displays.last() || c.apps.isNotEmpty(),
             )
         }
         c.apps.forEachIndexed { i, a ->
@@ -260,13 +237,13 @@ private fun LevelRow(
     if (divider) HorizontalDivider(Modifier.padding(start = 70.dp, end = 20.dp), color = MaterialTheme.colorScheme.outlineVariant)
 }
 
-private val PcPower.label get() = when (this) {
+internal val PcPower.label get() = when (this) {
     PcPower.SLEEP -> "Sleep"
     PcPower.RESTART -> "Restart"
     PcPower.SHUTDOWN -> "Shut down"
     PcPower.LOGOUT -> "Log out"
 }
-private val PcPower.icon get() = when (this) {
+internal val PcPower.icon get() = when (this) {
     PcPower.SLEEP -> Icons.Rounded.Bedtime
     PcPower.RESTART -> Icons.Rounded.RestartAlt
     PcPower.SHUTDOWN -> Icons.Rounded.PowerSettingsNew

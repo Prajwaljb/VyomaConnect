@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Column
 import dev.vyoma.connect.protocol.link.TransportKind
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Usb
+import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.Terminal
 import android.widget.Toast
 import androidx.compose.material.icons.Icons
@@ -45,6 +46,17 @@ import dev.vyoma.connect.designsystem.SectionCard
 import dev.vyoma.connect.designsystem.SectionLabel
 import dev.vyoma.connect.protocol.plugin.builtin.BatteryPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.PcSpecs
+import dev.vyoma.connect.data.PcSpecsStore
+import androidx.compose.material.icons.rounded.Laptop
+import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.Layers
+import androidx.compose.material.icons.rounded.DeveloperBoard
+import androidx.compose.material.icons.rounded.Gradient
+import androidx.compose.material.icons.rounded.Memory
+import androidx.compose.material.icons.rounded.Storage
+import androidx.compose.material.icons.rounded.Monitor
+import kotlin.math.roundToInt
 import dev.vyoma.connect.protocol.plugin.builtin.PcPower
 import dev.vyoma.connect.protocol.plugin.builtin.LockPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
@@ -67,21 +79,14 @@ fun DeviceScreen(
     val companionPlugin = remember(companion?.identity?.deviceId, companion?.plugins) {
         companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
     }
-    val pcLevels = companionPlugin?.let { rememberPcControls(it) }
     val pcStats by (companionPlugin?.stats ?: remember { MutableStateFlow(null) }).collectAsState()
-    var confirmPower by rememberSaveable { mutableStateOf<PcPower?>(null) }
     val fingerprint = remember(state?.isReachable, state?.isPaired) { vm.fingerprint(deviceId) }
+    val specs = PcSpecsStore.all.collectAsStateWithLifecycle().value[deviceId]
 
     // Plugin instances change when the link reconnects; key on the loaded set.
     val device = remember(state?.plugins) { vm.device(deviceId) }
     val battery by (device?.plugin<BatteryPlugin>(BatteryPlugin.ID)?.remote ?: remember { MutableStateFlow(null) }).collectAsState()
     val commands by (device?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands ?: remember { MutableStateFlow(emptyList()) }).collectAsState()
-
-    val pcRoute by (companionPlugin?.gamepadRoute ?: remember { MutableStateFlow(null) }).collectAsState()
-    val pcTrip by (companionPlugin?.gamepadTrip ?: remember { MutableStateFlow(null) }).collectAsState()
-    val pointerOpen by (companionPlugin?.pointerOpen ?: remember { MutableStateFlow(false) }).collectAsState()
-    val pointerTrip by (companionPlugin?.pointerTrip ?: remember { MutableStateFlow(null) }).collectAsState()
-    val bluetooth = rememberBluetoothReadiness()
 
     // How it's connected; the battery row below owns the charge (each fact said once).
     val subtitle = state?.let { transportLabel(it) }
@@ -109,59 +114,18 @@ fun DeviceScreen(
             }
         }
 
-        item(key = "info-label") { SectionLabel("Connection", Modifier.animateItem()) }
-        item(key = "info") {
-            SectionCard(Modifier.animateItem()) {
-                ListRow(
-                    title = if (state.isReachable) "Link" else "Not reachable",
-                    subtitle = if (state.isReachable) "${state.plugins.size} features active" else "Open KDE Connect on it, or join the same network",
-                    icon = when {
-                        TransportKind.USB in state.transports -> Icons.Rounded.Usb
-                        TransportKind.LAN !in state.transports && TransportKind.BLUETOOTH in state.transports -> Icons.Rounded.Bluetooth
-                        else -> Icons.Rounded.Wifi
-                    },
-                    iconTint = if (state.isReachable) SystemColor.BLUE.color else SystemColor.GRAY.color,
-                    showDivider = battery != null,
-                    // Checks the link end to end: the PC shows a "Ping!" notification.
-                    trailing = if (live) { { PillButton("Ping", prominent = false, onClick = { vm.ping(deviceId); status.show("Pinged: look for it on the PC") }) } } else null,
-                )
-                battery?.let { b ->
-                    val plugged = !b.charging && pcStats?.ac == true
-                    ListRow(
-                        title = "Battery ${b.charge}%",
-                        subtitle = if (b.charging) "Charging" else if (plugged) "Plugged in" else if (b.low) "Low" else "On battery",
-                        icon = if (b.charging || plugged) Icons.Rounded.BatteryChargingFull else Icons.Rounded.BatteryStd,
-                        iconTint = if (b.low) SystemColor.RED.color else SystemColor.GREEN.color,
-                    )
-                }
-            }
-        }
-
-        item(key = "checks-label") { SectionLabel("Connection checks", Modifier.animateItem()) }
-        item(key = "checks") {
-            ConnectionChecksCard(
-                connectionChecks(
-                    LinkFacts(
-                        pc = state.transports,
-                        paired = state.isPaired,
-                        companion = companion?.transports,
-                        bluetooth = bluetooth,
-                        controllerRoute = pcRoute,
-                        controllerTrip = pcTrip,
-                        touchpadOpen = pointerOpen,
-                        touchpadTrip = pointerTrip,
-                    ),
-                ),
-                Modifier.animateItem(),
-            )
-        }
-
-        companionPlugin?.let { pcControls(it, pcLevels) { action -> confirmPower = action } }
-
         // Commands are run from Home; here they're one row (a wall of shell lines led the page before).
         if (live) {
             item(key = "commands") {
                 SectionCard(Modifier.animateItem()) {
+                    ListRow(
+                        title = "Ping",
+                        subtitle = "Shows a notification on the PC",
+                        icon = Icons.Rounded.Sensors,
+                        iconTint = SystemColor.CYAN.color,
+                        showDivider = true,
+                        onClick = { vm.ping(deviceId); status.show("Pinged: look for it on the PC") },
+                    )
                     ListRow(
                         title = "Commands",
                         subtitle = if (commands.isEmpty()) (if (companionOnline) "Scripts: set up on the PC" else "Shutdown, sleep, scripts: set up on the PC") else "Run or edit what the PC offers",
@@ -172,6 +136,12 @@ fun DeviceScreen(
                     )
                 }
             }
+        }
+
+        // What the PC is, from its companion (kept, so it shows while the PC is away too).
+        if (specs != null && state.isPaired) {
+            item(key = "specs-label") { SectionLabel("About this PC", Modifier.animateItem()) }
+            item(key = "specs") { SpecsCard(specs, Modifier.animateItem()) }
         }
 
         item(key = "security-label") { SectionLabel("Security", Modifier.animateItem()) }
@@ -207,9 +177,6 @@ fun DeviceScreen(
         }
     }
 
-    confirmPower?.let { action ->
-        companionPlugin?.let { PcPowerDialog(it, state?.identity?.deviceName ?: "the PC", action) { confirmPower = null } }
-    }
     if (showCommands) CommandsSheet(vm, deviceId) { showCommands = false }
     if (confirmUnpair) {
         GlassDialog(
@@ -225,5 +192,66 @@ fun DeviceScreen(
             },
             dismissButton = { DialogButton(onClick = { confirmUnpair = false }) { Text("Cancel") } },
         )
+    }
+}
+
+/** One row per part, each named and then said in full (a details page: nothing cut short). */
+@Composable
+private fun SpecsCard(s: PcSpecs, modifier: Modifier = Modifier) {
+    val rows = buildList {
+        s.model?.let { add(Triple("Model", it, (if (s.displays.any { d -> d.internal }) Icons.Rounded.Laptop else Icons.Rounded.Computer) to SystemColor.BLUE)) }
+        // One line each: the system, the desktop it runs, its kernel.
+        val system = listOfNotNull(s.os, s.desktop?.let { d -> s.session?.let { "$d ($it)" } ?: d }, s.kernel?.let { "Linux $it" })
+        if (system.isNotEmpty()) add(Triple("System", system.joinToString("\n"), Icons.Rounded.Layers to SystemColor.TEAL))
+        s.cpu?.let { cpu ->
+            val count = when {
+                s.cores != null && s.threads != null && s.threads != s.cores -> "${s.cores} cores, ${s.threads} threads"
+                s.cores != null -> "${s.cores} cores"
+                s.threads != null -> "${s.threads} threads"
+                else -> null
+            }
+            add(Triple("Processor", listOfNotNull(cpu, count).joinToString("\n"), Icons.Rounded.DeveloperBoard to SystemColor.ORANGE))
+        }
+        if (s.gpus.isNotEmpty()) add(Triple("Graphics", s.gpus.joinToString("\n"), Icons.Rounded.Gradient to SystemColor.PINK))
+        s.memTotal?.let { add(Triple("Memory", memorySize(it), Icons.Rounded.Memory to SystemColor.GREEN)) }
+        s.diskTotal?.let { total ->
+            add(Triple("Storage", s.diskFree?.let { "${diskSize(it)} free of ${diskSize(total)}" } ?: diskSize(total), Icons.Rounded.Storage to SystemColor.GRAY))
+        }
+        if (s.displays.isNotEmpty()) {
+            val many = s.displays.size > 1
+            val text = s.displays.joinToString("\n") { d ->
+                val size = "${d.width} × ${d.height}"
+                if (!many) size else if (d.internal) "Built-in: $size" else "External: $size"
+            }
+            add(Triple(if (many) "Displays" else "Display", text, Icons.Rounded.Monitor to SystemColor.CYAN))
+        }
+    }
+    SectionCard(modifier) {
+        rows.forEachIndexed { i, (title, value, look) ->
+            ListRow(title = title, subtitle = value, icon = look.first, iconTint = look.second.color, showDivider = i < rows.lastIndex, haptic = null)
+        }
+    }
+}
+
+/**
+ * RAM as it's sold: the kernel and firmware keep some back, so 15.4 GiB on the meter is a 16 GB PC
+ * and 30.6 GiB a 32 GB one. The next size RAM comes in.
+ */
+internal fun memorySize(bytes: Long): String {
+    val gib = bytes / (1024.0 * 1024 * 1024)
+    if (gib < 1) return "${bytes / (1024 * 1024)} MB"
+    val sold = RAM_SIZES.firstOrNull { it >= gib } ?: kotlin.math.ceil(gib).toInt()
+    return "$sold GB"
+}
+
+private val RAM_SIZES = listOf(1, 2, 3, 4, 6, 8, 12, 16, 18, 24, 32, 36, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024)
+
+/** Disks are sold in thousands: 508 GB, 2 TB. */
+internal fun diskSize(bytes: Long): String {
+    val gb = bytes / 1e9
+    return when {
+        gb >= 1000 -> "%.1f TB".format(java.util.Locale.ROOT, gb / 1000).replace(".0 ", " ")
+        gb >= 10 -> "${gb.roundToInt()} GB"
+        else -> "%.1f GB".format(java.util.Locale.ROOT, gb)
     }
 }
