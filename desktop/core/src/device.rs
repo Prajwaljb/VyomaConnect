@@ -42,8 +42,8 @@ pub enum Command {
 /// What the desktop is told.
 #[derive(Debug, PartialEq)]
 pub enum Event {
-    /// Its first link came up.
-    Linked { id: String, name: String, kind: String, paired: bool },
+    /// Its first link came up. [incoming] and [outgoing]: the packet types it takes and sends.
+    Linked { id: String, name: String, kind: String, paired: bool, incoming: Vec<String>, outgoing: Vec<String> },
     /// Its last link closed.
     Gone { id: String },
     /// It asks to pair: show [key] with Accept and Reject.
@@ -184,6 +184,8 @@ impl Hub {
         let name = crate::lan::device_name(body["deviceName"].as_str().unwrap_or(""));
         let kind = body["deviceType"].as_str().unwrap_or("").to_owned();
         let protocol = body["protocolVersion"].as_i64().unwrap_or(0);
+        let strings = |v: &Value| v.as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect::<Vec<_>>()).unwrap_or_default();
+        let (takes, sends) = (strings(&body["incomingCapabilities"]), strings(&body["outgoingCapabilities"]));
         let paired = trusted.is_some();
         let ours = self.ours.clone();
         let device = self.devices.entry(id.clone()).or_insert_with(|| Device {
@@ -235,7 +237,7 @@ impl Hub {
         if first {
             self.linked.lock().unwrap().insert(id.clone());
             tracing::info!("{id}: linked{}", if paired { ", paired" } else { "" });
-            self.emit(Event::Linked { id, name, kind, paired });
+            self.emit(Event::Linked { id, name, kind, paired, incoming: takes, outgoing: sends });
         }
     }
 

@@ -246,7 +246,16 @@ Phase 1 so far:
   - The code is shown in a freedesktop notification with Accept and Reject.
   - `dev.vyoma.Desktop1` on the session bus serves the GUI (Devices, Pair, Accept, Reject, Unpair, Refresh).
   - It has its own identity, and an allowlist for development.
-- Next: the stock plugins, in the order above. Each is checked against kdeconnectd, then against the phone's debug build.
+- Milestone 4, stock plugins. Each is checked against kdeconnectd first, then against the phone's debug build.
+  - Done (`desktop/daemon` plugins.rs and system.rs), checked against kdeconnectd:
+    - Ping.
+    - Battery both ways, from sysfs.
+    - The PC's lock state through logind, without lock requests outward.
+    - Find my phone both ways, ringing with pw-play/paplay/canberra and a "Found it" button.
+    - The phone's signal report, stored and shown in `Details`.
+  - Checked with the phone's debug build (2026-11-07): pairing from the phone, battery both ways, signal,
+    ping, ringing the phone, and lock then unlock of the PC from the phone (the tile follows logind).
+  - Next: clipboard and share.
 
 ### GUI (decided 2026-11-07)
 Slint, in Vyoma's own look, on every desktop. First version: pairing and phones (the code to
