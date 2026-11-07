@@ -2,7 +2,8 @@
 
 Android client for the KDE Connect protocol (Kotlin + Compose), plus a future Rust Linux companion.
 Package `dev.vyoma.connect` (debug: `.debug`). minSdk 31, target/compile 37. FOSS only (F-Droid): no GMS, Firebase,
-or proprietary SDKs. Roadmap and architecture: `docs/PLAN.md`.
+or proprietary SDKs. Licence: GPL-3.0-or-later (`LICENSE`), as KDE Connect is GPL; new dependencies must be
+compatible with it. Roadmap and architecture: `docs/PLAN.md`.
 
 ## Build
 ```bash
