@@ -116,12 +116,17 @@ internal class DemoCompanion(credentials: LocalCredentials, private val pc: Demo
         }
     }
 
-    // ---- PC controls: one monitor, two apps playing --------------------------------------------
+    // ---- PC controls: one monitor, two browser tabs and a player playing --------------------------------------------
 
-    private data class App(val id: Long, val name: String, val binary: String, val volume: Double, val muted: Boolean = false)
+    private data class App(val id: Long, val name: String, val binary: String, val volume: Double, val muted: Boolean = false, val title: String? = null)
 
     private var brightness = 0.7
-    private val apps = mutableListOf(App(41, "Firefox", "firefox", 0.85), App(57, "Music", "elisa", 0.6))
+    // Like a real browser, each tab is its own stream named by its page; a player may only say "Playback".
+    private val apps = mutableListOf(
+        App(41, "Firefox", "firefox", 0.85, title = "Night Drive (Live) - YouTube"),
+        App(43, "Firefox", "firefox", 0.5, title = "Morning news briefing"),
+        App(57, "Music", "elisa", 0.6, title = "Playback"),
+    )
 
     private fun sendControls() = send(packet(CompanionPlugin.PC) {
         putJsonArray("displays") {
@@ -129,7 +134,7 @@ internal class DemoCompanion(credentials: LocalCredentials, private val pc: Demo
         }
         putJsonArray("apps") {
             for (a in apps) addJsonObject {
-                put("id", a.id); put("name", a.name); put("binary", a.binary); put("volume", a.volume); put("muted", a.muted)
+                put("id", a.id); put("name", a.name); put("binary", a.binary); a.title?.let { put("title", it) }; put("volume", a.volume); put("muted", a.muted)
             }
         }
     })

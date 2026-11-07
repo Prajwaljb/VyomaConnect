@@ -138,11 +138,6 @@ fun DeviceScreen(
             }
         }
 
-        // Each app's sound, moved off Home; only while something plays.
-        if (live) companionPlugin?.let { plugin ->
-            item(key = "apps") { LevelsCard(plugin, apps = true, Modifier.animateItem(), label = "App volume") }
-        }
-
         // What the PC is, from its companion (kept, so it shows while the PC is away too).
         if (specs != null && state.isPaired) {
             item(key = "specs-label") { SectionLabel("About this PC", Modifier.animateItem()) }

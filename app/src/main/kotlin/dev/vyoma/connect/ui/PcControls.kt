@@ -4,8 +4,12 @@ import android.app.Application
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import dev.vyoma.connect.designsystem.fadingVerticalScroll
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.unit.Dp
+import dev.vyoma.connect.protocol.plugin.builtin.PcApp
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -115,52 +119,73 @@ fun PcPowerDialog(plugin: CompanionPlugin, pcName: String, action: PcPower, onDi
 }
 
 /**
- * Each screen's brightness (on Home, under the PC's own volume) or the volume of each app playing
- * sound (PC details: the user didn't want it on Home, 2026-11-07). Sliders own their value while
- * touched and briefly after (the PC's echoes lag). Rows come and go with what's playing, and the
- * card is nothing at all, [label] included, with none: a "nothing playing" row would be noise.
+ * Each screen's brightness, on Home under the PC's own volume. Sliders own their value while
+ * touched and briefly after (the PC's echoes lag). Nothing at all with no dimmable screen.
+ * Each app's sound is the volume card's mixer ([AppMixerDialog]), not Home (the user, 2026-11-07).
  */
 @Composable
-internal fun LevelsCard(plugin: CompanionPlugin, apps: Boolean, modifier: Modifier = Modifier, label: String? = null) {
-    val c = rememberPcControls(plugin)?.let { if (apps) it.copy(displays = emptyList()) else it.copy(apps = emptyList()) }
-    LiquidReveal(c != null && (c.displays.isNotEmpty() || c.apps.isNotEmpty()), modifier) {
-        // The list's own 12 dp gap, as between a label and its card in their own items.
-        if (c != null) Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            label?.let { SectionLabel(it) }
-            Levels(plugin, c)
+internal fun LevelsCard(plugin: CompanionPlugin, modifier: Modifier = Modifier) {
+    val displays = rememberPcControls(plugin)?.displays.orEmpty()
+    LiquidReveal(displays.isNotEmpty(), modifier) {
+        SectionCard(Modifier.animateContentSize(VyomaMotion.spatial())) {
+            displays.forEach { d ->
+                LevelRow(
+                    key = "d:${d.id}",
+                    title = d.label.ifEmpty { if (d.internal) "Built-in screen" else "Monitor" },
+                    icon = Icons.Rounded.BrightnessMedium,
+                    tint = SystemColor.YELLOW,
+                    reported = d.level,
+                    onSet = { plugin.setBrightness(d.id, it) },
+                    divider = d != displays.last(),
+                )
+            }
         }
     }
 }
 
+/**
+ * The sound of each thing playing on the PC. A row is named for what plays (a browser names each
+ * tab's stream: three tabs were three rows all called "Zen"), with the app under it.
+ */
 @Composable
-private fun Levels(plugin: CompanionPlugin, c: PcControls) {
-    SectionCard(Modifier.animateContentSize(VyomaMotion.spatial())) {
-        c.displays.forEach { d ->
-            LevelRow(
-                key = "d:${d.id}",
-                title = d.label.ifEmpty { if (d.internal) "Built-in screen" else "Monitor" },
-                icon = Icons.Rounded.BrightnessMedium,
-                tint = SystemColor.YELLOW,
-                reported = d.level,
-                onSet = { plugin.setBrightness(d.id, it) },
-                divider = d != c.displays.last() || c.apps.isNotEmpty(),
-            )
-        }
-        c.apps.forEachIndexed { i, a ->
-            LevelRow(
-                key = "a:${a.id}",
-                title = a.name,
-                icon = Icons.Rounded.GraphicEq,
-                tint = SystemColor.PINK,
-                reported = a.volume,
-                muted = a.muted,
-                onSet = { plugin.setAppVolume(a.id, it) },
-                onMute = { plugin.setAppMuted(a.id, !a.muted) },
-                divider = i < c.apps.lastIndex,
-            )
-        }
-    }
+internal fun AppMixerDialog(plugin: CompanionPlugin, onDismiss: () -> Unit) {
+    val apps = rememberPcControls(plugin)?.apps
+    GlassDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("App volume") },
+        text = {
+            when {
+                apps == null -> Text(" ")
+                apps.isEmpty() -> Text("Nothing is playing on the PC.")
+                else -> Column(Modifier.heightIn(max = 420.dp).fadingVerticalScroll(rememberScrollState()).animateContentSize(VyomaMotion.spatial())) {
+                    apps.forEachIndexed { i, a ->
+                        val what = a.playing
+                        LevelRow(
+                            key = "a:${a.id}",
+                            title = what ?: a.name,
+                            subtitle = a.name.takeIf { what != null },
+                            icon = Icons.Rounded.GraphicEq,
+                            tint = SystemColor.PINK,
+                            reported = a.volume,
+                            muted = a.muted,
+                            onSet = { plugin.setAppVolume(a.id, it) },
+                            onMute = { plugin.setAppMuted(a.id, !a.muted) },
+                            divider = i < apps.lastIndex,
+                            edge = 0.dp,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { DialogButton(onClick = onDismiss) { Text("Done") } },
+    )
 }
+
+/** What the stream says it plays (a tab's title), unless that's only a placeholder or the app's name. */
+private val PcApp.playing: String?
+    get() = title?.trim()?.takeIf { it.isNotEmpty() && !it.equals(name, ignoreCase = true) && it.lowercase() !in PLACEHOLDER_TITLES }
+
+private val PLACEHOLDER_TITLES = setOf("audiostream", "audio stream", "playback", "playstream", "output", "audio")
 
 /**
  * One level: icon, name and value on a line, the slider under them, lined up with the name. With
@@ -177,6 +202,8 @@ private fun LevelRow(
     divider: Boolean,
     muted: Boolean = false,
     onMute: (() -> Unit)? = null,
+    subtitle: String? = null,
+    edge: Dp = 20.dp,
 ) {
     var level by remember(key) { mutableFloatStateOf(reported.coerceIn(0f, 1f)) }
     var dragging by remember { mutableStateOf(false) }
@@ -192,11 +219,14 @@ private fun LevelRow(
     // A boosted app reads its real level, though the slider tops out at 100%.
     val percent = if (!dragging && level >= 1f && reported > 1f) reported else level
 
-    Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = if (onMute != null) 8.dp else 20.dp, top = 12.dp, bottom = 6.dp)) {
+    Column(Modifier.fillMaxWidth().padding(start = edge, end = if (onMute != null) (edge - 12.dp).coerceAtLeast(0.dp) else edge, top = 12.dp, bottom = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconBadge(icon, tint.color)
             Spacer(Modifier.width(16.dp))
-            Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = quiet, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            }
             Text(
                 if (muted) "Muted" else "${(percent * 100).roundToInt()}%",
                 style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
@@ -239,7 +269,7 @@ private fun LevelRow(
             edgeHaptics = false,
         )
     }
-    if (divider) HorizontalDivider(Modifier.padding(start = 70.dp, end = 20.dp), color = MaterialTheme.colorScheme.outlineVariant)
+    if (divider) HorizontalDivider(Modifier.padding(start = edge + 50.dp, end = edge), color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 internal val PcPower.label get() = when (this) {
