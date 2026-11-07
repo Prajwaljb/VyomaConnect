@@ -241,9 +241,12 @@ Phase 1 so far:
   - Discovery shares UDP 1716 and listens on the first free TCP port, IPv6 and IPv4.
   - Links are made both ways, unpaired certificates must name their id, and there are handshake limits.
   - Pairing follows the phone's rules, with the code, timeouts and clock check; there is a trust store.
-  - `examples/devpair.rs` runs it against allowlisted ids only.
-- Next: the daemon itself. It keeps its own identity and per-device state across links, and shows the code in
-  a desktop notification with Accept and Reject. Then the stock plugins, in the order above.
+- Done: the daemon, `desktop/daemon` (vyoma-desktop), checked live against kdeconnectd in both directions, plus reject and ping.
+  - The core's `device.rs` hub keeps each device's state across links.
+  - The code is shown in a freedesktop notification with Accept and Reject.
+  - `dev.vyoma.Desktop1` on the session bus serves the GUI (Devices, Pair, Accept, Reject, Unpair, Refresh).
+  - It has its own identity, and an allowlist for development.
+- Next: the stock plugins, in the order above. Each is checked against kdeconnectd, then against the phone's debug build.
 
 ### GUI (decided 2026-11-07)
 Slint, in Vyoma's own look, on every desktop. First version: pairing and phones (the code to
