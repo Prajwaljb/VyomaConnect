@@ -232,10 +232,9 @@ fun CapturesRow(onTake: (() -> Unit)?, onOpen: () -> Unit, modifier: Modifier = 
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        when {
-            any -> RowChevron()
-            onTake != null && r != null -> PillButton("Take one", prominent = false, onClick = onTake)
-        }
+        // A screenshot is one tap from Home, whatever's there already.
+        if (onTake != null && r != null) PillButton("Screenshot", prominent = false, onClick = onTake)
+        if (any) RowChevron()
     }
 }
 
