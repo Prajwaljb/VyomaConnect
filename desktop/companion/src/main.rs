@@ -12,13 +12,10 @@ mod desktop;
 mod files;
 mod accessory;
 mod gamepad;
-mod identity;
 mod kde;
-mod link;
 mod media;
 mod mirror;
 mod notice;
-mod payload;
 mod paste;
 mod pc;
 mod pointer;
@@ -41,6 +38,9 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use serde_json::{Value, json};
 use tracing::{info, warn};
+
+// The shared protocol core; `crate::link` and friends keep working for the modules here.
+use vyoma_core::{identity, link, payload};
 
 use identity::Identity;
 use kde::KdeHost;

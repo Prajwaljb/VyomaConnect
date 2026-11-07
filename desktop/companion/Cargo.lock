@@ -1838,7 +1838,24 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "vyoma-core",
  "zbus",
+]
+
+[[package]]
+name = "vyoma-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "rcgen",
+ "rustls",
+ "rustls-pki-types",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
