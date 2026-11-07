@@ -16,6 +16,7 @@ scripts/deploy.sh debug          # install + launch on phone
 ./gradlew :app:assembleDemo      # demo build (.demo): simulated laptop + companion in-app over loopback, no network;
                                  # Settings > Generate log writes perf/device diagnostics to Downloads (app/.../demo/)
 (cd desktop/companion && cargo build --release)   # Linux companion (Rust); run inside it for its .cargo linker fix
+(cd desktop/companion && cargo test --release -p vyoma-core && cargo test --release)   # core + companion tests
 install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ && systemctl --user restart vyoma-companion
                                  # the installed systemd user unit runs ~/.local/bin/vyoma-companion; logs: journalctl --user -u vyoma-companion
 ```
@@ -26,7 +27,9 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   and interfaces like `CredentialStore`/`TrustStore`.
 - `core/designsystem`: theme, motion, One UI-style components.
 - `app`: Application/AppContainer (manual lazy DI), `LinkService` (single connectedDevice FGS), UI.
-- `desktop/companion`: Rust daemon beside stock kdeconnectd. Dials only phones kdeconnectd trusts (mDNS), pairs with
+- `desktop/core` (`vyoma-core`): the desktop side's shared protocol core (identity, links, payloads), no desktop
+  calls, so it serves every desktop and macOS. Becoming the standalone desktop app: `docs/PLAN.md` section 10.
+- `desktop/companion`: Rust daemon beside stock kdeconnectd, built on `vyoma-core`. Dials only phones kdeconnectd trusts (mDNS), pairs with
   no prompt via `CompanionProof` (signed with kdeconnectd's key; phone verifies against the pinned PC cert), speaks
   `vyoma.*` packets. Phone folds it into its PC (`DeviceIdentity.companionOf`, `DeviceState.isCompanion`).
   Also watches sysfs for an adb USB interface and, for phones with Vyoma installed, runs `adb reverse tcp:1765 tcp:1716`

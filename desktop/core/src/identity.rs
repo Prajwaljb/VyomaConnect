@@ -14,7 +14,8 @@ pub struct Identity {
     pub key: PrivateKeyDer<'static>,
 }
 
-pub(crate) fn dir() -> PathBuf {
+/// Where Vyoma keeps its own state (`~/.config/vyoma-companion`, 0700).
+pub fn dir() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"))
@@ -69,7 +70,8 @@ fn lock_down(dir: &Path) {
     }
 }
 
-pub(crate) fn write_private(path: &PathBuf, data: &[u8]) -> Result<()> {
+/// Writes [data] readable by the user only (0600).
+pub fn write_private(path: &PathBuf, data: &[u8]) -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;

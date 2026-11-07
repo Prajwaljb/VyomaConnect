@@ -46,6 +46,7 @@ Distribution: F-Droid / FOSS — **no Google Play Services, Firebase, or proprie
 ```
 
 ### Companion ↔ KDE Connect coexistence
+*(Today's model; being replaced by the standalone desktop app, section 10.)*
 The companion is a **separate peer** on the same host, on its own port range. It
 advertises `linkedKdeConnectId` so the app merges it into the same device card.
 On Plasma it reads `~/.config/kdeconnect/` to auto-trust the phone certificate
@@ -190,3 +191,58 @@ now. They may move to the planned PC companion GUI, along with allowed phones an
 3. Protocol core + discovery + pairing with your Plasma machine → first green link.
 
 - Automation connections (2026-11-05): triggers/conditions for one paired Bluetooth device (ACL broadcasts + audio profile proxies for what's already connected), how the PC is connected (best transport, settled 3 s), and a named Wi-Fi (added while on it; fingerprint of subnet/router/DHCP, no location permission, so two networks with identical addressing can't be told apart).
+
+## 10. Desktop app: standalone, every desktop (decided 2026-11-07)
+
+The companion grows into Vyoma's whole desktop side: it speaks the full KDE Connect protocol and
+pairs on its own, so no kdeconnectd, GSConnect or Valent is needed. One install behaves the same on
+KDE, GNOME, Cinnamon, COSMIC and macOS. The phone keeps working with stock KDE Connect desktops for
+the basics; the extras need Vyoma's.
+
+### Shape
+- **Core** (pure Rust, no desktop calls): identity and certificates, discovery (UDP, mDNS, manual,
+  cable, Bluetooth), TLS links, pairing with the verification code, payloads, the plugin host, the
+  trust store. Tested like core/protocol: unit tests plus a live test against the phone app.
+- **Platform layer**: one trait per thing the desktop does (clipboard, notifications, media, input,
+  screen capture, volume, power, lock, wallpaper, brightness, files, camera), with a common
+  freedesktop implementation (portals, MPRIS, PipeWire, logind, notifications) and small per-desktop
+  parts chosen at run time (`XDG_CURRENT_DESKTOP`): KDE, GNOME, Cinnamon (X11), COSMIC; then macOS.
+- **Daemon** (systemd user unit on Linux, a LaunchAgent on macOS) owns the links. The **GUI** is a
+  separate process that talks to it (D-Bus on Linux, a local socket on macOS), so closing or crashing
+  it never drops a link. Cross-platform toolkit in Vyoma's own look (not Plasma-native); no reliance
+  on a tray, since GNOME has none by default.
+
+### What it takes over from kdeconnectd
+By the phone's plugins, in the order to build them:
+1. Pairing (prompt with the code, on the desktop), ping, battery, lock, find my phone, connectivity.
+2. Clipboard both ways, share (files, links, text) both ways.
+3. Media (the PC's players for the phone, via MPRIS / the macOS equivalent), system volume.
+4. Touchpad, keyboard and presenter (portal RemoteDesktop; X11 on Cinnamon; macOS Accessibility).
+5. Notifications from the phone: shown, replied to, actioned, dismissed.
+6. Run commands (the PC's list, edited from the phone as today).
+7. Later: calls, SMS and contacts (a messaging window), browsing the phone's files (sftp).
+The vyoma.* extras (screen, files, camera, controller, webcam, mirror, specs) move over as they are.
+
+### Phases
+1. **Split and stand alone on KDE** (this PC): core + platform layer out of today's companion, own
+   pairing, the stock features above, checked one by one against kdeconnectd. Development must not
+   touch the real phone's pairing with KDE Connect: a separate identity and the debug/demo phone
+   builds until it's ready to replace kdeconnectd here.
+2. **GNOME** (Wayland, portals; most users). Tested in a VM the user sets up.
+3. **Cinnamon** (X11 input and capture, thin portals).
+4. **COSMIC** (its portals; remote input may not be supported yet).
+5. **macOS**: same core; ScreenCaptureKit, CGEvent (Accessibility), AVFoundation, VideoToolbox.
+   No virtual controller, phone webcam or mic at first (a camera extension and audio driver need
+   signing); Gatekeeper wants a paid Apple Developer ID. Needs a Mac to build and test on.
+
+### GUI (decided 2026-11-07)
+Slint, in Vyoma's own look, on every desktop. First version: pairing and phones (the code to
+compare, how each is connected, unpair), setup and health (missing tools, firewall, udev, what's
+broken and why), per-phone permissions (screen view/control, files, camera, power, webcam,
+controller), and an activity log (screenshots, photos, files, power actions). Built once the daemon
+can pair on its own.
+
+### Open
+Packaging (AUR, Flatpak, Homebrew), the app's desktop name, and whether KDE users keep the option of
+running beside kdeconnectd.
+
