@@ -138,6 +138,8 @@ import dev.vyoma.connect.protocol.plugin.builtin.MousePadPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.PointerChannel
 import dev.vyoma.connect.service.BluetoothFallback
 import dev.vyoma.connect.service.BluetoothPointerChannel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import dev.vyoma.connect.protocol.plugin.builtin.characterCount
 import dev.vyoma.connect.protocol.plugin.builtin.commonEnds
@@ -215,11 +217,15 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
         if (dx != 0f || dy != 0f) { if (radio?.move(dx, dy) != true) p.move(dx, dy) }
         if (sx != 0f || sy != 0f) { if (radio?.scroll(sx, sy) != true) p.scroll(sx, sy) }
     }
+    val flushLifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(pad) {
         val p = pad ?: return@LaunchedEffect
-        while (isActive) {
-            delay(8)
-            flushMotion(p)
+        // Not while hidden (under the gamepad, say): this wakes the main thread 125 times a second.
+        flushLifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (isActive) {
+                delay(8)
+                flushMotion(p)
+            }
         }
     }
     // The phone keyboard types on the PC through the typing bar.
@@ -401,7 +407,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
                 .glassCard(SmoothCornerShape(32.dp))
-                .pointerInput(pad) {
+                .pointerInput(pad, companionPlugin) {
                     val slop = viewConfiguration.touchSlop
                     awaitEachGesture {
                         try {
@@ -910,6 +916,9 @@ private fun RowScope.ClusterGap() = Spacer(Modifier.width(6.dp))
 @Composable
 private fun ScrollStrip(modifier: Modifier, onScroll: (Float) -> Unit, onClick: () -> Unit) {
     val haptics = LocalHapticFeedback.current
+    // The gesture below outlives this composition's lambdas: these hold the PC of the moment.
+    val scroll by rememberUpdatedState(onScroll)
+    val click by rememberUpdatedState(onClick)
     Box(
         modifier
             .fillMaxSize()
@@ -930,7 +939,7 @@ private fun ScrollStrip(modifier: Modifier, onScroll: (Float) -> Unit, onClick: 
                         val d = change.positionChange()
                         travelled += abs(d.y)
                         if (travelled > slop) {
-                            onScroll(d.y * 1.6f)
+                            scroll(d.y * 1.6f)
                             // A detent per notch, like a mouse wheel.
                             wheel += d.y
                             if (abs(wheel) >= notch) {
@@ -942,7 +951,7 @@ private fun ScrollStrip(modifier: Modifier, onScroll: (Float) -> Unit, onClick: 
                     }
                     if (travelled <= slop) {
                         haptics.perform(Haptic.Tap)
-                        onClick()
+                        click()
                     }
                 }
             },

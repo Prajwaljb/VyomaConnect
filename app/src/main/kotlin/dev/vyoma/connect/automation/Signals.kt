@@ -94,7 +94,7 @@ class Signals(private val context: Context, private val c: AppContainer, private
         hub?.devices?.flatMapLatest { devices ->
             if (devices.isEmpty()) flowOf(null)
             else combine(devices.values.map { d -> d.state.map { s -> d.takeIf { s.isPaired && s.isReachable && !s.isCompanion } } }) { list ->
-                list.filterNotNull().minByOrNull { d -> d.state.value.transports.minOf { it.ordinal } }
+                list.filterNotNull().minByOrNull { d -> d.state.value.transports.minOfOrNull { it.ordinal } ?: Int.MAX_VALUE }
             }
         } ?: flowOf(null)
     }.distinctUntilChanged()

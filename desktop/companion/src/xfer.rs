@@ -120,8 +120,7 @@ async fn receive(me: &Identity, pinned: &[u8], phone: IpAddr, key: &str, packet:
     if have != size {
         bail!("the transfer broke off at {have} of {size} bytes{}", copied.err().map(|e| format!(" ({e})")).unwrap_or_default());
     }
-    let target = free_name(&dir, &name).await;
-    tokio::fs::rename(&part, &target).await?;
+    let target = crate::files::settle(&part, &dir, &name).await?;
     let _ = tokio::fs::remove_file(&keyfile).await;
     Ok(target)
 }
@@ -144,7 +143,7 @@ async fn folder_dir(base: &Path, rel: &str, batch: &str) -> Result<PathBuf> {
     let root = match existing {
         Some(r) => r,
         None => {
-            let r = free_name(base, &top).await;
+            let r = crate::files::free_name(base, &top).await;
             tokio::fs::create_dir_all(&r).await.context("can't create the folder")?;
             BATCHES.lock().unwrap().get_or_insert_with(HashMap::new).insert(batch.to_string(), r.clone());
             r
@@ -185,21 +184,6 @@ fn safe_name(name: &str, hidden_ok: bool) -> Result<String> {
         bail!("that name can't be used here");
     }
     Ok(name.to_string())
-}
-
-/// `name`, or `name (2).ext`, `name (3).ext`… whichever doesn't exist yet.
-async fn free_name(dir: &Path, name: &str) -> PathBuf {
-    let (stem, ext) = match name.rsplit_once('.') {
-        Some((s, e)) if !s.is_empty() => (s, format!(".{e}")),
-        _ => (name, String::new()),
-    };
-    let mut candidate = dir.join(name);
-    let mut n = 2;
-    while tokio::fs::try_exists(&candidate).await.unwrap_or(true) {
-        candidate = dir.join(format!("{stem} ({n}){ext}"));
-        n += 1;
-    }
-    candidate
 }
 
 /// Where kdeconnectd saves what this phone sends: its share plugin's `incoming_path` if set

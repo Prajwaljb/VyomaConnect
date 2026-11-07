@@ -169,7 +169,19 @@ class MediaHub(private val hub: StateFlow<DeviceHub?>, private val scope: Corout
         conn.instanceFollowRedirects = true
         try {
             if (conn.responseCode != 200) return null
-            conn.inputStream.use { it.readBytes() }
+            // A web page playing on the PC picks this address: it mustn't be able to fill the phone's memory.
+            if (conn.contentLengthLong > MAX_ART_BYTES) return null
+            conn.inputStream.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(16 * 1024)
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    out.write(buffer, 0, n)
+                    if (out.size() > MAX_ART_BYTES) return null
+                }
+                out.toByteArray()
+            }
         } finally {
             conn.disconnect()
         }
@@ -177,6 +189,7 @@ class MediaHub(private val hub: StateFlow<DeviceHub?>, private val scope: Corout
 
     companion object {
         private const val MAX_ART_PX = 1024
+        private const val MAX_ART_BYTES = 8 * 1024 * 1024
         private const val SETTLE_MS = 250L
         private const val GONE_GRACE_MS = 2_500L
 

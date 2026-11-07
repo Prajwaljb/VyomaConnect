@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -283,7 +284,10 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
             if (setSender?.isActive == true) return
             setSender = ctx.scope.launch {
                 while (true) {
-                    val next = synchronized(pendingSets) { pendingSets.values.toList().also { pendingSets.clear() } }
+                    val next = synchronized(pendingSets) {
+                        // Stepping down in the same lock, or a set arriving now would wait for this one.
+                        pendingSets.values.toList().also { pendingSets.clear(); if (it.isEmpty()) setSender = null }
+                    }
                     if (next.isEmpty()) break
                     for (b in next) ctx.send(NetworkPacket(PC_SET, b))
                     delay(SET_INTERVAL_MS)
@@ -379,6 +383,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     }
 
     private fun abandonReplies() {
+        _fetching.value = emptySet()
+        _folder.update { if (it?.loading == true) it.copy(loading = false, error = "The PC didn't answer") else it }
         for (key in xferReplies.keys.toList()) xferReplies.remove(key)?.complete(packet(XFER_DONE) { put(LOST, true) })
     }
 
@@ -605,6 +611,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         internal fun receive(packet: NetworkPacket) {
             packet.string("error")?.let { return fail(it) }
             if (!packet.hasPayload) return fail("The PC sent no image")
+            watchdog?.cancel() // it answered: on slow Wi-Fi the transfer can take longer, and has timeouts of its own
             ctx.scope.launch(Dispatchers.IO) {
                 val ext = packet.string("format")?.takeIf { it in IMAGE_FORMATS } ?: "png"
                 val name = "$fileLabel " + SimpleDateFormat("yyyy-MM-dd HH.mm.ss", Locale.US).format(Date()) + ".$ext"
@@ -828,6 +835,12 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                 gamepadOffer.first { it != null }
                 if (!radioUp.get()) {
                     runCatching { radio?.open() }.getOrNull()?.let {
+                        // Connecting takes a while: the controller may have closed meanwhile.
+                        if (!isActive) {
+                            runCatching { it.first.close() }
+                            radio?.close()
+                            return@launch
+                        }
                         radioUp.set(true)
                         radioReady.set(it)
                     }
@@ -1100,20 +1113,25 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
      */
     suspend fun openPointer(radio: RadioChannel): Result<PointerChannel?> = withContext(kotlinx.coroutines.Dispatchers.IO) {
         val (out, input) = radio.open() ?: return@withContext Result.success(null)
+        var handedOver = false
+        try {
         val reply = CompletableDeferred<NetworkPacket>()
         pendingPointer = reply
         val answer = if (ctx.send(packet(POINTER_REQUEST) {})) withTimeoutOrNull(POINTER_TIMEOUT_MS) { reply.await() } else null
         val key = answer?.string("key")?.let { runCatching { java.util.Base64.getDecoder().decode(it) }.getOrNull() }
         if (key == null) {
-            radio.close()
             return@withContext Result.failure(IllegalStateException(answer?.string("error") ?: "The PC didn't answer"))
         }
         _pointerOpen.value = true
+        handedOver = true
         Result.success(PointerChannel(out, input, key, { _pointerTrip.value = it }) {
             _pointerOpen.value = false
             _pointerTrip.value = null
             radio.close()
         })
+        } finally {
+            if (!handedOver) radio.close() // refused, or the page was left while the PC's dialog was up
+        }
     }
 
     fun closePointer() {

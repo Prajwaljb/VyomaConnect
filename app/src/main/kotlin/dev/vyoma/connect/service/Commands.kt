@@ -62,7 +62,7 @@ object Commands {
 
     fun primary(container: AppContainer): Device? = container.hub.value?.devices?.value?.values
         ?.filter { it.state.value.isPaired && it.state.value.isReachable && !it.state.value.isCompanion }
-        ?.sortedBy { it.state.value.transports.minOf { t -> t.ordinal } }
+        ?.sortedBy { it.state.value.transports.minOfOrNull { t -> t.ordinal } ?: Int.MAX_VALUE } // it may drop between the reads
         ?.firstOrNull()
 
     suspend fun run(context: Context, action: String, deviceId: String? = null) {

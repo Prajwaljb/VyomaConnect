@@ -17,7 +17,7 @@ class RuleStore(context: Context) {
     private val file = File(context.filesDir, "rules.json")
     private val logFile = File(context.filesDir, "rules-log.json")
 
-    private val _rules = MutableStateFlow(if (file.exists()) RuleJson.decode(file.readText()) else emptyList())
+    private val _rules = MutableStateFlow(load())
     val rules: StateFlow<List<Rule>> = _rules.asStateFlow()
 
     private val _log = MutableStateFlow(readLog())
@@ -34,9 +34,20 @@ class RuleStore(context: Context) {
     @Synchronized
     fun setEnabled(id: String, enabled: Boolean) = write { list -> list.map { if (it.id == id) it.copy(enabled = enabled) else it } }
 
+    private fun load(): List<Rule> {
+        if (!file.exists()) return emptyList()
+        val text = file.readText()
+        val rules = RuleJson.decode(text)
+        // The next save would write over it: keep what can't be read, in case it can be rescued.
+        if (rules.isEmpty() && text.trim() != "[]") runCatching { file.copyTo(File(file.path + ".bad"), overwrite = true) }
+        return rules
+    }
+
     private fun write(change: (List<Rule>) -> List<Rule>) {
         val next = change(_rules.value)
-        file.writeText(RuleJson.encode(next))
+        val tmp = File(file.path + ".tmp")
+        tmp.writeText(RuleJson.encode(next))
+        tmp.renameTo(file)
         _rules.value = next
     }
 

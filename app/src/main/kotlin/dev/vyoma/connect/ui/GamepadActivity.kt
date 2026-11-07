@@ -154,9 +154,9 @@ class GamepadActivity : ComponentActivity() {
         GyroAim(this, rotation = { display?.rotation ?: Surface.ROTATION_90 }, onMove = ::recompute)
     }
     /** The USB cable without USB debugging, for the plugin (accessory mode, see UsbAccessoryLink). */
-    private val cable = object : CompanionPlugin.CableChannel {
-        override fun plugged() = UsbAccessoryLink.cablePlugged(applicationContext)
-        override fun open() = UsbAccessoryLink.output(applicationContext)
+    private class Cable(private val app: android.content.Context) : CompanionPlugin.CableChannel { // the plugin outlives this activity
+        override fun plugged() = UsbAccessoryLink.cablePlugged(app)
+        override fun open() = UsbAccessoryLink.output(app)
         override fun close() = UsbAccessoryLink.close()
     }
     private val vibrator by lazy { (getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator }
@@ -212,7 +212,7 @@ class GamepadActivity : ComponentActivity() {
                 // Streams to whichever companion link is up, moving over when it's replaced.
                 companion.collectLatest { c ->
                     val p = c?.first ?: return@collectLatest
-                    p.cable = cable
+                    p.cable = Cable(applicationContext)
                     p.radio = dev.vyoma.connect.service.BluetoothPadChannel(applicationContext, p.pcId)
                     coroutineScope {
                         launch { p.rumble.collect(::rumble) }

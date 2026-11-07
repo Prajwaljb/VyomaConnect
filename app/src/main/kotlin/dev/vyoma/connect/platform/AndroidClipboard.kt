@@ -72,7 +72,8 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
     fun readNow(): String? {
         val clip = runCatching { cm.primaryClip }.getOrNull() ?: return null
         if (clip.itemCount == 0) return null
-        val text = clip.getItemAt(0).coerceToText(context)?.toString()?.takeIf { it.isNotBlank() } ?: return null
+        // The text itself, not coerceToText: a copied photo or file would become its content:// address.
+        val text = clip.getItemAt(0).text?.toString()?.takeIf { it.isNotBlank() } ?: return null
         if (text == _current.value?.text) return null
         // Respect apps that mark copies as sensitive (password managers): keep them local.
         if (clip.description?.extras?.getBoolean(ClipDescription.EXTRA_IS_SENSITIVE) == true) return null

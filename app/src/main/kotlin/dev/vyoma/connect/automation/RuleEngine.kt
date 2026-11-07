@@ -31,6 +31,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -229,6 +230,8 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
             is Action.PcBrightness -> {
                 val companion = companionOf(pc!!).need("the companion")
                 companion.requestControls()
+                // The undo needs today's levels: wait a moment for the answer before settling for what's known.
+                withTimeoutOrNull(1_500) { companion.controls.drop(1).first() }
                 val displays = withTimeoutOrNull(4_000) { companion.controls.filterNotNull().first { it.displays.isNotEmpty() } }?.displays
                     ?: error("no screen reported")
                 displays.forEach { companion.setBrightness(it.id, a.percent / 100f) }

@@ -4,6 +4,7 @@ import dev.vyoma.connect.protocol.crypto.CompanionProof
 import dev.vyoma.connect.protocol.DeviceIdentity
 import dev.vyoma.connect.protocol.NetworkPacket
 import dev.vyoma.connect.protocol.PacketTypes
+import dev.vyoma.connect.protocol.ProtocolException
 import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.protocol.crypto.Certificates
 import dev.vyoma.connect.protocol.link.DeviceLink
@@ -18,6 +19,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -106,7 +108,9 @@ class Device internal constructor(
     private var promptedAt = 0L
     private var promptExpiredAt = 0L
     private var pluginScope: CoroutineScope? = null
-    private val plugins = mutableMapOf<String, Plugin>()
+    // Replaced, never changed in place: the UI reads it from other threads, and a plugin suspending
+    // in onStart can have them all stopped before the loop over them ends.
+    @Volatile private var plugins: Map<String, Plugin> = emptyMap()
     private val packetRoutes = mutableMapOf<String, Plugin>()
 
     val name: String get() = _state.value.identity.deviceName
@@ -173,10 +177,18 @@ class Device internal constructor(
         }
         reloadPlugins()
         env.scope.launch {
-            link.receive(limit = { if (isPaired()) MAX_PACKET_BYTES else UNPAIRED_PACKET_BYTES }) { packet ->
-                withContext(serial) { handle(packet, link) }
+            try {
+                link.receive(limit = { if (isPaired()) MAX_PACKET_BYTES else UNPAIRED_PACKET_BYTES }) { packet ->
+                    withContext(serial) { handle(packet, link) }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                VLog.e(TAG, "$name: link ended on an error", e)
+            } finally {
+                link.close()
+                withContext(NonCancellable + serial) { onLinkClosed(link) }
             }
-            withContext(serial) { onLinkClosed(link) }
         }
     }
 
@@ -223,7 +235,8 @@ class Device internal constructor(
         timeoutMs: Int = 30_000,
         onProgress: (Long) -> Unit = {},
     ): Boolean {
-        val link = links.filterNot { it.isClosed }.sortedBy { it.transport.ordinal }.firstOrNull { it.payloads != null } ?: return false
+        // Ordered as in [send]: the announcement mustn't go down a link that's being replaced.
+        val link = links.filterNot { it.isClosed }.asReversed().sortedBy { it.transport.ordinal }.firstOrNull { it.payloads != null } ?: return false
         // A companion links over Wi-Fi only; with its PC's cable tunnel up it can fetch over USB.
         val usb = identity.companionOf?.let(env::usbTunnelUp) == true
         return link.payloads!!.send(link, packet, source, timeoutMs, onProgress, usbMirror = usb)
@@ -236,7 +249,7 @@ class Device internal constructor(
      */
     suspend fun openPayload(packet: NetworkPacket): InputStream? {
         if (!packet.hasPayload) return null
-        var failure: java.io.IOException? = null
+        var failure: Exception? = null
         // A companion only links over Wi-Fi, but its PC's USB tunnel mirrors the payload ports too:
         // the cable is far quicker and steadier (it's what keeps the live screen from lagging).
         val host = identity.companionOf
@@ -246,6 +259,8 @@ class Device internal constructor(
                     return link.payloads!!.open(link, packet, java.net.InetAddress.getLoopbackAddress())
                 } catch (e: java.io.IOException) {
                     failure = e
+                } catch (e: ProtocolException) {
+                    failure = e // a stale mirror answering with another certificate
                 }
             }
         }
@@ -253,6 +268,8 @@ class Device internal constructor(
             try {
                 return link.payloads!!.open(link, packet)
             } catch (e: java.io.IOException) {
+                failure = e
+            } catch (e: ProtocolException) {
                 failure = e
             }
         }
@@ -453,6 +470,7 @@ class Device internal constructor(
         // up) must not restart plugins: that drops state peers only send once, like the PC's battery.
         if (isPaired() && links.isNotEmpty() && loadedFor == caps) {
             for ((pluginId, plugin) in plugins) {
+                if (plugins[pluginId] !== plugin) break
                 runCatching { plugin.onLinkAdded() }.onFailure { VLog.e(TAG, "re-syncing plugin $pluginId failed", it) }
             }
             return
@@ -467,10 +485,11 @@ class Device internal constructor(
             val plugin = runCatching { spec.create(PluginContext(this, scope)) }
                 .onFailure { VLog.e(TAG, "creating plugin ${spec.id} failed", it) }
                 .getOrNull() ?: continue
-            plugins[spec.id] = plugin
+            plugins = plugins + (spec.id to plugin)
             spec.incoming.forEach { packetRoutes[it] = plugin }
         }
         for ((pluginId, plugin) in plugins) {
+            if (plugins[pluginId] !== plugin) break
             runCatching { plugin.onStart() }.onFailure { VLog.e(TAG, "starting plugin $pluginId failed", it) }
         }
         _state.update { it.copy(plugins = plugins.keys.toSet()) }
@@ -482,7 +501,7 @@ class Device internal constructor(
         pluginScope?.cancel()
         pluginScope = null
         plugins.values.forEach { runCatching { it.onStop() } }
-        plugins.clear()
+        plugins = emptyMap()
         packetRoutes.clear()
         _state.update { if (it.plugins.isEmpty()) it else it.copy(plugins = emptySet()) }
     }

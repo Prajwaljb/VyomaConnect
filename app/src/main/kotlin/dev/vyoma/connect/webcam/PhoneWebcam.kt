@@ -383,6 +383,10 @@ object PhoneWebcam {
                 val chunk = ByteArray(RATE / 100 * 2) // 10 ms
                 while (running) {
                     val n = r.read(chunk, 0, chunk.size)
+                    if (n < 0) { // audioserver died: this would answer at once, for ever
+                        VLog.w(TAG, "mic stopped: $n")
+                        break
+                    }
                     if (n > 0) out.offer(chunk.copyOf(n)) // full: the PC is behind, this 10 ms is skipped
                 }
             }, "webcam-mic").apply { priority = Thread.MAX_PRIORITY; start() }

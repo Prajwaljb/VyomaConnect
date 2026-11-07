@@ -119,7 +119,8 @@ class SharePlugin(private val ctx: PluginContext, private val sink: ShareSink) :
                     return@withLock
                 }
                 try {
-                    val input = ctx.device.openPayload(packet) ?: error("no payload")
+                    // Stock KDE Connect sends an empty file as a name and no payload.
+                    val input = ctx.device.openPayload(packet) ?: if (size == 0L) ByteArray(0).inputStream() else error("no payload")
                     input.use { it.copyWithProgress(target.output) { done -> Transfers.progress(id, done) } }
                     target.output.close()
                     Transfers.finish(id, ok = true, location = target.complete())

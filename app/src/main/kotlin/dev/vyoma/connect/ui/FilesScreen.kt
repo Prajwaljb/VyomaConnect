@@ -203,7 +203,7 @@ fun FilesScreen(
                 val last = shown.entries.lastIndex
                 shown.entries.forEachIndexed { i, f ->
                     val child = if (path.isEmpty()) f.name else "$path/${f.name}"
-                    item(key = child, contentType = ENTRY) {
+                    item(key = "entry/$child", contentType = ENTRY) { // a file can be called "crumbs"
                         FileRow(
                             f,
                             busy = child in fetching,

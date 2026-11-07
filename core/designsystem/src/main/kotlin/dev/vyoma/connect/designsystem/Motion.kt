@@ -228,7 +228,7 @@ object Haptics {
 
     fun attach(context: Context) {
         if (vibrator != null) return
-        vibrator = context.getSystemService(VibratorManager::class.java)?.defaultVibrator?.takeIf { it.hasVibrator() }
+        vibrator = context.applicationContext.getSystemService(VibratorManager::class.java)?.defaultVibrator?.takeIf { it.hasVibrator() }
         resolver = context.applicationContext.contentResolver
         engine = vibrator?.let(::engineFor)
     }

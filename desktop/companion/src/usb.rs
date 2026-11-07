@@ -14,6 +14,7 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 
+static RECHECKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 const PACKAGES: [&str; 2] = ["dev.vyoma.connect", "dev.vyoma.connect.debug"];
 /// Must match LanBackend.USB_REVERSE_PORT on the phone; kdeconnectd listens on 1716.
 const REVERSE: [&str; 2] = ["tcp:1765", "tcp:1716"];
@@ -66,8 +67,14 @@ pub async fn watch() {
         polls = polls.wrapping_add(1);
         // Just plugged in, it's being set up: no tunnel yet isn't a lost tunnel.
         if !known.is_empty() && !plugged_in && polls % TUNNEL_CHECK_POLLS == 0 {
-            let adb = adb.clone();
-            tokio::spawn(async move { recheck_tunnels(&adb).await });
+            // One at a time: with a stuck adb server, each tick would add another waiting on it.
+            if !RECHECKING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                let adb = adb.clone();
+                tokio::spawn(async move {
+                    recheck_tunnels(&adb).await;
+                    RECHECKING.store(false, std::sync::atomic::Ordering::Release);
+                });
+            }
         }
         tokio::time::sleep(POLL).await;
     }
@@ -311,7 +318,9 @@ async fn signing_digest(adb: &PathBuf, serial: &str, pkg: &str) -> Result<String
     let apk = paths.lines().find_map(|l| l.strip_prefix("package:")).filter(|p| p.ends_with("/base.apk")).context("can't find the app's APK")?;
     // Private to this user (XDG_RUNTIME_DIR is 0700), and deleted as soon as it's read.
     let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    let local = dir.join(format!("vyoma-check-{}.apk", std::process::id()));
+    // One per phone: two set up at once mustn't judge one's app by the other's file.
+    let tag: String = serial.chars().filter(char::is_ascii_alphanumeric).collect();
+    let local = dir.join(format!("vyoma-check-{}-{tag}.apk", std::process::id()));
     let local_str = local.to_string_lossy().into_owned();
     let pulled = tokio::time::timeout(
         PULL_WAIT,
@@ -379,7 +388,8 @@ fn prefixed<'a>(input: &mut &'a [u8]) -> Result<&'a [u8]> {
 }
 
 async fn list_devices(adb: &PathBuf) -> Vec<(String, String)> {
-    let Ok(out) = tokio::process::Command::new(adb).arg("devices").output().await else { return Vec::new() };
+    let listing = tokio::process::Command::new(adb).arg("devices").kill_on_drop(true).output();
+    let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(15), listing).await else { return Vec::new() };
     String::from_utf8_lossy(&out.stdout)
         .lines()
         .skip(1)

@@ -68,14 +68,21 @@ class LinkService : LifecycleService() {
         Notifications.ensureChannels(this)
         // Refused right after the user stops the app from One UI's Active apps panel. Started from the
         // UI we still run (as a plain service while the app is open), so carry on rather than crash.
+        startForegroundNow()
+        lifecycleScope.launch { startHub() }
+    }
+
+    private var foreground = false
+
+    private fun startForegroundNow() {
         runCatching {
             startForeground(
                 Notifications.SERVICE_ID,
                 Notifications.service(this, connected = emptyList()),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
             )
+            foreground = true
         }.onFailure { VLog.w("LinkService", "not allowed in the foreground yet: ${it.message}") }
-        lifecycleScope.launch { startHub() }
     }
 
     // What the phone is streaming to the PC: each adds its foreground type (see ACTION_MEDIA).
@@ -94,6 +101,8 @@ class LinkService : LifecycleService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
+        // Refused in onCreate and started in the foreground now: Android ends the app unless we say it again.
+        if (!foreground) startForegroundNow()
         when (intent?.action) {
             ACTION_REFRESH -> {
                 hub?.refresh()
@@ -134,7 +143,12 @@ class LinkService : LifecycleService() {
         val usb = if (BuildConfig.DEMO) null else UsbLink(this, hub, lifecycleScope).also { this.usb = it }
         // Cable first: hold Wi-Fi back from the very first refresh, which hub.start() does.
         if (usb?.cableIn() == true) hub.cablePlugged()
-        hub.start()
+        // Every port taken: no links, but no crash at every start (at boot, too) over something that passes.
+        try {
+            hub.start()
+        } catch (e: java.io.IOException) {
+            VLog.e("LinkService", "can't listen for links", e)
+        }
         if (!BuildConfig.DEMO) mdns = MdnsDiscovery(this, hub).also { it.start() }
         usb?.start()
         if (!BuildConfig.DEMO) bluetooth = BluetoothTunnel(this, hub, lifecycleScope).also { it.start() }
@@ -433,7 +447,11 @@ class LinkService : LifecycleService() {
                     // Already went to the background; fall through.
                 }
             }
-            ContextCompat.startForegroundService(context, intent)
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (e: IllegalStateException) {
+                VLog.w("LinkService", "not allowed to start now: ${e.message}") // in the background, with no exemption
+            }
         }
 
         fun looksLikeUrl(text: String): Boolean {

@@ -172,9 +172,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * every [gapMs] while the finger moves, and the final value is never dropped.
      */
     private fun <T : Any> throttled(gapMs: Long = 50, send: suspend (T) -> Unit): (T) -> Unit {
-        val latest = MutableStateFlow<T?>(null)
-        viewModelScope.launch { latest.filterNotNull().collect { send(it); delay(gapMs) } }
-        return { latest.value = it }
+        // A channel, not a StateFlow: the same value twice is two sends (the PC may have moved in between).
+        val latest = kotlinx.coroutines.channels.Channel<T>(kotlinx.coroutines.channels.Channel.CONFLATED)
+        viewModelScope.launch { for (value in latest) { send(value); delay(gapMs) } }
+        return { latest.trySend(it) }
     }
 
     private val playerVolume = throttled<Int> { v -> container.media.control { p, n -> p.setVolume(n, v) } }

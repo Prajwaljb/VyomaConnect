@@ -773,9 +773,11 @@ private fun BluetoothDialog(vm: AppViewModel, value: Trigger.BluetoothDevice, on
     val context = LocalContext.current
     var devices by remember { mutableStateOf(vm.pairedBluetooth()) }
     var blocked by remember { mutableStateOf(vm.needsBluetoothPermission(context)) }
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         blocked = vm.needsBluetoothPermission(context)
         devices = vm.pairedBluetooth()
+        // Denied for good, Android doesn't ask again: this is the only way left.
+        if (!granted) runCatching { context.startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:" + context.packageName))) }
     }
     var address by remember { mutableStateOf(value.address) }
     var connected by remember { mutableStateOf(value.connected) }
