@@ -86,6 +86,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.foundation.border
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.UnfoldMore
 import dev.vyoma.connect.designsystem.LocalMenu
 import dev.vyoma.connect.designsystem.MenuItem
@@ -364,9 +365,18 @@ fun PcDashboard(
         }
         // Everything about sound in one place: the level, and where it plays when there's a choice.
         DashboardSection.VOLUME -> pc.sink?.let { sink ->
+            // Each app's own sound, through the companion (plain KDE Connect has only the outputs).
+            val devices by vm.devices.collectAsStateWithLifecycle()
+            val companion = devices.firstOrNull { it.identity.featuresOf == id && it.isPaired && it.isReachable }
+            val mixer = remember(companion?.identity?.deviceId, companion?.plugins) {
+                companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
+            }
+            var showMixer by rememberSaveable { mutableStateOf(false) }
+            if (showMixer) mixer?.let { AppMixerDialog(it) { showMixer = false } }
             VolumeBar(
                 sink, onVolume = { vm.setSinkVolume(id, sink.name, it) }, modifier,
                 outputs = pc.sinks.takeIf { it.size > 1 }, onOutput = { vm.makeSinkDefault(id, it.name) },
+                onMixer = mixer?.let { { showMixer = true } },
                 // Turned all the way down is as silent as muted, so it reads the same; tapped, it
                 // comes back at a third rather than staying at nothing.
                 onMute = {
@@ -586,6 +596,7 @@ internal fun VolumeBar(
     outputs: List<AudioSink>? = null,
     onOutput: (AudioSink) -> Unit = {},
     onMute: () -> Unit = {},
+    onMixer: (() -> Unit)? = null,
 ) {
     val max = sink.maxVolume.coerceAtLeast(1).toFloat()
     var level by remember(sink.name) { mutableFloatStateOf(sink.volume / max) }
@@ -680,12 +691,20 @@ internal fun VolumeBar(
             } else {
                 Text(name, style = MaterialTheme.typography.labelLarge, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             }
-            Text(
-                if (sink.muted) "Muted" else "${(level * 100).roundToInt()}%",
-                style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
-                textAlign = TextAlign.End,
-                modifier = Modifier.padding(start = 16.dp).widthIn(min = 44.dp),
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Each app's volume: a glass button beside the level it refines.
+                if (onMixer != null) Box(
+                    Modifier.padding(start = 12.dp).size(36.dp).pressable(glass = true, onClick = onMixer).glassRaised(CircleShape)
+                        .semantics { contentDescription = "App volume" },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(18.dp)) }
+                Text(
+                    if (sink.muted) "Muted" else "${(level * 100).roundToInt()}%",
+                    style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.padding(start = 12.dp).widthIn(min = 44.dp),
+                )
+            }
         }
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
