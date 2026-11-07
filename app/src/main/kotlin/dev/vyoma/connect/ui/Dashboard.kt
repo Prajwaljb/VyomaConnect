@@ -692,18 +692,19 @@ internal fun VolumeBar(
                 Text(name, style = MaterialTheme.typography.labelLarge, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // Each app's volume: a glass button beside the level it refines.
-                if (onMixer != null) Box(
-                    Modifier.padding(start = 12.dp).size(36.dp).pressable(glass = true, onClick = onMixer).glassRaised(CircleShape)
-                        .semantics { contentDescription = "App volume" },
-                    contentAlignment = Alignment.Center,
-                ) { Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(18.dp)) }
                 Text(
                     if (sink.muted) "Muted" else "${(level * 100).roundToInt()}%",
                     style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
                     textAlign = TextAlign.End,
                     modifier = Modifier.padding(start = 12.dp).widthIn(min = 44.dp),
                 )
+                // Each app's volume, in the far corner: like the output capsule opposite, 10 dp from the
+                // card's top and side (it bleeds into the side padding), concentric with the curve.
+                if (onMixer != null) Box(
+                    Modifier.padding(start = 2.dp).offset(x = 10.dp).size(36.dp).pressable(glass = true, onClick = onMixer).glassRaised(CircleShape)
+                        .semantics { contentDescription = "App volume" },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(18.dp)) }
             }
         }
         Spacer(Modifier.height(4.dp))
