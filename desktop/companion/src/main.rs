@@ -24,9 +24,11 @@ mod pc;
 mod pointer;
 mod screen;
 mod screenshot;
+mod setup;
 mod stats;
 mod tether;
 mod usb;
+mod specs;
 mod wallpaper;
 mod webcam;
 mod xfer;
@@ -103,6 +105,11 @@ fn main() -> Result<()> {
     if args.get(1).map(String::as_str) == Some(mirror::WINDOW_ARG) {
         return mirror::window(&args[2..]);
     }
+    match args.get(1).map(String::as_str) {
+        Some("--check") => std::process::exit(if setup::print_check() { 0 } else { 1 }),
+        Some("--setup") => return setup::run(args.get(2).is_some_and(|a| a == "--dry-run")),
+        _ => {}
+    }
     daemon()
 }
 
@@ -124,6 +131,7 @@ async fn daemon() -> Result<()> {
     };
     let shared = Arc::new(Shared { host, me, links: Links::default(), seen: Mutex::default(), media, away: Arc::default(), sessions: Mutex::default() });
 
+    tokio::spawn(setup::offer());
     tokio::spawn(usb::watch());
     let (bluetooth_links, bluetooth_ports) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(bluetooth::serve(bluetooth_links));
@@ -232,8 +240,8 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": ["vyoma.away", "vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.screen.input", "vyoma.screen.touch", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.gamepad.state", "vyoma.gamepad.close", "vyoma.desktop.step", "vyoma.usb.accessory", "vyoma.webcam", "vyoma.webcam.mic", "vyoma.webcam.turn", "vyoma.mirror", "vyoma.mirror.audio", "vyoma.mirror.copy", "vyoma.mirror.volume", "vyoma.paste", "vyoma.pointer.request", "vyoma.pointer.close"],
-            "outgoingCapabilities": ["vyoma.bluetooth", "vyoma.pointer.ready", "vyoma.paste.ready", "vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.gamepad.rumble", "vyoma.gamepad.udp", "vyoma.desktop.stepped", "vyoma.webcam.state", "vyoma.mirror.input", "vyoma.mirror.state"],
+            "incomingCapabilities": ["vyoma.away", "vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.screen.input", "vyoma.screen.touch", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.specs.request", "vyoma.gamepad.state", "vyoma.gamepad.close", "vyoma.desktop.step", "vyoma.usb.accessory", "vyoma.webcam", "vyoma.webcam.mic", "vyoma.webcam.turn", "vyoma.mirror", "vyoma.mirror.audio", "vyoma.mirror.copy", "vyoma.mirror.volume", "vyoma.paste", "vyoma.pointer.request", "vyoma.pointer.close"],
+            "outgoingCapabilities": ["vyoma.bluetooth", "vyoma.pointer.ready", "vyoma.paste.ready", "vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.specs", "vyoma.gamepad.rumble", "vyoma.gamepad.udp", "vyoma.desktop.stepped", "vyoma.webcam.state", "vyoma.mirror.input", "vyoma.mirror.state"],
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
         }),
@@ -615,6 +623,13 @@ async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &
                         Err(e) => json!({ "error": format!("{e:#}") }),
                     };
                     let _ = sender.send(&packet("vyoma.wallpaper", reply)).await;
+                });
+            }
+            "vyoma.specs.request" => {
+                let sender = link.sender.clone();
+                tokio::spawn(async move {
+                    let reply = tokio::task::spawn_blocking(specs::read).await.unwrap_or_else(|e| json!({ "error": e.to_string() }));
+                    let _ = sender.send(&packet("vyoma.specs", reply)).await;
                 });
             }
             "vyoma.gamepad.state" => {
