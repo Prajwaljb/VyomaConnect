@@ -436,6 +436,9 @@ class LiveStream(private val maxBytes: Int) : java.io.InputStream() {
     private var pos = 0
     private var closed = false
 
+    /** How full it is, 0..1: what the encoder's bitrate follows. */
+    val fill: Float get() = synchronized(lock) { queued.toFloat() / maxBytes }
+
     fun offer(bytes: ByteArray): Boolean = synchronized(lock) {
         if (closed || queued + bytes.size > maxBytes) return false
         queue.addLast(bytes)

@@ -52,6 +52,15 @@ internal class H264Encoder(width: Int, height: Int, bitrate: Int, fps: Int, priv
     val height: Int
     private var config: ByteArray? = null
     private var dropping = false
+    /**
+     * The bitrate follows the link: home 2.4 GHz Wi-Fi carried < 1 MB/s, so a steady 8 Mbit/s filled
+     * the backlog and the picture froze for up to 1.5 s at each skip (2026-11-07). Down by a third
+     * as soon as a quarter of it waits (at most every 0.5 s), back up a quarter after 4 s with it
+     * near empty, never below a sixth. On the cable or good Wi-Fi it never moves.
+     */
+    private val top = bitrate
+    private var rate = bitrate
+    private var changed = 0L
 
     init {
         try {
@@ -91,6 +100,7 @@ internal class H264Encoder(width: Int, height: Int, bitrate: Int, fps: Int, priv
                     if (dropping && !key) return
                     // SPS/PPS before every keyframe: a decoder restarted on the PC picks up from it.
                     val frame = if (key) (config ?: ByteArray(0)) + bytes else bytes
+                    follow(out.fill)
                     if (out.offer(frame)) dropping = false
                     else if (!dropping) {
                         // The link is behind: skip to the next keyframe instead of falling further back.
@@ -126,6 +136,20 @@ internal class H264Encoder(width: Int, height: Int, bitrate: Int, fps: Int, priv
             }
             return width to height
         }
+    }
+
+    private fun follow(fill: Float) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val next = when {
+            fill > 0.25f && now - changed > 500 -> maxOf(top / 6, rate * 2 / 3)
+            fill < 0.05f && now - changed > 4_000 -> minOf(top, rate * 5 / 4)
+            else -> return
+        }
+        if (next == rate) return
+        rate = next
+        changed = now
+        VLog.d("H264Encoder", "$name: ${rate / 1000} kbit/s")
+        runCatching { codec.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, rate) }) }
     }
 
     fun sync() = runCatching { codec.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) }) }

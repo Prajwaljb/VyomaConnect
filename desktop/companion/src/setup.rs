@@ -103,6 +103,11 @@ pub fn standalone() {
     STANDALONE.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Whether [standalone] was called: the desktop app, not the companion beside kdeconnectd.
+pub fn is_standalone() -> bool {
+    STANDALONE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The program the user runs: the companion, or the desktop app.
 fn program() -> &'static str {
     if STANDALONE.load(std::sync::atomic::Ordering::Relaxed) { "vyoma-desktop" } else { "vyoma-companion" }
