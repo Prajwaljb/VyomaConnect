@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
+import android.os.StatFs
 import android.provider.Settings
 import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.protocol.plugin.builtin.PhoneFileServer
@@ -18,6 +19,13 @@ import org.apache.sshd.common.util.security.SecurityUtils
 import org.apache.sshd.server.SshServer
 import org.apache.sshd.server.auth.password.PasswordAuthenticator
 import org.apache.sshd.server.auth.pubkey.PublickeyAuthenticator
+import org.apache.sshd.server.channel.ChannelSession
+import org.apache.sshd.server.session.ServerSession
+import org.apache.sshd.sftp.common.SftpConstants
+import org.apache.sshd.sftp.common.extensions.openssh.AbstractOpenSSHExtensionParser.OpenSSHExtension
+import org.apache.sshd.common.util.buffer.Buffer
+import org.apache.sshd.sftp.server.SftpSubsystem
+import org.apache.sshd.sftp.server.SftpSubsystemConfigurator
 import org.apache.sshd.sftp.server.SftpSubsystemFactory
 import java.io.IOException
 import java.nio.file.Path
@@ -104,7 +112,7 @@ class AndroidPhoneFileServer(private val app: Context, private val hostKey: () -
         val server = SshServer.setUpDefaultServer().apply {
             keyPairProvider = KeyPairProvider.wrap(hostKey())
             fileSystemFactory = VirtualFileSystemFactory(Environment.getExternalStorageDirectory().toPath())
-            subsystemFactories = listOf(SftpSubsystemFactory.Builder().build())
+            subsystemFactories = listOf(FreeSpaceSftpFactory())
             passwordAuthenticator = PasswordAuthenticator { user, password, _ ->
                 user == SftpPlugin.USER && MessageDigest.isEqual(sha256(password), passwordHash)
             }
@@ -125,11 +133,39 @@ class AndroidPhoneFileServer(private val app: Context, private val hostKey: () -
         error("No free port for the file server")
     }
 
+    /**
+     * MINA's SFTP, plus OpenSSH's free-space query (which it lacks), so the PC sees the phone's real space.
+     * Kept in its package by proguard-rules.pro: MINA names its vendor from the subsystem's package.
+     */
+    private class FreeSpaceSftpFactory : SftpSubsystemFactory() {
+        override fun createSubsystem(channel: ChannelSession) = FreeSpaceSftp(channel, this)
+    }
+
+    private class FreeSpaceSftp(channel: ChannelSession, config: SftpSubsystemConfigurator) : SftpSubsystem(channel, config) {
+        override fun resolveOpenSSHExtensions(session: ServerSession): List<OpenSSHExtension> =
+            super.resolveOpenSSHExtensions(session) + OpenSSHExtension(STATVFS, "2")
+
+        override fun executeExtendedCommand(buffer: Buffer, id: Int, extension: String) {
+            if (extension != STATVFS) return super.executeExtendedCommand(buffer, id, extension)
+            buffer.getString() // The path: everything we serve is internal storage, one volume.
+            val fs = StatFs(Environment.getExternalStorageDirectory().path)
+            val reply = prepareReply(buffer)
+            reply.putByte(SftpConstants.SSH_FXP_EXTENDED_REPLY.toByte())
+            reply.putInt(id.toLong())
+            // struct statvfs as OpenSSH sends it: bsize, frsize, blocks, bfree, bavail, files, ffree, favail, fsid, flag, namemax.
+            val block = fs.blockSizeLong
+            for (v in longArrayOf(block, block, fs.blockCountLong, fs.freeBlocksLong, fs.availableBlocksLong, 0, 0, 0, 0, ST_NOSUID, 255)) reply.putLong(v)
+            send(reply)
+        }
+    }
+
     private fun sha256(s: String) = MessageDigest.getInstance("SHA-256").digest(s.toByteArray())
 
     companion object {
         private const val TAG = "PhoneFiles"
         private val PORTS = 1739..1764
+        private const val STATVFS = "statvfs@openssh.com"
+        private const val ST_NOSUID = 2L
 
         init {
             // As KDE Connect's app: the platform's own crypto (no BouncyCastle registrar), NIO2

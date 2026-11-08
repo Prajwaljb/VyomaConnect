@@ -15,6 +15,8 @@
 # The SFTP server (phone files on the PC) builds its parts by reflection and ServiceLoader.
 -keep class org.apache.sshd.** { *; }
 -dontwarn org.apache.sshd.**
+# MINA reads the SFTP subsystem's package name; R8 would move it to the unnamed package.
+-keepnames class dev.vyoma.connect.platform.AndroidPhoneFileServer$FreeSpaceSftp
 -dontwarn org.slf4j.**
 -dontwarn net.i2p.crypto.eddsa.**
 -dontwarn javax.management.**
