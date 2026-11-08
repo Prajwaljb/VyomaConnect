@@ -224,7 +224,7 @@ pub async fn show_in_folder(conn: &zbus::Connection, path: &Path) {
 }
 
 /// A path as a URI's path: anything but unreserved characters and `/` escaped.
-fn percent(path: &str) -> String {
+pub fn percent(path: &str) -> String {
     path.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
