@@ -279,6 +279,13 @@ impl Control {
         self.asks.send(Ask::StopRinging).map_err(|_| fdo::Error::Failed("stopping".into()))
     }
 
+    /// The desktop's wallpaper as a grid of colours, for the window's canvas and accent (the phone
+    /// takes the same from the companion): {cols, rows, colors: [[r, g, b], ...]}, row-major.
+    async fn wallpaper(&self) -> fdo::Result<String> {
+        let colors = vyoma_companion::wallpaper::colors().await.map_err(|e| fdo::Error::Failed(format!("{e:#}")))?;
+        Ok(json!({ "cols": vyoma_companion::wallpaper::COLS, "rows": vyoma_companion::wallpaper::ROWS, "colors": colors }).to_string())
+    }
+
     /// What phones did here, newest first, as JSON: [{time (Unix seconds), phone (id), name, kind, text}].
     fn activity(&self) -> String {
         Value::Array(self.activity.recent()).to_string()
