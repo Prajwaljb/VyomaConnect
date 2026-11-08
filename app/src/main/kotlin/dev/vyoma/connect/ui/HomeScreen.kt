@@ -247,7 +247,8 @@ fun HomeScreen(
                     CapturesRow(
                         onTake = companionPlugin?.let { c ->
                             val context = LocalContext.current
-                            { AppLock.ask(context, AppLock.SCREENSHOT) { vm.capture(c.screenshot) } }
+                            if (primary.onlyBluetooth) { { status.show(NEEDS_WIFI, failure = true) } }
+                            else { { AppLock.ask(context, AppLock.SCREENSHOT) { vm.capture(c.screenshot) } } }
                         },
                         onOpen = onCaptures,
                         modifier = Modifier.animateItem().padding(top = 8.dp),

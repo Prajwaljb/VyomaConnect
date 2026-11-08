@@ -101,7 +101,7 @@ internal fun connectionChecks(f: LinkFacts): List<ConnectionCheck> {
             CheckLevel.GOOD,
         )
         else -> when (f.bluetooth) {
-            BluetoothFallback.Readiness.READY -> ConnectionCheck(CheckKind.BLUETOOTH, "Ready, nothing using it right now", CheckLevel.QUIET)
+            BluetoothFallback.Readiness.READY -> ConnectionCheck(CheckKind.BLUETOOTH, "Paired with your PC and ready, nothing using it right now. Android's Bluetooth page stops saying Paired once audio and calls are off for the PC.", CheckLevel.QUIET)
             BluetoothFallback.Readiness.RADIO_OFF -> ConnectionCheck(CheckKind.BLUETOOTH, "Turned off on this phone", CheckLevel.QUIET)
             BluetoothFallback.Readiness.NO_ADAPTER -> ConnectionCheck(CheckKind.BLUETOOTH, "This phone has no Bluetooth", CheckLevel.QUIET)
             BluetoothFallback.Readiness.NEEDS_PERMISSION -> ConnectionCheck(CheckKind.BLUETOOTH, "Vyoma needs the Nearby devices permission", CheckLevel.PROBLEM)

@@ -125,6 +125,9 @@ class MprisPlugin(private val ctx: PluginContext) : Plugin {
     private fun maybeRequestArt(player: RemotePlayer) {
         val url = player.artUrl
         if (url.isBlank() || !url.startsWith("file://") || !supportsArtPayload) return
+        // Over Bluetooth alone the cover can't come: asked then, the PC waited out its deadline for
+        // nothing. Not marked as asked, so the next update after Wi-Fi or USB is back asks.
+        if (!ctx.device.canCarryPayloads) return
         if (url in _art.value || !requestedArt.add(url)) return
         ctx.scope.launch {
             ctx.send(packet(PacketTypes.MPRIS_REQUEST) {

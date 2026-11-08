@@ -317,8 +317,14 @@ fun Staggered(index: Int, modifier: Modifier = Modifier, content: @Composable ()
     ) { content() }
 }
 
-/** Tiles whose job moves a file or a picture, which a Bluetooth link has no sockets for. */
-private val NEEDS_PAYLOADS = setOf("Send files", "PC files", "Screen", "Camera")
+/** Tiles whose job moves a file or a picture, which a Bluetooth link has no sockets for (PC files lists over it; opening a file says it needs Wi-Fi). */
+private val NEEDS_PAYLOADS = setOf("Send files", "Screen", "Camera")
+
+/** Linked over Bluetooth alone: packets go, but no file, picture or stream can. */
+internal val DeviceState.onlyBluetooth: Boolean get() = transports == setOf(TransportKind.BLUETOOTH)
+
+/** What a file, picture or stream action says instead, while [onlyBluetooth]. */
+internal const val NEEDS_WIFI = "Needs Wi-Fi or USB"
 
 /** The connected PC at a glance: battery and clipboard bento, media, volume, then the controls. */
 @Composable
@@ -399,7 +405,7 @@ fun PcDashboard(
           // The companion says when a photo can't be taken (lid shut, no other camera); unknown counts as fine.
           val pcCamera = (shots?.stats ?: remember { MutableStateFlow(null) }).collectAsStateWithLifecycle().value
           val cameraOk = pcCamera?.camera != false
-          val overBluetooth = state.transports == setOf(TransportKind.BLUETOOTH)
+          val overBluetooth = state.onlyBluetooth
           var showCommands by rememberSaveable { mutableStateOf(false) }
           if (showCommands) CommandsSheet(vm, id) { showCommands = false }
           var confirmPower by rememberSaveable { mutableStateOf<PcPower?>(null) }
@@ -464,7 +470,7 @@ fun PcDashboard(
                 else Control(Icons.Rounded.Terminal, "Commands", SystemColor.GRAY, opens = true) { showCommands = true },
             ).map { c ->
                 // Files and pictures don't fit through Bluetooth: same slots, and a tap says why.
-                if (overBluetooth && c.label in NEEDS_PAYLOADS) c.copy(unavailable = true, menu = null, onClick = { status.show("Needs Wi-Fi or USB", failure = true) }) else c
+                if (overBluetooth && c.label in NEEDS_PAYLOADS) c.copy(unavailable = true, menu = null, onClick = { status.show(NEEDS_WIFI, failure = true) }) else c
             },
             // Toggles say their state when on ("Locked", "Muted"): the user wants it in words, not
             // only in the fill.

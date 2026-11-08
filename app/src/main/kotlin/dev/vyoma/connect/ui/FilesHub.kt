@@ -86,6 +86,9 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
     val devices by vm.devices.collectAsStateWithLifecycle()
     val pc = devices.firstOrNull { it.identity.companionOf == null && it.isPaired && it.isReachable }
     val companion = pc?.let { p -> devices.any { it.identity.featuresOf == p.identity.deviceId && it.isPaired && it.isReachable } } == true
+    // Over Bluetooth alone nothing can be sent: the tiles stay, dimmed, and say why.
+    val bluetooth = pc?.onlyBluetooth == true
+    fun send(go: () -> Unit) = if (bluetooth) status.show(NEEDS_WIFI, failure = true) else go()
     val running by Transfers.all.collectAsStateWithLifecycle()
     val recent by remember { TransferLog.recent(context) }.collectAsStateWithLifecycle()
     val clips by vm.clipHistory.collectAsStateWithLifecycle()
@@ -101,10 +104,10 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
         item(key = "send-label") { SectionLabel(pc?.let { "Send to ${it.identity.deviceName}" } ?: "Send to your PC", Modifier.animateItem()) }
         item(key = "send") {
             Row(Modifier.animateItem().fillMaxWidth().pressGroup(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                SendTile(Icons.Rounded.UploadFile, "Files", SystemColor.BLUE, pc != null, Modifier.weight(1f)) { vm.pickFiles(context) }
-                SendTile(Icons.Rounded.PhotoLibrary, "Photos", SystemColor.PINK, pc != null, Modifier.weight(1f)) { vm.pickPhotos(context) }
+                SendTile(Icons.Rounded.UploadFile, "Files", SystemColor.BLUE, pc != null, Modifier.weight(1f), dim = bluetooth) { send { vm.pickFiles(context) } }
+                SendTile(Icons.Rounded.PhotoLibrary, "Photos", SystemColor.PINK, pc != null, Modifier.weight(1f), dim = bluetooth) { send { vm.pickPhotos(context) } }
                 // Folders travel through the companion (stock KDE Connect sends files only).
-                if (companion) SendTile(Icons.Rounded.DriveFolderUpload, "Folder", SystemColor.ORANGE, true, Modifier.weight(1f)) { vm.pickFolder(context) }
+                if (companion) SendTile(Icons.Rounded.DriveFolderUpload, "Folder", SystemColor.ORANGE, true, Modifier.weight(1f), dim = bluetooth) { send { vm.pickFolder(context) } }
             }
         }
 
@@ -193,13 +196,13 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
 
 /** One of the Send tiles: a filled Shortcuts tile, wider than Home's, glyph over its name. */
 @Composable
-private fun SendTile(icon: ImageVector, label: String, color: SystemColor, enabled: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun SendTile(icon: ImageVector, label: String, color: SystemColor, enabled: Boolean, modifier: Modifier, dim: Boolean = false, onClick: () -> Unit) {
     val tone = color.color
     val fill = if (tone.luminance() in 0.2f..0.5f) tone.toned(lightness = 0.38f) else tone
     Column(
         modifier
             .height(96.dp)
-            .graphicsLayer { if (!enabled) alpha = 0.4f }
+            .graphicsLayer { if (!enabled || dim) alpha = 0.4f }
             .pressable(enabled = enabled, onClick = onClick)
             .glassRaised(SmoothCornerShape(20.dp), fill.copy(alpha = 0.92f))
             .padding(14.dp),
