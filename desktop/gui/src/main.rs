@@ -1,8 +1,9 @@
 //! Vyoma's desktop window. It only shows and asks: the daemon (`vyoma-desktop`) owns the links,
 //! so closing or crashing this never drops a phone. `--snapshot <png>` renders it offscreen with
-//! made-up phones instead (`--dark`, `--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|empty|down`).
+//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|empty|down`).
 
 mod daemon;
+mod look;
 mod snapshot;
 
 use std::cell::RefCell;
@@ -19,6 +20,8 @@ slint::include_modules!();
 const NOTICE_FOR: Duration = Duration::from_millis(3200);
 const REREAD_EVERY: Duration = Duration::from_secs(5);
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
+/// How often the wallpaper's colours are reread (a new wallpaper says nothing).
+const WALLPAPER_EVERY: Duration = Duration::from_secs(60);
 /// The sidebar's id for This PC's page.
 pub const THIS_PC: &str = "this-pc";
 /// And the activity's.
@@ -35,7 +38,7 @@ fn main() -> anyhow::Result<()> {
     if let Some(at) = args.iter().position(|a| a == "--snapshot") {
         let path = args.get(at + 1).ok_or_else(|| anyhow::anyhow!("--snapshot needs a path"))?;
         let scene = args.iter().position(|a| a == "--scene").and_then(|i| args.get(i + 1)).map(String::as_str).unwrap_or("phones");
-        return snapshot::run(path, args.iter().any(|a| a == "--dark"), scene);
+        return snapshot::run(path, args.iter().any(|a| a == "--dark"), args.iter().any(|a| a == "--plain"), scene);
     }
     let ui = MainWindow::new()?;
     wire(&ui);
@@ -192,6 +195,7 @@ fn watch(ui: slint::Weak<MainWindow>) {
     });
     std::thread::spawn(move || {
         let mut daemon: Option<DbusDaemon> = None;
+        let mut wall_read: Option<std::time::Instant> = None;
         loop {
             if daemon.is_none() {
                 daemon = DbusDaemon::connect().ok();
@@ -199,6 +203,20 @@ fn watch(ui: slint::Weak<MainWindow>) {
                 if daemon.is_some() {
                     read_health(&ui);
                     read_activity(&ui);
+                    wall_read = None;
+                }
+            }
+            if let Some(d) = &daemon {
+                if wall_read.is_none_or(|t| t.elapsed() >= WALLPAPER_EVERY) {
+                    wall_read = Some(std::time::Instant::now());
+                    // An older daemon, or no wallpaper to read: the accent's glow instead.
+                    let wall = d.wallpaper().ok();
+                    let ui2 = ui.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui2.upgrade() {
+                            show_wallpaper(&ui, wall);
+                        }
+                    });
                 }
             }
             let phones = daemon.as_ref().map(|d| d.phones());
@@ -225,6 +243,16 @@ fn watch(ui: slint::Weak<MainWindow>) {
             while changes.try_recv().is_ok() {}
         }
     });
+}
+
+/// The accent and canvas from [wall], redrawn only when it changed.
+fn show_wallpaper(ui: &MainWindow, wall: Option<look::Wallpaper>) {
+    thread_local! { static LAST: RefCell<Option<Option<look::Wallpaper>>> = const { RefCell::new(None) }; }
+    if LAST.with(|l| l.borrow().as_ref() == Some(&wall)) {
+        return;
+    }
+    look::apply(&ui.global::<Theme>(), wall.as_ref());
+    LAST.with(|l| *l.borrow_mut() = Some(wall));
 }
 
 /// Reads the activity off the UI thread, then shows it.
@@ -401,6 +429,7 @@ fn to_ui(p: &PhoneData) -> Phone {
         can_ring: p.can_ring,
         can_browse: p.can_browse,
         can_share: p.can_share,
+        sims: std::rc::Rc::new(slint::VecModel::from(p.sims.iter().map(|(label, network, level)| Sim { label: label.into(), network: network.into(), level: *level }).collect::<Vec<_>>())).into(),
         permits: std::rc::Rc::new(slint::VecModel::from(
             p.permits.iter().map(|x| Permission { key: x.key.clone().into(), name: x.name.clone().into(), detail: x.detail.clone().into(), on: x.on }).collect::<Vec<_>>(),
         ))
@@ -408,7 +437,7 @@ fn to_ui(p: &PhoneData) -> Phone {
     }
 }
 
-/// Shows [text] at the bottom of the window for a moment.
+/// Shows [text] in the bubble at the top of the window for a moment.
 fn notify(ui: &slint::Weak<MainWindow>, text: String) {
     let ui = ui.clone();
     let _ = slint::invoke_from_event_loop(move || {
@@ -418,10 +447,12 @@ fn notify(ui: &slint::Weak<MainWindow>, text: String) {
             *c.borrow()
         });
         win.set_notice(text.into());
+        win.set_notice_on(true);
+        // The words stay while the bubble rises away.
         slint::Timer::single_shot(NOTICE_FOR, move || {
             if NOTICES.with(|c| *c.borrow()) == n {
                 if let Some(win) = ui.upgrade() {
-                    win.set_notice(SharedString::new());
+                    win.set_notice_on(false);
                 }
             }
         });

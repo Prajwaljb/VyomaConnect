@@ -23,6 +23,8 @@ pub struct PhoneData {
     pub can_ring: bool,
     pub can_browse: bool,
     pub can_share: bool,
+    /// Each SIM's signal: its label, network ("5G") and level 0..4.
+    pub sims: Vec<(String, String, i32)>,
     /// What it may do here (paired phones).
     pub permits: Vec<Permission>,
 }
@@ -61,9 +63,22 @@ impl PhoneData {
             can_ring: can("ring"),
             can_browse: can("browse"),
             can_share: can("share"),
+            sims: sims(&v["signal"]),
             permits: Vec::new(),
         }
     }
+}
+
+/// The SIMs in `signal` ({sim, network, level}), named "SIM 1", "SIM 2" in order; one alone is "Signal".
+fn sims(v: &Value) -> Vec<(String, String, i32)> {
+    let list = v.as_array().map(Vec::as_slice).unwrap_or_default();
+    list.iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let label = if list.len() == 1 { "Signal".to_owned() } else { format!("SIM {}", i + 1) };
+            (label, s["network"].as_str().unwrap_or("").to_owned(), s["level"].as_i64().unwrap_or(0).clamp(0, 4) as i32)
+        })
+        .collect()
 }
 
 /// A feature that needs something on the PC.
@@ -177,6 +192,8 @@ pub trait Daemon: Send + Sync {
     /// What phones did here, newest first.
     fn activity(&self) -> Result<Vec<ActivityEntry>>;
     fn clear_activity(&self) -> Result<()>;
+    /// The PC's wallpaper as a colour grid, for the window's accent and canvas.
+    fn wallpaper(&self) -> Result<crate::look::Wallpaper>;
     /// Blocks until the daemon says something (an error once it's gone away).
     fn next_event(&self) -> Result<Event>;
 }
@@ -264,6 +281,16 @@ impl Daemon for DbusDaemon {
 
     fn clear_activity(&self) -> Result<()> {
         self.call("ClearActivity", &())
+    }
+
+    fn wallpaper(&self) -> Result<crate::look::Wallpaper> {
+        let json: String = self.call("Wallpaper", &())?;
+        let v: Value = serde_json::from_str(&json)?;
+        let colors = v["colors"].as_array().context("no colours")?.iter().map(|c| {
+            let b = |i: usize| c[i].as_u64().unwrap_or(0).min(255) as u8;
+            [b(0), b(1), b(2)]
+        });
+        Ok(crate::look::Wallpaper { cols: v["cols"].as_u64().unwrap_or(0) as usize, rows: v["rows"].as_u64().unwrap_or(0) as usize, colors: colors.collect() })
     }
 
     fn next_event(&self) -> Result<Event> {

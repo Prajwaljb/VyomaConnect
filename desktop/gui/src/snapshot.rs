@@ -25,7 +25,7 @@ impl Platform for Offscreen {
     }
 }
 
-pub fn run(path: &str, dark: bool, scene: &str) -> Result<()> {
+pub fn run(path: &str, dark: bool, plain: bool, scene: &str) -> Result<()> {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(Offscreen(window.clone()))).map_err(|e| anyhow::anyhow!("{e:?}"))?;
     let ui = MainWindow::new()?;
@@ -61,7 +61,7 @@ pub fn run(path: &str, dark: bool, scene: &str) -> Result<()> {
     let list = if scene == "activity" {
         vec![
             ev(4, "Pixel 9 Pro", "screenshot", "Took a screenshot"),
-            ev(12, "Pixel 9 Pro", "files", "Copied \u{201c}Report final.pdf\u{201d} from this PC"),
+            ev(12, "Pixel 9 Pro", "files", "Copied \u{201c}Quarterly report for the whole team, final version two.pdf\u{201d} from this PC"),
             ev(38, "Work phone", "refused", "Refused: \u{201c}See and control this screen\u{201d} is off"),
             ev(95, "Pixel 9 Pro", "touchpad", "Was the touchpad"),
             ev(60 * 20, "Pixel 9 Pro", "power", "Put the PC to sleep"),
@@ -76,6 +76,17 @@ pub fn run(path: &str, dark: bool, scene: &str) -> Result<()> {
     crate::show_activity(&ui, &list, noon);
     if scene == "notice" {
         ui.set_notice("Opening the phone's files…".into());
+        ui.set_notice_on(true);
+    }
+    // A made-up wallpaper (a dusk over water) unless [--plain], for the accent's glow instead.
+    if !plain {
+        let colors = [
+            [0x1B, 0x2A, 0x4A], [0x2E, 0x3F, 0x6E], [0x5A, 0x4E, 0x7A], [0xD9, 0x7A, 0x4A],
+            [0x22, 0x3A, 0x5C], [0x3B, 0x5C, 0x8A], [0x8A, 0x6A, 0x7E], [0xF0, 0xA0, 0x5A],
+            [0x14, 0x30, 0x48], [0x1E, 0x4A, 0x66], [0x3A, 0x5E, 0x78], [0x6A, 0x70, 0x78],
+            [0x0C, 0x1C, 0x2C], [0x10, 0x2A, 0x3C], [0x18, 0x34, 0x46], [0x22, 0x3A, 0x4A],
+        ];
+        crate::look::apply(&ui.global::<Theme>(), Some(&crate::look::Wallpaper { cols: 4, rows: 4, colors: colors.to_vec() }));
     }
     ui.show()?;
     slint::platform::update_timers_and_animations();
@@ -127,6 +138,7 @@ fn phones(scene: &str) -> Vec<PhoneData> {
         permit("webcam", "Be this PC's webcam and mic", "The phone's camera and microphone in calls here", true),
         permit("power", "Wake, unlock, sleep and shut down", "Also log out and restart", false),
     ];
+    main.sims = vec![("SIM 1".into(), "5G".into(), 4), ("SIM 2".into(), "LTE".into(), 2)];
     let away = PhoneData { paired: true, ..phone("b", "Work phone") };
     let mut near = PhoneData { linked: true, ..phone("c", "OnePlus 12") };
     if scene == "pairing" {
