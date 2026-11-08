@@ -23,10 +23,12 @@ pub struct Call {
     pub kind: Kind,
     /// The call it names is over: take its notification down.
     pub over: bool,
-    /// Who: the contact's name, else the number.
-    pub who: String,
+    /// Who: the contact's name, else the number (none for a hidden number, or an app that doesn't say).
+    pub who: Option<String>,
     /// The number, when the name is a contact's.
     pub number: Option<String>,
+    /// The app calling over the internet (WhatsApp...): such calls have no number.
+    pub app: Option<String>,
 }
 
 /// A telephony packet, if it's a call (old phones also sent texts this way: those are ignored).
@@ -38,11 +40,43 @@ pub fn parse(p: &Value) -> Option<Call> {
         "missedCall" => Kind::Missed,
         _ => return None,
     };
-    let number = b["phoneNumber"].as_str().map(str::trim).filter(|n| !n.is_empty()).map(str::to_owned);
-    let name = b["contactName"].as_str().map(str::trim).filter(|n| !n.is_empty() && *n != "Unknown");
-    let who = name.map(str::to_owned).or_else(|| number.clone()).unwrap_or_else(|| "Unknown number".into());
-    let number = number.filter(|n| *n != who);
-    Some(Call { kind, over: b["isCancel"].as_bool().unwrap_or(false), who, number })
+    let text = |k: &str| b[k].as_str().map(str::trim).filter(|n| !n.is_empty()).map(str::to_owned);
+    let number = text("phoneNumber");
+    let app = text("appName");
+    // Without a caller, the phone names the app there (for desktops that don't know appName).
+    let name = text("contactName").filter(|n| n != "Unknown" && Some(n) != app.as_ref());
+    let who = name.or_else(|| number.clone());
+    let number = number.filter(|n| Some(n) != who.as_ref());
+    Some(Call { kind, over: b["isCancel"].as_bool().unwrap_or(false), who, number, app })
+}
+
+impl Call {
+    /// "Sam is calling", "WhatsApp call" (the app didn't say who), "Unknown number is calling".
+    pub fn ringing_title(&self) -> String {
+        match (&self.who, &self.app) {
+            (Some(who), _) => format!("{who} is calling"),
+            (None, Some(app)) => format!("{app} call"),
+            (None, None) => "Unknown number is calling".into(),
+        }
+    }
+
+    pub fn missed_title(&self) -> String {
+        match (&self.who, &self.app) {
+            (Some(who), Some(app)) => format!("Missed {app} call from {who}"),
+            (Some(who), None) => format!("Missed call from {who}"),
+            (None, Some(app)) => format!("Missed {app} call"),
+            (None, None) => "Missed call from unknown number".into(),
+        }
+    }
+
+    /// The line under it: the number or the app, and which phone.
+    pub fn body(&self, phone: &str) -> String {
+        match (&self.number, &self.app) {
+            (Some(n), _) => format!("{n}, on {phone}"),
+            (None, Some(app)) if self.who.is_some() => format!("{app} call, on {phone}"),
+            _ => format!("On {phone}"),
+        }
+    }
 }
 
 /// One phone's call, as far as this PC is concerned.
@@ -123,10 +157,24 @@ mod tests {
     #[test]
     fn reads_who_is_calling() {
         let c = parse(&json!({ "body": { "event": "ringing", "contactName": "Unknown", "phoneNumber": " 123 " } })).unwrap();
-        assert_eq!((c.kind, c.over, c.who.as_str(), c.number), (Kind::Ringing, false, "123", None));
+        assert_eq!((c.kind, c.over, c.who.as_deref(), c.number.as_deref()), (Kind::Ringing, false, Some("123"), None::<&str>));
+        assert_eq!((c.ringing_title(), c.body("P")), ("123 is calling".into(), "On P".into()));
         let c = call("ringing", false);
-        assert_eq!((c.who.as_str(), c.number.as_deref()), ("A", Some("1")));
+        assert_eq!((c.who.as_deref(), c.number.as_deref()), (Some("A"), Some("1")));
+        assert_eq!((c.ringing_title(), c.missed_title(), c.body("P")), ("A is calling".into(), "Missed call from A".into(), "1, on P".into()));
         assert!(parse(&json!({ "body": { "event": "sms" } })).is_none());
+        let c = parse(&json!({ "body": { "event": "ringing", "contactName": "Unknown" } })).unwrap();
+        assert_eq!(c.ringing_title(), "Unknown number is calling");
+    }
+
+    #[test]
+    fn an_apps_call_names_the_app_not_an_unknown_number() {
+        let c = parse(&json!({ "body": { "event": "ringing", "contactName": "Sam", "appName": "WhatsApp" } })).unwrap();
+        assert_eq!((c.ringing_title(), c.body("P")), ("Sam is calling".into(), "WhatsApp call, on P".into()));
+        assert_eq!(c.missed_title(), "Missed WhatsApp call from Sam");
+        // The caller kept private: the phone names the app as the contact.
+        let c = parse(&json!({ "body": { "event": "ringing", "contactName": "WhatsApp", "appName": "WhatsApp" } })).unwrap();
+        assert_eq!((c.ringing_title(), c.missed_title(), c.body("P")), ("WhatsApp call".into(), "Missed WhatsApp call".into(), "On P".into()));
     }
 
     #[test]

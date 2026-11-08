@@ -12,6 +12,7 @@ import android.graphics.Canvas
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.telecom.TelecomManager
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.core.graphics.createBitmap
@@ -128,6 +129,41 @@ object NotificationBridge : NotificationSource {
         val match = actionsByKey[id]?.firstOrNull { it.title?.toString() == action } ?: return
         runCatching { match.actionIntent.send() }.onFailure { e -> if (e is PendingIntent.CanceledException) VLog.d(TAG, "action gone") }
     }
+
+    /** An app's call: who's calling, if the app says and the user lets its words through. */
+    data class AppCall(val app: String, val caller: String?)
+
+    /**
+     * The app ringing or in a call over the internet (WhatsApp, Signal, Telegram...), from its call
+     * notification. Phones report these calls without a number; the phone's own calls are skipped.
+     */
+    fun appCall(context: Context): AppCall? {
+        val l = listener ?: return null
+        val skip = buildSet {
+            add(context.packageName)
+            addAll(PHONE_APPS)
+            runCatching { context.getSystemService(TelecomManager::class.java)?.defaultDialerPackage }.getOrNull()?.let(::add)
+        }
+        val calls = runCatching { l.activeNotifications }.getOrNull().orEmpty().filter { sbn ->
+            val n = sbn.notification
+            sbn.packageName !in skip &&
+                (n.category == Notification.CATEGORY_CALL || n.extras.getString(Notification.EXTRA_TEMPLATE) == CALL_STYLE)
+        }
+        // The ringing one first: it's the call the phone state is about.
+        val sbn = calls.maxByOrNull { it.postTime } ?: return null
+        val extras = sbn.notification.extras
+        val appInfo = if (Build.VERSION.SDK_INT >= 33) extras.getParcelable(EXTRA_APP_INFO, ApplicationInfo::class.java)
+        else @Suppress("DEPRECATION") extras.getParcelable(EXTRA_APP_INFO)
+        val app = appLabel(context, sbn.packageName, appInfo)
+        if (NotificationFilters.load(context).mode(context, sbn.packageName) != NotifMode.SHOW) return AppCall(app, null)
+        val person = extras.getParcelable(Notification.EXTRA_CALL_PERSON, android.app.Person::class.java)?.name
+        val caller = (person ?: extras.getCharSequence(Notification.EXTRA_TITLE))?.toString()?.trim()?.takeIf { it.isNotEmpty() && it != app }
+        return AppCall(app, caller)
+    }
+
+    private const val CALL_STYLE = "android.app.Notification\$CallStyle"
+    /** The phone's own call screens, which show phone calls (those come with their number). */
+    private val PHONE_APPS = setOf("com.android.server.telecom", "com.samsung.android.incallui", "com.android.incallui", "com.google.android.dialer", "com.samsung.android.dialer", "com.android.dialer")
 
     private fun convert(context: Context, sbn: StatusBarNotification): PhoneNotification? {
         val n = sbn.notification

@@ -75,6 +75,8 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
 - Namespace `vyoma.<feature>[.<verb>]`, advertised in capabilities like any packet, so stock peers just don't load them.
 - Never change the meaning of a stock `kdeconnect.*` packet; extend with extra optional body fields only if stock
   peers ignore unknown fields (they do).
+  Ours so far: `kdeconnect.telephony` `appName` (an app's internet call, e.g. WhatsApp: no number; `contactName`
+  is the caller, or the app's name when it doesn't say, so stock desktops still read sensibly).
 - Real-time streams (gamepad, video) don't go through the JSON link: negotiate over a vyoma packet, then use a
   dedicated socket (UDP with AEAD for input, TLS/TCP for video).
 
