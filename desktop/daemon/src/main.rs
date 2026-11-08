@@ -27,6 +27,7 @@ mod share;
 mod system;
 mod telephony;
 mod volume;
+mod window;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
@@ -263,16 +264,27 @@ impl Control {
     }
 
     /// Adds a command devices can run here; its key.
-    fn add_command(&self, name: String, command: String) -> fdo::Result<String> {
+    async fn add_command(&self, name: String, command: String, #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>) -> fdo::Result<String> {
         let key = self.run.add(&name, &command).map_err(|e| fdo::Error::Failed(format!("{e:#}")))?;
         self.commands_changed();
+        let _ = Control::changed(&emitter).await;
         Ok(key)
     }
 
-    fn remove_command(&self, key: String) -> fdo::Result<()> {
+    /// Changes a command, or adds one when [key] is empty ([fingerprint]: the phone asks for its
+    /// owner's fingerprint before running it); its key.
+    async fn save_command(&self, key: String, name: String, command: String, fingerprint: bool, #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>) -> fdo::Result<String> {
+        let key = self.run.save_one(&key, &name, &command, fingerprint).map_err(|e| fdo::Error::Failed(format!("{e:#}")))?;
+        self.commands_changed();
+        let _ = Control::changed(&emitter).await;
+        Ok(key)
+    }
+
+    async fn remove_command(&self, key: String, #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>) -> fdo::Result<()> {
         match self.run.remove(&key) {
             Ok(true) => {
                 self.commands_changed();
+                let _ = Control::changed(&emitter).await;
                 Ok(())
             }
             Ok(false) => Err(fdo::Error::UnknownObject(key)),
@@ -280,7 +292,7 @@ impl Control {
         }
     }
 
-    /// The commands as JSON: {key: {name, command}}.
+    /// The commands as JSON: {key: {name, command, fingerprint}}.
     fn commands(&self) -> String {
         Value::Object(self.run.all().into_iter().collect()).to_string()
     }
@@ -1074,6 +1086,11 @@ impl Desk {
                         let body = &packet["body"];
                         if body["requestCommandList"].as_bool() == Some(true) {
                             self.send(&id, self.run.list_packet());
+                        }
+                        // The phone's "add command": the editor is Vyoma's window.
+                        if body["setup"].as_bool() == Some(true) {
+                            tracing::info!("{id}: opening the command editor");
+                            tokio::spawn(window::open("commands"));
                         }
                         if let Some(key) = body["key"].as_str() {
                             match self.run.run(key) {

@@ -17,7 +17,7 @@ as_root() {
 
 if [ "${1:-}" = "--undo" ]; then
     systemctl --user disable --now vyoma-desktop 2>/dev/null || true
-    rm -f "$autostart" "$activation"
+    rm -f "$autostart" "$activation" "$data/applications/vyoma.desktop"
     [ -f "$config/systemd/user/vyoma-companion.service" ] && systemctl --user enable --now vyoma-companion
     (setsid kdeconnectd >/dev/null 2>&1 &)
     echo "KDE Connect is back. Vyoma's desktop app keeps its folder ($config/vyoma-desktop) until you remove it."
@@ -38,6 +38,11 @@ fi
 echo "Building (a few minutes the first time)..."
 (cd "$here" && cargo build --release)
 install -Dm755 "$here/target/release/vyoma-desktop" "$HOME/.local/bin/vyoma-desktop"
+# The window (desktop/gui), beside it: the daemon opens it when a phone asks for the command editor.
+(cd "$here/../gui" && cargo build --release)
+install -Dm755 "$here/../gui/target/release/vyoma" "$HOME/.local/bin/vyoma"
+mkdir -p "$data/applications"
+sed "s|@BIN@|$HOME/.local/bin/vyoma|" "$here/dist/vyoma.desktop" >"$data/applications/vyoma.desktop"
 "$HOME/.local/bin/vyoma-desktop" --setup
 
 # KDE Connect's ports, as its own packages open them.

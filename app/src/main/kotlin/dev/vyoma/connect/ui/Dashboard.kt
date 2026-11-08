@@ -1148,13 +1148,13 @@ private fun Meter(label: String, value: String?, unit: String, fraction: Float, 
     }
 }
 
-/** Runs [cmd], first asking for the fingerprint if it's one the owner marked in [CommandsSheet]. */
+/** Runs [cmd], first asking for the fingerprint if the owner marked it, here in [CommandsSheet] or on the PC. */
 internal fun runGuarded(context: Context, vm: AppViewModel, id: String, cmd: RemoteCommand, status: StatusController) {
     val run = {
         vm.runCommand(id, cmd.key)
         status.show("Running ${cmd.name}", icon = Icons.Rounded.Terminal)
     }
-    if (AppLock.commandLocked(context, id, cmd.key)) AppLock.askForCommand(context, "To run ${cmd.name}", run) else run()
+    if (cmd.fingerprint || AppLock.commandLocked(context, id, cmd.key)) AppLock.askForCommand(context, "To run ${cmd.name}", run) else run()
 }
 
 /** The PC's commands, run from where you are; set up (or edited) on the PC itself. */
@@ -1170,12 +1170,17 @@ internal fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) 
         title = { Text("Commands") },
         text = {
             if (commands.isEmpty()) {
-                Text("None yet. Add shutdown, sleep or your own scripts on the PC, and run them from here.")
+                Text("None yet. Add shutdown, sleep or your own scripts in Vyoma's window on the PC, and run them from here.")
             } else {
                 Column(Modifier.heightIn(max = 360.dp).fadingVerticalScroll(rememberScrollState())) {
                     commands.forEachIndexed { i, cmd ->
-                        val locked = remember(lockChanges, cmd.key) { AppLock.commandLocked(context, id, cmd.key) }
+                        // The PC can ask for it too; then it's changed there, not here.
+                        val locked = remember(lockChanges, cmd.key, cmd.fingerprint) { cmd.fingerprint || AppLock.commandLocked(context, id, cmd.key) }
                         fun setLocked(want: Boolean) {
+                            if (cmd.fingerprint) {
+                                status.show("The PC asks for it: change it in Commands there", icon = Icons.Rounded.Terminal)
+                                return
+                            }
                             fun save() {
                                 AppLock.setCommandLocked(context, id, cmd.key, want)
                                 lockChanges++
@@ -1187,7 +1192,7 @@ internal fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) 
                         ListRow(
                             title = cmd.name,
                             // Says what the switch is for: alone, it could read as the command being on or off.
-                            subtitle = if (locked) "Asks for your fingerprint" else "Runs straight away",
+                            subtitle = if (cmd.fingerprint) "Asks for your fingerprint, set on the PC" else if (locked) "Asks for your fingerprint" else "Runs straight away",
                             subtitleMaxLines = 1,
                             icon = Icons.Rounded.Terminal,
                             iconTint = SystemColor.GRAY.color,
@@ -1207,7 +1212,11 @@ internal fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) 
         },
         confirmButton = { DialogButton(onClick = onDismiss) { Text("Close") } },
         dismissButton = {
-            DialogButton(onClick = { vm.openCommandSetup(id); onDismiss() }) { Text(if (commands.isEmpty()) "Set up on PC" else "Edit") }
+            DialogButton(onClick = {
+                vm.openCommandSetup(id)
+                status.show("Opening Commands on the PC", icon = Icons.Rounded.Terminal)
+                onDismiss()
+            }) { Text(if (commands.isEmpty()) "Add on PC" else "Edit on PC") }
         },
     )
 }

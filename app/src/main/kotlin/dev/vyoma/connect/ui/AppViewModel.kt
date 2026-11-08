@@ -269,7 +269,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         dev.vyoma.connect.service.Commands.primary(container)?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands?.value.orEmpty()
     /** Whether the connected PC's command [key] asks for the fingerprint when run by hand. */
     fun pcCommandLocked(key: String): Boolean = dev.vyoma.connect.service.Commands.primary(container)?.let {
-        AppLock.commandLocked(getApplication(), it.id, key)
+        AppLock.commandLocked(getApplication(), it.id, key) || pcCommands().any { c -> c.key == key && c.fingerprint }
     } == true
     /** Whether a companion has ever paired (walk-away rules and some actions need it). */
     fun hasCompanion(): Boolean = container.hub.value?.devices?.value?.values?.any { it.state.value.identity.featuresOf != null && it.state.value.isPaired } == true

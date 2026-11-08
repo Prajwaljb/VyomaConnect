@@ -20,7 +20,7 @@ serde_json = "1.0.154"
 slint = { version = "1.18.1", features = ["renderer-software"] }
 futures-util = { version = "0.3", default-features = false }
 tokio = { version = "1.54.1", features = ["rt-multi-thread"] }
-zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"] }
 
 [build-dependencies]
 slint-build = "1.18.1"

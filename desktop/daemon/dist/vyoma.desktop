@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Vyoma
+GenericName=Phone companion
+Comment=Your phones on this PC: files, commands, what they may do
+Exec=@BIN@
+Icon=phone
+Terminal=false
+Categories=Network;Utility;
+Keywords=phone;android;kde connect;

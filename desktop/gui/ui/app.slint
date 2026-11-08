@@ -49,6 +49,14 @@ export struct Phone {
     permits: [Permission],
 }
 
+// A command phones can run here. [fingerprint]: Vyoma on the phone asks for it first.
+export struct Command {
+    key: string,
+    name: string,
+    command: string,
+    fingerprint: bool,
+}
+
 // A feature that needs something on the PC; [detail]: "Ready" or what it needs.
 export struct Feature {
     name: string,
@@ -233,7 +241,7 @@ component Glass inherits Rectangle {
     drop-shadow-blur: Theme.dark ? 0px : 14px;
     drop-shadow-offset-x: Theme.fall-x * 4.8px;
     drop-shadow-offset-y: Theme.fall-y * 4.8px;
-    drop-shadow-color: #1A2B4C0D;
+    drop-shadow-color: Theme.dark ? transparent : #1A2B4C0D;
     VerticalLayout {
         @children
     }
@@ -307,29 +315,30 @@ component PillButton inherits Rectangle {
     }
 }
 
-// The phone's switch: the accent track when on, a white capsule knob that slides with a little
-// overshoot and stretches while held, as iOS's.
+// The phone's switch, as iOS's: one eased progress moves the knob and blends the track into the
+// accent together, so they never disagree; held, the knob stretches towards the middle.
 component Switch inherits Rectangle {
     in property <bool> on;
     callback toggled;
     width: 50px;
-    height: 28px;
+    height: 30px;
     border-radius: self.height / 2;
-    background: on ? Theme.accent-fill : Theme.track;
-    animate background { duration: 180ms; }
-    property <length> knob: touch.pressed ? 40px : 34px;
-    animate knob { duration: 180ms; easing: ease-out; }
+    property <float> t: root.on ? 1 : 0;
+    animate t { duration: 300ms; easing: cubic-bezier(0.32, 0.72, 0, 1); }
+    property <length> stretch: touch.pressed ? 6px : 0px;
+    animate stretch { duration: 200ms; easing: cubic-bezier(0.32, 0.72, 0, 1); }
+    background: Theme.accent-fill.mix(Theme.track, root.t);
+    property <length> knob: 26px;
     Rectangle {
-        width: root.knob;
-        height: 22px;
-        x: root.on ? parent.width - self.width - 3px : 3px;
-        y: 3px;
-        border-radius: 11px;
+        width: root.knob + root.stretch;
+        height: root.knob;
+        x: 2px + (root.width - 4px - root.knob - root.stretch) * root.t;
+        y: 2px;
+        border-radius: self.height / 2;
         background: white;
-        drop-shadow-blur: 4px;
-        drop-shadow-offset-y: 1px;
-        drop-shadow-color: #00000040;
-        animate x { duration: 260ms; easing: ease-out-back; }
+        drop-shadow-blur: 6px;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-color: #00000033;
     }
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -513,7 +522,7 @@ component Tile inherits Rectangle {
         drop-shadow-blur: Theme.dark ? 0px : 16px;
         drop-shadow-offset-x: Theme.fall-x * 5px;
         drop-shadow-offset-y: Theme.fall-y * 5px;
-        drop-shadow-color: root.fill.transparentize(72%);
+        drop-shadow-color: Theme.dark ? transparent : root.fill.transparentize(72%);
         Glyph {
             x: 16px;
             y: 16px;
@@ -1194,6 +1203,274 @@ component ActivityPage inherits Page {
     }
 }
 
+// A text field on glass: the label above, a placeholder while empty, the accent ring while typing.
+component Field inherits VerticalLayout {
+    in property <string> label;
+    in property <string> placeholder;
+    in property <bool> mono;
+    in-out property <string> text;
+    callback accepted;
+    public function take-focus() { input.focus(); }
+    spacing: 6px;
+    Text {
+        text: root.label;
+        color: Theme.muted;
+        font-size: 13px;
+        font-weight: 500;
+    }
+    Rectangle {
+        height: 42px;
+        border-radius: 12px;
+        background: Theme.raised;
+        border-width: input.has-focus ? 2px : 1px;
+        border-color: input.has-focus ? Theme.accent : Theme.divider;
+        animate border-color { duration: 160ms; }
+        TouchArea {
+            mouse-cursor: MouseCursor.text;
+            clicked => { input.focus(); }
+        }
+        if root.text == "": Text {
+            x: 14px;
+            width: parent.width - 28px;
+            text: root.placeholder;
+            color: Theme.muted.transparentize(35%);
+            font-size: 14px;
+            font-family: root.mono ? "monospace" : "Inter";
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        input := TextInput {
+            x: 14px;
+            width: parent.width - 28px;
+            height: parent.height;
+            text <=> root.text;
+            color: Theme.text;
+            font-size: 14px;
+            font-family: root.mono ? "monospace" : "Inter";
+            single-line: true;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent.with-alpha(0.3);
+            accepted => { root.accepted(); }
+        }
+    }
+}
+
+// The commands phones can run here, as kdeconnectd's: each opens in the editor; ready-made ones
+// below to start from.
+component CommandsPage inherits Page {
+    in property <[Command]> commands;
+    in property <[Command]> suggestions;
+    callback edit(Command);
+    callback add();
+    title: "Commands";
+    glyph: @image-url("icons/terminal.svg");
+    subtitle: "What your phones can run on this PC";
+    action: "Add";
+    act => { root.add(); }
+
+    if root.commands.length == 0: Text {
+        text: "None yet. Add one here, or start from a suggestion: it shows on your phones under Commands, ready to run.";
+        color: Theme.muted;
+        font-size: 15px;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+    }
+
+    if root.commands.length > 0: Section {
+        label: "On your phones";
+        for c[i] in root.commands: Row {
+            icon: @image-url("icons/terminal.svg");
+            icon-color: Theme.green;
+            title: c.name;
+            subtitle: c.command;
+            value: c.fingerprint ? "Fingerprint" : "";
+            tappable: true;
+            first: i == 0;
+            last: i == root.commands.length - 1;
+            clicked => { root.edit(c); }
+        }
+    }
+
+    VerticalLayout {
+        padding-top: root.commands.length > 0 ? 0px : 4px;
+        Glass {
+            Row {
+                icon: @image-url("icons/plus.svg");
+                icon-color: Theme.accent-fill;
+                title: "Add a command";
+                title-color: Theme.accent;
+                tappable: true;
+                first: true;
+                last: true;
+                clicked => { root.add(); }
+            }
+        }
+    }
+
+    if root.suggestions.length > 0: Section {
+        label: "Suggestions";
+        for c[i] in root.suggestions: Row {
+            icon: @image-url("icons/terminal.svg");
+            icon-color: Theme.gray;
+            title: c.name;
+            subtitle: c.command;
+            action: "Add";
+            first: i == 0;
+            last: i == root.suggestions.length - 1;
+            act => { root.edit(c); }
+        }
+    }
+
+    VerticalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        padding-top: 6px;
+        spacing: 10px;
+        Tip {
+            text: "A command runs as you, in a shell, the moment a phone asks. Add only what you'd let your phone do here.";
+        }
+        Tip {
+            text: "Ask for fingerprint has Vyoma on the phone check it's you before running it, for the ones that matter, like shutting down.";
+        }
+    }
+}
+
+// The command editor: name, command line, whether the phone asks for a fingerprint first. A glass
+// sheet that settles in; Escape cancels, Return saves.
+component CommandSheet inherits Rectangle {
+    in property <bool> shown;
+    // Empty for a new command.
+    in property <string> key;
+    in-out property <string> name;
+    in-out property <string> command;
+    in-out property <bool> fingerprint;
+    callback saved();
+    callback removed();
+    callback cancelled();
+    property <bool> ready: root.name != "" && root.command != "";
+    changed shown => {
+        if root.shown { name-field.take-focus(); }
+    }
+    opacity: shown ? 1 : 0;
+    visible: self.opacity > 0.01;
+    animate opacity { duration: 180ms; }
+    background: #00000059;
+    TouchArea {
+        clicked => { root.cancelled(); }
+    }
+    property <length> full: min(480px, root.width - 48px);
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape { root.cancelled(); return EventResult.accept; }
+            if event.text == Key.Return && root.ready { root.saved(); return EventResult.accept; }
+            EventResult.reject
+        }
+        Rectangle {
+            width: root.shown ? root.full : root.full * 0.92;
+            height: box.preferred-height;
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            animate width { duration: 320ms; easing: ease-out-back; }
+            border-radius: 28px;
+            background: Theme.popup;
+            border-width: 1px;
+            border-color: Theme.rim;
+            drop-shadow-blur: 32px;
+            drop-shadow-offset-x: Theme.fall-x * 12px;
+            drop-shadow-offset-y: Theme.fall-y * 12px;
+            drop-shadow-color: #00000040;
+            TouchArea { }
+            box := VerticalLayout {
+                padding: 26px;
+                padding-bottom: 22px;
+                spacing: 16px;
+                Text {
+                    text: root.key == "" ? "New command" : "Edit command";
+                    color: Theme.text;
+                    font-size: 20px;
+                    font-weight: 700;
+                }
+                name-field := Field {
+                    label: "Name on the phone";
+                    placeholder: "Lock the screen";
+                    text <=> root.name;
+                    accepted => { command-field.take-focus(); }
+                }
+                command-field := Field {
+                    label: "Command";
+                    placeholder: "loginctl lock-session";
+                    mono: true;
+                    text <=> root.command;
+                    accepted => {
+                        if root.ready { root.saved(); }
+                    }
+                }
+                Rectangle {
+                    border-radius: 16px;
+                    background: Theme.raised;
+                    HorizontalLayout {
+                        padding: 14px;
+                        padding-left: 14px;
+                        spacing: 12px;
+                        VerticalLayout {
+                            alignment: center;
+                            Badge {
+                                icon: @image-url("icons/fingerprint.svg");
+                                fill: Theme.red;
+                                size: 30px;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            horizontal-stretch: 1;
+                            Text {
+                                text: "Ask for fingerprint first";
+                                color: Theme.text;
+                                font-size: 15px;
+                                font-weight: 500;
+                            }
+                            Text {
+                                text: "Vyoma on the phone checks it's you before running it";
+                                color: Theme.muted;
+                                font-size: 13px;
+                                wrap: word-wrap;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Switch {
+                                on: root.fingerprint;
+                                toggled => { root.fingerprint = !root.fingerprint; }
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    padding-top: 4px;
+                    if root.key != "": PillButton {
+                        text: "Delete";
+                        destructive: true;
+                        clicked => { root.removed(); }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    PillButton {
+                        text: "Cancel";
+                        clicked => { root.cancelled(); }
+                    }
+                    PillButton {
+                        text: "Save";
+                        prominent: true;
+                        enabled: root.ready;
+                        clicked => { root.saved(); }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // No phone to show: the daemon's down, or nothing's paired or nearby yet.
 component EmptyPage inherits Page {
     in property <bool> daemon-ok;
@@ -1702,6 +1979,15 @@ export component MainWindow inherits Window {
     in property <[Day]> days;
     in property <bool> activity-loaded;
     in property <string> activity-summary: "Nothing yet";
+    // Commands phones can run (selected: "commands"), and ready-made ones not added yet.
+    in property <[Command]> commands;
+    in property <[Command]> suggestions;
+    // The command editor: open while [editing], on [edit-key] ("" for a new one).
+    in-out property <bool> editing;
+    in-out property <string> edit-key;
+    in-out property <string> edit-name;
+    in-out property <string> edit-command;
+    in-out property <bool> edit-fingerprint;
     // A short outcome, in the glass bubble at the top while [notice-on] (the words stay while it leaves).
     in property <string> notice;
     in property <bool> notice-on;
@@ -1730,6 +2016,10 @@ export component MainWindow inherits Window {
     callback allow-clipboard(string);
     callback show-pc();
     callback show-activity();
+    callback show-commands();
+    // key ("" for new), name, command line, fingerprint.
+    callback save-command(string, string, string, bool);
+    callback remove-command(string);
     callback clear-activity();
     callback install();
     callback finish-setup();
@@ -1749,7 +2039,7 @@ export component MainWindow inherits Window {
                 if root.confirm-clear { root.confirm-clear = false; root.clear-activity(); return EventResult.accept; }
                 return EventResult.reject;
             }
-            if root.setup || root.confirm-unpair || root.confirm-clear { return EventResult.reject; }
+            if root.setup || root.confirm-unpair || root.confirm-clear || root.editing { return EventResult.reject; }
             if event.text == Key.UpArrow { root.step(-1); return EventResult.accept; }
             if event.text == Key.DownArrow { root.step(1); return EventResult.accept; }
             EventResult.reject
@@ -1860,6 +2150,14 @@ export component MainWindow inherits Window {
                 selected: root.selected == "activity";
                 clicked => { root.show-activity(); }
             }
+            if root.daemon-ok: SideItem {
+                icon: @image-url("icons/terminal.svg");
+                fill: Theme.green;
+                title: "Commands";
+                subtitle: root.commands.length == 0 ? "None yet" : root.commands.length == 1 ? "1 command" : root.commands.length + " commands";
+                selected: root.selected == "commands";
+                clicked => { root.show-commands(); }
+            }
             // Asks phones nearby to show themselves again.
             if root.daemon-ok: Rectangle {
                 height: 40px;
@@ -1914,7 +2212,25 @@ export component MainWindow inherits Window {
             loaded: root.activity-loaded;
             confirm-clear <=> root.confirm-clear;
         }
-        if root.selected != "this-pc" && root.selected != "activity" && root.has-current: PhonePage {
+        if root.selected == "commands" && root.daemon-ok: CommandsPage {
+            commands: root.commands;
+            suggestions: root.suggestions;
+            add => {
+                root.edit-key = "";
+                root.edit-name = "";
+                root.edit-command = "";
+                root.edit-fingerprint = false;
+                root.editing = true;
+            }
+            edit(c) => {
+                root.edit-key = c.key;
+                root.edit-name = c.name;
+                root.edit-command = c.command;
+                root.edit-fingerprint = c.fingerprint;
+                root.editing = true;
+            }
+        }
+        if root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands" && root.has-current: PhonePage {
             phone: root.current;
             confirm-unpair <=> root.confirm-unpair;
             pair(id) => { root.pair(id); }
@@ -1926,7 +2242,7 @@ export component MainWindow inherits Window {
             set-permission(id, key, on) => { root.set-permission(id, key, on); }
             allow-clipboard(id) => { root.allow-clipboard(id); }
         }
-        if ((root.selected != "this-pc" && root.selected != "activity") || !root.daemon-ok) && !root.has-current: EmptyPage {
+        if ((root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands") || !root.daemon-ok) && !root.has-current: EmptyPage {
             daemon-ok: root.daemon-ok;
             search => { root.search(); }
         }
@@ -1981,6 +2297,27 @@ export component MainWindow inherits Window {
         }
     }
 
+    CommandSheet {
+        shown: root.editing;
+        key: root.edit-key;
+        name <=> root.edit-name;
+        command <=> root.edit-command;
+        fingerprint <=> root.edit-fingerprint;
+        cancelled => {
+            root.editing = false;
+            keys.focus();
+        }
+        saved => {
+            root.editing = false;
+            keys.focus();
+            root.save-command(root.edit-key, root.edit-name, root.edit-command, root.edit-fingerprint);
+        }
+        removed => {
+            root.editing = false;
+            keys.focus();
+            root.remove-command(root.edit-key);
+        }
+    }
     Dialog {
         shown: root.confirm-unpair;
         title: "Unpair " + root.current.name + "?";

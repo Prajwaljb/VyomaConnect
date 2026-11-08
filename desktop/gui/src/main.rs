@@ -1,8 +1,10 @@
 //! Vyoma's desktop window. It only shows and asks: the daemon (`vyoma-desktop`) owns the links,
 //! so closing or crashing this never drops a phone. `--snapshot <png>` renders it offscreen with
-//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|down`, `--setup` to open on setup).
+//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|commands|commands-empty|commands-edit|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|down`, `--setup` to open on setup). `--page commands|this-pc|activity|<phone id>` opens on that page;
+//! a window already open shows it instead (`instance.rs`).
 
 mod daemon;
+mod instance;
 mod look;
 mod snapshot;
 
@@ -10,7 +12,7 @@ use std::cell::RefCell;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use daemon::{ActivityEntry, Daemon, DbusDaemon, Event, Health, PhoneData};
+use daemon::{ActivityEntry, CommandData, Daemon, DbusDaemon, Event, Health, PhoneData};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 slint::include_modules!();
@@ -20,13 +22,24 @@ slint::include_modules!();
 const NOTICE_FOR: Duration = Duration::from_millis(3200);
 const REREAD_EVERY: Duration = Duration::from_secs(5);
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
-/// How often the wallpaper's colours are reread (a new wallpaper says nothing).
+/// How long "You're connected" stays.
 const MOMENT_FOR: Duration = Duration::from_millis(2600);
+/// How often the wallpaper's colours are reread (a new wallpaper says nothing).
 const WALLPAPER_EVERY: Duration = Duration::from_secs(60);
 /// The sidebar's id for This PC's page.
 pub const THIS_PC: &str = "this-pc";
 /// And the activity's.
 pub const ACTIVITY: &str = "activity";
+/// And the commands'.
+pub const COMMANDS: &str = "commands";
+
+/// Ready-made commands the Commands page offers until added: (name, command line, fingerprint).
+const SUGGESTIONS: &[(&str, &str, bool)] = &[
+    ("Lock the screen", "loginctl lock-session", false),
+    ("Mute or unmute", "pactl set-sink-mute @DEFAULT_SINK@ toggle", false),
+    ("Sleep", "systemctl suspend", false),
+    ("Shut down", "systemctl poweroff", true),
+];
 
 thread_local! {
     /// The devices last read, on the UI thread.
@@ -41,12 +54,58 @@ fn main() -> anyhow::Result<()> {
         let scene = args.iter().position(|a| a == "--scene").and_then(|i| args.get(i + 1)).map(String::as_str).unwrap_or("phones");
         return snapshot::run(path, args.iter().any(|a| a == "--dark"), args.iter().any(|a| a == "--plain"), scene);
     }
+    let page = args.iter().position(|a| a == "--page").and_then(|i| args.get(i + 1)).cloned().unwrap_or_default();
     let ui = MainWindow::new()?;
+    // Another window is open: it shows the page, this one ends. No bus at all: run anyway.
+    if !instance::claim(&ui, &page).unwrap_or(true) {
+        return Ok(());
+    }
     ui.set_setup(args.iter().any(|a| a == "--setup") || !setup_done());
     wire(&ui);
     watch(ui.as_weak());
+    if !page.is_empty() {
+        open_page(&ui, &page);
+    }
     ui.run()?;
     Ok(())
+}
+
+/// Shows [page] (see `instance.rs`), leaving setup if it's up: a page was asked for by name.
+pub fn open_page(ui: &MainWindow, page: &str) {
+    if page.is_empty() {
+        return;
+    }
+    ui.set_setup(false);
+    match page {
+        COMMANDS => ui.invoke_show_commands(),
+        THIS_PC => ui.invoke_show_pc(),
+        ACTIVITY => ui.invoke_show_activity(),
+        id => ui.invoke_select(id.into()),
+    }
+}
+
+fn read_commands(ui: &slint::Weak<MainWindow>) {
+    let ui = ui.clone();
+    std::thread::spawn(move || {
+        let list = DbusDaemon::connect().and_then(|d| d.commands());
+        let _ = slint::invoke_from_event_loop(move || {
+            if let (Some(win), Ok(list)) = (ui.upgrade(), list) {
+                show_commands(&win, &list);
+            }
+        });
+    });
+}
+
+/// The commands, and the suggestions whose command line isn't among them yet.
+pub fn show_commands(ui: &MainWindow, list: &[CommandData]) {
+    let to = |c: &CommandData| Command { key: c.key.clone().into(), name: c.name.clone().into(), command: c.command.clone().into(), fingerprint: c.fingerprint };
+    let suggestions: Vec<Command> = SUGGESTIONS
+        .iter()
+        .filter(|(_, line, _)| !list.iter().any(|c| c.command.trim() == *line))
+        .map(|(name, line, fingerprint)| Command { key: "".into(), name: (*name).into(), command: (*line).into(), fingerprint: *fingerprint })
+        .collect();
+    ui.set_commands(ModelRc::new(VecModel::from(list.iter().map(to).collect::<Vec<_>>())));
+    ui.set_suggestions(ModelRc::new(VecModel::from(suggestions)));
 }
 
 /// Where the window keeps what's its own (that setup's been through), beside the daemon's state.
@@ -166,6 +225,41 @@ fn wire(ui: &MainWindow) {
             });
         }
     });
+    ui.on_show_commands({
+        let ui = ui.as_weak();
+        move || {
+            if let Some(win) = ui.upgrade() {
+                win.set_selected(COMMANDS.into());
+            }
+            read_commands(&ui);
+        }
+    });
+    ui.on_save_command({
+        let ui = ui.as_weak();
+        move |key, name, command, fingerprint| {
+            let ui = ui.clone();
+            std::thread::spawn(move || match DbusDaemon::connect().and_then(|d| d.save_command(&key, &name, &command, fingerprint)) {
+                Ok(_) => {
+                    notify(&ui, if key.is_empty() { format!("Added \u{201c}{}\u{201d}: it's on your phones now", name.trim()) } else { "Saved".into() });
+                    read_commands(&ui);
+                }
+                Err(e) => notify(&ui, format!("{e:#}")),
+            });
+        }
+    });
+    ui.on_remove_command({
+        let ui = ui.as_weak();
+        move |key| {
+            let ui = ui.clone();
+            std::thread::spawn(move || match DbusDaemon::connect().and_then(|d| d.remove_command(&key)) {
+                Ok(()) => {
+                    notify(&ui, "Deleted".into());
+                    read_commands(&ui);
+                }
+                Err(e) => notify(&ui, format!("{e:#}")),
+            });
+        }
+    });
     ui.on_allow_clipboard({
         let ui = ui.as_weak();
         move |id| {
@@ -187,6 +281,7 @@ fn wire(ui: &MainWindow) {
             if win.get_daemon_ok() {
                 order.push(THIS_PC.into());
                 order.push(ACTIVITY.into());
+                order.push(COMMANDS.into());
             }
             let at = order.iter().position(|id| *id == win.get_selected().as_str());
             let next = match at {
@@ -197,6 +292,7 @@ fn wire(ui: &MainWindow) {
             match order[next].as_str() {
                 THIS_PC => win.invoke_show_pc(),
                 ACTIVITY => win.invoke_show_activity(),
+                COMMANDS => win.invoke_show_commands(),
                 id => win.invoke_select(id.into()),
             }
         }
@@ -240,6 +336,7 @@ fn watch(ui: slint::Weak<MainWindow>) {
                 while let Ok(event) = d.next_event() {
                     match event {
                         Event::Changed => {
+                            read_commands(&told);
                             if changed.send(()).is_err() {
                                 return;
                             }
@@ -266,6 +363,7 @@ fn watch(ui: slint::Weak<MainWindow>) {
                 if daemon.is_some() {
                     read_health(&ui);
                     read_activity(&ui);
+                    read_commands(&ui);
                     wall_read = None;
                 }
             }
@@ -485,7 +583,7 @@ fn show(ui: &MainWindow, phones: &[PhoneData]) {
     ui.set_phones(ModelRc::new(VecModel::from(paired.iter().map(|p| to_ui(p)).collect::<Vec<_>>())));
     ui.set_nearby(ModelRc::new(VecModel::from(nearby.iter().map(|p| to_ui(p)).collect::<Vec<_>>())));
     // This PC's page and the activity stay put however the phones change.
-    if selected == THIS_PC || selected == ACTIVITY {
+    if selected == THIS_PC || selected == ACTIVITY || selected == COMMANDS {
         return;
     }
     ui.set_has_current(current.is_some());

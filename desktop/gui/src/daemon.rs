@@ -31,6 +31,31 @@ pub struct PhoneData {
     pub permits: Vec<Permission>,
 }
 
+/// A command phones can run here.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CommandData {
+    pub key: String,
+    pub name: String,
+    pub command: String,
+    pub fingerprint: bool,
+}
+
+impl CommandData {
+    /// From the daemon's `Commands` JSON ({key: {name, command, fingerprint}}), by name.
+    pub fn list(v: &Value) -> Vec<CommandData> {
+        let mut out: Vec<CommandData> = v
+            .as_object()
+            .map(|o| {
+                o.iter()
+                    .map(|(k, c)| CommandData { key: k.clone(), name: c["name"].as_str().unwrap_or("").to_owned(), command: c["command"].as_str().unwrap_or("").to_owned(), fingerprint: c["fingerprint"].as_bool().unwrap_or(false) })
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.sort_by_key(|c| c.name.to_lowercase());
+        out
+    }
+}
+
 /// One thing a phone may do on this PC.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Permission {
@@ -192,6 +217,10 @@ pub trait Daemon: Send + Sync {
     fn set_permission(&self, id: &str, key: &str, on: bool) -> Result<()>;
     /// Gives the plugged-in phone the one-time adb grant background clipboard sync needs.
     fn allow_clipboard(&self, id: &str) -> Result<()>;
+    fn commands(&self) -> Result<Vec<CommandData>>;
+    /// Changes a command, or adds one when [key] is empty; its key.
+    fn save_command(&self, key: &str, name: &str, command: &str, fingerprint: bool) -> Result<String>;
+    fn remove_command(&self, key: &str) -> Result<()>;
     /// Installs what's missing; [Event::SetupDone] follows.
     fn install(&self) -> Result<()>;
     /// What phones did here, newest first.
@@ -208,7 +237,7 @@ const PATH: &str = "/dev/vyoma/Desktop";
 const INTERFACE: &str = "dev.vyoma.Desktop1";
 
 /// zbus is async: its calls run here, each blocked on by the window's worker threads.
-fn runtime() -> &'static tokio::runtime::Runtime {
+pub fn runtime() -> &'static tokio::runtime::Runtime {
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RT.get_or_init(|| tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().expect("a tokio runtime"))
 }
@@ -277,6 +306,19 @@ impl Daemon for DbusDaemon {
 
     fn set_permission(&self, id: &str, key: &str, on: bool) -> Result<()> {
         self.call("SetPermission", &(id, key, on))
+    }
+
+    fn commands(&self) -> Result<Vec<CommandData>> {
+        let json: String = self.call("Commands", &())?;
+        Ok(CommandData::list(&serde_json::from_str(&json)?))
+    }
+
+    fn save_command(&self, key: &str, name: &str, command: &str, fingerprint: bool) -> Result<String> {
+        self.call("SaveCommand", &(key, name, command, fingerprint))
+    }
+
+    fn remove_command(&self, key: &str) -> Result<()> {
+        self.call("RemoveCommand", &(key,))
     }
 
     fn allow_clipboard(&self, id: &str) -> Result<()> {
