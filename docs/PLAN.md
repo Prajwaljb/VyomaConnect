@@ -351,7 +351,11 @@ Setup and health (2026-11-08): This PC in the sidebar (a dot when something need
 feature ready or what it needs (needing first), checks no package fixes (firewall: on, and whether a phone got through
 on Wi-Fi; KDE Connect running beside) and advice (VA-API), with Install (pkexec, once) when it can help. Daemon:
 `Health` (JSON), `Install`, `SetupDone(ok)`.
-Next: per-phone permissions, the activity log; then the macOS socket behind the same `Daemon` trait.
+Per-phone permissions (2026-11-08): each paired phone's page has "Allow this phone to" switches (screen, touchpad and
+controller, this PC's files, camera, webcam, power), all on by default, only offs kept in `permissions.json`, dropped on
+unpair. Off refuses with `vyoma.denied` (the phone shows why where it was waiting, else a toast) and stops what was
+running. Daemon: `Permissions(id)` (JSON), `SetPermission(id, key, on)`.
+Next: the activity log; then the macOS socket behind the same `Daemon` trait.
 
 ### Open
 Packaging (AUR, Flatpak, Homebrew), the app's desktop name, and whether KDE users keep the option of

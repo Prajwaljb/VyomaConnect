@@ -42,6 +42,7 @@ use vyoma_core::identity::Identity;
 use vyoma_core::lan::{Lan, Ports, Rules, UDP_PORT};
 use vyoma_core::link::packet;
 use vyoma_core::trust::TrustStore;
+use vyoma_companion::permits::{Permit, Permits};
 use vyoma_companion::session::{self as features, Host, Phone};
 use zbus::fdo;
 
@@ -110,6 +111,7 @@ struct Control {
     conn: zbus::Connection,
     /// kdeconnectd runs beside us (it keeps the cable, tethering and Bluetooth).
     beside_kde: bool,
+    permits: Arc<Permits>,
 }
 
 /// A phone has reached this PC over the network since start: a firewall lets it through.
@@ -275,6 +277,21 @@ impl Control {
         self.asks.send(Ask::StopRinging).map_err(|_| fdo::Error::Failed("stopping".into()))
     }
 
+    /// What the device may do here, as JSON: [{key, name, detail, on}], in the window's order.
+    fn permissions(&self, id: String) -> String {
+        let list: Vec<Value> = self.permits.of(&id).into_iter().map(|(p, on)| json!({ "key": p.key(), "name": p.name(), "detail": p.detail(), "on": on })).collect();
+        Value::Array(list).to_string()
+    }
+
+    /// Turns one of [permissions] on or off; off stops what it's doing at once.
+    async fn set_permission(&self, id: String, key: String, on: bool, #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>) -> fdo::Result<()> {
+        let p = Permit::from_key(&key).ok_or_else(|| fdo::Error::InvalidArgs(format!("no permission {key}")))?;
+        self.permits.set(&id, p, on).map_err(|e| fdo::Error::Failed(format!("{e:#}")))?;
+        tracing::info!("{id}: {key} {}", if on { "allowed" } else { "turned off" });
+        let _ = Control::changed(&emitter).await;
+        Ok(())
+    }
+
     /// Opens the device's files in the file manager (it has to allow it: Vyoma's "Browse this
     /// phone from your PC"). Mounted under $XDG_RUNTIME_DIR/vyoma until it goes.
     fn browse(&self, id: String) -> fdo::Result<()> {
@@ -359,6 +376,8 @@ struct Desk {
     volume: mpsc::UnboundedSender<(String, Value)>,
     /// What the companion did beside kdeconnectd (screen, files, controller…), served here.
     host: Arc<Host>,
+    /// When each phone's remote input was last refused (see [Permit::Control]).
+    refused_input: HashMap<String, std::time::Instant>,
     /// Device id to its running features session, which takes its vyoma.* packets.
     sessions: HashMap<String, mpsc::UnboundedSender<(Value, IpAddr)>>,
 }
@@ -463,7 +482,8 @@ async fn daemon(dir: PathBuf) -> Result<()> {
     let (mounted_tx, mut mounts_done) = mpsc::unbounded_channel();
     let notifier = Notifier::new(conn.clone());
     let run = commands::Commands::new(&dir);
-    let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone(), conn: conn.clone(), beside_kde };
+    let permits = Arc::new(Permits::load(dir.join("permissions.json")));
+    let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone(), conn: conn.clone(), beside_kde, permits: permits.clone() };
     conn.object_server().at(OBJECT_PATH, control).await?;
     conn.request_name(BUS_NAME).await.context("another Vyoma desktop app is running")?;
     // Tells the GUI when what it shows changed (checked, as many places change devices).
@@ -549,10 +569,11 @@ async fn daemon(dir: PathBuf) -> Result<()> {
             None
         }
     };
-    let host = Arc::new(Host { me: me.clone(), media: player, away: Arc::default() });
+    let host = Arc::new(Host { me: me.clone(), media: player, away: Arc::default(), permits });
 
     let mut desk = Desk {
         host,
+        refused_input: HashMap::new(),
         sessions: HashMap::new(),
         me: me.clone(),
         conn: conn.clone(),
@@ -938,6 +959,7 @@ impl Desk {
             }
             Event::Unpaired { id, name } => {
                 self.sessions.remove(&id);
+                self.host.permits.forget(&id);
                 self.kept.remove(&id);
                 if let Some(m) = self.mounts.remove(&id) {
                     m.unmount().await;
@@ -981,6 +1003,18 @@ impl Desk {
                         return;
                     }
                     input::MOUSEPAD_REQUEST => {
+                        if !self.host.permits.allows(&id, Permit::Control) {
+                            // Said once a while, not for every move of the finger.
+                            let now = std::time::Instant::now();
+                            if self.refused_input.get(&id).is_none_or(|t| now.duration_since(*t) > Duration::from_secs(5)) {
+                                self.refused_input.insert(id.clone(), now);
+                                tracing::info!("{id}: remote input refused, control is off for this phone");
+                                if plugins::takes(&device, vyoma_companion::permits::DENIED) {
+                                    self.send(&id, vyoma_companion::permits::denied(Permit::Control, &packet));
+                                }
+                            }
+                            return;
+                        }
                         let _ = self.input.send((std::time::Instant::now(), id, packet));
                         return;
                     }

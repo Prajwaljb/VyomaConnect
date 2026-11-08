@@ -101,6 +101,17 @@ fn wire(ui: &MainWindow) {
             });
         }
     });
+    ui.on_set_permission({
+        let ui = ui.as_weak();
+        move |id, key, on| {
+            let ui = ui.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = DbusDaemon::connect().and_then(|d| d.set_permission(&id, &key, on)) {
+                    notify(&ui, format!("{e:#}"));
+                }
+            });
+        }
+    });
     ui.on_search({
         let ui = ui.as_weak();
         move || {
@@ -298,6 +309,10 @@ fn to_ui(p: &PhoneData) -> Phone {
         can_ring: p.can_ring,
         can_browse: p.can_browse,
         can_share: p.can_share,
+        permits: std::rc::Rc::new(slint::VecModel::from(
+            p.permits.iter().map(|x| Permission { key: x.key.clone().into(), name: x.name.clone().into(), detail: x.detail.clone().into(), on: x.on }).collect::<Vec<_>>(),
+        ))
+        .into(),
     }
 }
 

@@ -23,6 +23,25 @@ pub struct PhoneData {
     pub can_ring: bool,
     pub can_browse: bool,
     pub can_share: bool,
+    /// What it may do here (paired phones).
+    pub permits: Vec<Permission>,
+}
+
+/// One thing a phone may do on this PC.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Permission {
+    pub key: String,
+    pub name: String,
+    pub detail: String,
+    pub on: bool,
+}
+
+impl Permission {
+    /// From the daemon's `Permissions` JSON.
+    pub fn list(v: &Value) -> Vec<Permission> {
+        let text = |p: &Value, k: &str| p[k].as_str().unwrap_or("").to_owned();
+        v.as_array().map(|a| a.iter().map(|p| Permission { key: text(p, "key"), name: text(p, "name"), detail: text(p, "detail"), on: p["on"].as_bool().unwrap_or(true) }).collect()).unwrap_or_default()
+    }
 }
 
 impl PhoneData {
@@ -42,6 +61,7 @@ impl PhoneData {
             can_ring: can("ring"),
             can_browse: can("browse"),
             can_share: can("share"),
+            permits: Vec::new(),
         }
     }
 }
@@ -128,6 +148,8 @@ pub trait Daemon: Send + Sync {
     fn send_files(&self, id: &str, paths: Vec<String>) -> Result<()>;
     fn search(&self) -> Result<()>;
     fn health(&self) -> Result<Health>;
+    /// Turns one of a phone's [Permission]s on or off; [Event::Changed] follows.
+    fn set_permission(&self, id: &str, key: &str, on: bool) -> Result<()>;
     /// Installs what's missing; [Event::SetupDone] follows.
     fn install(&self) -> Result<()>;
     /// Blocks until the daemon says something (an error once it's gone away).
@@ -173,7 +195,14 @@ impl Daemon for DbusDaemon {
         let mut out = Vec::with_capacity(list.len());
         for (id, ..) in list {
             let details: String = self.call("Details", &(&id,))?;
-            out.push(PhoneData::from_details(&id, &serde_json::from_str(&details)?));
+            let mut phone = PhoneData::from_details(&id, &serde_json::from_str(&details)?);
+            if phone.paired {
+                // An older daemon has no permissions: the card stays hidden.
+                if let Ok(json) = self.call::<String>("Permissions", &(&id,)) {
+                    phone.permits = Permission::list(&serde_json::from_str(&json)?);
+                }
+            }
+            out.push(phone);
         }
         Ok(out)
     }
@@ -197,6 +226,10 @@ impl Daemon for DbusDaemon {
 
     fn install(&self) -> Result<()> {
         self.call("Install", &())
+    }
+
+    fn set_permission(&self, id: &str, key: &str, on: bool) -> Result<()> {
+        self.call("SetPermission", &(id, key, on))
     }
 
     fn next_event(&self) -> Result<Event> {

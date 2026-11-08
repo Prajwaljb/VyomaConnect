@@ -5,6 +5,14 @@
 import { Palette, ScrollView } from "std-widgets.slint";
 import "fonts/inter.ttf";
 
+// One thing a phone may do here, and whether it may.
+export struct Permission {
+    key: string,
+    name: string,
+    detail: string,
+    on: bool,
+}
+
 export struct Phone {
     id: string,
     name: string,
@@ -21,7 +29,10 @@ export struct Phone {
     can-ring: bool,
     can-browse: bool,
     can-share: bool,
+    // What it may do on this PC (paired phones only).
+    permits: [Permission],
 }
+
 
 // A feature that needs something on the PC; [detail]: "Ready" or what it needs.
 export struct Feature {
@@ -373,6 +384,85 @@ component CheckRow inherits Rectangle {
     }
 }
 
+// An on/off switch, iOS style: the accent when on.
+component Switch inherits Rectangle {
+    in property <bool> on;
+    callback toggled;
+    width: 42px;
+    height: 26px;
+    border-radius: self.height / 2;
+    background: on ? Theme.accent : Theme.dark ? #FFFFFF29 : #00000024;
+    animate background { duration: 150ms; }
+    Rectangle {
+        x: root.on ? parent.width - self.width - 2px : 2px;
+        y: 2px;
+        width: 22px;
+        height: 22px;
+        border-radius: 11px;
+        background: white;
+        drop-shadow-blur: 3px;
+        drop-shadow-offset-y: 1px;
+        drop-shadow-color: #00000030;
+        animate x { duration: 150ms; easing: ease-out; }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+}
+
+// A permission: its name over what it covers, the switch at the end. The whole row flips it.
+component PermitRow inherits Rectangle {
+    in property <Permission> permit;
+    in property <bool> last;
+    callback toggled;
+    background: touch.pressed ? Theme.pressed : touch.has-hover ? Theme.hover : transparent;
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 14px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.permit.name;
+                color: Theme.text;
+                font-size: 14px;
+                font-weight: 500;
+                wrap: word-wrap;
+            }
+            Text {
+                text: root.permit.detail;
+                color: Theme.muted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Switch {
+                on: root.permit.on;
+                toggled => { root.toggled(); }
+            }
+        }
+    }
+    Rectangle {
+        x: 16px;
+        y: parent.height - 1px;
+        width: parent.width - 16px;
+        height: 1px;
+        background: Theme.divider;
+        visible: !root.last;
+    }
+}
+
 // This PC in the sidebar, below the phones.
 component PcItem inherits Rectangle {
     in property <bool> selected;
@@ -629,6 +719,7 @@ component PhonePage inherits Rectangle {
     callback ring(string);
     callback browse(string);
     callback send-files(string);
+    callback set-permission(string, string, bool);
 
     ScrollView {
         VerticalLayout {
@@ -791,6 +882,24 @@ component PhonePage inherits Rectangle {
                 }
             }
 
+            // What it may do here; off stops it at once.
+            if root.phone.paired && root.phone.permits.length > 0: VerticalLayout {
+                spacing: 8px;
+                SectionLabel {
+                    text: "Allow this phone to";
+                    x: 4px;
+                }
+                CardShadow {
+                    Card {
+                        for p[i] in root.phone.permits: PermitRow {
+                            permit: p;
+                            last: i == root.phone.permits.length - 1;
+                            toggled => { root.set-permission(root.phone.id, p.key, !p.on); }
+                        }
+                    }
+                }
+            }
+
             // Unpair asks once, in place.
             if root.phone.paired: CardShadow {
                 Card {
@@ -916,6 +1025,7 @@ export component MainWindow inherits Window {
     callback ring(string);
     callback browse(string);
     callback send-files(string);
+    callback set-permission(string, string, bool);
     callback show-pc();
     callback install();
 
@@ -1032,6 +1142,7 @@ export component MainWindow inherits Window {
                 ring(id) => { root.ring(id); }
                 browse(id) => { root.browse(id); }
                 send-files(id) => { root.send-files(id); }
+                set-permission(id, key, on) => { root.set-permission(id, key, on); }
             }
             if (root.selected != "this-pc" || !root.daemon-ok) && !root.has-current: EmptyPage {
                 daemon-ok: root.daemon-ok;

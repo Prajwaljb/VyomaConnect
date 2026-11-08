@@ -22,6 +22,7 @@ import dev.vyoma.connect.designsystem.AppCanvas
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.filterNotNull
@@ -138,6 +139,18 @@ class VyomaApp : Application() {
                     if (each.isEmpty()) flowOf(null) else merge(*each.toTypedArray())
                 }
             }.filterNotNull().collect { (pc, specs, body) -> PcSpecsStore.put(this@VyomaApp, pc, specs, body) }
+        }
+        // The PC turned something off for this phone and nothing on screen says so (a wake, a stopped cast).
+        container.appScope.launch(Dispatchers.Main) {
+            @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+            container.hub.filterNotNull().flatMapLatest { hub ->
+                hub.devices.flatMapLatest { all ->
+                    val each = all.values.map { d ->
+                        d.state.map { d.plugin<CompanionPlugin>(CompanionPlugin.ID) }.distinctUntilChanged().flatMapLatest { it?.refused ?: emptyFlow() }
+                    }
+                    if (each.isEmpty()) emptyFlow() else merge(*each.toTypedArray())
+                }
+            }.collect { why -> android.widget.Toast.makeText(this@VyomaApp, why, android.widget.Toast.LENGTH_LONG).show() }
         }
         // Whether any of our activities is started: background work scales down when it isn't.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {

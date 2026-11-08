@@ -77,6 +77,8 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
   peers ignore unknown fields (they do).
   Ours so far: `kdeconnect.telephony` `appName` (an app's internet call, e.g. WhatsApp: no number; `contactName`
   is the caller, or the app's name when it doesn't say, so stock desktops still read sensibly).
+- `vyoma.denied` (PC → phone, `feature`, `name`, `request`, `path`/`key`): that request's feature is off for this phone
+  in the desktop app (`desktop/companion/src/permits.rs`); an empty `request` means a running one was stopped.
 - Real-time streams (gamepad, video) don't go through the JSON link: negotiate over a vyoma packet, then use a
   dedicated socket (UDP with AEAD for input, TLS/TCP for video).
 

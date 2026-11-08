@@ -100,7 +100,7 @@ async fn daemon() -> Result<()> {
             None
         }
     };
-    let shared = Arc::new(Shared { host, features: Arc::new(Host { me: Arc::new(me), media, away: Arc::default() }), links: Links::default(), seen: Mutex::default(), sessions: Mutex::default() });
+    let shared = Arc::new(Shared { host, features: Arc::new(Host { me: Arc::new(me), media, away: Arc::default(), permits: Arc::default() }), links: Links::default(), seen: Mutex::default(), sessions: Mutex::default() });
 
     tokio::spawn(setup::offer());
     tokio::spawn(usb::watch());
