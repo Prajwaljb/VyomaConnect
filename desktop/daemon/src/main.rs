@@ -170,7 +170,18 @@ impl Control {
             "browse": moves && plugins::takes(d, phonefiles::SFTP_REQUEST),
             "share": moves && plugins::takes(d, share::SHARE),
         });
-        Ok(json!({ "name": d.name, "type": d.kind, "paired": d.paired, "linked": d.linked, "key": d.key, "asking": d.asking, "battery": battery, "signal": d.signal, "via": via(d), "can": can }).to_string())
+        let linked_paired = all.values().filter(|d| d.paired && d.linked).count();
+        let clip = clipboard_sync(&id, d, linked_paired);
+        Ok(json!({ "name": d.name, "type": d.kind, "paired": d.paired, "linked": d.linked, "key": d.key, "asking": d.asking, "battery": battery, "signal": d.signal, "via": via(d), "can": can, "clipboardSync": clip }).to_string())
+    }
+
+    /// Lets the plugged-in phone's clipboard sync work with Vyoma closed (the USB notification's
+    /// Allow, from the window). Needs the phone on the cable with USB debugging on.
+    async fn allow_clipboard_sync(&self, id: String, #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>) -> fdo::Result<()> {
+        vyoma_companion::usb::allow_clipboard().await.map_err(|e| fdo::Error::Failed(format!("{e:#}")))?;
+        clip_remember(&id);
+        let _ = Control::changed(&emitter).await;
+        Ok(())
     }
 
     /// Something the GUI shows changed: a device came, went, paired, or its battery moved.
@@ -506,6 +517,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
     let run = commands::Commands::new(&dir);
     let permits = Arc::new(Permits::load(dir.join("permissions.json")));
     let activity = Arc::new(Activity::load(dir.join("activity.json")));
+    clip_load(&dir);
     let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone(), conn: conn.clone(), beside_kde, permits: permits.clone(), activity: activity.clone() };
     conn.object_server().at(OBJECT_PATH, control).await?;
     conn.request_name(BUS_NAME).await.context("another Vyoma desktop app is running")?;
@@ -1304,6 +1316,39 @@ fn best(routes: &[IpAddr], cable: bool) -> Option<IpAddr> {
 }
 
 /// How a linked device is reached: loopback is the cable (while one's tunnelled) or Bluetooth.
+/// Phones whose background clipboard sync was seen granted: it lasts until the app's uninstalled,
+/// and the cable (the only place it shows) is usually out.
+static CLIP_ON: std::sync::OnceLock<(PathBuf, Mutex<std::collections::BTreeSet<String>>)> = std::sync::OnceLock::new();
+
+fn clip_load(dir: &std::path::Path) {
+    let file = dir.join("clipboard-sync.json");
+    let ids = std::fs::read_to_string(&file).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let _ = CLIP_ON.set((file, Mutex::new(ids)));
+}
+
+fn clip_remember(id: &str) {
+    let Some((file, ids)) = CLIP_ON.get() else { return };
+    let mut ids = ids.lock().unwrap();
+    if ids.insert(id.to_owned()) {
+        let _ = std::fs::write(file, serde_json::to_string(&*ids).unwrap_or_default());
+    }
+}
+
+/// "on", "ask" (on the cable, waiting for Allow) or "plug" (unknown until it's plugged in). A phone
+/// on the cable is the one linked by it, or the only one linked at all.
+fn clipboard_sync(id: &str, d: &DeviceView, linked_paired: usize) -> &'static str {
+    let plugged = vyoma_companion::usb::clipboard();
+    let mine = d.paired && d.linked && !plugged.is_empty() && (via(d) == Some("cable") || linked_paired == 1);
+    if mine {
+        if plugged.iter().any(|c| c.granted()) {
+            clip_remember(id);
+            return "on";
+        }
+        return "ask";
+    }
+    if CLIP_ON.get().is_some_and(|(_, ids)| ids.lock().unwrap().contains(id)) { "on" } else { "plug" }
+}
+
 fn via(d: &DeviceView) -> Option<&'static str> {
     let remote = d.remote.filter(|_| d.linked)?;
     Some(if !remote.is_loopback() {
@@ -1367,6 +1412,9 @@ fn shown(devices: &Devices) -> u64 {
     for id in ids {
         let d = &all[id];
         (id, &d.name, &d.kind, d.paired, d.linked, &d.key, d.asking, d.battery, d.remote, via(d)).hash(&mut h);
+    }
+    for c in vyoma_companion::usb::clipboard() {
+        (c.serial, c.digest).hash(&mut h);
     }
     h.finish()
 }

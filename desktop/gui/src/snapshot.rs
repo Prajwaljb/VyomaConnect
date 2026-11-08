@@ -96,8 +96,15 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str) -> Result<()> {
         crate::look::apply(&ui.global::<Theme>(), Some(&crate::look::Wallpaper { cols: 4, rows: 4, colors: colors.to_vec() }));
     }
     ui.show()?;
-    slint::platform::update_timers_and_animations();
+    // Draw once so pages start rising in, then again once every enter animation has settled.
     let mut pixels = vec![Rgb8Pixel::new(0, 0, 0); (w * h) as usize];
+    slint::platform::update_timers_and_animations();
+    window.draw_if_needed(|renderer| {
+        renderer.render(&mut pixels, w as usize);
+    });
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    slint::platform::update_timers_and_animations();
+    window.request_redraw();
     window.draw_if_needed(|renderer| {
         renderer.render(&mut pixels, w as usize);
     });
@@ -146,14 +153,17 @@ fn phones(scene: &str) -> Vec<PhoneData> {
         permit("power", "Wake, unlock, sleep and shut down", "Also log out and restart", false),
     ];
     main.sims = vec![("SIM 1".into(), "5G".into(), 4), ("SIM 2".into(), "LTE".into(), 2)];
-    let away = PhoneData { paired: true, ..phone("b", "Work phone") };
+    let away = PhoneData { paired: true, clip: "plug".into(), ..phone("b", "Work phone") };
     let mut near = PhoneData { linked: true, ..phone("c", "OnePlus 12") };
     if scene == "pairing" {
         near.code = "4F9A2C1B".into();
         near.asking = true;
     }
+    main.clip = "on".into();
     if scene == "cable" {
+        // Plugged in, waiting for the one-time clipboard grant.
         main.via = "cable".into();
+        main.clip = "ask".into();
     }
     // Setup before pairing: nothing paired yet, one phone nearby (asking, in setup-pairing).
     if scene == "setup" || scene == "setup-pairing" {
