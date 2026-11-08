@@ -110,6 +110,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -778,34 +779,63 @@ private fun BluetoothRow(vm: AppViewModel, resumeTick: Int) {
     remember { BluetoothFallback.init(context) }
     val on by BluetoothFallback.enabled.collectAsStateWithLifecycle()
     var asked by remember { mutableIntStateOf(0) }
+    // Pairing ends in Android's dialog and the PC's: recheck when it does.
+    var pairing by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        val bonds = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context, i: Intent) {
+                @Suppress("DEPRECATION") // the typed getter is API 33
+                val device = i.getParcelableExtra<android.bluetooth.BluetoothDevice>(android.bluetooth.BluetoothDevice.EXTRA_DEVICE)
+                if (device?.address !in BluetoothFallback.addresses(context).values) return // headphones and the like
+                pairing = i.getIntExtra(android.bluetooth.BluetoothDevice.EXTRA_BOND_STATE, 0) == android.bluetooth.BluetoothDevice.BOND_BONDING
+                asked++
+            }
+        }
+        androidx.core.content.ContextCompat.registerReceiver(
+            context, bonds, android.content.IntentFilter(android.bluetooth.BluetoothDevice.ACTION_BOND_STATE_CHANGED),
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        onDispose { context.unregisterReceiver(bonds) }
+    }
     val ready = remember(resumeTick, on, asked) { BluetoothFallback.readiness(context) }
     // Android's Bluetooth page stops calling the PC paired once its audio and calls are off, so this says it.
     val devices by vm.devices.collectAsStateWithLifecycle()
     val known = remember(resumeTick, on, asked) { BluetoothFallback.addresses(context).keys }
     val pcName = devices.firstOrNull { it.identity.deviceId in known }?.identity?.deviceName ?: "your PC"
     val overRadio = devices.any { TransportKind.BLUETOOTH in it.transports && it.isReachable }
+    fun openBluetoothSettings() = runCatching { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+    // Not paired: the app starts it (both screens show a code), else Bluetooth settings.
+    fun pair() {
+        if (BluetoothFallback.pair(context)) pairing = true else openBluetoothSettings()
+    }
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         asked++
-        if (granted) BluetoothFallback.setEnabled(context, true)
-        else runCatching {
+        if (granted) {
+            BluetoothFallback.setEnabled(context, true)
+            if (BluetoothFallback.readiness(context) == BluetoothFallback.Readiness.NOT_PAIRED) pair()
+        } else runCatching {
             context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + context.packageName)))
         }
     }
-    fun openBluetoothSettings() = runCatching { context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
     fun toggle(want: Boolean) {
         if (!want) BluetoothFallback.setEnabled(context, false)
-        else if (BluetoothFallback.permitted(context)) BluetoothFallback.setEnabled(context, true)
-        else ask.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
+        else if (BluetoothFallback.permitted(context)) {
+            BluetoothFallback.setEnabled(context, true)
+            if (ready == BluetoothFallback.Readiness.NOT_PAIRED) pair()
+        } else ask.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
     }
-    val needsPairing = on && (ready == BluetoothFallback.Readiness.NOT_PAIRED || ready == BluetoothFallback.Readiness.RADIO_OFF)
+    val needsPairing = ready == BluetoothFallback.Readiness.NOT_PAIRED
+    val needsRadio = on && ready == BluetoothFallback.Readiness.RADIO_OFF
     ListRow(
         title = "Bluetooth",
         subtitle = when {
+            // Said whether the switch is on or not: without the pairing it can never work.
+            pairing -> "Pairing: confirm the code on the phone and on $pcName"
+            needsPairing -> "Not paired with $pcName yet. Tap to pair"
             !on -> "Connect without Wi-Fi or cable"
             ready == BluetoothFallback.Readiness.NO_ADAPTER -> "This phone has no Bluetooth"
             ready == BluetoothFallback.Readiness.RADIO_OFF -> "Turn on Bluetooth to use it"
             ready == BluetoothFallback.Readiness.PC_UNKNOWN -> "Connect once over Wi-Fi so it can find your PC"
-            ready == BluetoothFallback.Readiness.NOT_PAIRED -> "Pair this phone with your PC in Bluetooth settings"
             overRadio -> "Connected to $pcName over Bluetooth"
             else -> "Paired with $pcName, ready if Wi-Fi drops"
         },
@@ -813,7 +843,7 @@ private fun BluetoothRow(vm: AppViewModel, resumeTick: Int) {
         iconTint = SystemColor.BLUE.color,
         showDivider = true,
         haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
-        onClick = { if (needsPairing) openBluetoothSettings() else toggle(!on) },
+        onClick = { if (needsPairing) pair() else if (needsRadio) openBluetoothSettings() else toggle(!on) },
         trailing = { VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Bluetooth") },
     )
 }
