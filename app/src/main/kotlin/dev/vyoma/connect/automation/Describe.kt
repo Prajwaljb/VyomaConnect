@@ -122,7 +122,7 @@ object Suggestions {
 
     val all = listOf(
         Suggestion(
-            "walkaway", "Your PC locks itself once your phone has been gone a minute (needs the companion).",
+            "walkaway", "Your PC locks itself once your phone has been gone a minute (needs Vyoma on your PC).",
             Rule(name = "Lock PC when I leave", trigger = Trigger.PcLink(connected = false, afterMin = 1), actions = listOf(Action.LockPc), suggestion = "walkaway"),
         ),
         Suggestion(

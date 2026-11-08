@@ -231,7 +231,7 @@ pub async fn mount(server: &Server, phone: IpAddr, id: &str, name: &str, at: &Pa
     if phone.is_loopback() {
         // Loopback without a cable is Bluetooth, which carries packets only; the cable's ports
         // would answer anyway (adb holds them) and reset the connection.
-        anyhow::ensure!(!vyoma_companion::usb::cable_ports().is_empty(), "Browsing the phone needs Wi-Fi or the USB cable (it's on Bluetooth only)");
+        anyhow::ensure!(!vyoma_companion::usb::cable_ports().is_empty(), "Phone files need Wi-Fi or the USB cable (it's on Bluetooth only)");
         // Through a Unix socket of our own rather than the companion's TCP mirror of the port:
         // ~10 ms a file opened instead of ~50 (usb::forward_unix).
         let socket = runtime_dir().join(unit.replace(".service", ".sock"));

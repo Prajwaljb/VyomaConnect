@@ -157,8 +157,8 @@ fun FilesScreen(
             item(key = "offline") {
                 SectionCard {
                     ListRow(
-                        title = "The companion isn't connected",
-                        subtitle = "Browsing PC files needs Vyoma's companion running on $pcName",
+                        title = "Vyoma isn't connected on the PC",
+                        subtitle = "Browsing PC files needs Vyoma running on $pcName",
                         icon = Icons.Rounded.FolderOff,
                         iconTint = SystemColor.GRAY.color,
                     )

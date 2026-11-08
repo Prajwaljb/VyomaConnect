@@ -42,7 +42,6 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.vyoma.connect.container
@@ -219,7 +218,7 @@ class WebcamActivity : ComponentActivity() {
 private fun subtitle(s: PhoneWebcam.Status): String = when {
     s.error != null && !s.on -> "Off"
     !s.on -> "Off"
-    s.pc == null -> "Waiting for Vyoma's companion on the PC"
+    s.pc == null -> "Waiting for Vyoma on the PC"
     s.camera -> "Live on ${s.pc}" + (if (s.mic) " · camera and mic" else " · camera")
     else -> "Starting on ${s.pc}…"
 }
@@ -260,12 +259,10 @@ private fun Preview(size: android.util.Size) {
 
 @Composable
 private fun SetupSteps() {
+    // Vyoma on the PC installs it: no terminal, no paths into the source.
     Text(
-        "Run once on the PC, in a terminal:\n\n" +
-            "sudo install -Dm644 desktop/companion/webcam/vyoma-webcam.conf /etc/modprobe.d/\n" +
-            "echo v4l2loopback | sudo tee /etc/modules-load.d/vyoma-webcam.conf\n" +
-            "sudo modprobe v4l2loopback",
-        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+        "On the PC, click Install on This PC in Vyoma's window (or in Vyoma's notification). It asks for the password once, then try again here.",
+        style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 14.dp),
     )

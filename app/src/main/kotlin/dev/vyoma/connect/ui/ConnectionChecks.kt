@@ -53,7 +53,7 @@ internal enum class CheckKind(val title: String) {
     WIFI("Wi-Fi"),
     USB("USB cable"),
     BLUETOOTH("Bluetooth"),
-    COMPANION("Companion"),
+    COMPANION("Vyoma on PC"),
     ENCRYPTION("Encryption"),
     CONTROLLER("Controller"),
     TOUCHPAD("Touchpad"),
@@ -105,7 +105,7 @@ internal fun connectionChecks(f: LinkFacts): List<ConnectionCheck> {
             BluetoothFallback.Readiness.RADIO_OFF -> ConnectionCheck(CheckKind.BLUETOOTH, "Turned off on this phone", CheckLevel.QUIET)
             BluetoothFallback.Readiness.NO_ADAPTER -> ConnectionCheck(CheckKind.BLUETOOTH, "This phone has no Bluetooth", CheckLevel.QUIET)
             BluetoothFallback.Readiness.NEEDS_PERMISSION -> ConnectionCheck(CheckKind.BLUETOOTH, "Vyoma needs the Nearby devices permission", CheckLevel.PROBLEM)
-            BluetoothFallback.Readiness.PC_UNKNOWN -> ConnectionCheck(CheckKind.BLUETOOTH, "Connect once with the companion on your PC first", CheckLevel.PROBLEM)
+            BluetoothFallback.Readiness.PC_UNKNOWN -> ConnectionCheck(CheckKind.BLUETOOTH, "Connect once with Vyoma on your PC first", CheckLevel.PROBLEM)
             BluetoothFallback.Readiness.NOT_PAIRED -> ConnectionCheck(CheckKind.BLUETOOTH, "Pair this phone with your PC in Bluetooth settings", CheckLevel.PROBLEM)
         }
     }

@@ -132,12 +132,12 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str) -> Result<()> {
 }
 
 fn health(missing: bool) -> Health {
-    let names = ["Sound", "Volume", "Clipboard", "Notifications", "Browsing the phone", "Live screen", "Phone screen", "Phone as webcam", "Game controller over USB"];
+    let names = ["Sound", "Volume", "Clipboard", "Notifications", "Phone files", "PC screen on the phone", "Phone on PC", "Phone as webcam", "Game controller over USB"];
     let features = names
         .iter()
         .map(|n| {
             let needs: Vec<String> = match (*n, missing) {
-                ("Browsing the phone", true) => vec!["sshfs".into()],
+                ("Phone files", true) => vec!["sshfs".into()],
                 ("Phone as webcam", true) => vec!["v4l2loopback-dkms".into(), "a module setting".into()],
                 _ => vec![],
             };
@@ -149,7 +149,7 @@ fn health(missing: bool) -> Health {
     if missing {
         checks[0] = Check { name: "Firewall".into(), state: "info".into(), detail: "ufw is on. If phones don't show up on Wi-Fi, allow ports 1714 to 1764, TCP and UDP.".into() };
         checks.push(Check { name: "KDE Connect".into(), state: "warn".into(), detail: "Also running, so the USB cable, tethering and Bluetooth stay with it. Quit it to use them here.".into() });
-        notes.push("Live screen needs vah264enc, which comes from your graphics card's VA-API driver.".into());
+        notes.push("PC screen on the phone needs vah264enc, which comes from your graphics card's VA-API driver.".into());
     }
     Health { features, installable: missing, installing: false, checks, notes }
 }

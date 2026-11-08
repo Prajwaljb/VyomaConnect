@@ -650,7 +650,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                 canPaste = companionPlugin != null,
                 onText = ::sendTyped,
                 onKey = { k -> typing { key(k) } },
-                onRefused = { note("Emoji need the PC companion") },
+                onRefused = { note("Emoji need Vyoma on the PC") },
             )
         }
         Spacer(Modifier.navigationBarsPadding())

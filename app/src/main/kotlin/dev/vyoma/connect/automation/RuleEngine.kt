@@ -248,7 +248,7 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
                 }
             }
             is Action.PcBrightness -> {
-                val companion = companionOf(pc!!).need("the companion")
+                val companion = companionOf(pc!!).need("Vyoma on the PC")
                 companion.requestControls()
                 // The undo needs today's levels: wait a moment for the answer before settling for what's known.
                 withTimeoutOrNull(1_500) { companion.controls.drop(1).first() }
@@ -264,9 +264,9 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
                 null
             }
             is Action.MessagePc -> { pc!!.plugin<PingPlugin>(PingPlugin.ID).need("ping").ping(a.text.ifBlank { rule.name }); null }
-            Action.PcScreenshot -> { companionOf(pc!!).need("the companion").screenshot.request(); null }
-            Action.WakePcScreen -> { companionOf(pc!!).need("the companion").wake(); null }
-            Action.SleepPc -> { companionOf(pc!!).need("the companion").power(PcPower.SLEEP).getOrThrow(); null }
+            Action.PcScreenshot -> { companionOf(pc!!).need("Vyoma on the PC").screenshot.request(); null }
+            Action.WakePcScreen -> { companionOf(pc!!).need("Vyoma on the PC").wake(); null }
+            Action.SleepPc -> { companionOf(pc!!).need("Vyoma on the PC").power(PcPower.SLEEP).getOrThrow(); null }
             is Action.NotifyMe -> { Notifications.automation(app, rule.id, rule.name, a.text.ifBlank { rule.summary() }); null }
             is Action.PhoneRinger -> {
                 val want = if (a.mode == RingerMode.VIBRATE) AudioManager.RINGER_MODE_VIBRATE else AudioManager.RINGER_MODE_NORMAL

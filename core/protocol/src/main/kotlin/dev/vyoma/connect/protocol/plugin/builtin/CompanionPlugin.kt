@@ -1227,7 +1227,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
      */
     private fun receiveDenied(packet: NetworkPacket) {
         val name = packet.string("name") ?: "That"
-        val why = "Turned off for this phone on the PC. Allow \u201c$name\u201d in Vyoma there."
+        val why = "Turned off for this phone on the PC. Turn on \u201c$name\u201d on this phone's page in Vyoma's window there."
         val request = packet.string("request").orEmpty()
         val path = packet.string("path")
         val key = packet.string("key")
