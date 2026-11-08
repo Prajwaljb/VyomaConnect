@@ -187,9 +187,13 @@ fn safe_name(name: &str, hidden_ok: bool) -> Result<String> {
 }
 
 /// Where kdeconnectd saves what this phone sends: its share plugin's `incoming_path` if set
-/// (`%1` is the phone's name there; we use the folder as is), else XDG Downloads.
+/// (`%1` is the phone's name there; we use the folder as is), else XDG Downloads. The desktop app
+/// saves its stock shares to Downloads, so these go there too, whatever kdeconnectd's old setting.
 fn incoming_dir(phone_id: &str) -> PathBuf {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp"));
+    if crate::setup::is_standalone() {
+        return downloads(&home);
+    }
     let config = home.join(".config/kdeconnect").join(phone_id).join("kdeconnect_share/config");
     if let Ok(text) = std::fs::read_to_string(config)
         && let Some(v) = text.lines().find_map(|l| l.strip_prefix("incoming_path="))

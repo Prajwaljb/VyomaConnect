@@ -328,8 +328,7 @@ starts Android's pairing with the PC's address (`BluetoothFallback.pair`), a cod
 side doesn't pair by itself.
 
 Still to do:
-- Shares via xfer still land in kdeconnectd's `incoming_path`.
-- The portal touchpad (`pointer-token`) and the daemon's input (`remotedesktop-token`) are separate sessions, so Plasma may ask twice.
+- The portal touchpad (`pointer-token`) and the daemon's input (`remotedesktop-token`) are separate sessions, so Plasma may ask twice. Each asks once only (its token is kept), so left as is.
 
 ### GUI (decided 2026-11-07)
 Slint, in Vyoma's own look, on every desktop. First version: pairing and phones (the code to
