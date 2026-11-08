@@ -25,6 +25,8 @@ pub struct PhoneData {
     pub can_share: bool,
     /// Each SIM's signal: its label, network ("5G") and level 0..4.
     pub sims: Vec<(String, String, i32)>,
+    /// Background clipboard sync: "on", "ask" (plugged in, waiting for Allow) or "plug".
+    pub clip: String,
     /// What it may do here (paired phones).
     pub permits: Vec<Permission>,
 }
@@ -64,6 +66,7 @@ impl PhoneData {
             can_browse: can("browse"),
             can_share: can("share"),
             sims: sims(&v["signal"]),
+            clip: v["clipboardSync"].as_str().unwrap_or("plug").to_owned(),
             permits: Vec::new(),
         }
     }
@@ -187,6 +190,8 @@ pub trait Daemon: Send + Sync {
     fn health(&self) -> Result<Health>;
     /// Turns one of a phone's [Permission]s on or off; [Event::Changed] follows.
     fn set_permission(&self, id: &str, key: &str, on: bool) -> Result<()>;
+    /// Gives the plugged-in phone the one-time adb grant background clipboard sync needs.
+    fn allow_clipboard(&self, id: &str) -> Result<()>;
     /// Installs what's missing; [Event::SetupDone] follows.
     fn install(&self) -> Result<()>;
     /// What phones did here, newest first.
@@ -272,6 +277,10 @@ impl Daemon for DbusDaemon {
 
     fn set_permission(&self, id: &str, key: &str, on: bool) -> Result<()> {
         self.call("SetPermission", &(id, key, on))
+    }
+
+    fn allow_clipboard(&self, id: &str) -> Result<()> {
+        self.call("AllowClipboardSync", &(id,))
     }
 
     fn activity(&self) -> Result<Vec<ActivityEntry>> {

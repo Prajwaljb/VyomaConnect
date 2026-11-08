@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use daemon::{ActivityEntry, Daemon, DbusDaemon, Event, Health, PhoneData};
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 slint::include_modules!();
 
@@ -164,6 +164,41 @@ fn wire(ui: &MainWindow) {
                     notify(&ui, format!("{e:#}"));
                 }
             });
+        }
+    });
+    ui.on_allow_clipboard({
+        let ui = ui.as_weak();
+        move |id| {
+            let ui = ui.clone();
+            std::thread::spawn(move || match DbusDaemon::connect().and_then(|d| d.allow_clipboard(&id)) {
+                Ok(()) => notify(&ui, "Clipboard sync is on".into()),
+                Err(e) => notify(&ui, format!("{e:#}")),
+            });
+        }
+    });
+    // Up and Down move through the sidebar, in its order.
+    ui.on_step({
+        let ui = ui.as_weak();
+        move |by| {
+            let Some(win) = ui.upgrade() else { return };
+            let ids = |m: ModelRc<Phone>| (0..m.row_count()).filter_map(|i| m.row_data(i)).map(|p| p.id.to_string()).collect::<Vec<_>>();
+            let mut order = ids(win.get_phones());
+            order.extend(ids(win.get_nearby()));
+            if win.get_daemon_ok() {
+                order.push(THIS_PC.into());
+                order.push(ACTIVITY.into());
+            }
+            let at = order.iter().position(|id| *id == win.get_selected().as_str());
+            let next = match at {
+                Some(i) => (i as i32 + by).clamp(0, order.len() as i32 - 1) as usize,
+                None if !order.is_empty() => 0,
+                None => return,
+            };
+            match order[next].as_str() {
+                THIS_PC => win.invoke_show_pc(),
+                ACTIVITY => win.invoke_show_activity(),
+                id => win.invoke_select(id.into()),
+            }
         }
     });
     ui.on_search({
@@ -477,6 +512,7 @@ fn to_ui(p: &PhoneData) -> Phone {
         can_ring: p.can_ring,
         can_browse: p.can_browse,
         can_share: p.can_share,
+        clip: p.clip.clone().into(),
         sims: std::rc::Rc::new(slint::VecModel::from(p.sims.iter().map(|(label, network, level)| Sim { label: label.into(), network: network.into(), level: *level }).collect::<Vec<_>>())).into(),
         permits: std::rc::Rc::new(slint::VecModel::from(
             p.permits.iter().map(|x| Permission { key: x.key.clone().into(), name: x.name.clone().into(), detail: x.detail.clone().into(), on: x.on }).collect::<Vec<_>>(),

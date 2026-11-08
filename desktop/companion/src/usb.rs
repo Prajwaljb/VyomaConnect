@@ -63,6 +63,7 @@ pub async fn watch() {
         known = now;
         if known.is_empty() {
             CABLE.lock().unwrap().clear();
+            CLIP.lock().unwrap().clear();
         }
         polls = polls.wrapping_add(1);
         // Just plugged in, it's being set up: no tunnel yet isn't a lost tunnel.
@@ -153,6 +154,7 @@ pub async fn unforward_unix(at: &std::path::Path) {
 async fn recheck_tunnels(adb: &PathBuf) {
     let devices = list_devices(adb).await;
     CABLE.lock().unwrap().retain(|(serial, _)| devices.iter().any(|(s, st)| s == serial && st == "device"));
+    CLIP.lock().unwrap().retain(|c| devices.iter().any(|(s, st)| *s == c.serial && st == "device"));
     for (serial, state) in devices {
         if state != "device" || NOT_VYOMA.lock().unwrap().contains(&serial) || SETTING_UP.lock().unwrap().contains(&serial) {
             continue;
@@ -241,6 +243,7 @@ async fn set_up(adb: &PathBuf, serial: &str) {
     info!("{serial}: payload ports mirrored over USB ({mirrored} to the phone, {forwarded} from it)");
     for pkg in installed {
         if has_grants(adb, serial, pkg).await {
+            note_clip(serial, pkg, None);
             continue;
         }
         let digest = match signing_digest(adb, serial, pkg).await {
@@ -251,20 +254,77 @@ async fn set_up(adb: &PathBuf, serial: &str) {
             }
         };
         if !allowed_apps().contains(&digest) {
+            note_clip(serial, pkg, Some(digest.clone()));
             ask_to_allow(adb.clone(), serial.to_string(), pkg, digest);
             continue;
         }
-        grant(adb, serial, pkg).await;
+        if grant(adb, serial, pkg).await {
+            note_clip(serial, pkg, None);
+        }
     }
 }
 
-/// Both are idempotent; they only ever touch this package's own permissions.
-async fn grant(adb: &PathBuf, serial: &str, pkg: &str) {
+/// A plugged-in phone's background clipboard sync: granted, or waiting for the person at this PC
+/// to allow its signing key ([digest]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClipSync {
+    pub serial: String,
+    pub pkg: &'static str,
+    pub digest: Option<String>,
+}
+
+impl ClipSync {
+    pub fn granted(&self) -> bool {
+        self.digest.is_none()
+    }
+}
+
+/// Each plugged-in Vyoma app's state, gone when it's unplugged.
+static CLIP: std::sync::Mutex<Vec<ClipSync>> = std::sync::Mutex::new(Vec::new());
+
+fn note_clip(serial: &str, pkg: &'static str, digest: Option<String>) {
+    let mut all = CLIP.lock().unwrap();
+    all.retain(|c| !(c.serial == serial && c.pkg == pkg));
+    all.push(ClipSync { serial: serial.to_string(), pkg, digest });
+}
+
+/// The plugged-in phones' background clipboard sync, for the desktop app's window.
+pub fn clipboard() -> Vec<ClipSync> {
+    CLIP.lock().unwrap().clone()
+}
+
+/// The window's Allow: what the notification's Allow does, for every plugged-in app still waiting.
+/// How many got it.
+pub async fn allow_clipboard() -> Result<usize> {
+    let adb = find_adb().context("adb isn't installed")?;
+    let waiting: Vec<ClipSync> = clipboard().into_iter().filter(|c| !c.granted()).collect();
+    anyhow::ensure!(!waiting.is_empty(), "Plug the phone in with a USB cable first, with USB debugging on");
+    let mut done = 0;
+    for c in waiting {
+        let digest = c.digest.clone().unwrap_or_default();
+        if !allowed_apps().contains(&digest) {
+            std::fs::create_dir_all(crate::identity::dir())
+                .and_then(|()| std::fs::write(allowed_apps_path(), allowed_apps().into_iter().chain([digest.clone()]).collect::<Vec<_>>().join("\n") + "\n"))
+                .context("couldn't remember the allowed app")?;
+        }
+        if grant(&adb, &c.serial, c.pkg).await {
+            note_clip(&c.serial, c.pkg, None);
+            done += 1;
+        }
+    }
+    anyhow::ensure!(done > 0, "The phone didn't take it. Unplug it, plug it in again and allow USB debugging on its screen");
+    Ok(done)
+}
+
+/// Both are idempotent; they only ever touch this package's own permissions. Whether both took.
+async fn grant(adb: &PathBuf, serial: &str, pkg: &str) -> bool {
     let logs = run(adb, serial, &["shell", "pm", "grant", pkg, "android.permission.READ_LOGS"]).await;
     let overlay = run(adb, serial, &["shell", "appops", "set", pkg, "SYSTEM_ALERT_WINDOW", "allow"]).await;
-    if logs.is_some() && overlay.is_some() {
+    let ok = logs.is_some() && overlay.is_some();
+    if ok {
         info!("{serial}: background clipboard sync allowed for {pkg}");
     }
+    ok
 }
 
 /// Nothing to ask or fetch when it already has them (the usual case: they last until uninstalled).
@@ -327,7 +387,9 @@ fn ask_to_allow(adb: PathBuf, serial: String, pkg: &'static str, digest: String)
                 if let Err(e) = saved {
                     warn!("couldn't remember the allowed app: {e}");
                 }
-                grant(&adb, &serial, pkg).await;
+                if grant(&adb, &serial, pkg).await {
+                    note_clip(&serial, pkg, None);
+                }
             }
             "no" => DECLINED.lock().unwrap().push(digest.clone()),
             _ => {}

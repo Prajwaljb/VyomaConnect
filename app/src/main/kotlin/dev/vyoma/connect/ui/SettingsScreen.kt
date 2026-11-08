@@ -608,7 +608,7 @@ internal fun ClipboardSetupDialog(vm: AppViewModel, onDismiss: () -> Unit) {
                         runCatching { context.startActivity(Intent(if (options) Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS else Settings.ACTION_DEVICE_INFO_SETTINGS)) }
                     }
                     SetupStep(2, "Plug into your PC", "Then tap Allow when this phone asks about USB debugging.", done = false)
-                    SetupStep(3, "Click Allow on your PC", "The Vyoma companion asks in a notification. This turns on by itself after that.", done = false)
+                    SetupStep(3, "Click Allow on your PC", "In the notification Vyoma shows, or on this phone's page in Vyoma's window. This turns on by itself after that.", done = false)
                     Spacer(Modifier.height(4.dp))
                     Text(
                         if (manual) "Hide the command" else "No companion on the PC?",
