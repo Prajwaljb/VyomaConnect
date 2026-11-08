@@ -1,7 +1,9 @@
-//! A mounted phone in the file managers' sidebars, as KDE Connect's was: "<phone> (Vyoma Desktop)"
-//! in Dolphin's Places (`user-places.xbel`) and in the GTK bookmarks that Thunar, Nautilus, Nemo,
-//! Caja and COSMIC Files share (`gtk-3.0/bookmarks`). Each file manager watches its file, so the
-//! entry shows while mounted and goes when the mount does.
+//! A mounted phone in the file managers' sidebars, as KDE Connect's was: its folder, "<phone>
+//! (Vyoma Desktop)", in the GTK bookmarks that Thunar, Nautilus, Nemo, Caja and COSMIC Files share
+//! (`gtk-3.0/bookmarks`), which they watch, so it shows while mounted and goes with the mount.
+//! Dolphin lists the mount by itself (under Remote, by its folder's name), so it gets no entry of
+//! ours: one there doubled it. Entries an older version put in Dolphin's `user-places.xbel` are
+//! still taken out.
 //!
 //! An entry is ours when it points under `$XDG_RUNTIME_DIR/vyoma/`, where only our mounts live:
 //! everything else in those files is the user's and is written back as it was.
@@ -10,16 +12,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-/// What the entry says after the phone's name.
-const BY: &str = "Vyoma Desktop";
-
-/// Adds [name]'s mount at [at] to both sidebars.
-pub fn add(name: &str, at: &Path) {
+/// Adds the mount at [at], called [label], to the GTK file managers' sidebar.
+pub fn add(label: &str, at: &Path) {
     let uri = uri(at);
-    let label = format!("{name} ({BY})");
-    edit(&gtk_file(), true, |s| with_gtk(&without_gtk(s), &uri, &label));
-    // Only into a file Dolphin made: a new one would stand in for its default places.
-    edit(&kde_file(), false, |s| with_kde(&without_kde(s), &uri, &label));
+    edit(&gtk_file(), true, |s| with_gtk(&without_gtk(s), &uri, label));
 }
 
 /// Takes every entry of ours out (a mount ended, or at start for what a crash left).
@@ -131,6 +127,7 @@ fn drop_kde(s: &str, drop: impl Fn(&str) -> bool) -> String {
     out
 }
 
+#[cfg(test)]
 fn with_kde(s: &str, uri: &str, label: &str) -> String {
     let Some(end) = s.rfind("</xbel>") else { return s.to_owned() };
     let entry = format!(
@@ -141,6 +138,7 @@ fn with_kde(s: &str, uri: &str, label: &str) -> String {
     format!("{}{entry}{}", &s[..end], &s[end..])
 }
 
+#[cfg(test)]
 fn escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }

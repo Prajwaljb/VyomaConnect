@@ -90,7 +90,8 @@ fn mpint(n: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Where a phone called [name] is mounted this time: `$XDG_RUNTIME_DIR/vyoma/<n>/<name>`, a new
+/// Where a phone called [name] is mounted this time: `$XDG_RUNTIME_DIR/vyoma/<n>/<name> (Vyoma
+/// Desktop)`, the name file managers show for it (Dolphin lists it by that alone), a new
 /// [n] for each mount. File managers keep a folder they've shown by its path (Thunar never looks
 /// again, as sshfs sends no changes), so a mount made again at the same path showed a window left
 /// open on the old one as empty; on a fresh path that window's folder is gone, and it closes.
@@ -99,6 +100,7 @@ pub fn mount_point(name: &str) -> PathBuf {
     let base = mounts_dir();
     let clean: String = name.chars().map(|c| if c == '/' || c.is_control() { '_' } else { c }).collect();
     let clean = if clean.trim().is_empty() || clean.starts_with('.') { "Phone".into() } else { clean };
+    let clean = format!("{clean} (Vyoma Desktop)");
     loop {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = base.join(n.to_string());
@@ -400,8 +402,8 @@ mod tests {
 
     #[test]
     fn a_phone_name_is_a_safe_folder() {
-        assert!(mount_point("A/B").ends_with("A_B"));
-        assert!(mount_point("..").ends_with("Phone"));
+        assert!(mount_point("A/B").ends_with("A_B (Vyoma Desktop)"));
+        assert!(mount_point("..").ends_with("Phone (Vyoma Desktop)"));
         let (a, b) = (mount_point("P"), mount_point("P"));
         assert_ne!(a, b, "each mount gets a path of its own");
         assert_eq!(a.parent().unwrap().parent(), b.parent().unwrap().parent());
