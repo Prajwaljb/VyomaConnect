@@ -10,8 +10,8 @@ pub const NAME: &str = "dev.vyoma.Window";
 const PATH: &str = "/dev/vyoma/Window";
 const INTERFACE: &str = "dev.vyoma.Window1";
 
-pub async fn open(page: &'static str) {
-    if let Err(e) = try_open(page).await {
+pub async fn open(page: String) {
+    if let Err(e) = try_open(&page).await {
         tracing::warn!("can't open the window on {page}: {e:#}");
     }
 }

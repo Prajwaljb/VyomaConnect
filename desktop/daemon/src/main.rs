@@ -1041,6 +1041,19 @@ impl Desk {
             }
             Event::Packet { id, packet, from } => {
                 let Some(mut device) = self.devices.lock().unwrap().get(&id).cloned() else { return };
+                if packet["type"].as_str() == Some(plugins::WINDOW) {
+                    // Only pages by name; a phone can open its own page, not another's.
+                    let page = match packet["body"]["page"].as_str().unwrap_or("") {
+                        "phone" => id.clone(),
+                        p @ ("commands" | "this-pc" | "activity" | "") => p.to_owned(),
+                        _ => return,
+                    };
+                    if device.paired {
+                        tracing::info!("{id}: opening the window on {}", if page == id { "its page" } else { page.as_str() });
+                        tokio::spawn(window::open(page));
+                    }
+                    return;
+                }
                 if packet["type"].as_str().is_some_and(|t| t.starts_with("vyoma.")) {
                     if let Some(session) = self.sessions.get(&id) {
                         let _ = session.send((packet, from));
@@ -1090,7 +1103,7 @@ impl Desk {
                         // The phone's "add command": the editor is Vyoma's window.
                         if body["setup"].as_bool() == Some(true) {
                             tracing::info!("{id}: opening the command editor");
-                            tokio::spawn(window::open("commands"));
+                            tokio::spawn(window::open("commands".into()));
                         }
                         if let Some(key) = body["key"].as_str() {
                             match self.run.run(key) {

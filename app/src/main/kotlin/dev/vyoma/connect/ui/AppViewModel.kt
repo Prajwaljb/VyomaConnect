@@ -217,6 +217,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         devices.value.firstOrNull { it.identity.featuresOf == pcId && it.isPaired && it.isReachable }
             ?.let { device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
 
+    /** Whether PC [pcId] runs Vyoma's own app, which has a window this phone can open. */
+    fun pcHasWindow(pcId: String): Boolean = companionOf(pcId)?.hasWindow == true
+
+    /** Opens Vyoma's window on PC [pcId] at [page] ("phone": this phone's page); false if it couldn't be asked. */
+    suspend fun openPcWindow(pcId: String, page: String = "phone"): Boolean {
+        val plugin = companionOf(pcId)?.takeIf { it.hasWindow } ?: return false
+        return runCatching { plugin.openWindow(page) }.isSuccess
+    }
+
     /**
      * Carries on here with what PC [pcId] is playing: the PC pauses, and the link opens on the
      * phone at the same moment (YouTube) or just opens (any other page).
