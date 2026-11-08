@@ -14,6 +14,7 @@ pub mod mirror;
 pub mod notice;
 pub mod paste;
 pub mod pc;
+pub mod permits;
 pub mod pointer;
 pub mod screen;
 pub mod screenshot;

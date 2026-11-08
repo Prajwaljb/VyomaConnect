@@ -9,7 +9,7 @@ use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferTyp
 use slint::platform::{Platform, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, PhysicalSize};
 
-use crate::daemon::{Check, Feature, Health, PhoneData};
+use crate::daemon::{Check, Feature, Health, Permission, PhoneData};
 use crate::{MainWindow, Theme};
 
 const WIDTH: u32 = 920;
@@ -94,6 +94,15 @@ fn health(missing: bool) -> Health {
 fn phones(scene: &str) -> Vec<PhoneData> {
     let phone = |id: &str, name: &str| PhoneData { id: id.into(), name: name.into(), can_ring: true, can_browse: true, can_share: true, ..Default::default() };
     let mut main = PhoneData { paired: true, linked: true, via: "wifi".into(), battery: Some(82), charging: true, ..phone("a", "Pixel 9 Pro") };
+    let permit = |key: &str, name: &str, detail: &str, on: bool| Permission { key: key.into(), name: name.into(), detail: detail.into(), on };
+    main.permits = vec![
+        permit("screen", "See and control this screen", "Watch the screen live, use it by touch, take screenshots", true),
+        permit("control", "Touchpad, keyboard and controller", "Move the pointer, type, paste, play games", true),
+        permit("files", "Use this PC's files", "Browse your home folder from the phone, and save to it", true),
+        permit("camera", "Take photos with this PC's camera", "Photos land on the phone", false),
+        permit("webcam", "Be this PC's webcam and mic", "The phone's camera and microphone in calls here", true),
+        permit("power", "Wake, unlock, sleep and shut down", "Also log out and restart", false),
+    ];
     let away = PhoneData { paired: true, ..phone("b", "Work phone") };
     let mut near = PhoneData { linked: true, ..phone("c", "OnePlus 12") };
     if scene == "pairing" {

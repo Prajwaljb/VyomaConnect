@@ -1217,7 +1217,46 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         _rumble.tryEmit(Rumble(packet.int("strong") ?: 0, packet.int("weak") ?: 0, packet.int("ms") ?: 0))
     }
 
+    private val _refused = MutableSharedFlow<String>(extraBufferCapacity = 4, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
+    /** Something was refused (or stopped) because it's turned off for this phone on the PC, and nothing waiting shows it: say so. */
+    val refused: SharedFlow<String> = _refused.asSharedFlow()
+
+    /**
+     * The PC turned [DENIED]'s feature off for this phone: whatever was waiting on [request] gets
+     * the reason as its error; what has no waiter (a wake, a stopped stream) goes to [refused].
+     */
+    private fun receiveDenied(packet: NetworkPacket) {
+        val name = packet.string("name") ?: "That"
+        val why = "Turned off for this phone on the PC. Allow \u201c$name\u201d in Vyoma there."
+        val request = packet.string("request").orEmpty()
+        val path = packet.string("path")
+        val key = packet.string("key")
+        fun error(type: String) = NetworkPacket(type, buildJsonObject {
+            put("error", why)
+            path?.let { put("path", it) }
+            key?.let { put("key", it) }
+        })
+        when (request) {
+            SCREENSHOT_REQUEST -> screenshot.receive(error(SCREENSHOT))
+            CAMERA_REQUEST -> photo.receive(error(CAMERA))
+            SCREEN_REQUEST -> pendingScreen?.also { pendingScreen = null }?.complete(error(SCREEN)) ?: _refused.tryEmit(why)
+            POINTER_REQUEST -> pendingPointer?.also { pendingPointer = null }?.complete(error(POINTER_READY)) ?: _refused.tryEmit(why)
+            DESKTOP_STEP -> pendingStep?.also { pendingStep = null }?.complete(error(DESKTOP_STEPPED)) ?: _refused.tryEmit(why)
+            GAMEPAD_STATE -> _gamepadError.value = why
+            WEBCAM, WEBCAM_MIC -> receiveWebcam(error(WEBCAM_STATE))
+            PASTE -> pendingPaste?.also { pendingPaste = null }?.complete(why) ?: _refused.tryEmit(why)
+            PC_POWER -> pendingPower?.also { pendingPower = null }?.complete(why) ?: _refused.tryEmit(why)
+            FILES_LIST -> _folder.update { if (it?.loading == true) it.copy(loading = false, error = why) else it }
+            FILES_GET -> if (path != null) receiveFile(error(FILES_FILE)) else _refused.tryEmit(why)
+            FILES_PUT -> pending?.also { it.reply.complete(it.name to why) } ?: _refused.tryEmit(why)
+            XFER_BEGIN -> xferReplies.remove("ready:$key")?.complete(error(XFER_READY))
+            XFER_DATA -> xferReplies.remove("done:$key")?.complete(error(XFER_DONE))
+            else -> _refused.tryEmit(why)
+        }
+    }
+
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
+        if (packet.type == DENIED) receiveDenied(packet)
         if (packet.type == GAMEPAD_RUMBLE) receiveRumble(packet)
         if (packet.type == WEBCAM_STATE) receiveWebcam(packet)
         if (packet.type == MIRROR_INPUT) receiveMirrorInput(packet)
@@ -1326,6 +1365,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val MIRROR_COPY = "vyoma.mirror.copy"
         const val MIRROR_VOLUME = "vyoma.mirror.volume"
         const val MIRROR_STATE = "vyoma.mirror.state"
+        /** A request refused: its feature is turned off for this phone on the PC. */
+        const val DENIED = "vyoma.denied"
         private const val WEBCAM_ACCEPT_MS = 15_000
         private const val ACCESSORY_ASK_MS = 15_000L
         private const val GAMEPAD_BODY = 35
@@ -1352,7 +1393,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(POINTER_READY, BLUETOOTH, PASTE_READY, STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, SPECS, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED, WEBCAM_STATE, MIRROR_INPUT, MIRROR_STATE),
+            incoming = setOf(POINTER_READY, BLUETOOTH, PASTE_READY, STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, SPECS, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED, WEBCAM_STATE, MIRROR_INPUT, MIRROR_STATE, DENIED),
             outgoing = setOf(POINTER_REQUEST, POINTER_CLOSE, PASTE, STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, SCREEN_INPUT, SCREEN_TOUCH, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, SPECS_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, USB_ACCESSORY, WEBCAM, WEBCAM_MIC, WEBCAM_TURN, MIRROR, MIRROR_AUDIO, MIRROR_COPY, MIRROR_VOLUME),
         ) { CompanionPlugin(it, sink) }
     }

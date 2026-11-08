@@ -13,6 +13,7 @@ use vyoma_core::identity::Identity;
 use vyoma_core::link::{Sender, packet};
 use vyoma_core::payload;
 
+use crate::permits::{self, Permit, Permits};
 use crate::{accessory, away, bluetooth, camera, desktop, files, gamepad, media, mirror, paste, pc, pointer, screen, screenshot, specs, stats, wallpaper, webcam, xfer};
 
 /// The phone's stats come for this long after it last asked.
@@ -22,7 +23,7 @@ const STATS_EVERY: Duration = Duration::from_secs(2);
 /// What every session on this PC shares.
 /// The vyoma.* packets a session takes and sends.
 pub const INCOMING: &[&str] = &["vyoma.away", "vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.screen.input", "vyoma.screen.touch", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.specs.request", "vyoma.gamepad.state", "vyoma.gamepad.close", "vyoma.desktop.step", "vyoma.usb.accessory", "vyoma.webcam", "vyoma.webcam.mic", "vyoma.webcam.turn", "vyoma.mirror", "vyoma.mirror.audio", "vyoma.mirror.copy", "vyoma.mirror.volume", "vyoma.paste", "vyoma.pointer.request", "vyoma.pointer.close"];
-pub const OUTGOING: &[&str] = &["vyoma.bluetooth", "vyoma.pointer.ready", "vyoma.paste.ready", "vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.specs", "vyoma.gamepad.rumble", "vyoma.gamepad.udp", "vyoma.desktop.stepped", "vyoma.webcam.state", "vyoma.mirror.input", "vyoma.mirror.state"];
+pub const OUTGOING: &[&str] = &["vyoma.bluetooth", "vyoma.pointer.ready", "vyoma.paste.ready", "vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.specs", "vyoma.gamepad.rumble", "vyoma.gamepad.udp", "vyoma.desktop.stepped", "vyoma.webcam.state", "vyoma.mirror.input", "vyoma.mirror.state", "vyoma.denied"];
 
 pub struct Host {
     pub me: Arc<Identity>,
@@ -30,6 +31,8 @@ pub struct Host {
     pub media: Option<Arc<media::Media>>,
     /// Walk-away rules each phone asked for.
     pub away: Arc<away::Away>,
+    /// What each phone may do here.
+    pub permits: Arc<Permits>,
 }
 
 /// The phone at the other end.
@@ -79,9 +82,61 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
     if let Some(address) = bluetooth::address().await {
         let _ = sender.send(&packet("vyoma.bluetooth", json!({ "address": address }))).await;
     }
-    while let Some((p, from)) = packets.recv().await {
+    let mut switches = host.permits.subscribe();
+    // A refusal goes out at most this often per feature: streams (controller states, touches) repeat.
+    let mut refused: std::collections::HashMap<Permit, Instant> = std::collections::HashMap::new();
+    loop {
+        let (p, from) = tokio::select! {
+            got = packets.recv() => match got {
+                Some(got) => got,
+                None => break,
+            },
+            Ok(()) = switches.changed() => {
+                // Turned off: what it was doing stops now, and the phone hears why.
+                for permit in Permit::ALL.into_iter().filter(|&f| !host.permits.allows(phone_id, f)) {
+                    let stopped = match permit {
+                        Permit::Screen => {
+                            screen_input = None;
+                            stop(touch_task.take()) | stop(screen_task.take()) | stop(shot_task.take())
+                        }
+                        Permit::Camera => stop(photo_task.take()),
+                        Permit::Webcam => stop(webcam_task.take()) | stop(mic_task.take()),
+                        Permit::Control => {
+                            let pointer = touchpad.take().is_some_and(|(tx, t)| {
+                                if tx.try_send(pointer::Frame::Close).is_err() {
+                                    t.abort();
+                                }
+                                true
+                            });
+                            pointer | stop(pad.take().map(|(_, t)| t))
+                        }
+                        Permit::Files => {
+                            let busy = !file_tasks.is_empty();
+                            file_tasks.abort_all();
+                            busy
+                        }
+                        Permit::Power => false,
+                    };
+                    if stopped {
+                        info!("{name}: {} turned off, stopped", permit.key());
+                        let _ = sender.send(&permits::denied(permit, &json!({ "type": "" }))).await;
+                    }
+                }
+                continue;
+            }
+        };
         while file_tasks.try_join_next().is_some() {}
-        match p["type"].as_str().unwrap_or_default() {
+        let kind = p["type"].as_str().unwrap_or_default();
+        if let Some(permit) = Permit::of(kind).filter(|&f| !host.permits.allows(phone_id, f)) {
+            let now = Instant::now();
+            if refused.get(&permit).is_none_or(|t| now.duration_since(*t) > Duration::from_secs(2)) {
+                refused.insert(permit, now);
+                info!("{name}: {kind} refused, {} is off for this phone", permit.key());
+                let _ = sender.send(&permits::denied(permit, &p)).await;
+            }
+            continue;
+        }
+        match kind {
             "vyoma.stats.request" => {
                 *lease.lock().unwrap() = Instant::now() + STATS_LEASE;
                 if stats_task.as_ref().is_none_or(|t| t.is_finished()) {
@@ -408,6 +463,15 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
     info!("{name}: link closed");
 }
 
+
+/// Ends [task]; true if it was still going.
+fn stop(task: Option<tokio::task::JoinHandle<()>>) -> bool {
+    task.is_some_and(|t| {
+        let going = !t.is_finished();
+        t.abort();
+        going
+    })
+}
 
 /// Sends the wallpaper's colours whenever it changes (checked every few seconds; the phone asks for
 /// the current one itself when it connects).
