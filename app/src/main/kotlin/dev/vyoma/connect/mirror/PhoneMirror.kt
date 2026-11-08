@@ -179,6 +179,11 @@ object PhoneMirror {
         val vd = display ?: return@coroutineScope
         val video = LiveStream(BACKLOG)
         current = plugin
+        // Out of power save while it streams: a dozing radio held the PC's acks back, and the picture
+        // stalled in bursts of 250 ms to 1.5 s (as the PC screen view, which takes the same lock).
+        val wifi = (app.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager)
+            .createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "vyoma:mirror")
+            .apply { setReferenceCounted(false); acquire() }
         var size = pictureSize(realSize(app))
         var encoder = H264Encoder(size.width, size.height, BITRATE, FPS, video, "mirror-encoder")
         vd.resize(encoder.width, encoder.height, app.resources.displayMetrics.densityDpi)
@@ -208,6 +213,7 @@ object PhoneMirror {
             VLog.i(TAG, "mirroring ${encoder.width}x${encoder.height}")
             plugin.sendMirror(encoder.width, encoder.height, video)
         } finally {
+            wifi.release()
             if (current === plugin) current = null
             // Stop may have released the display already.
             runCatching { vd.surface = null }

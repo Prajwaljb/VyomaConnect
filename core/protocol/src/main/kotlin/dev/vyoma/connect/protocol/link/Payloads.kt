@@ -80,7 +80,7 @@ internal class LanPayloads(
                 if (usbMirror && !link.remoteAddress.isLoopbackAddress) put("usbPort", server.localPort + USB_FORWARD_SHIFT)
             })
             if (!link.send(announced)) return@closeOnCancel false
-            val secure = acceptPeer(server, link.peerCertificate, timeoutMs, packet.type).also { ssl = it }
+            val secure = acceptPeer(server, link.peerCertificate, timeoutMs, packet.type, live = source.size < 0).also { ssl = it }
             VLog.d(TAG, "payload port ${server.localPort} (${packet.type}): peer connected")
             secure.use {
                 it.soTimeout = IO_TIMEOUT_MS
@@ -96,7 +96,7 @@ internal class LanPayloads(
      * one that's wrong or stalls is dropped and the wait goes on, for [timeoutMs] in all. Proofs run
      * side by side, each with a time limit, so a few idle connections can't hold up the real one.
      */
-    private suspend fun acceptPeer(server: ServerSocket, expected: X509Certificate, timeoutMs: Int, what: String): SSLSocket = coroutineScope {
+    private suspend fun acceptPeer(server: ServerSocket, expected: X509Certificate, timeoutMs: Int, what: String, live: Boolean = false): SSLSocket = coroutineScope {
         val peer = CompletableDeferred<SSLSocket>()
         val proving = ConcurrentHashMap.newKeySet<Socket>()
         val slots = Semaphore(MAX_PROOFS)
@@ -117,6 +117,10 @@ internal class LanPayloads(
                         }
                         try {
                             tuneSocket(plain)
+                            // A live stream's backlog belongs in its own queue, where the encoder sees it and
+                            // lowers the bitrate: Android's send buffer took megabytes, seconds of picture on
+                            // slow Wi-Fi, so the encoder never knew and the PC saw it freeze (2026-11-08).
+                            if (live) plain.sendBufferSize = LIVE_SEND_BUFFER
                             val secure = tls.wrap(plain, asServer = true).also { wrapped = it }
                             secure.startHandshake()
                             verifyPeer(secure, expected)
@@ -213,6 +217,8 @@ internal class LanPayloads(
         const val TAG = "LanPayloads"
         const val CONNECT_TIMEOUT_MS = 5_000
         const val MAX_PROOFS = 4
+        /** A live stream's socket send buffer (Linux doubles it): ~0.1 s at the mirror's top bitrate. */
+        private const val LIVE_SEND_BUFFER = 64 * 1024
         const val PROOF_LIMIT_MS = 5_000L
         const val IO_TIMEOUT_MS = 30_000
     }
