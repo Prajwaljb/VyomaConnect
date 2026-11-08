@@ -545,6 +545,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
 
     lan.announce(&targets).await?;
     tracing::info!("{} is up as {}", env!("CARGO_PKG_NAME"), me.device_id);
+    phonefiles::tidy().await;
     if beside_kde {
         tracing::info!("kdeconnectd is running: the cable, tethering and Bluetooth stay its own");
     } else {
@@ -1004,7 +1005,9 @@ impl Desk {
                 share::open(&m.path.to_string_lossy());
                 return;
             }
-            self.mounts.remove(&id);
+            if let Some(m) = self.mounts.remove(&id) {
+                tokio::spawn(m.unmount());
+            }
         }
         tracing::info!("{id}: asking to browse its files");
         self.send(&id, phonefiles::request());
@@ -1016,11 +1019,14 @@ impl Desk {
         if self.mounts.get_mut(&id).is_some_and(|m| m.alive()) {
             return;
         }
-        // Its sshfs unit is the one the new mount replaces (same name), which the mount stops.
-        self.mounts.remove(&id);
+        // The ended one it replaces goes first, its folder with it.
+        let old = self.mounts.remove(&id);
         let at = phonefiles::mount_point(&device.name);
         let (key, cert, dir, done) = (self.dir.join("privateKey.pem"), device.cert.clone(), self.dir.clone(), self.mounted.clone());
         tokio::spawn(async move {
+            if let Some(old) = old {
+                old.unmount().await;
+            }
             let result = phonefiles::mount(&server, remote, &id, &at, &key, &cert, &dir).await;
             let _ = done.send((id, result));
         });
