@@ -398,6 +398,13 @@ internal fun CompanionSetup(vm: AppViewModel, online: Boolean, pcId: String?) {
     val scope = rememberCoroutineScope()
     if (online) {
         Tip("It's running. Screen, camera, stats and files are on Home now, and Vyoma's window on the PC shows this phone.")
+        // Vyoma's own PC app has a window: open it on this phone's page, the other half of setup.
+        if (pcId != null && vm.pcHasWindow(pcId)) PillButton("Open Vyoma on PC", onClick = {
+            scope.launch {
+                if (vm.openPcWindow(pcId)) status.show("Opened on your PC", haptic = false)
+                else status.show("Couldn't reach your PC", failure = true)
+            }
+        }, prominent = false)
         return
     }
     Text(

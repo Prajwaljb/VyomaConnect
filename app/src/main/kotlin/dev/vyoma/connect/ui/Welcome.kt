@@ -78,6 +78,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.Shadow
@@ -409,12 +410,14 @@ internal fun WelcomeShow(backdrop: Backdrop, clock: ShowClock, intro: WelcomeInt
         // Skip stays out of the way; there's nothing it skips that setup needs.
         GlassPill(
             "Skip", backdrop,
-            Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 8.dp, end = 16.dp).graphicsLayer { alpha = if (pager.currentPage == SCENES - 1) 0f else intro.controls.value },
+            Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 8.dp, end = 16.dp).graphicsLayer { alpha = if (pager.currentPage == SCENES - 1) 0f else intro.controls.value; compositingStrategy = CompositingStrategy.ModulateAlpha },
             onClick = { if (intro.controls.value > 0.5f) onDone() },
         )
         Column(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(start = 20.dp, end = 20.dp, bottom = 16.dp)
-                .graphicsLayer { alpha = intro.controls.value; translationY = (1f - intro.controls.value) * 14.dp.toPx() },
+                // Alpha per draw, not through an offscreen layer: that cut the glass's shadow to a square
+                // while it faded in (user, 2026-11-09).
+                .graphicsLayer { alpha = intro.controls.value; translationY = (1f - intro.controls.value) * 14.dp.toPx(); compositingStrategy = CompositingStrategy.ModulateAlpha },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             PageDots(SCENES) { pager.currentPage + pager.currentPageOffsetFraction }

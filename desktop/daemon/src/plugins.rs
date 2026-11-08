@@ -31,7 +31,11 @@ pub const SIGNAL: &str = "kdeconnect.connectivity_report";
 pub const SIGNAL_REQUEST: &str = "kdeconnect.connectivity_report.request";
 
 /// What we take. Not lock requests outward: phones can't be locked that way, and a KDE PC would lock.
-pub const INCOMING: &[&str] = &[PING, BATTERY, FIND, LOCK_REQUEST, SIGNAL, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, MPRIS_REQUEST, VOLUME_REQUEST, RUNCOMMAND_REQUEST, NOTIFICATION, MOUSEPAD_REQUEST, TELEPHONY, PRESENTER, SFTP];
+/// The phone asks for this PC's window on a page (`{page}`: "phone" for its own, "commands", "this-pc",
+/// "activity", or "" as it is). Vyoma's own: only this app has a window, so only it advertises it.
+pub const WINDOW: &str = "vyoma.window";
+
+pub const INCOMING: &[&str] = &[WINDOW, PING, BATTERY, FIND, LOCK_REQUEST, SIGNAL, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, MPRIS_REQUEST, VOLUME_REQUEST, RUNCOMMAND_REQUEST, NOTIFICATION, MOUSEPAD_REQUEST, TELEPHONY, PRESENTER, SFTP];
 pub const OUTGOING: &[&str] = &[
     PING, BATTERY, FIND, LOCK, SIGNAL_REQUEST, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, MPRIS, VOLUME, RUNCOMMAND,
     NOTIFICATION_REQUEST, NOTIFICATION_REPLY, NOTIFICATION_ACTION, MOUSEPAD_ECHO, MOUSEPAD_KEYBOARDSTATE, MUTE, SFTP_REQUEST,
