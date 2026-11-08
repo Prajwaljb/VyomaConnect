@@ -27,8 +27,12 @@ interface PhoneFileServer {
      */
     fun start(peerKey: PublicKey?, from: Collection<InetAddress>): Result<Running>
 
-    /** That PC is gone: the server stops once no PC is left. */
-    fun stop(peerKey: PublicKey?)
+    /**
+     * That PC is gone. Unpaired ([now]): its sessions end, and the server once no PC is left.
+     * Only its link went: what it has open goes on (a mount outlives a blip, or the cable handing
+     * over to Wi-Fi), and the server stops once idle.
+     */
+    fun stop(peerKey: PublicKey?, now: Boolean = true)
 }
 
 class SftpPlugin(private val ctx: PluginContext, private val server: PhoneFileServer) : Plugin {
@@ -66,7 +70,7 @@ class SftpPlugin(private val ctx: PluginContext, private val server: PhoneFileSe
     }
 
     override fun onStop() {
-        if (peerKey != null) server.stop(peerKey)
+        if (peerKey != null) server.stop(peerKey, now = !ctx.device.state.value.isPaired)
     }
 
     companion object {

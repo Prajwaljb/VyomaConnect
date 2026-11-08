@@ -119,7 +119,12 @@ class AndroidPhoneFileServer(private val app: Context, private val hostKey: () -
         }
     }
 
-    override fun stop(peerKey: PublicKey?) = synchronized(lock) {
+    override fun stop(peerKey: PublicKey?, now: Boolean) = synchronized(lock) {
+        if (!now) {
+            // Kept until idle, so its sessions (and a reconnect from its address) carry on.
+            if (sessions.isEmpty()) idleSoon()
+            return@synchronized
+        }
         peers.remove(peerKey.id())
         if (peers.isEmpty()) close()
     }
