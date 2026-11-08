@@ -153,6 +153,9 @@ async fn a_second_link_carries_on_the_pairing() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     drop(first);
     tokio::time::sleep(Duration::from_millis(200)).await;
+    // Each change of links is told: two, then one.
+    assert!(matches!(pc.event().await, Event::Routes { remotes, .. } if remotes.len() == 2));
+    assert!(matches!(pc.event().await, Event::Routes { remotes, .. } if remotes.len() == 1));
     pc.commands.send(Command::Accept(ph.device_id.clone())).unwrap();
     assert_eq!(next(&mut second).await["body"], json!({ "pair": true }));
     assert!(matches!(pc.event().await, Event::Paired { .. }));

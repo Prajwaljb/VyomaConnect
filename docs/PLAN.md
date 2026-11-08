@@ -344,6 +344,11 @@ broken and why), per-phone permissions (screen view/control, files, camera, powe
 controller), and an activity log (screenshots, photos, files, power actions). Built once the daemon
 can pair on its own.
 
+Started 2026-11-08 (`desktop/gui`): phones in a sidebar (paired, then nearby), each phone's page with how it's
+connected, battery, Ring / Browse files / Send files, pairing with the code to compare (Accept/Reject only when the
+phone asked) and Unpair asked in place. The daemon gained a `Changed` signal and `via`/`can`/`asking` in Details.
+Next: setup and health, per-phone permissions, the activity log; then the macOS socket behind the same `Daemon` trait.
+
 ### Open
 Packaging (AUR, Flatpak, Homebrew), the app's desktop name, and whether KDE users keep the option of
 running beside kdeconnectd.

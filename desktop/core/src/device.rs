@@ -48,6 +48,9 @@ pub enum Event {
     Linked { id: String, name: String, kind: String, paired: bool, incoming: Vec<String>, outgoing: Vec<String>, cert: Vec<u8>, remote: IpAddr },
     /// Its last link closed.
     Gone { id: String },
+    /// It stayed linked but its links changed (Wi-Fi joined Bluetooth, the cable came out):
+    /// every link's address now, oldest first.
+    Routes { id: String, remotes: Vec<IpAddr> },
     /// It asks to pair: show [key] with Accept and Reject.
     Prompt { id: String, name: String, key: String },
     /// We asked: show [key] until it answers.
@@ -243,6 +246,9 @@ impl Hub {
             self.linked.lock().unwrap().insert(id.clone());
             tracing::info!("{id}: linked{}", if paired { ", paired" } else { "" });
             self.emit(Event::Linked { id, name, kind, paired, incoming: takes, outgoing: sends, cert, remote });
+        } else {
+            let remotes = device.links.iter().map(|l| l.remote).collect();
+            self.emit(Event::Routes { id, remotes });
         }
     }
 
@@ -259,6 +265,9 @@ impl Hub {
                 }
                 tracing::info!("{}: gone", i.id);
                 self.emit(Event::Gone { id: i.id });
+            } else {
+                let remotes = device.links.iter().map(|l| l.remote).collect();
+                self.emit(Event::Routes { id: i.id, remotes });
             }
             return;
         };

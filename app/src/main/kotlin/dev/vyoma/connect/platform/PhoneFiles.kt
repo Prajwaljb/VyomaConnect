@@ -88,6 +88,16 @@ class AndroidPhoneFileServer(private val app: Context, private val hostKey: () -
 
     private class Peer(val key: PublicKey?, val from: Set<InetAddress>)
 
+    /**
+     * IPv4 as IPv4: a link the phone dialed can hold the PC as `::ffff:a.b.c.d` while its sshfs
+     * arrives as `a.b.c.d`, and the two aren't equal.
+     */
+    private fun InetAddress.plain(): InetAddress {
+        val b = address
+        val mapped = b.size == 16 && (0 until 10).all { b[it] == 0.toByte() } && b[10] == 0xFF.toByte() && b[11] == 0xFF.toByte()
+        return if (mapped) InetAddress.getByAddress(b.copyOfRange(12, 16)) else this
+    }
+
     private fun PublicKey?.id() = this?.encoded?.let { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) } ?: ""
 
     init {
@@ -98,7 +108,7 @@ class AndroidPhoneFileServer(private val app: Context, private val hostKey: () -
         synchronized(lock) {
             check(PhoneFileSharing.on.value) { "Turn on \"Browse this phone from your PC\" in Vyoma's settings" }
             check(PhoneFileSharing.allowed()) { "Vyoma needs All files access on the phone to share its files" }
-            peers[peerKey.id()] = Peer(peerKey, from.toSet())
+            peers[peerKey.id()] = Peer(peerKey, from.map { it.plain() }.toSet())
             val server = sshd?.takeIf { it.isStarted } ?: open().also { sshd = it }
             if (sessions.isEmpty()) idleSoon()
             // A fresh one each time it's asked for: sessions already in keep going.
@@ -142,6 +152,9 @@ class AndroidPhoneFileServer(private val app: Context, private val hostKey: () -
             publickeyAuthenticator = PublickeyAuthenticator { user, key, _ ->
                 user == SftpPlugin.USER && synchronized(lock) { peers.values.any { it.key?.encoded?.contentEquals(key.encoded) == true } }
             }
+            // Small requests (open, close) answered at once: with Nagle's algorithm on (MINA's
+            // default) each waited for the PC's delayed ack, ~125 ms a file opened (2026-11-08).
+            org.apache.sshd.core.CoreModuleProperties.TCP_NODELAY.set(this, true)
             // Password (stock KDE Connect) and key (ours) are the ways in.
             keyboardInteractiveAuthenticator = null
             addSessionListener(Gate())
@@ -188,7 +201,7 @@ class AndroidPhoneFileServer(private val app: Context, private val hostKey: () -
     /** Drops strangers on connect, and keeps the sessions let in for the idle stop. */
     private inner class Gate : SessionListener {
         override fun sessionCreated(session: Session) {
-            val from = (session.remoteAddress as? InetSocketAddress)?.address
+            val from = (session.remoteAddress as? InetSocketAddress)?.address?.plain()
             val known = from != null && synchronized(lock) {
                 (from.isLoopbackAddress || peers.values.any { from in it.from }).also { known ->
                     if (known) {

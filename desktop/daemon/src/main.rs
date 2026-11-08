@@ -56,6 +56,8 @@ const TETHER_EVERY: Duration = Duration::from_secs(3);
 /// How often the PC's battery is read; it's sent on when it changed.
 const BATTERY_EVERY: Duration = Duration::from_secs(30);
 /// How often kept phone mounts are checked, and how long a remount's ask is waited on.
+/// How often what the GUI shows is checked for changes.
+const CHANGES_EVERY: Duration = Duration::from_millis(400);
 const MOUNTS_EVERY: Duration = Duration::from_secs(5);
 const REMOUNT_WAIT: Duration = Duration::from_secs(30);
 
@@ -68,6 +70,8 @@ pub struct DeviceView {
     pub linked: bool,
     /// The code while a pairing is on screen.
     pub key: String,
+    /// That pairing is the device's ask (ours to accept), not ours.
+    pub asking: bool,
     /// The packet types it takes.
     pub incoming: Vec<String>,
     /// Charge, charging, low.
@@ -76,8 +80,10 @@ pub struct DeviceView {
     pub signal: Option<Vec<Value>>,
     /// The certificate its links show, which its payloads must show too.
     pub cert: Vec<u8>,
-    /// Where its first link comes from.
+    /// Its best link's address ([best]): Wi-Fi over the cable over Bluetooth.
     pub remote: Option<IpAddr>,
+    /// Every link's address.
+    pub routes: Vec<IpAddr>,
 }
 
 type Devices = Arc<Mutex<HashMap<String, DeviceView>>>;
@@ -98,6 +104,8 @@ struct Control {
     devices: Devices,
     lan: Arc<Lan>,
     targets: Vec<SocketAddr>,
+    /// For the signals sent from tasks.
+    conn: zbus::Connection,
 }
 
 #[zbus::interface(name = "dev.vyoma.Desktop1")]
@@ -130,13 +138,25 @@ impl Control {
         out
     }
 
-    /// One device's state as JSON: battery, signal and the rest of [devices].
+    /// One device's state as JSON: battery, signal, how it's linked (`via`: wifi, cable or
+    /// bluetooth), what it can do here (`can`) and the rest of [devices].
     fn details(&self, id: String) -> fdo::Result<String> {
         let all = self.devices.lock().unwrap();
         let d = all.get(&id).ok_or_else(|| fdo::Error::UnknownObject(id.clone()))?;
         let battery = d.battery.map(|(charge, charging, low)| json!({ "charge": charge, "charging": charging, "low": low }));
-        Ok(json!({ "name": d.name, "type": d.kind, "paired": d.paired, "linked": d.linked, "key": d.key, "battery": battery, "signal": d.signal }).to_string())
+        // Files need a network or the cable: Bluetooth carries packets only.
+        let moves = via(d) != Some("bluetooth");
+        let can = json!({
+            "ring": plugins::takes(d, plugins::FIND),
+            "browse": moves && plugins::takes(d, phonefiles::SFTP_REQUEST),
+            "share": moves && plugins::takes(d, share::SHARE),
+        });
+        Ok(json!({ "name": d.name, "type": d.kind, "paired": d.paired, "linked": d.linked, "key": d.key, "asking": d.asking, "battery": battery, "signal": d.signal, "via": via(d), "can": can }).to_string())
     }
+
+    /// Something the GUI shows changed: a device came, went, paired, or its battery moved.
+    #[zbus(signal)]
+    async fn changed(emitter: &zbus::object_server::SignalEmitter<'_>) -> zbus::Result<()>;
 
     /// Makes the device ring, to find it.
     fn ring(&self, id: String) -> fdo::Result<()> {
@@ -154,15 +174,27 @@ impl Control {
         if files.is_empty() {
             return Ok(());
         }
-        let (me, commands, notifier) = (self.me.clone(), self.commands.clone(), self.notifier.clone());
+        let (me, commands, notifier, conn) = (self.me.clone(), self.commands.clone(), self.notifier.clone(), self.conn.clone());
+        let count = files.len() as u32;
         tokio::spawn(async move {
-            if let Err(e) = share::send_files(&commands, &id, &me, &pinned, files).await {
-                tracing::warn!("{id}: {e:#}");
-                plugins::tell(&notifier, "Couldn't send", &format!("{e:#}")).await;
+            let error = match share::send_files(&commands, &id, &me, &pinned, files).await {
+                Ok(()) => String::new(),
+                Err(e) => {
+                    tracing::warn!("{id}: {e:#}");
+                    plugins::tell(&notifier, "Couldn't send", &format!("{e:#}")).await;
+                    format!("{e:#}")
+                }
+            };
+            if let Ok(emitter) = zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
+                let _ = Control::files_sent(&emitter, &id, count, &error).await;
             }
         });
         Ok(())
     }
+
+    /// A [send_files] batch is over: [error] is empty when the device fetched all [count].
+    #[zbus(signal)]
+    async fn files_sent(emitter: &zbus::object_server::SignalEmitter<'_>, id: &str, count: u32, error: &str) -> zbus::Result<()>;
 
     /// Sends text to the device, or opens a link there.
     fn send_text(&self, id: String, text: String) -> fdo::Result<()> {
@@ -318,6 +350,9 @@ fn main() -> Result<()> {
         Some("--check") => std::process::exit(if vyoma_companion::setup::print_check() { 0 } else { 1 }),
         Some("--setup") => vyoma_companion::setup::run(std::env::args().nth(2).is_some_and(|a| a == "--dry-run")),
         Some("--import-kde") => import_kde(&dir),
+        Some(phonefiles::RELAY_ARG) => phonefiles::relay(&std::env::args().nth(2).unwrap_or_default()),
+        // Run by ssh with its prompt as the argument.
+        Some(_) if std::env::var_os(phonefiles::ASKPASS_ENV).is_some() => phonefiles::askpass(),
         Some(other) => anyhow::bail!("unknown option {other}: try --import-kde, --check or --setup [--dry-run]"),
         None => daemon(dir),
     }
@@ -383,9 +418,26 @@ async fn daemon(dir: PathBuf) -> Result<()> {
     let (mounted_tx, mut mounts_done) = mpsc::unbounded_channel();
     let notifier = Notifier::new(conn.clone());
     let run = commands::Commands::new(&dir);
-    let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone() };
+    let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone(), conn: conn.clone() };
     conn.object_server().at(OBJECT_PATH, control).await?;
     conn.request_name(BUS_NAME).await.context("another Vyoma desktop app is running")?;
+    // Tells the GUI when what it shows changed (checked, as many places change devices).
+    {
+        let (conn, devices) = (conn.clone(), devices.clone());
+        tokio::spawn(async move {
+            let mut last = shown(&devices);
+            loop {
+                tokio::time::sleep(CHANGES_EVERY).await;
+                let now = shown(&devices);
+                if now != last {
+                    last = now;
+                    if let Ok(emitter) = zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
+                        let _ = Control::changed(&emitter).await;
+                    }
+                }
+            }
+        });
+    }
     let (pressed_tx, mut pressed) = mpsc::unbounded_channel();
     {
         let notifier = notifier.clone();
@@ -524,7 +576,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
                 Ask::Browse(id) => desk.browse(id),
             },
             Some((id, result)) = mounts_done.recv() => desk.on_mounted(id, result).await,
-            _ = mounts_tick.tick() => desk.check_mounts(),
+            _ = mounts_tick.tick() => desk.check_mounts().await,
             Some(locked) = lock_changes.recv() => {
                 if desk.locked != Some(locked) {
                     desk.locked = Some(locked);
@@ -769,14 +821,23 @@ impl Desk {
                 {
                     let mut all = self.devices.lock().unwrap();
                     let d = all.entry(id.clone()).or_default();
-                    (d.name, d.kind, d.paired, d.linked, d.incoming, d.cert, d.remote) = (name, kind, paired, true, incoming, cert, Some(remote));
+                    (d.name, d.kind, d.paired, d.linked, d.incoming, d.cert, d.routes, d.remote) = (name, kind, paired, true, incoming, cert, vec![remote], Some(remote));
                 }
                 if paired {
                     self.start(&id);
-                    // A new route (cable or Wi-Fi): the mount's old one may be gone.
-                    if self.kept.contains(&id) && !self.mounts.get_mut(&id).is_some_and(|m| m.via == remote && m.alive()) {
-                        self.remount(&id);
-                    }
+                    self.route_changed(&id, remote);
+                }
+            }
+            Event::Routes { id, remotes } => {
+                let best = {
+                    let mut all = self.devices.lock().unwrap();
+                    let Some(d) = all.get_mut(&id) else { return };
+                    d.remote = best(&remotes, !vyoma_companion::usb::cable_ports().is_empty());
+                    d.routes = remotes;
+                    d.paired.then_some(d.remote).flatten()
+                };
+                if let Some(best) = best {
+                    self.route_changed(&id, best);
                 }
             }
             Event::Gone { id } => {
@@ -799,19 +860,19 @@ impl Desk {
                 }
             }
             Event::Prompt { id, name, key } => {
-                self.set_key(&id, &key);
+                self.set_key(&id, &key, true);
                 let body = format!("Code {key}. Accept only if {name} shows the same code.");
                 let notice = Notice { icon: "smartphone", title: &format!("Pair with {name}?"), body: &body, actions: &[("accept", "Accept"), ("reject", "Reject")], sticky: true, replaces: self.prompts.get(&id).copied() };
                 self.show_prompt(id, notice).await;
             }
             Event::Asked { id, name, key } => {
-                self.set_key(&id, &key);
+                self.set_key(&id, &key, false);
                 let body = format!("Code {key}. Accept on {name} if it shows the same code.");
                 let notice = Notice { icon: "smartphone", title: &format!("Pairing with {name}"), body: &body, actions: &[], sticky: true, replaces: self.prompts.get(&id).copied() };
                 self.show_prompt(id, notice).await;
             }
             Event::PairingOver { id } => {
-                self.set_key(&id, "");
+                self.set_key(&id, "", false);
                 if let Some(n) = self.prompts.remove(&id) {
                     self.notifier.close(n).await;
                 }
@@ -964,6 +1025,13 @@ impl Desk {
         });
     }
 
+    /// [id]'s best route is now [remote] (cable, Wi-Fi): a kept mount on another remounts.
+    fn route_changed(&mut self, id: &str, remote: IpAddr) {
+        if self.kept.contains(id) && !self.mounts.get_mut(id).is_some_and(|m| m.via == remote && m.alive()) {
+            self.remount(id);
+        }
+    }
+
     /// Asks [id] to serve its files again, for a mount that's kept (no window opens for it).
     fn remount(&mut self, id: &str) {
         if self.remounting.get(id).is_some_and(|at| at.elapsed() < REMOUNT_WAIT) {
@@ -974,22 +1042,24 @@ impl Desk {
         self.send(id, phonefiles::request());
     }
 
-    /// Kept mounts whose sshfs ended. sshfs exits alike when unmounted here (the file manager's
-    /// eject) and when cut off, so the route tells: still linked the same way, it was unmounted
-    /// and is let go; else it's remounted once the phone's linked.
-    fn check_mounts(&mut self) {
+    /// Kept mounts whose sshfs ended: cleanly, it was unmounted (the file manager's eject) and is
+    /// let go; failing, it was cut off from the phone and is remounted once the phone's linked.
+    async fn check_mounts(&mut self) {
         if self.kept.is_empty() && self.mounts.is_empty() {
             return;
         }
-        let ended: Vec<(String, IpAddr)> = self.mounts.iter_mut().filter_map(|(id, m)| (!m.alive()).then(|| (id.clone(), m.via))).collect();
-        let all = self.devices.lock().unwrap().clone();
-        for (id, via) in ended {
-            self.mounts.remove(&id);
-            if all.get(&id).is_some_and(|d| d.linked && d.remote == Some(via)) {
+        let ended: Vec<(String, bool)> = self.mounts.iter_mut().filter_map(|(id, m)| Some((id.clone(), m.ended()?))).collect();
+        for (id, ejected) in ended {
+            let Some(mut m) = self.mounts.remove(&id) else { continue };
+            m.release().await;
+            if ejected {
                 tracing::info!("{id}: files unmounted");
                 self.kept.remove(&id);
+            } else {
+                tracing::info!("{id}: lost the connection to its files: {}", m.why().await);
             }
         }
+        let all = self.devices.lock().unwrap().clone();
         let linked: Vec<String> = {
             self.kept.iter().filter(|id| !self.mounts.contains_key(*id) && all.get(*id).is_some_and(|d| d.linked)).cloned().collect()
         };
@@ -1053,9 +1123,10 @@ impl Desk {
         }
     }
 
-    fn set_key(&self, id: &str, key: &str) {
+    fn set_key(&self, id: &str, key: &str, asking: bool) {
         if let Some(d) = self.devices.lock().unwrap().get_mut(id) {
             d.key = key.to_owned();
+            d.asking = asking;
         }
     }
 
@@ -1097,6 +1168,39 @@ fn transports(lan: Arc<Lan>, devices: Devices) {
     });
 }
 
+/// The link to use of [routes], newest first among equals: the [cable] while one's plugged in
+/// (loopback; steadier than Wi-Fi), then Wi-Fi (any real address), then Bluetooth (loopback).
+fn best(routes: &[IpAddr], cable: bool) -> Option<IpAddr> {
+    let newest = |wired: bool| routes.iter().rev().find(|r| r.is_loopback() == wired).copied();
+    if cable { newest(true).or(newest(false)) } else { newest(false).or(newest(true)) }
+}
+
+/// How a linked device is reached: loopback is the cable (while one's tunnelled) or Bluetooth.
+fn via(d: &DeviceView) -> Option<&'static str> {
+    let remote = d.remote.filter(|_| d.linked)?;
+    Some(if !remote.is_loopback() {
+        "wifi"
+    } else if vyoma_companion::usb::cable_ports().is_empty() {
+        "bluetooth"
+    } else {
+        "cable"
+    })
+}
+
+/// What the GUI shows of every device, to tell when it changed.
+fn shown(devices: &Devices) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let all = devices.lock().unwrap();
+    let mut ids: Vec<&String> = all.keys().collect();
+    ids.sort();
+    for id in ids {
+        let d = &all[id];
+        (id, &d.name, &d.kind, d.paired, d.linked, &d.key, d.asking, d.battery, d.remote, via(d)).hash(&mut h);
+    }
+    h.finish()
+}
+
 fn default_dir() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -1128,4 +1232,20 @@ fn identity(me: &Identity) -> Value {
 fn host_name() -> String {
     let name = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default();
     vyoma_core::lan::device_name(name.trim())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cable_is_the_best_route_then_wifi_then_bluetooth() {
+        let (wifi, lo) = (IpAddr::from([192, 168, 1, 5]), IpAddr::from([127, 0, 0, 1]));
+        assert_eq!(best(&[lo, wifi], true), Some(lo));
+        assert_eq!(best(&[wifi, lo], true), Some(lo));
+        assert_eq!(best(&[wifi], true), Some(wifi));
+        assert_eq!(best(&[lo, wifi], false), Some(wifi));
+        assert_eq!(best(&[lo], false), Some(lo));
+        assert_eq!(best(&[], true), None);
+    }
 }
