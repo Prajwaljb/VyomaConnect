@@ -90,11 +90,53 @@ fn mpint(n: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Where a phone called [name] is mounted.
+/// Where a phone called [name] is mounted this time: `$XDG_RUNTIME_DIR/vyoma/<n>/<name>`, a new
+/// [n] for each mount. File managers keep a folder they've shown by its path (Thunar never looks
+/// again, as sshfs sends no changes), so a mount made again at the same path showed a window left
+/// open on the old one as empty; on a fresh path that window's folder is gone, and it closes.
 pub fn mount_point(name: &str) -> PathBuf {
-    let runtime = runtime_dir();
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let base = runtime_dir().join("vyoma");
     let clean: String = name.chars().map(|c| if c == '/' || c.is_control() { '_' } else { c }).collect();
-    runtime.join("vyoma").join(if clean.trim().is_empty() || clean.starts_with('.') { "Phone".into() } else { clean })
+    let clean = if clean.trim().is_empty() || clean.starts_with('.') { "Phone".into() } else { clean };
+    loop {
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = base.join(n.to_string());
+        if !dir.exists() {
+            return dir.join(clean);
+        }
+    }
+}
+
+/// Removes [at] and its numbered folder once nothing's mounted there, unmounting a dead mount
+/// first. Only empty folders go (rmdir), never what's in them.
+async fn remove_mount_point(at: &Path) {
+    if mounted(at) {
+        clear(at).await;
+    }
+    if !mounted(at) && std::fs::remove_dir(at).is_ok() {
+        if let Some(n) = at.parent() {
+            let _ = std::fs::remove_dir(n);
+        }
+    }
+}
+
+/// At start: what an earlier run left under `$XDG_RUNTIME_DIR/vyoma` (it ended without unmounting).
+pub async fn tidy() {
+    let Ok(entries) = std::fs::read_dir(runtime_dir().join("vyoma")) else { return };
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if let Ok(inner) = std::fs::read_dir(&dir) {
+            for at in inner.flatten() {
+                remove_mount_point(&at.path()).await;
+            }
+        }
+        // The old layout's `vyoma/<name>`, and a numbered folder emptied above.
+        if mounted(&dir) {
+            clear(&dir).await;
+        }
+        let _ = std::fs::remove_dir(&dir);
+    }
 }
 
 /// A running sshfs (its `systemd-run`, which lasts as long as it): [Mount::unmount] takes it down.
@@ -132,11 +174,12 @@ impl Mount {
         last_line(&mut self.child).await
     }
 
-    /// Takes down what an ended mount leaves behind.
+    /// Takes down what an ended mount leaves behind: its cable socket and its folder.
     pub async fn release(&mut self) {
         if let Some(socket) = self.forward.take() {
             vyoma_companion::usb::unforward_unix(&socket).await;
         }
+        remove_mount_point(&self.path).await;
     }
 }
 
@@ -180,12 +223,13 @@ pub async fn mount(server: &Server, phone: IpAddr, id: &str, at: &Path, key: &Pa
         route.extend(["-p".to_owned(), server.port.to_string()]);
     }
     let result = run_sshfs(server, &route, id, &unit, at, key, cert, dir).await;
-    match (&result, &forward) {
-        (Ok(_), Some(socket)) => return result.map(|m| Mount { forward: Some(socket.clone()), ..m }),
-        (Err(_), Some(socket)) => vyoma_companion::usb::unforward_unix(socket).await,
-        _ => {}
+    if result.is_err() {
+        if let Some(socket) = &forward {
+            vyoma_companion::usb::unforward_unix(socket).await;
+        }
+        remove_mount_point(at).await;
     }
-    result
+    result.map(|m| Mount { forward, ..m })
 }
 
 /// This program's path, for ssh to run it as a helper ([relay], [askpass]).
@@ -347,8 +391,12 @@ mod tests {
 
     #[test]
     fn a_phone_name_is_a_safe_folder() {
-        assert!(mount_point("A/B").ends_with("vyoma/A_B"));
-        assert!(mount_point("..").ends_with("vyoma/Phone"));
+        assert!(mount_point("A/B").ends_with("A_B"));
+        assert!(mount_point("..").ends_with("Phone"));
+        let (a, b) = (mount_point("P"), mount_point("P"));
+        assert_ne!(a, b, "each mount gets a path of its own");
+        assert_eq!(a.parent().unwrap().parent(), b.parent().unwrap().parent());
+        assert!(a.parent().unwrap().parent().unwrap().ends_with("vyoma"));
         assert_eq!(unit_name("ab_1-c/d"), "vyoma-files-ab_1-c_d.service");
     }
 
