@@ -93,6 +93,8 @@ const NEEDS: &[Need] = &[
     need("video", Probe::Gst("videoparsersbad"), "gst-plugins-bad", "gstreamer1.0-plugins-bad", "gstreamer1-plugins-bad-free"),
     need("video", Probe::Gst("va"), "gst-plugin-va", "gstreamer1.0-plugins-bad", "gstreamer1-plugins-bad-free"),
     need("phone screen", Probe::Gst("libav"), "gst-libav", "gstreamer1.0-libav", "gstreamer1-plugin-libav"),
+    need("phone screen sound", Probe::Gst("opus"), "gst-plugins-base", "gstreamer1.0-plugins-base", "gstreamer1-plugins-base"),
+    need("phone screen sound", Probe::Gst("app"), "gst-plugins-base", "gstreamer1.0-plugins-base", "gstreamer1-plugins-base"),
     // Comes with some kernels (CachyOS); built for the others, which needs their headers.
     need("phone as webcam", Probe::Module("v4l2loopback"), "v4l2loopback-dkms", "v4l2loopback-dkms", ""),
 ];

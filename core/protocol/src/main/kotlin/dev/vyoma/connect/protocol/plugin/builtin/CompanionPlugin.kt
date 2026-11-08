@@ -1099,7 +1099,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
      * What the PC says about the mirror: [open] while its window shows the phone; [closed] once that
      * window was closed (the user stopping it); [error] why it can't.
      */
-    data class MirrorState(val open: Boolean = false, val closed: Boolean = false, val error: String? = null)
+    /** [sound]: the codecs the PC's window can play the phone's sound in besides PCM ("opus"). */
+    data class MirrorState(val open: Boolean = false, val closed: Boolean = false, val error: String? = null, val sound: List<String> = emptyList())
     private val _mirror = MutableStateFlow(MirrorState())
     val mirror: StateFlow<MirrorState> = _mirror.asStateFlow()
 
@@ -1109,17 +1110,25 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
      * The phone's screen in a window on the PC: [video] is live H.264 (Annex-B), w x h to start with
      * (a turned phone sends a new size in-stream). Suspends until the stream ends.
      */
+    /** A mirror's starting: the last one's state (its window, its codecs) no longer holds. */
+    fun mirrorStarting() {
+        _mirror.value = MirrorState()
+    }
+
     suspend fun sendMirror(w: Int, h: Int, video: java.io.InputStream): Boolean =
         ctx.device.sendWithPayload(
             packet(MIRROR) { put("w", w); put("h", h) },
             PayloadSource(-1) { video }, timeoutMs = WEBCAM_ACCEPT_MS,
         )
 
-    /** The phone's sound while mirrored: [pcm] is live s16le audio. Suspends until it ends. */
-    suspend fun sendMirrorAudio(rate: Int, channels: Int, pcm: java.io.InputStream): Boolean =
+    /**
+     * The phone's sound while mirrored: [sound] is live s16le audio, or with [codec] "opus" Opus
+     * packets each after a 2-byte big-endian length. Suspends until it ends.
+     */
+    suspend fun sendMirrorAudio(rate: Int, channels: Int, sound: java.io.InputStream, codec: String? = null): Boolean =
         ctx.device.sendWithPayload(
-            packet(MIRROR_AUDIO) { put("rate", rate); put("channels", channels) },
-            PayloadSource(-1) { pcm }, timeoutMs = WEBCAM_ACCEPT_MS,
+            packet(MIRROR_AUDIO) { put("rate", rate); put("channels", channels); codec?.let { put("codec", it) } },
+            PayloadSource(-1) { sound }, timeoutMs = WEBCAM_ACCEPT_MS,
         )
 
     /** Text copied in the mirror (Ctrl+C / Ctrl+X in the PC's window), for the PC's clipboard. */
@@ -1138,7 +1147,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
 
     private fun receiveMirrorState(p: NetworkPacket) {
         val open = p.bool("open") ?: false
-        _mirror.value = MirrorState(open = open, closed = !open && _mirror.value.open, error = p.string("error"))
+        _mirror.value = MirrorState(open = open, closed = !open && _mirror.value.open, error = p.string("error"), sound = p.stringList("sound"))
     }
 
     @Volatile private var pendingStep: CompletableDeferred<NetworkPacket>? = null

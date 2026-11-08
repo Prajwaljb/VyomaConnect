@@ -66,6 +66,11 @@ object PhoneMirror {
     private const val RATE = 48_000
     /** 100 ms of stereo sound: more waiting is dropped (the PC plays a touch slower), not delayed. */
     private const val SOUND_BACKLOG = RATE * 4 / 10
+    /** The same 100 ms and more as Opus (its packets vary), at [OPUS_BITRATE]. */
+    private const val OPUS_BACKLOG = 4 * 1024
+    private const val OPUS_BITRATE = 128_000
+    /** How long the sound waits for the PC's window to say what it plays (a PC that never says gets PCM). */
+    private const val OPEN_WAIT_MS = 5_000L
 
     /** The phone's sound plays on the PC too; the running mirror follows it. */
     val sound = MutableStateFlow(true)
@@ -188,6 +193,7 @@ object PhoneMirror {
         var encoder = H264Encoder(size.width, size.height, BITRATE, FPS, video, "mirror-encoder")
         vd.resize(encoder.width, encoder.height, app.resources.displayMetrics.densityDpi)
         vd.surface = encoder.surface
+        plugin.mirrorStarting()
         try {
             launch { plugin.mirror.collect { s -> _status.value = _status.value.copy(open = s.open) } }
             launch {
@@ -246,14 +252,24 @@ object PhoneMirror {
             android.media.AudioRecord.Builder().setAudioPlaybackCaptureConfig(config).setAudioFormat(format)
                 .setBufferSizeInBytes(RATE * 4 / 5).build()
         }.onFailure { VLog.w(TAG, "no sound capture: ${it.message}") }.getOrNull() ?: return
-        val pcm = LiveStream(SOUND_BACKLOG)
+        // Opus if the PC's window plays it (a tenth of PCM's 1.5 Mbit/s, which a busy Wi-Fi can't spare).
+        val pcPlaysOpus = withTimeoutOrNull(OPEN_WAIT_MS) { plugin.mirror.first { it.open } }?.sound?.contains("opus") == true
+        val opus = if (pcPlaysOpus) {
+            runCatching { OpusPacker(RATE, 2, OPUS_BITRATE) }.onFailure { VLog.w(TAG, "no Opus encoder: ${it.message}") }.getOrNull()
+        } else null
+        val sound = LiveStream(if (opus != null) OPUS_BACKLOG else SOUND_BACKLOG)
         val speaker = Speaker(app)
         val running = java.util.concurrent.atomic.AtomicBoolean(true)
         val reader = Thread({
             val chunk = ByteArray(RATE / 100 * 4) // 10 ms
             while (running.get()) {
                 val n = record.read(chunk, 0, chunk.size)
-                if (n > 0) pcm.offer(chunk.copyOf(n)) else if (n < 0) break
+                when {
+                    n < 0 -> break
+                    n == 0 -> {}
+                    opus != null -> opus.feed(chunk, n) { sound.offer(it) }
+                    else -> sound.offer(chunk.copyOf(n))
+                }
             }
         }, "mirror-sound")
         try {
@@ -261,15 +277,84 @@ object PhoneMirror {
             reader.start()
             speaker.silence()
             soundOnPc = true
-            plugin.sendMirrorAudio(RATE, 2, pcm)
+            VLog.i(TAG, "sound to the PC as ${if (opus != null) "Opus" else "PCM"}")
+            plugin.sendMirrorAudio(RATE, 2, sound, codec = opus?.let { "opus" })
         } finally {
             soundOnPc = false
             speaker.restore()
             running.set(false)
-            pcm.close()
+            sound.close()
             reader.join(200)
             runCatching { record.stop() }
             record.release()
+            if (!reader.isAlive) opus?.close()
+        }
+    }
+
+    /**
+     * 16-bit PCM in, Opus packets out (Android's own encoder), each handed on framed for the PC: a
+     * 2-byte big-endian length, then the packet. Used from one thread.
+     */
+    private class OpusPacker(private val rate: Int, channels: Int, bitrate: Int) : AutoCloseable {
+        private val codec = android.media.MediaCodec.createEncoderByType(android.media.MediaFormat.MIMETYPE_AUDIO_OPUS).apply {
+            val format = android.media.MediaFormat.createAudioFormat(android.media.MediaFormat.MIMETYPE_AUDIO_OPUS, rate, channels)
+            format.setInteger(android.media.MediaFormat.KEY_BIT_RATE, bitrate)
+            try {
+                configure(format, null, null, android.media.MediaCodec.CONFIGURE_FLAG_ENCODE)
+                start()
+            } catch (e: Exception) {
+                release()
+                throw e
+            }
+        }
+        private val info = android.media.MediaCodec.BufferInfo()
+        private val frameBytes = channels * 2
+        private var samples = 0L
+
+        fun feed(pcm: ByteArray, n: Int, out: (ByteArray) -> Unit) {
+            var off = 0
+            var tries = 0
+            while (off < n && tries < 20) {
+                val i = codec.dequeueInputBuffer(5_000)
+                if (i < 0) {
+                    drain(out)
+                    tries++
+                    continue
+                }
+                val buf = codec.getInputBuffer(i) ?: continue
+                buf.clear()
+                val len = minOf(buf.remaining(), n - off)
+                buf.put(pcm, off, len)
+                codec.queueInputBuffer(i, 0, len, samples * 1_000_000 / rate, 0)
+                samples += len / frameBytes
+                off += len
+            }
+            drain(out)
+        }
+
+        private fun drain(out: (ByteArray) -> Unit) {
+            while (true) {
+                val o = codec.dequeueOutputBuffer(info, 0)
+                if (o == android.media.MediaCodec.INFO_TRY_AGAIN_LATER) return
+                if (o < 0) continue // Format or buffers changed.
+                val buf = codec.getOutputBuffer(o)
+                // The codec's own header (OpusHead) isn't sound; the PC's decoder needs none.
+                val config = info.flags and android.media.MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
+                if (buf != null && !config && info.size in 1..0xFFFF) {
+                    val packet = ByteArray(2 + info.size)
+                    packet[0] = (info.size shr 8).toByte()
+                    packet[1] = info.size.toByte()
+                    buf.position(info.offset)
+                    buf.get(packet, 2, info.size)
+                    out(packet)
+                }
+                codec.releaseOutputBuffer(o, false)
+            }
+        }
+
+        override fun close() {
+            runCatching { codec.stop() }
+            codec.release()
         }
     }
 
