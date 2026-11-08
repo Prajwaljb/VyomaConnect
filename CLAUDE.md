@@ -44,9 +44,9 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   The phone treats it as its own companion (`DeviceIdentity.featuresOf`). The cable, tethering, Bluetooth and the setup
   offer start only while kdeconnectd isn't running. `install.sh` takes over from KDE Connect (`--undo` gives it back): never run it unasked.
 - `desktop/gui` (`vyoma-gui`, binary `vyoma`): the desktop app's window, Slint (GPL-3.0 option) in the phone app's look
-  (`ui/app.slint`: the PC wallpaper as a soft canvas with its accent (`src/look.rs`, the phone's formulas, from the daemon's `Wallpaper`), glass cards, centred heroes, tiles, the floating glass sidebar, glass dialogs and status bubble, Inter). It only shows and asks: `src/daemon.rs` is the `Daemon`
+  (`ui/app.slint`: the PC wallpaper as a soft canvas with its accent (`src/look.rs`, the phone's formulas, from the daemon's `Wallpaper`), glass cards whose rims and shadows follow the wallpaper's light, centred heroes, tiles, the floating glass sidebar, glass dialogs and status bubble, Inter; first run is the phone's setup steps, `--setup` or This PC > Run setup again shows it again, done is kept in ~/.config/vyoma-desktop/window.json). It only shows and asks: `src/daemon.rs` is the `Daemon`
   trait (D-Bus `dev.vyoma.Desktop1` today, a local socket on macOS later), rereading on the daemon's `Changed` signal.
-  `vyoma --snapshot out.png [--dark] [--plain (no wallpaper)] [--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|activity-empty|empty|down]` renders it offscreen
+  `vyoma --snapshot out.png [--dark] [--plain (no wallpaper)] [--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|activity-empty|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|down]` renders it offscreen
   with made-up phones: check the look with that, never by capturing the screen.
 - `desktop/companion`: lib + bin (the session loop is `session.rs`, shared with the desktop app); the bin is the Rust daemon beside stock kdeconnectd, built on `vyoma-core`. Dials only phones kdeconnectd trusts (mDNS), pairs with
   no prompt via `CompanionProof` (signed with kdeconnectd's key; phone verifies against the pinned PC cert), speaks

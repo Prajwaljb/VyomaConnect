@@ -1,6 +1,6 @@
 //! Vyoma's desktop window. It only shows and asks: the daemon (`vyoma-desktop`) owns the links,
 //! so closing or crashing this never drops a phone. `--snapshot <png>` renders it offscreen with
-//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|empty|down`).
+//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|down`, `--setup` to open on setup).
 
 mod daemon;
 mod look;
@@ -21,6 +21,7 @@ const NOTICE_FOR: Duration = Duration::from_millis(3200);
 const REREAD_EVERY: Duration = Duration::from_secs(5);
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 /// How often the wallpaper's colours are reread (a new wallpaper says nothing).
+const MOMENT_FOR: Duration = Duration::from_millis(2600);
 const WALLPAPER_EVERY: Duration = Duration::from_secs(60);
 /// The sidebar's id for This PC's page.
 pub const THIS_PC: &str = "this-pc";
@@ -41,14 +42,41 @@ fn main() -> anyhow::Result<()> {
         return snapshot::run(path, args.iter().any(|a| a == "--dark"), args.iter().any(|a| a == "--plain"), scene);
     }
     let ui = MainWindow::new()?;
+    ui.set_setup(args.iter().any(|a| a == "--setup") || !setup_done());
     wire(&ui);
     watch(ui.as_weak());
     ui.run()?;
     Ok(())
 }
 
+/// Where the window keeps what's its own (that setup's been through), beside the daemon's state.
+fn window_file() -> Option<std::path::PathBuf> {
+    let config = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))?;
+    Some(config.join("vyoma-desktop").join("window.json"))
+}
+
+fn setup_done() -> bool {
+    window_file().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()).is_some_and(|v| v["setupDone"] == true)
+}
+
+fn mark_setup_done() {
+    let Some(file) = window_file() else { return };
+    let _ = file.parent().map(std::fs::create_dir_all);
+    let _ = std::fs::write(file, serde_json::json!({ "setupDone": true }).to_string());
+}
+
 /// The window's buttons: each call runs off the UI thread, and a failure shows as a notice.
 fn wire(ui: &MainWindow) {
+    ui.on_finish_setup({
+        let ui = ui.as_weak();
+        move || {
+            mark_setup_done();
+            if let Some(win) = ui.upgrade() {
+                win.set_setup(false);
+                read_health(&ui);
+            }
+        }
+    });
     ui.on_select({
         let ui = ui.as_weak();
         move |id| {
@@ -355,6 +383,9 @@ pub fn show_health(ui: &MainWindow, h: &Health) {
         .collect();
     let checks: Vec<Check> = h.checks.iter().map(|c| Check { name: c.name.clone().into(), state: c.state.clone().into(), detail: c.detail.clone().into() }).collect();
     let notes: Vec<SharedString> = h.notes.iter().map(|n| n.clone().into()).collect();
+    // Setup lists only what an install fixes.
+    let missing: Vec<Feature> = features.iter().filter(|f| !f.ready && f.detail.starts_with("Needs")).cloned().collect();
+    ui.set_missing(ModelRc::new(VecModel::from(missing)));
     ui.set_features(ModelRc::new(VecModel::from(features)));
     ui.set_checks(ModelRc::new(VecModel::from(checks)));
     ui.set_notes(ModelRc::new(VecModel::from(notes)));
@@ -388,7 +419,24 @@ fn apply(ui: &MainWindow, phones: Option<Vec<PhoneData>>) {
     if let Some(p) = asking {
         ui.set_selected(p.id.clone().into());
     }
+    // Paired just now, while setting up: its moment.
+    let fresh = phones.iter().find(|p| p.paired && before.iter().any(|b| b.id == p.id && !b.paired));
+    if let (Some(p), true) = (fresh, ui.get_setup()) {
+        moment(ui, p.name.clone());
+    }
     show(ui, &phones);
+}
+
+/// "You're connected" with [name], for a moment.
+pub fn moment(ui: &MainWindow, name: String) {
+    ui.set_moment(name.into());
+    ui.set_moment_on(true);
+    let ui = ui.as_weak();
+    slint::Timer::single_shot(MOMENT_FOR, move || {
+        if let Some(win) = ui.upgrade() {
+            win.set_moment_on(false);
+        }
+    });
 }
 
 /// The sidebar's two lists and the chosen phone's page, keeping the choice while it's there.

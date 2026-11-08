@@ -66,6 +66,10 @@ impl Rgb {
     }
 }
 
+/// Straight up, and how far a wallpaper can turn the light from there.
+const REST: f32 = 270.0;
+const MAX_SWAY: f32 = 40.0;
+
 /// The PC's wallpaper as a grid of colours, rows top first.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Wallpaper {
@@ -92,6 +96,35 @@ impl Wallpaper {
         let c = best?;
         let (s, _) = c.sl();
         Some(c.toned((0.72 / s).clamp(1.0, 3.0), Some(if dark { 0.7 } else { 0.47 })))
+    }
+
+    /// Where its light comes from, as the window's light angle (degrees clockwise from 3 o'clock,
+    /// 270 straight up): above its brightest part, so the glass's highlights agree with what's
+    /// behind it. Only sideways: the page fades lower down, so the top rows count most. A
+    /// wallpaper with no bright side leaves it straight up (the phone's `lightAngle`).
+    pub fn light_angle(&self) -> f32 {
+        let luma = |c: [u8; 3]| (0.2126 * c[0] as f32 + 0.7152 * c[1] as f32 + 0.0722 * c[2] as f32) / 255.0;
+        let row_weight = |r: usize| 1.0 / (1.0 + 1.5 * r as f32 * 4.0 / self.rows as f32);
+        let columns: Vec<f32> = (0..self.cols)
+            .map(|x| {
+                let (sum, weight) = (0..self.rows).fold((0.0, 0.0), |(s, w), y| (s + luma(self.colors[y * self.cols + x]) * row_weight(y), w + row_weight(y)));
+                sum / weight
+            })
+            .collect();
+        let low = columns.iter().cloned().fold(f32::MAX, f32::min);
+        let contrast = columns.iter().cloned().fold(f32::MIN, f32::max) - low;
+        if contrast < 0.01 {
+            return REST;
+        }
+        let (mut at, mut total) = (0.0, 0.0);
+        for (x, l) in columns.iter().enumerate() {
+            let w = (l - low) * (l - low);
+            at += w * (x as f32 + 0.5) / self.cols as f32;
+            total += w;
+        }
+        // Faint differences barely move it; a clear bright side moves it all the way.
+        let t = ((contrast - 0.04) / 0.16).clamp(0.0, 1.0);
+        REST + ((at / total) - 0.5) * 2.0 * MAX_SWAY * t * t * (3.0 - 2.0 * t)
     }
 
     /// The canvas: the grid toned towards the theme's base, stretched smoothly (bilinear, cell
@@ -131,6 +164,7 @@ pub fn apply(theme: &crate::Theme, wall: Option<&Wallpaper>) {
     theme.set_fill_light(light.toned(1.2, Some(0.5)).slint());
     theme.set_fill_dark(dark.toned(1.2, Some(0.56)).slint());
     theme.set_has_wall(valid.is_some());
+    theme.set_light(valid.map_or(REST, Wallpaper::light_angle));
     if let Some(w) = valid {
         theme.set_wall_light(w.canvas(false, 96, 72));
         theme.set_wall_dark(w.canvas(true, 96, 72));
@@ -150,6 +184,10 @@ mod tests {
         assert!(a.0 > a.1 && a.1 > a.2, "stays orange: {a:?}");
         assert!((a.sl().1 - 0.47).abs() < 0.01);
         assert!((wall.accent(true).unwrap().sl().1 - 0.7).abs() < 0.01);
+        // A bright right-hand side puts the light up and to the right.
+        let right = Wallpaper { cols: 2, rows: 1, colors: vec![[20, 20, 20], [240, 240, 240]] };
+        assert!((right.light_angle() - 290.0).abs() < 1.0, "{}", right.light_angle());
+        assert_eq!(Wallpaper { cols: 2, rows: 1, colors: vec![[90, 90, 90]; 2] }.light_angle(), 270.0);
         let back = Rgb(0.2, 0.5, 0.8).toned(1.0, None);
         assert!((back.0 - 0.2).abs() < 1e-4 && (back.1 - 0.5).abs() < 1e-4 && (back.2 - 0.8).abs() < 1e-4);
     }
