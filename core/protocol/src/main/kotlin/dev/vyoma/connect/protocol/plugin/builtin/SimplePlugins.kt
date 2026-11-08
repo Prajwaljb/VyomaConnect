@@ -176,7 +176,8 @@ class LockPlugin(private val ctx: PluginContext) : Plugin {
 
 // ---- run commands on the PC -------------------------------------------------------------------
 
-data class RemoteCommand(val key: String, val name: String, val command: String)
+/** [fingerprint]: the PC asks Vyoma to check it's the owner before running it (Vyoma's desktop app). */
+data class RemoteCommand(val key: String, val name: String, val command: String, val fingerprint: Boolean = false)
 
 class RunCommandPlugin(private val ctx: PluginContext) : Plugin {
     private val _commands = MutableStateFlow<List<RemoteCommand>>(emptyList())
@@ -199,7 +200,7 @@ class RunCommandPlugin(private val ctx: PluginContext) : Plugin {
         } ?: return true
         _commands.value = obj.mapNotNull { (key, value) ->
             val o = value as? JsonObject ?: return@mapNotNull null
-            RemoteCommand(key, o.str("name") ?: key, o.str("command").orEmpty())
+            RemoteCommand(key, o.str("name") ?: key, o.str("command").orEmpty(), (o["fingerprint"] as? JsonPrimitive)?.booleanOrNull == true)
         }.sortedBy { it.name.lowercase() }
         return true
     }

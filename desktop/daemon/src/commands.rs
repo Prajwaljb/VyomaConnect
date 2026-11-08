@@ -2,7 +2,10 @@
 //! the phone gets their names (`commandList`, a JSON object in a string, as stock) and sends back
 //! only a key, never a command line.
 //!
-//! Kept in `commands.json` in the daemon's folder: `{"<key>": {"name": …, "command": …}}`.
+//! Kept in `commands.json` in the daemon's folder: `{"<key>": {"name": …, "command": …, "fingerprint": bool}}`.
+//! `fingerprint` (Vyoma's own, ignored by stock phones) has Vyoma on the phone ask for the
+//! owner's fingerprint before running it. Vyoma's window adds and edits them; a phone's
+//! "add command" (`setup`) opens it there.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -40,19 +43,30 @@ impl Commands {
 
     pub fn list_packet(&self) -> Value {
         let list = Value::Object(self.all().into_iter().collect());
-        packet(RUNCOMMAND, json!({ "commandList": list.to_string(), "canAddCommand": false }))
+        packet(RUNCOMMAND, json!({ "commandList": list.to_string(), "canAddCommand": true }))
     }
 
     /// Adds a command; its key.
     pub fn add(&self, name: &str, command: &str) -> Result<String> {
+        self.save_one("", name, command, false)
+    }
+
+    /// Changes the command under [key], or adds one when [key] is empty; its key.
+    pub fn save_one(&self, key: &str, name: &str, command: &str, fingerprint: bool) -> Result<String> {
+        anyhow::ensure!(!name.trim().is_empty() && !command.trim().is_empty(), "A command needs a name and a command line");
         let mut all = self.all();
-        let key = loop {
-            let k = format!("{:016x}", unique_u64());
-            if !all.contains_key(&k) {
-                break k;
+        let key = if key.is_empty() {
+            loop {
+                let k = format!("{:016x}", unique_u64());
+                if !all.contains_key(&k) {
+                    break k;
+                }
             }
+        } else {
+            anyhow::ensure!(all.contains_key(key), "That command is gone");
+            key.to_owned()
         };
-        all.insert(key.clone(), json!({ "name": name, "command": command }));
+        all.insert(key.clone(), json!({ "name": name.trim(), "command": command.trim(), "fingerprint": fingerprint }));
         self.save(&all)?;
         Ok(key)
     }
@@ -110,7 +124,11 @@ mod tests {
         let key = c.add("Touch", &format!("touch '{}'", flag.display())).unwrap();
         let list: Value = serde_json::from_str(c.list_packet()["body"]["commandList"].as_str().unwrap()).unwrap();
         assert_eq!(list[&key]["name"], "Touch");
-        assert_eq!(c.run(&key).as_deref(), Some("Touch"));
+        assert_eq!(c.save_one(&key, "Touch it", &format!("touch '{}'", flag.display()), true).unwrap(), key);
+        let list: Value = serde_json::from_str(c.list_packet()["body"]["commandList"].as_str().unwrap()).unwrap();
+        assert_eq!((list[&key]["name"].as_str(), list[&key]["fingerprint"].as_bool()), (Some("Touch it"), Some(true)));
+        assert!(c.save_one("", " ", "true", false).is_err());
+        assert_eq!(c.run(&key).as_deref(), Some("Touch it"));
         for _ in 0..50 {
             if flag.exists() {
                 break;

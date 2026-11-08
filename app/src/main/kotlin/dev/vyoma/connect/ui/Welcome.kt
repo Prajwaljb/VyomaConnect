@@ -98,10 +98,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
@@ -335,9 +332,39 @@ private val CONTROL_MODES = listOf(
     Triple(Icons.Rounded.Videocam, "A better webcam", "This phone's camera and mic become the PC's, for any app and any call."),
 )
 
+/**
+ * The first scene's entrance, shared by its words (in the picture) and its buttons (over it). The
+ * name is there from the first frame; once the glass has dropped in, the line comes up a half at a
+ * time, then the hint, then the way on: Show me, Skip and the dots together (user, 2026-11-09).
+ * With animations off it's all just there.
+ */
+@Stable
+internal class WelcomeIntro(still: Boolean) {
+    val line = Animatable(if (still) 1f else 0f)
+    val more = Animatable(if (still) 1f else 0f)
+    val hint = Animatable(if (still) 1f else 0f)
+    val controls = Animatable(if (still) 1f else 0f)
+}
+
+@Composable
+internal fun rememberWelcomeIntro(): WelcomeIntro {
+    val context = LocalContext.current
+    val intro = remember { WelcomeIntro(Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f) }
+    LaunchedEffect(intro) {
+        val rise = LinearOutSlowInEasing
+        // The lens takes about 1.3 s to fall in and come to rest over the name.
+        launch { delay(1300); intro.line.animateTo(1f, tween(1000, easing = rise)) }
+        launch { delay(2000); intro.more.animateTo(1f, tween(1000, easing = rise)) }
+        // The hint's fade is the one the user liked; only its turn moved.
+        launch { delay(2900); intro.hint.animateTo(1f, tween(1600, easing = rise)) }
+        launch { delay(3900); intro.controls.animateTo(1f, tween(900, easing = rise)) }
+    }
+    return intro
+}
+
 /** The show before setup. [onDone] leads on to it; so does Skip. */
 @Composable
-internal fun WelcomeShow(backdrop: Backdrop, clock: ShowClock, page: (Float) -> Unit, onLensTouched: () -> Unit, onDone: () -> Unit) {
+internal fun WelcomeShow(backdrop: Backdrop, clock: ShowClock, intro: WelcomeIntro, page: (Float) -> Unit, onLensTouched: () -> Unit, onDone: () -> Unit) {
     val pager = rememberPagerState { SCENES }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
@@ -382,11 +409,12 @@ internal fun WelcomeShow(backdrop: Backdrop, clock: ShowClock, page: (Float) -> 
         // Skip stays out of the way; there's nothing it skips that setup needs.
         GlassPill(
             "Skip", backdrop,
-            Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 8.dp, end = 16.dp).graphicsLayer { alpha = if (pager.currentPage == SCENES - 1) 0f else 1f },
-            onClick = onDone,
+            Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(top = 8.dp, end = 16.dp).graphicsLayer { alpha = if (pager.currentPage == SCENES - 1) 0f else intro.controls.value },
+            onClick = { if (intro.controls.value > 0.5f) onDone() },
         )
         Column(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(start = 20.dp, end = 20.dp, bottom = 16.dp),
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(start = 20.dp, end = 20.dp, bottom = 16.dp)
+                .graphicsLayer { alpha = intro.controls.value; translationY = (1f - intro.controls.value) * 14.dp.toPx() },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             PageDots(SCENES) { pager.currentPage + pager.currentPageOffsetFraction }
@@ -395,7 +423,7 @@ internal fun WelcomeShow(backdrop: Backdrop, clock: ShowClock, page: (Float) -> 
             GlassPill(
                 if (last) "Set up Vyoma" else if (pager.currentPage == 0) "Show me" else "Next", backdrop,
                 Modifier.fillMaxWidth(), large = true,
-                onClick = { if (last) onDone() else scope.launch { pager.animateScrollToPage(pager.currentPage + 1, animationSpec = VyomaMotion.page()) } },
+                onClick = { if (intro.controls.value < 0.5f) Unit else if (last) onDone() else scope.launch { pager.animateScrollToPage(pager.currentPage + 1, animationSpec = VyomaMotion.page()) } },
             )
         }
     }
@@ -403,41 +431,37 @@ internal fun WelcomeShow(backdrop: Backdrop, clock: ShowClock, page: (Float) -> 
 
 /** The first scene's words, drawn into the picture so that the lens bends them too (over it, they vanished under the lens). */
 @Composable
-internal fun WelcomeTitle(visible: () -> Float, touched: Boolean) {
-    // The name and the hint come up slowly, a moment after the picture, so the dunes and the lens
-    // are seen first (user, 2026-11-08). With animations off they're just there.
-    val context = LocalContext.current
-    val still = remember { Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f }
-    val name = remember { Animatable(if (still) 1f else 0f) }
-    val prompt = remember { Animatable(if (still) 1f else 0f) }
-    LaunchedEffect(Unit) {
-        launch { delay(1500); name.animateTo(1f, tween(2200, easing = LinearOutSlowInEasing)) }
-        launch { delay(4200); prompt.animateTo(1f, tween(1600, easing = LinearOutSlowInEasing)) }
-    }
+internal fun WelcomeTitle(visible: () -> Float, touched: Boolean, intro: WelcomeIntro) {
+    // The name is there from the start; the rest follows the glass in (WelcomeIntro).
     BoxWithConstraints(Modifier.fillMaxSize().graphicsLayer { alpha = visible(); translationX = -(1f - visible()) * size.width }) {
         Text(
             "Vyoma",
             style = TextStyle(fontSize = 84.sp, fontWeight = FontWeight.Bold, letterSpacing = (-2).sp, color = Color.White, shadow = Soft),
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = maxHeight * 0.27f).graphicsLayer { alpha = name.value },
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = maxHeight * 0.27f),
         )
         val hint by animateFloatAsState(if (touched || GlassQuality.lite) 0f else 1f, VyomaMotion.effects(), label = "hint")
         Text(
             "Go on, drag the glass",
             style = MaterialTheme.typography.labelLarge.copy(shadow = Soft),
             color = Color.White,
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = maxHeight * 0.46f).graphicsLayer { alpha = hint * prompt.value * 0.9f },
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = maxHeight * 0.46f).graphicsLayer { alpha = hint * intro.hint.value * 0.9f },
         )
-        Text(
-            // Set like a keynote line: big, tight, the second half a step back.
-            buildAnnotatedString {
-                append("Your phone and your PC,\n")
-                withStyle(SpanStyle(color = Color.White.copy(alpha = 0.72f))) { append("working as one.") }
-            },
-            style = MaterialTheme.typography.headlineMedium.copy(fontSize = 28.sp, lineHeight = 32.sp, letterSpacing = (-0.025).em, shadow = Soft),
-            color = Color.White,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(start = 20.dp, end = 20.dp, bottom = 122.dp),
-        )
+        // Set like a keynote line: big, tight, the second half a step back. Two texts, so each half
+        // comes up on its own turn, rising a little as it does.
+        val tagline = MaterialTheme.typography.headlineMedium.copy(fontSize = 28.sp, lineHeight = 32.sp, letterSpacing = (-0.025).em, shadow = Soft)
+        Column(
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(start = 20.dp, end = 20.dp, bottom = 122.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                "Your phone and your PC,", style = tagline, color = Color.White, textAlign = TextAlign.Center,
+                modifier = Modifier.graphicsLayer { alpha = intro.line.value; translationY = (1f - intro.line.value) * 10.dp.toPx() },
+            )
+            Text(
+                "working as one.", style = tagline, color = Color.White.copy(alpha = 0.72f), textAlign = TextAlign.Center,
+                modifier = Modifier.graphicsLayer { alpha = intro.more.value; translationY = (1f - intro.more.value) * 10.dp.toPx() },
+            )
+        }
     }
 }
 

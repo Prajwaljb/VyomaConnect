@@ -90,6 +90,9 @@ import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.geometry.isSimple
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -476,14 +479,39 @@ fun Modifier.aurora(): Modifier = composed {
     val strength = if (isDarkUi) 0.16f else 0.20f
     val wallpaper = AppCanvas.wallpaper.takeIf { AppCanvas.useWallpaper }
     val dark = isDarkUi
+    // A new PC wallpaper (or the PC accent switched on or off) fades in over the old canvas rather
+    // than snapping to it (user, 2026-11-09).
+    var shown by remember { mutableStateOf(wallpaper) }
+    var leaving by remember { mutableStateOf<Leaving?>(null) }
+    val fade = remember { Animatable(1f) }
+    LaunchedEffect(wallpaper) {
+        if (wallpaper == shown) return@LaunchedEffect
+        leaving = Leaving(shown)
+        shown = wallpaper
+        fade.snapTo(0f)
+        fade.animateTo(1f, tween(CANVAS_FADE_MS, easing = FastOutSlowInEasing))
+        leaving = null
+    }
+    val old = leaving
     drawWithCache {
         val w = (size.width / AURORA_SCALE).roundToInt().coerceAtLeast(1)
         val h = (size.height / AURORA_SCALE).roundToInt().coerceAtLeast(1)
-        val bitmap = if (wallpaper != null) AuroraCache.wallpaper(w, h, base, wallpaper, dark) else AuroraCache.get(w, h, base, accent, strength)
+        fun canvasOf(wall: CanvasWallpaper?) = if (wall != null) AuroraCache.wallpaper(w, h, base, wall, dark) else AuroraCache.get(w, h, base, accent, strength)
+        val bitmap = canvasOf(shown)
+        val before = old?.let { canvasOf(it.wallpaper) }
         val dst = IntSize(size.width.roundToInt(), size.height.roundToInt())
-        onDrawBehind { drawImage(bitmap, dstSize = dst, filterQuality = FilterQuality.Low) }
+        onDrawBehind {
+            val f = fade.value
+            if (before != null && f < 1f) drawImage(before, dstSize = dst, filterQuality = FilterQuality.Low)
+            drawImage(bitmap, dstSize = dst, filterQuality = FilterQuality.Low, alpha = if (before != null) f else 1f)
+        }
     }
 }
+
+/** The canvas a new one is fading in over: [wallpaper], or the accent's glow when null. */
+private class Leaving(val wallpaper: CanvasWallpaper?)
+
+private const val CANVAS_FADE_MS = 900
 
 private const val AURORA_SCALE = 4f
 

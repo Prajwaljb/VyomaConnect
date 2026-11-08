@@ -133,13 +133,14 @@ fun OnboardingScreen(vm: AppViewModel, onDone: () -> Unit) {
     val scope = rememberCoroutineScope()
     var titleShown by remember { mutableFloatStateOf(1f) }
     var lensTouched by remember { mutableStateOf(false) }
+    val intro = rememberWelcomeIntro()
     Box(Modifier.fillMaxSize()) {
         DuneScene(backdrop, clock, ripple, { day.value }) {
-            if (showing) WelcomeTitle({ titleShown }, lensTouched)
+            if (showing) WelcomeTitle({ titleShown }, lensTouched, intro)
         }
         Crossfade(showing, animationSpec = VyomaMotion.effects(), label = "first run") { show ->
             if (show) {
-                WelcomeShow(backdrop, clock, page = { at ->
+                WelcomeShow(backdrop, clock, intro, page = { at ->
                     titleShown = 1f - at.coerceIn(0f, 1f)
                     scope.launch { day.snapTo(at) }
                 }, onLensTouched = { lensTouched = true }, onDone = { showing = false })

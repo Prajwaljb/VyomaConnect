@@ -132,7 +132,12 @@ fun DeviceScreen(
                         icon = Icons.Rounded.Terminal,
                         iconTint = SystemColor.GRAY.color,
                         trailing = { RowChevron(commands.size.takeIf { it > 0 }?.toString()) },
-                        onClick = { if (commands.isEmpty()) vm.openCommandSetup(deviceId) else showCommands = true },
+                        onClick = {
+                            if (commands.isEmpty()) {
+                                vm.openCommandSetup(deviceId)
+                                status.show("Opening Commands on the PC", icon = Icons.Rounded.Terminal)
+                            } else showCommands = true
+                        },
                     )
                 }
             }
