@@ -1170,7 +1170,7 @@ internal fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) 
         title = { Text("Commands") },
         text = {
             if (commands.isEmpty()) {
-                Text("None yet. Add shutdown, sleep or your own scripts in Vyoma's window on the PC, and run them from here.")
+                Text("None yet. Add your own scripts and shortcuts on the PC, and run them from here.")
             } else {
                 Column(Modifier.heightIn(max = 360.dp).fadingVerticalScroll(rememberScrollState())) {
                     commands.forEachIndexed { i, cmd ->
