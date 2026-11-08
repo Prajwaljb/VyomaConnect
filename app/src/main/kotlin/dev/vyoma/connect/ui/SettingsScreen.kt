@@ -120,6 +120,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.vyoma.connect.protocol.link.TransportKind
 import dev.vyoma.connect.designsystem.CollapsingHeaderScaffold
 import dev.vyoma.connect.designsystem.DarkMode
 import dev.vyoma.connect.designsystem.ListRow
@@ -302,7 +303,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
         item(key = "hosts-label") { SectionLabel("Ways to connect") }
         item(key = "hosts") {
             SectionCard(Modifier.animateContentSize(VyomaMotion.spatial())) {
-                BluetoothRow(resumeTick)
+                BluetoothRow(vm, resumeTick)
                 SteadierRow(resumeTick)
                 hosts.forEach { host ->
                     ListRow(
@@ -772,12 +773,17 @@ private fun SteadierRow(resumeTick: Int) {
 
 /** The fallback link: a switch, and what it still needs in words. Off until asked for (it needs a permission). */
 @androidx.compose.runtime.Composable
-private fun BluetoothRow(resumeTick: Int) {
+private fun BluetoothRow(vm: AppViewModel, resumeTick: Int) {
     val context = androidx.compose.ui.platform.LocalContext.current
     remember { BluetoothFallback.init(context) }
     val on by BluetoothFallback.enabled.collectAsStateWithLifecycle()
     var asked by remember { mutableIntStateOf(0) }
     val ready = remember(resumeTick, on, asked) { BluetoothFallback.readiness(context) }
+    // Android's Bluetooth page stops calling the PC paired once its audio and calls are off, so this says it.
+    val devices by vm.devices.collectAsStateWithLifecycle()
+    val known = remember(resumeTick, on, asked) { BluetoothFallback.addresses(context).keys }
+    val pcName = devices.firstOrNull { it.identity.deviceId in known }?.identity?.deviceName ?: "your PC"
+    val overRadio = devices.any { TransportKind.BLUETOOTH in it.transports && it.isReachable }
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         asked++
         if (granted) BluetoothFallback.setEnabled(context, true)
@@ -800,7 +806,8 @@ private fun BluetoothRow(resumeTick: Int) {
             ready == BluetoothFallback.Readiness.RADIO_OFF -> "Turn on Bluetooth to use it"
             ready == BluetoothFallback.Readiness.PC_UNKNOWN -> "Connect once over Wi-Fi so it can find your PC"
             ready == BluetoothFallback.Readiness.NOT_PAIRED -> "Pair this phone with your PC in Bluetooth settings"
-            else -> "Connect without Wi-Fi or cable"
+            overRadio -> "Connected to $pcName over Bluetooth"
+            else -> "Paired with $pcName, ready if Wi-Fi drops"
         },
         icon = Icons.Rounded.Bluetooth,
         iconTint = SystemColor.BLUE.color,

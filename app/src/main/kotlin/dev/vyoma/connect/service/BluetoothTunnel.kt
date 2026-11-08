@@ -222,7 +222,8 @@ class BluetoothTunnel(private val context: Context, private val hub: DeviceHub, 
                 offlineSince.remove(pcId)
                 nextTry.remove(pcId)
                 wait.remove(pcId)
-                if (state.transports == setOf(TransportKind.BLUETOOTH)) linkCompanion(pcId, address, adapter)
+                // A PC that serves the companion's features itself (the desktop app) has no companion to bring.
+                if (state.transports == setOf(TransportKind.BLUETOOTH) && state.identity.featuresOf != pcId) linkCompanion(pcId, address, adapter)
                 continue
             }
             val since = offlineSince.getOrPut(pcId) { now() }

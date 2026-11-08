@@ -95,6 +95,9 @@ fun FilesScreen(
     val status = LocalStatus.current
     val devices by vm.devices.collectAsStateWithLifecycle()
     val pcName = devices.firstOrNull { it.identity.deviceId == pcId }?.identity?.deviceName ?: "PC"
+    // Over Bluetooth alone a folder still lists (it's a packet), but no file can come or go.
+    val bluetooth = devices.firstOrNull { it.identity.deviceId == pcId }?.onlyBluetooth == true
+    fun moving(go: () -> Unit) = if (bluetooth) status.show(NEEDS_WIFI, failure = true) else go()
     val companion = devices.firstOrNull { it.identity.featuresOf == pcId && it.isPaired && it.isReachable }
     val plugin = remember(companion?.identity?.deviceId, companion?.plugins) {
         companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
@@ -169,7 +172,7 @@ fun FilesScreen(
                 // Inset so the first crumb's text lines up with the card text below.
                 Breadcrumbs(path, onPick = onCrumb, modifier = Modifier.weight(1f).padding(start = 10.dp))
                 // Into the folder on screen; the dashboard's Send drops files in the PC's Downloads instead.
-                PillButton("Upload here", prominent = false, onClick = { upload.launch(arrayOf("*/*")) })
+                PillButton("Upload here", prominent = false, onClick = { moving { upload.launch(arrayOf("*/*")) } })
             }
         }
 
@@ -209,8 +212,8 @@ fun FilesScreen(
                             busy = child in fetching,
                             showDivider = i != last,
                             modifier = (if (i != last) Modifier.joinNext() else Modifier).cardSegment(first = i == 0, last = i == last),
-                            onClick = { if (f.isDir) onOpen(child) else vm.downloadPcFile(plugin, child, keep = false) },
-                            onSave = { vm.downloadPcFile(plugin, child) },
+                            onClick = { if (f.isDir) onOpen(child) else moving { vm.downloadPcFile(plugin, child, keep = false) } },
+                            onSave = { moving { vm.downloadPcFile(plugin, child) } },
                         )
                     }
                 }

@@ -129,10 +129,10 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
   only say `isCharging`, false on a charger at a charge limit or full, so the phone shows "Plugged in" from this.
 - Bluetooth fallback (`bluetooth.rs`, app `service/BluetoothTunnel.kt`), not stock's beta backend: two BlueZ RFCOMM
   services for bonded phones. `…f801` (channel 26; BlueZ won't listen without one) pipes to kdeconnectd 127.0.0.1:1716,
-  and the phone links through it as TLS server after 15 s offline. Once that's the PC's only link, `…f802` (channel 27)
+  and the phone links through it as TLS server after 15 s offline. Once that's the PC's only link and the PC has a separate companion (not a PC that is its own, `featuresOf`), `…f802` (channel 27)
   bridges to a one-time local port the companion dials, with `LanBackend.acceptTunnel` answering, so stats, controls and
   the controller (link packets, no UDP) work and the walk-away rule sees a phone still here. Links have `payloads = null`:
-  the Dashboard's file/picture tiles say "Needs Wi-Fi or USB". Any other link to the PC closes both (`DeviceHub.onLink`).
+  the Dashboard's file/picture tiles, the Files tab's sends, opening or saving PC files and Screenshot say "Needs Wi-Fi or USB" (`DeviceState.onlyBluetooth`; folder listings still work), and `MprisPlugin` asks for no album art. Any other link to the PC closes both (`DeviceHub.onLink`).
   `…f803` (channel 28) takes the controller's 51-byte frames whatever the link is on (order: cable, Bluetooth, UDP; only
   with the Settings switch on). The cable, Bluetooth and UDP echo the seq (4 bytes, big-endian) of every 32nd frame: the
   phone logs "controller round trip over …" every 30 s, the companion "controller frames: … gaps over 150 ms" at close.

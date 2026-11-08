@@ -318,10 +318,14 @@ Progress (2026-11-07): steps 1–3, 5 and 6 are written, and tests pass.
 
 Checked with the debug build over Wi-Fi: stats and PC controls on Home, and a resumable send (vyoma.xfer, 3 MB, hash matched).
 
+Done 2026-11-07/08: this PC took over (`install.sh`); on the real phone with the release build, step 4 in full
+(the user tried every feature, webcam and camera included) and the transports for real (cable; Bluetooth only:
+touchpad, wake and unlock, controller). Over Bluetooth alone, everything that moves a file or a picture says
+"Needs Wi-Fi or USB" (Home tiles, the Files tab's sends, opening or saving PC files, Screenshot); listing PC
+folders works, and album art isn't asked for. Settings says the PC is paired over Bluetooth (Android's own page
+stops saying so once audio and calls are off for it).
+
 Still to do:
-- Step 4 for the rest.
-- The transports for real.
-- The release app needs this phone build before any takeover.
 - Shares via xfer still land in kdeconnectd's `incoming_path`.
 - The portal touchpad (`pointer-token`) and the daemon's input (`remotedesktop-token`) are separate sessions, so Plasma may ask twice.
 
