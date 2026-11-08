@@ -13,9 +13,13 @@ glance = "1.2.0"
 graphicsShapes = "1.1.0"
 profileinstaller = "1.4.1"
 palette = "1.0.0"
+# Apache-2.0: the SFTP server the PC browses the phone through (as KDE Connect's app).
+sshd = "2.20.1"
 junit = "4.13.2"
 
 [libraries]
+sshd-core = { module = "org.apache.sshd:sshd-core", version.ref = "sshd" }
+sshd-sftp = { module = "org.apache.sshd:sshd-sftp", version.ref = "sshd" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }

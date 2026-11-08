@@ -84,6 +84,7 @@ const NEEDS: &[Need] = &[
     need("opening files", Probe::Tool("xdg-open"), "xdg-utils", "xdg-utils", "xdg-utils"),
     need("USB", Probe::Tool("adb"), "android-tools", "adb", "android-tools"),
     need("wallpaper and camera", Probe::Tool("ffmpeg"), "ffmpeg", "ffmpeg", "ffmpeg-free"),
+    need("browsing the phone", Probe::Tool("sshfs"), "sshfs", "sshfs", "fuse-sshfs"),
     need("live screen", Probe::Tool("gst-launch-1.0"), "gstreamer", "gstreamer1.0-tools", "gstreamer1"),
     need("live screen", Probe::Gst("pipewire"), "gst-plugin-pipewire", "gstreamer1.0-pipewire", "pipewire-gstreamer"),
     need("live screen", Probe::Gst("coreelements"), "gstreamer", "gstreamer1.0-tools", "gstreamer1"),

@@ -19,7 +19,7 @@ scripts/deploy.sh debug          # install + launch on phone
 (cd desktop/companion && cargo test --release -p vyoma-core && cargo test --release)   # core + companion tests
 (cd desktop/daemon && cargo build --release && VYOMA_DIR=<scratch dir> VYOMA_ALLOW=<ids> VYOMA_ANNOUNCE=<IPs> ./target/release/vyoma-desktop)
                                  # standalone desktop app (in development, not installed); drive it with
-                                 # busctl --user call dev.vyoma.Desktop /dev/vyoma/Desktop dev.vyoma.Desktop1 Devices|Pair|Accept|Reject|Unpair|Refresh.
+                                 # busctl --user call dev.vyoma.Desktop /dev/vyoma/Desktop dev.vyoma.Desktop1 Devices|Pair|Accept|Reject|Unpair|Refresh|Browse.
                                  # Against this PC's kdeconnectd: allow only its id, announce to the PC's own global IPv6 (it ignores
                                  # loopback UDP), check codes with qdbus6 verificationKey, unpair at the end, rmdir ~/.config/kdeconnect/<dev id>
 install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ && systemctl --user restart vyoma-companion
@@ -37,7 +37,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `desktop/daemon` (`vyoma-desktop`): the standalone desktop app growing on that core (`docs/PLAN.md` section 10): pairing
   prompt as a freedesktop notification with Accept/Reject, `dev.vyoma.Desktop1` D-Bus control for the future GUI;
   stock plugins in `plugins.rs`, `clipboard.rs` (wl-clipboard), `share.rs` (files land in XDG Downloads), `media.rs`
-  (MPRIS), `volume.rs` (pactl), `commands.rs`, `notifications.rs`, `telephony.rs` (calls: notification with Mute, music paused for the call), `presenter.rs` (the pointer dot: a layer-shell overlay, smithay-client-toolkit), `input.rs` (RemoteDesktop portal). `VYOMA_PLAYERS=<bus suffix>` limits it to a test player.
+  (MPRIS), `volume.rs` (pactl), `commands.rs`, `notifications.rs`, `telephony.rs` (calls: notification with Mute, music paused for the call), `presenter.rs` (the pointer dot: a layer-shell overlay, smithay-client-toolkit), `phonefiles.rs` (D-Bus `Browse`: the phone's SFTP mounted with sshfs under $XDG_RUNTIME_DIR/vyoma, host key checked against its cert; sshfs runs as a transient `vyoma-files-<id>` user unit, as the app's own unit has NoNewPrivileges), `input.rs` (RemoteDesktop portal). `VYOMA_PLAYERS=<bus suffix>` limits it to a test player.
   Own identity in `~/.config/vyoma-desktop`, separate from the companion's (`--import-kde` takes over kdeconnectd's instead).
   Every `vyoma.*` feature is the companion's own code: each paired phone gets a `vyoma_companion::session::serve`.
   The phone treats it as its own companion (`DeviceIdentity.featuresOf`). The cable, tethering, Bluetooth and the setup

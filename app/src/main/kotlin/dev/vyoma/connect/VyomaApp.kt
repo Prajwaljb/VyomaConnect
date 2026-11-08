@@ -185,12 +185,19 @@ class AppContainer(private val app: Application) {
     private val _hub = MutableStateFlow<DeviceHub?>(null)
     val hub: StateFlow<DeviceHub?> = _hub.asStateFlow()
 
+    /** Our TLS key pair, once the identity's loaded: the file server's SSH host key too. */
+    @Volatile private var hostKey: java.security.KeyPair? = null
+    val phoneFiles by lazy {
+        dev.vyoma.connect.platform.AndroidPhoneFileServer(app) { hostKey ?: error("no identity yet") }
+    }
+
     suspend fun obtainHub(): DeviceHub = hubLock.withLock {
         _hub.value ?: withContext(Dispatchers.IO) {
             val keyDir = File(app.noBackupFilesDir, "identity")
             val credStore = FileCredentialStore(File(keyDir, "credentials.p12"))
             val credentials = credStore.load()
                 ?: LocalCredentials.generate(DeviceIdentity.newDeviceId()).also(credStore::save)
+            hostKey = java.security.KeyPair(credentials.certificate.publicKey, credentials.privateKey)
             val name = settings.deviceName.first() ?: defaultDeviceName()
             val trustStore = FileTrustStore(File(keyDir, "trusted.json"))
             val demo = if (BuildConfig.DEMO) Demo.prepare(File(keyDir, "demo"), trustStore) else null
@@ -225,6 +232,7 @@ class AppContainer(private val app: Application) {
         SmsPlugin.spec(sms),
         TelephonyPlugin.spec(calls),
         ContactsPlugin.spec(contacts),
+        dev.vyoma.connect.protocol.plugin.builtin.SftpPlugin.spec(phoneFiles),
         ConnectivityReportPlugin.spec(signal.states),
         CompanionPlugin.spec(shareSink),
     )
