@@ -106,6 +106,8 @@ pub struct Mount {
     child: Child,
     unit: String,
     pub path: PathBuf,
+    /// The phone's address it went to (loopback: the cable).
+    pub via: IpAddr,
 }
 
 impl Mount {
@@ -185,7 +187,7 @@ pub async fn mount(server: &Server, phone: IpAddr, id: &str, at: &Path, key: &Pa
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
         if mounted(at) {
-            return Ok(Mount { child, unit, path: at.to_owned() });
+            return Ok(Mount { child, unit, path: at.to_owned(), via: phone });
         }
         if let Some(status) = child.try_wait()? {
             let mut why = String::new();

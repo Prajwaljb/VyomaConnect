@@ -26,7 +26,7 @@ mod system;
 mod telephony;
 mod volume;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -55,6 +55,9 @@ const OBJECT_PATH: &str = "/dev/vyoma/Desktop";
 const TETHER_EVERY: Duration = Duration::from_secs(3);
 /// How often the PC's battery is read; it's sent on when it changed.
 const BATTERY_EVERY: Duration = Duration::from_secs(30);
+/// How often kept phone mounts are checked, and how long a remount's ask is waited on.
+const MOUNTS_EVERY: Duration = Duration::from_secs(5);
+const REMOUNT_WAIT: Duration = Duration::from_secs(30);
 
 /// What the GUI is shown of one device, and what its plugins keep.
 #[derive(Clone, Default)]
@@ -243,6 +246,11 @@ struct Desk {
     presenter: presenter::Presenter,
     /// Device id to its files, mounted.
     mounts: HashMap<String, phonefiles::Mount>,
+    /// Phones whose files were opened and not unmounted here: remounted, quietly, when the link
+    /// changes route or sshfs is cut off.
+    kept: HashSet<String>,
+    /// Remounts asked for (not to open a window for), and when.
+    remounting: HashMap<String, std::time::Instant>,
     /// Finished mounts, from the tasks that make them.
     mounted: mpsc::UnboundedSender<(String, Result<phonefiles::Mount>)>,
     /// Where our identity and its key are.
@@ -475,6 +483,8 @@ async fn daemon(dir: PathBuf) -> Result<()> {
         calls: HashMap::new(),
         presenter: presenter::Presenter::default(),
         mounts: HashMap::new(),
+        kept: HashSet::new(),
+        remounting: HashMap::new(),
         mounted: mounted_tx,
         dir: dir.clone(),
         prompts: HashMap::new(),
@@ -490,6 +500,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
     }
 
     let mut battery_tick = tokio::time::interval(BATTERY_EVERY);
+    let mut mounts_tick = tokio::time::interval(MOUNTS_EVERY);
     loop {
         tokio::select! {
             Some(event) = events.recv() => desk.on_event(event).await,
@@ -513,6 +524,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
                 Ask::Browse(id) => desk.browse(id),
             },
             Some((id, result)) = mounts_done.recv() => desk.on_mounted(id, result).await,
+            _ = mounts_tick.tick() => desk.check_mounts(),
             Some(locked) = lock_changes.recv() => {
                 if desk.locked != Some(locked) {
                     desk.locked = Some(locked);
@@ -761,6 +773,10 @@ impl Desk {
                 }
                 if paired {
                     self.start(&id);
+                    // A new route (cable or Wi-Fi): the mount's old one may be gone.
+                    if self.kept.contains(&id) && !self.mounts.get_mut(&id).is_some_and(|m| m.via == remote && m.alive()) {
+                        self.remount(&id);
+                    }
                 }
             }
             Event::Gone { id } => {
@@ -812,6 +828,7 @@ impl Desk {
             }
             Event::Unpaired { id, name } => {
                 self.sessions.remove(&id);
+                self.kept.remove(&id);
                 if let Some(m) = self.mounts.remove(&id) {
                     m.unmount().await;
                 }
@@ -879,6 +896,8 @@ impl Desk {
                             phonefiles::Reply::Ready(server) => self.mount(id, &device, server),
                             phonefiles::Reply::Failed(why) => {
                                 tracing::info!("{id}: files not browsable: {why}");
+                                self.kept.remove(&id);
+                                self.remounting.remove(&id);
                                 plugins::tell(&self.notifier, &format!("Can't open {}'s files", device.name), &why).await;
                             }
                             phonefiles::Reply::Nothing => {}
@@ -932,9 +951,11 @@ impl Desk {
     /// The phone's server is up: mount it, off the main loop.
     fn mount(&mut self, id: String, device: &DeviceView, server: phonefiles::Server) {
         let Some(remote) = device.remote else { return };
-        if self.mounts.get_mut(&id).is_some_and(|m| m.alive()) {
+        if self.mounts.get_mut(&id).is_some_and(|m| m.via == remote && m.alive()) {
             return;
         }
+        // Its sshfs unit is the one the new mount replaces (same name), which the mount stops.
+        self.mounts.remove(&id);
         let at = phonefiles::mount_point(&device.name);
         let (key, cert, dir, done) = (self.dir.join("privateKey.pem"), device.cert.clone(), self.dir.clone(), self.mounted.clone());
         tokio::spawn(async move {
@@ -943,17 +964,55 @@ impl Desk {
         });
     }
 
+    /// Asks [id] to serve its files again, for a mount that's kept (no window opens for it).
+    fn remount(&mut self, id: &str) {
+        if self.remounting.get(id).is_some_and(|at| at.elapsed() < REMOUNT_WAIT) {
+            return;
+        }
+        tracing::info!("{id}: remounting its files");
+        self.remounting.insert(id.to_owned(), std::time::Instant::now());
+        self.send(id, phonefiles::request());
+    }
+
+    /// Kept mounts whose sshfs ended. sshfs exits alike when unmounted here (the file manager's
+    /// eject) and when cut off, so the route tells: still linked the same way, it was unmounted
+    /// and is let go; else it's remounted once the phone's linked.
+    fn check_mounts(&mut self) {
+        if self.kept.is_empty() && self.mounts.is_empty() {
+            return;
+        }
+        let ended: Vec<(String, IpAddr)> = self.mounts.iter_mut().filter_map(|(id, m)| (!m.alive()).then(|| (id.clone(), m.via))).collect();
+        let all = self.devices.lock().unwrap().clone();
+        for (id, via) in ended {
+            self.mounts.remove(&id);
+            if all.get(&id).is_some_and(|d| d.linked && d.remote == Some(via)) {
+                tracing::info!("{id}: files unmounted");
+                self.kept.remove(&id);
+            }
+        }
+        let linked: Vec<String> = {
+            self.kept.iter().filter(|id| !self.mounts.contains_key(*id) && all.get(*id).is_some_and(|d| d.linked)).cloned().collect()
+        };
+        drop(all);
+        for id in linked {
+            self.remount(&id);
+        }
+    }
+
     async fn on_mounted(&mut self, id: String, result: Result<phonefiles::Mount>) {
         match result {
             Ok(m) => {
                 tracing::info!("{id}: files mounted");
-                share::open(&m.path.to_string_lossy());
-                if let Some(old) = self.mounts.insert(id, m) {
-                    old.unmount().await;
+                if self.remounting.remove(&id).is_none() {
+                    share::open(&m.path.to_string_lossy());
                 }
+                self.kept.insert(id.clone());
+                self.mounts.insert(id, m);
             }
             Err(e) => {
                 tracing::warn!("{id}: couldn't mount its files: {e:#}");
+                self.kept.remove(&id);
+                self.remounting.remove(&id);
                 plugins::tell(&self.notifier, "Couldn't open the phone's files", &format!("{e:#}")).await;
             }
         }
