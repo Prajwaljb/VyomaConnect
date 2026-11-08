@@ -204,7 +204,7 @@ object PhoneMirror {
                     vd.surface = null
                     encoder.close()
                     size = next
-                    encoder = H264Encoder(size.width, size.height, BITRATE, FPS, video, "mirror-encoder")
+                    encoder = H264Encoder(size.width, size.height, BITRATE, FPS, video, "mirror-encoder", start = encoder.rate)
                     vd.resize(encoder.width, encoder.height, app.resources.displayMetrics.densityDpi)
                     vd.surface = encoder.surface
                 }

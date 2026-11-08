@@ -43,7 +43,7 @@ internal fun companionLink(hub: DeviceHub): Flow<Pair<CompanionPlugin, String>?>
  * what it got): many encoders stop at 1088 lines, so a tall portrait screen is scaled down, and
  * some can't do 60 fps at full size. Asking for more makes configure fail on those phones.
  */
-internal class H264Encoder(width: Int, height: Int, bitrate: Int, fps: Int, private val out: LiveStream, private val name: String) {
+internal class H264Encoder(width: Int, height: Int, bitrate: Int, fps: Int, private val out: LiveStream, private val name: String, start: Int = bitrate) {
     private val thread = HandlerThread(name).also { it.start() }
     val handler = Handler(thread.looper)
     private val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
@@ -59,7 +59,9 @@ internal class H264Encoder(width: Int, height: Int, bitrate: Int, fps: Int, priv
      * near empty, never below a sixth. On the cable or good Wi-Fi it never moves.
      */
     private val top = bitrate
-    private var rate = bitrate
+    /** Where it is now: a new encoder for the same link (the phone turned) starts here, not at the top. */
+    var rate = start.coerceIn(bitrate / 6, bitrate)
+        private set
     private var changed = 0L
 
     init {
@@ -72,7 +74,7 @@ internal class H264Encoder(width: Int, height: Int, bitrate: Int, fps: Int, priv
             if (w != width || h != height || rate != fps) VLog.i("H264Encoder", "$name: ${width}x$height@$fps fitted to ${w}x$h@$rate for ${codec.name}")
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+                setInteger(MediaFormat.KEY_BIT_RATE, start.coerceIn(bitrate / 6, bitrate))
                 setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
                 setInteger(MediaFormat.KEY_FRAME_RATE, rate)
                 // A 120 Hz screen doesn't make more frames than asked for.
