@@ -9,6 +9,7 @@ import dev.vyoma.connect.protocol.plugin.PluginContext
 import dev.vyoma.connect.protocol.plugin.PluginSpec
 import dev.vyoma.connect.protocol.putStrings
 import kotlinx.serialization.json.put
+import java.net.InetAddress
 import java.security.PublicKey
 
 /**
@@ -20,8 +21,11 @@ import java.security.PublicKey
 interface PhoneFileServer {
     class Running(val port: Int, val password: String, val roots: List<Pair<String, String>>)
 
-    /** Starts it (or keeps it running) for a PC whose certificate has [peerKey]; why not, if it can't. */
-    fun start(peerKey: PublicKey?): Result<Running>
+    /**
+     * Starts it (or keeps it running) for a PC whose certificate has [peerKey], which may connect
+     * only [from] its links' addresses (loopback being the cable); why not, if it can't.
+     */
+    fun start(peerKey: PublicKey?, from: Collection<InetAddress>): Result<Running>
 
     /** That PC is gone: the server stops once no PC is left. */
     fun stop(peerKey: PublicKey?)
@@ -38,7 +42,7 @@ class SftpPlugin(private val ctx: PluginContext, private val server: PhoneFileSe
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         if (packet.bool("startBrowsing") != true) return false
         peerKey = ctx.device.peerCertificate?.publicKey
-        val reply = server.start(peerKey).fold(
+        val reply = server.start(peerKey, ctx.device.addresses).fold(
             onSuccess = { running ->
                 val at = ctx.device.ourAddress
                 packet(PacketTypes.SFTP) {
