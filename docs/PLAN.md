@@ -323,7 +323,9 @@ Done 2026-11-07/08: this PC took over (`install.sh`); on the real phone with the
 touchpad, wake and unlock, controller). Over Bluetooth alone, everything that moves a file or a picture says
 "Needs Wi-Fi or USB" (Home tiles, the Files tab's sends, opening or saving PC files, Screenshot); listing PC
 folders works, and album art isn't asked for. Settings says the PC is paired over Bluetooth (Android's own page
-stops saying so once audio and calls are off for it).
+stops saying so once audio and calls are off for it); unpaired, it says so even with the switch off, and a tap
+starts Android's pairing with the PC's address (`BluetoothFallback.pair`), a code to confirm on both. The PC
+side doesn't pair by itself.
 
 Still to do:
 - Shares via xfer still land in kdeconnectd's `incoming_path`.

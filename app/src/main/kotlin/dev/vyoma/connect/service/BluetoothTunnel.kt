@@ -102,6 +102,19 @@ object BluetoothFallback {
 
     internal fun adapterOrNull(context: Context) = adapter(context)
 
+    /**
+     * Asks Android to pair with the PC (at the address its link told us), so nobody has to find it in
+     * Bluetooth settings: the phone and the PC each show a code to confirm. False if it can't start.
+     */
+    @SuppressLint("MissingPermission") // permitted() is checked first.
+    fun pair(context: Context): Boolean {
+        if (!permitted(context)) return false
+        val adapter = adapter(context)?.takeIf { it.isEnabled } ?: return false
+        val peer = addresses(context).values.filter(BluetoothAdapter::checkBluetoothAddress).map(adapter::getRemoteDevice)
+            .firstOrNull { it.bondState != BluetoothDevice.BOND_BONDED } ?: return false
+        return peer.bondState == BluetoothDevice.BOND_BONDING || peer.createBond()
+    }
+
     /** A connected socket to [service] on this PC, if everything's in place for one. */
     @SuppressLint("MissingPermission") // permitted() is checked first.
     internal fun connect(context: Context, pcId: String?, service: UUID): BluetoothSocket? {
