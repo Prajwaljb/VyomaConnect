@@ -35,7 +35,7 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str) -> Result<()> {
     window.set_size(PhysicalSize::new(w, h));
     match scene {
         "down" => crate::apply(&ui, None),
-        "empty" => crate::apply(&ui, Some(vec![])),
+        "empty" | "setup-search" => crate::apply(&ui, Some(vec![])),
         _ => crate::apply(&ui, Some(phones(scene))),
     }
     if scene == "nearby" {
@@ -49,6 +49,13 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str) -> Result<()> {
         ui.set_selected(crate::THIS_PC.into());
         crate::apply(&ui, Some(phones(scene)));
         crate::show_health(&ui, &health(scene == "pc-setup"));
+    }
+    if scene.starts_with("setup") {
+        ui.set_setup(true);
+        crate::show_health(&ui, &health(scene == "setup-ready" || scene == "setup-moment"));
+        if scene == "setup-moment" {
+            crate::moment(&ui, "Pixel 9 Pro".into());
+        }
     }
     if scene == "activity" || scene == "activity-empty" {
         ui.set_selected(crate::ACTIVITY.into());
@@ -147,6 +154,18 @@ fn phones(scene: &str) -> Vec<PhoneData> {
     }
     if scene == "cable" {
         main.via = "cable".into();
+    }
+    // Setup before pairing: nothing paired yet, one phone nearby (asking, in setup-pairing).
+    if scene == "setup" || scene == "setup-pairing" {
+        let mut first = PhoneData { linked: true, via: "wifi".into(), ..phone("a", "Pixel 9 Pro") };
+        if scene == "setup-pairing" {
+            first.code = "4F9A2C1B".into();
+            first.asking = true;
+        }
+        return vec![first];
+    }
+    if scene == "setup-search" {
+        return vec![];
     }
     vec![main, away, near]
 }

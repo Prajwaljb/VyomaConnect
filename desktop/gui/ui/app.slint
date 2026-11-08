@@ -82,6 +82,13 @@ export global Theme {
     in-out property <image> wall-light;
     in-out property <image> wall-dark;
     in-out property <bool> has-wall;
+    // Where the light comes from, clockwise from 3 o'clock (270deg is straight up): above the
+    // wallpaper's brightest part, as on the phone (SpecularLight / lightAngle).
+    in-out property <angle> light: 270deg;
+    // Edges are lit facing it and, at 80%, opposite it; shadows fall away from it.
+    out property <angle> rim-angle: light - 90deg;
+    out property <float> fall-x: -cos(light);
+    out property <float> fall-y: -sin(light);
 
     out property <color> accent: dark ? accent-dark : accent-light;
     out property <color> accent-fill: dark ? fill-dark : fill-light;
@@ -180,7 +187,7 @@ component Badge inherits Rectangle {
     border-radius: 9px;
     background: fill;
     border-width: 1px;
-    border-color: @linear-gradient(180deg, #FFFFFF59 0%, #FFFFFF00 60%);
+    border-color: @linear-gradient(Theme.rim-angle, #FFFFFFBF 0%, #FFFFFF24 35%, #FFFFFF24 65%, #FFFFFF99 100%);
     Glyph {
         source: root.icon;
         tint: white;
@@ -194,7 +201,8 @@ component Glass inherits Rectangle {
     border-radius: radius;
     background: Theme.card;
     drop-shadow-blur: Theme.dark ? 0px : 14px;
-    drop-shadow-offset-y: 3px;
+    drop-shadow-offset-x: Theme.fall-x * 4.8px;
+        drop-shadow-offset-y: Theme.fall-y * 4.8px;
     drop-shadow-color: #1A2B4C0D;
     VerticalLayout {
         @children
@@ -202,7 +210,7 @@ component Glass inherits Rectangle {
     Rectangle {
         border-radius: root.radius;
         border-width: 1px;
-        border-color: @linear-gradient(180deg, Theme.rim-lit 0%, Theme.rim-base 30%, Theme.rim-base 70%, Theme.rim-lit.transparentize(Theme.dark ? 60% : 30%) 100%);
+        border-color: @linear-gradient(Theme.rim-angle, Theme.rim-lit 0%, Theme.rim-base 30%, Theme.rim-base 70%, Theme.rim-lit.transparentize(20%) 100%);
     }
 }
 
@@ -218,8 +226,10 @@ component PillButton inherits Rectangle {
     in property <bool> prominent;
     in property <bool> destructive;
     in property <bool> enabled: true;
+    // The one way forward at the end of a flow: taller, larger words.
+    in property <bool> large;
     callback clicked;
-    height: 38px;
+    height: large ? 50px : 38px;
     min-width: max(96px, label.preferred-width + 40px);
     border-radius: self.height / 2;
     opacity: enabled ? 1 : 0.4;
@@ -229,7 +239,7 @@ component PillButton inherits Rectangle {
     label := Text {
         text: root.text;
         color: root.prominent ? white : root.destructive ? Theme.error : Theme.accent;
-        font-size: 14px;
+        font-size: root.large ? 16px : 14px;
         font-weight: 600;
     }
     touch := TouchArea {
@@ -279,8 +289,14 @@ component Row inherits Rectangle {
     in property <bool> switch;
     in property <bool> on;
     in property <bool> tappable: switch;
+    in property <bool> first;
     in property <bool> last;
     callback clicked;
+    // The hover and press light keeps the card's round where the row meets its corners.
+    border-top-left-radius: first ? 26px : 0px;
+    border-top-right-radius: first ? 26px : 0px;
+    border-bottom-left-radius: last ? 26px : 0px;
+    border-bottom-right-radius: last ? 26px : 0px;
 
     background: tappable && touch.pressed ? Theme.pressed : tappable && touch.has-hover ? Theme.hover : transparent;
     // The whole row toggles, as on the phone.
@@ -419,7 +435,7 @@ component Tile inherits Rectangle {
     background: enabled && touch.pressed ? fill.darker(0.18) : enabled && touch.has-hover ? fill.brighter(0.1) : fill;
     animate background { duration: 120ms; }
     border-width: 1px;
-    border-color: @linear-gradient(180deg, #FFFFFF5C 0%, #FFFFFF00 50%, #FFFFFF1F 100%);
+    border-color: @linear-gradient(Theme.rim-angle, #FFFFFF5C 0%, #FFFFFF14 35%, #FFFFFF14 65%, #FFFFFF4A 100%);
     Glyph {
         x: 16px;
         y: 16px;
@@ -616,9 +632,10 @@ component Page inherits Rectangle {
         border-radius: 20px;
         background: action-touch.pressed ? Theme.pressed : Theme.chrome;
         border-width: 1px;
-        border-color: @linear-gradient(180deg, Theme.rim-lit 0%, Theme.rim-base 60%);
+        border-color: @linear-gradient(Theme.rim-angle, Theme.rim-lit 0%, Theme.rim-base 40%, Theme.rim-base 60%, Theme.rim-lit.transparentize(20%) 100%);
         drop-shadow-blur: Theme.dark ? 0px : 12px;
-        drop-shadow-offset-y: 3px;
+        drop-shadow-offset-x: Theme.fall-x * 4.8px;
+        drop-shadow-offset-y: Theme.fall-y * 4.8px;
         drop-shadow-color: #1A2B4C14;
         action-text := Text {
             text: root.action;
@@ -853,6 +870,7 @@ component PhonePage inherits Page {
                 subtitle: p.detail;
                 switch: true;
                 on: p.on;
+                first: i == 0;
                 last: i == root.phone.permits.length - 1;
                 clicked => { root.set-permission(root.phone.id, p.key, !p.on); }
             }
@@ -868,6 +886,7 @@ component PhonePage inherits Page {
                 title: "Unpair";
                 title-color: Theme.error;
                 tappable: true;
+                first: true;
                 last: true;
                 clicked => { root.confirm-unpair = true; }
             }
@@ -884,6 +903,7 @@ component PcPage inherits Page {
     in property <int> attention;
     in property <bool> loaded;
     callback install();
+    callback setup();
     title: "This PC";
     subtitle: !loaded ? "Checking…" : attention == 0 ? "Ready for everything" : attention == 1 ? "1 thing to set up" : attention + " things to set up";
     subtitle-color: loaded && attention > 0 ? Theme.pending : Theme.muted;
@@ -950,6 +970,21 @@ component PcPage inherits Page {
             }
         }
     }
+
+    VerticalLayout {
+        padding-top: 10px;
+        Glass {
+            Row {
+                has-icon: false;
+                title: "Run setup again";
+                title-color: Theme.accent;
+                tappable: true;
+                first: true;
+                last: true;
+                clicked => { root.setup(); }
+            }
+        }
+    }
 }
 
 // One thing in the activity: its badge, what happened, which phone and when.
@@ -1009,6 +1044,7 @@ component ActivityPage inherits Page {
         Glass {
             for e[i] in d.items: HappeningRow {
                 item: e;
+                first: i == 0;
                 last: i == d.items.length - 1;
             }
         }
@@ -1040,6 +1076,432 @@ component EmptyPage inherits Page {
     }
 }
 
+// A cue: a sentence that saves the question, after a small yellow bulb (the phone's Tip).
+component Tip inherits HorizontalLayout {
+    in property <string> text;
+    spacing: 10px;
+    VerticalLayout {
+        alignment: start;
+        padding-top: 1px;
+        Glyph {
+            source: @image-url("icons/bulb.svg");
+            tint: Theme.dark ? #FFD60A : #E0A800;
+            width: 16px;
+            height: 16px;
+        }
+    }
+    Text {
+        text: root.text;
+        color: Theme.muted;
+        font-size: 13px;
+        wrap: word-wrap;
+        horizontal-stretch: 1;
+    }
+}
+
+// A step of setup, as the phone's: its number (a tick once done), what it is and where it stands;
+// its content shows while it's the open one.
+component SetupCard inherits Glass {
+    in property <int> number;
+    in property <string> title;
+    in property <string> status;
+    in property <bool> done;
+    in property <bool> open;
+    callback clicked;
+    Rectangle {
+        height: 72px;
+        border-top-left-radius: 26px;
+        border-top-right-radius: 26px;
+        border-bottom-left-radius: root.open ? 0px : 26px;
+        border-bottom-right-radius: root.open ? 0px : 26px;
+        background: head.pressed ? Theme.pressed : head.has-hover && !root.open ? Theme.hover : transparent;
+        head := TouchArea {
+            mouse-cursor: root.open ? default : pointer;
+            clicked => { root.clicked(); }
+        }
+        HorizontalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            spacing: 14px;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 16px;
+                    background: root.done ? Theme.green : root.open ? Theme.accent-fill : Theme.track;
+                    animate background { duration: 200ms; }
+                    if root.done: Glyph {
+                        source: @image-url("icons/check.svg");
+                        tint: white;
+                    }
+                    if !root.done: Text {
+                        text: root.number;
+                        color: root.open ? white : Theme.text;
+                        font-size: 14px;
+                        font-weight: 600;
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    text: root.title;
+                    color: Theme.text;
+                    font-size: 16px;
+                    font-weight: 600;
+                }
+                Text {
+                    text: root.status;
+                    color: root.done ? Theme.connected : Theme.muted;
+                    font-size: 13px;
+                }
+            }
+        }
+    }
+    Rectangle {
+        height: root.open ? body.preferred-height : 0px;
+        clip: true;
+        animate height { duration: 300ms; easing: ease-out; }
+        body := VerticalLayout {
+            y: 0;
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-bottom: 20px;
+            spacing: 12px;
+            @children
+        }
+    }
+}
+
+// A phone in setup's pairing step: what it is, then its state or the way to pair it.
+component SetupPhone inherits HorizontalLayout {
+    in property <Phone> phone;
+    callback pair(string);
+    spacing: 14px;
+    VerticalLayout {
+        alignment: center;
+        Badge {
+            icon: @image-url("icons/phone.svg");
+            fill: Theme.blue;
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        horizontal-stretch: 1;
+        Text {
+            text: root.phone.name;
+            color: Theme.text;
+            font-size: 15px;
+            font-weight: 500;
+        }
+        Text {
+            text: root.phone.paired ? "Paired" : root.phone.code != "" ? "Pairing…" : Words.short(root.phone) == "Not paired" ? "Nearby" : Words.short(root.phone);
+            color: root.phone.paired ? Theme.connected : Theme.muted;
+            font-size: 13px;
+        }
+    }
+    if root.phone.paired: VerticalLayout {
+        alignment: center;
+        Rectangle {
+            width: 28px;
+            height: 28px;
+            border-radius: 14px;
+            background: Theme.green;
+            Glyph {
+                source: @image-url("icons/check.svg");
+                tint: white;
+                width: 16px;
+                height: 16px;
+            }
+        }
+    }
+    if !root.phone.paired && root.phone.code == "": VerticalLayout {
+        alignment: center;
+        PillButton {
+            text: "Pair";
+            prominent: true;
+            clicked => { root.pair(root.phone.id); }
+        }
+    }
+}
+
+// First run, as the phone's: one step at a time on the wallpaper, each saying why it asks and
+// closing into a tick when done. Only pairing matters to use it; the rest is on This PC later.
+component SetupPage inherits Rectangle {
+    in property <[Phone]> phones;
+    in property <[Phone]> nearby;
+    in property <bool> daemon-ok;
+    in property <[Feature]> missing;
+    in property <bool> installable;
+    in property <bool> installing;
+    in property <bool> health-loaded;
+    callback pair(string);
+    callback accept(string);
+    callback reject(string);
+    callback search();
+    callback install();
+    callback finish();
+    property <bool> paired: root.phones.length > 0;
+    // The first thing left to do is the open one; a click can open another.
+    property <int> current: !root.paired ? 0 : root.installable ? 1 : 2;
+    property <int> chosen: -1;
+    property <int> open: root.chosen >= 0 ? root.chosen : root.current;
+    changed current => { root.chosen = -1; }
+    property <length> column: min(600px, root.width - 64px);
+    ScrollView {
+        VerticalLayout {
+            padding-left: (root.width - root.column) / 2;
+            padding-right: (root.width - root.column) / 2;
+            padding-bottom: 32px;
+            spacing: 12px;
+            alignment: start;
+            VerticalLayout {
+                height: max(170px, min(240px, root.height * 0.3));
+                alignment: end;
+                padding-bottom: 28px;
+                spacing: 6px;
+                Text {
+                    text: "Let's set up";
+                    color: Theme.text;
+                    font-size: 40px;
+                    font-weight: 700;
+                    letter-spacing: -1px;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: root.current == 0 ? "Pair your phone with this PC. It takes a minute."
+                        : root.current == 1 ? "Paired. A few things make this PC ready for everything."
+                        : "Nearly there";
+                    color: Theme.muted;
+                    font-size: 15px;
+                    horizontal-alignment: center;
+                }
+            }
+
+            SetupCard {
+                number: 1;
+                title: "Pair with your phone";
+                status: root.paired ? root.phones[0].name : "Both need to agree once";
+                done: root.paired;
+                open: root.open == 0;
+                clicked => { root.chosen = 0; }
+                if !root.daemon-ok: Tip {
+                    text: "Vyoma's background service isn't running. It starts with your session; log out and back in, or restart it.";
+                }
+                for p in root.phones: SetupPhone {
+                    phone: p;
+                }
+                for p in root.nearby: VerticalLayout {
+                    spacing: 12px;
+                    SetupPhone {
+                        phone: p;
+                        pair(id) => { root.pair(id); }
+                    }
+                    // The code to compare, right under the phone it's for.
+                    if p.code != "": Rectangle {
+                        border-radius: 18px;
+                        background: Theme.raised;
+                        VerticalLayout {
+                            padding: 18px;
+                            spacing: 10px;
+                            Text {
+                                text: p.asking ? "Make sure this code matches the one on your phone, then accept." : "Accept on your phone if it shows this same code.";
+                                color: Theme.muted;
+                                font-size: 14px;
+                                wrap: word-wrap;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: p.code;
+                                color: Theme.text;
+                                font-size: 32px;
+                                font-weight: 600;
+                                letter-spacing: 5px;
+                                horizontal-alignment: center;
+                            }
+                            if p.asking: HorizontalLayout {
+                                alignment: center;
+                                spacing: 10px;
+                                PillButton {
+                                    text: "Reject";
+                                    clicked => { root.reject(p.id); }
+                                }
+                                PillButton {
+                                    text: "Accept";
+                                    prominent: true;
+                                    clicked => { root.accept(p.id); }
+                                }
+                            }
+                        }
+                    }
+                }
+                if root.daemon-ok && root.phones.length == 0 && root.nearby.length == 0: VerticalLayout {
+                    spacing: 12px;
+                    Text {
+                        text: "Looking for your phone…";
+                        color: Theme.text;
+                        font-size: 15px;
+                    }
+                    Tip {
+                        text: "Open Vyoma on your phone, on the same Wi-Fi as this PC, or plug it in with a USB cable. Don't have it yet? It's at github.com/Prajwaljb/VyomaConnect.";
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        PillButton {
+                            text: "Search for phones";
+                            clicked => { root.search(); }
+                        }
+                    }
+                }
+                if !root.paired && root.nearby.length > 0: Tip {
+                    text: "You'll check that a code matches on both screens: that's how you know it's your phone.";
+                }
+            }
+
+            SetupCard {
+                number: 2;
+                title: "Get this PC ready";
+                status: !root.health-loaded ? "Checking…" : root.installable ? "Some features need a little more" : "Ready for everything";
+                done: root.health-loaded && !root.installable;
+                open: root.open == 1;
+                clicked => { root.chosen = 1; }
+                if root.missing.length > 0: VerticalLayout {
+                    spacing: 8px;
+                    for f in root.missing: HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: Theme.pending;
+                            }
+                        }
+                        Text {
+                            text: f.name;
+                            color: Theme.text;
+                            font-size: 14px;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: f.detail;
+                            color: Theme.muted;
+                            font-size: 13px;
+                        }
+                    }
+                }
+                if root.installable: Tip {
+                    text: "One install adds what these need. Your password is asked for once.";
+                }
+                if root.installable: HorizontalLayout {
+                    alignment: start;
+                    PillButton {
+                        text: root.installing ? "Installing…" : "Install";
+                        prominent: true;
+                        enabled: !root.installing;
+                        clicked => { root.install(); }
+                    }
+                }
+                if !root.installable: Tip {
+                    text: "Everything your phone can do here is ready. This PC's page shows it any time.";
+                }
+            }
+
+            SetupCard {
+                number: 3;
+                title: "Good to know";
+                status: "Then you're done";
+                done: false;
+                open: root.open == 2;
+                clicked => { root.chosen = 2; }
+                Tip {
+                    text: "Your phone connects by itself whenever it's near. This window can be closed: Vyoma keeps running.";
+                }
+                Tip {
+                    text: "Choose what each phone may do here on its page, under Allow this phone to.";
+                }
+                Tip {
+                    text: "Activity shows what your phones did on this PC: screenshots, files, sleep and more.";
+                }
+            }
+
+            VerticalLayout {
+                padding-top: 8px;
+                PillButton {
+                    text: root.paired ? "Start using Vyoma" : "Skip for now";
+                    prominent: true;
+                    large: true;
+                    clicked => { root.finish(); }
+                }
+            }
+        }
+    }
+}
+
+// The moment a phone pairs: a drop of glass with a tick swells in, then who it is.
+component PairedMoment inherits Rectangle {
+    in property <bool> shown;
+    in property <string> name;
+    opacity: shown ? 1 : 0;
+    visible: self.opacity > 0.01;
+    animate opacity { duration: 220ms; }
+    background: Theme.canvas.transparentize(Theme.dark ? 6% : 8%);
+    TouchArea { }
+    VerticalLayout {
+        alignment: center;
+        spacing: 24px;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 150px;
+                height: 150px;
+                Rectangle {
+                    property <length> d: root.shown ? 150px : 40px;
+                    animate d { duration: 650ms; easing: ease-out-back; }
+                    x: (150px - self.d) / 2;
+                    y: (150px - self.d) / 2;
+                    width: self.d;
+                    height: self.d;
+                    border-radius: self.d / 2;
+                    background: Theme.green;
+                    border-width: 1px;
+                    border-color: @linear-gradient(Theme.rim-angle, #FFFFFFBF 0%, #FFFFFF24 35%, #FFFFFF24 65%, #FFFFFF99 100%);
+                    drop-shadow-blur: 30px;
+                    drop-shadow-offset-x: Theme.fall-x * 8px;
+                    drop-shadow-offset-y: Theme.fall-y * 8px;
+                    drop-shadow-color: #16A34A55;
+                    Glyph {
+                        source: @image-url("icons/check.svg");
+                        tint: white;
+                        width: parent.width * 0.43;
+                        height: parent.height * 0.43;
+                    }
+                }
+            }
+        }
+        VerticalLayout {
+            spacing: 4px;
+            Text {
+                text: "You're connected";
+                color: Theme.text;
+                font-size: 26px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: root.name;
+                color: Theme.muted;
+                font-size: 16px;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}
+
 // A glass dialog over a dimmed window, as the phone's: title, a line, then Cancel and the action.
 component Dialog inherits Rectangle {
     in property <bool> shown;
@@ -1063,9 +1525,10 @@ component Dialog inherits Rectangle {
         border-radius: 28px;
         background: Theme.popup;
         border-width: 1px;
-        border-color: @linear-gradient(180deg, Theme.rim-lit 0%, Theme.rim-base 40%);
+        border-color: @linear-gradient(Theme.rim-angle, Theme.rim-lit 0%, Theme.rim-base 40%, Theme.rim-base 60%, Theme.rim-lit.transparentize(20%) 100%);
         drop-shadow-blur: 30px;
-        drop-shadow-offset-y: 8px;
+        drop-shadow-offset-x: Theme.fall-x * 12.8px;
+        drop-shadow-offset-y: Theme.fall-y * 12.8px;
         drop-shadow-color: #00000040;
         // Swallows clicks so they don't reach the scrim.
         TouchArea { }
@@ -1136,6 +1599,12 @@ export component MainWindow inherits Window {
     in-out property <string> selected;
     in-out property <bool> confirm-unpair;
     in-out property <bool> confirm-clear;
+    // First run: the setup steps over the whole window, until finished or skipped.
+    in-out property <bool> setup;
+    in property <[Feature]> missing;
+    // A phone just paired during setup: [moment] is its name, shown while [moment-on].
+    in property <string> moment;
+    in property <bool> moment-on;
 
     callback select(string);
     callback search();
@@ -1151,6 +1620,7 @@ export component MainWindow inherits Window {
     callback show-activity();
     callback clear-activity();
     callback install();
+    callback finish-setup();
 
     property <length> side: 268px;
 
@@ -1176,7 +1646,7 @@ export component MainWindow inherits Window {
     }
 
     // The sidebar: floating glass, as the phone's tab bar.
-    Rectangle {
+    if !root.setup: Rectangle {
         x: 12px;
         y: 12px;
         width: root.side;
@@ -1184,12 +1654,13 @@ export component MainWindow inherits Window {
         border-radius: 26px;
         background: Theme.chrome;
         drop-shadow-blur: Theme.dark ? 0px : 18px;
-        drop-shadow-offset-y: 4px;
+        drop-shadow-offset-x: Theme.fall-x * 6.4px;
+        drop-shadow-offset-y: Theme.fall-y * 6.4px;
         drop-shadow-color: #1A2B4C12;
         Rectangle {
             border-radius: 26px;
             border-width: 1px;
-            border-color: @linear-gradient(180deg, Theme.rim-lit 0%, Theme.rim-base 30%, Theme.rim-base 70%, Theme.rim-lit.transparentize(Theme.dark ? 60% : 30%) 100%);
+            border-color: @linear-gradient(Theme.rim-angle, Theme.rim-lit 0%, Theme.rim-base 30%, Theme.rim-base 70%, Theme.rim-lit.transparentize(20%) 100%);
         }
         VerticalLayout {
             padding: 10px;
@@ -1286,7 +1757,7 @@ export component MainWindow inherits Window {
     }
 
     // The chosen page.
-    Rectangle {
+    if !root.setup: Rectangle {
         x: root.side + 12px;
         width: parent.width - self.x;
         height: parent.height;
@@ -1299,6 +1770,7 @@ export component MainWindow inherits Window {
             attention: root.attention;
             loaded: root.health-loaded;
             install => { root.install(); }
+            setup => { root.setup = true; }
         }
         if root.selected == "activity" && root.daemon-ok: ActivityPage {
             days: root.days;
@@ -1322,9 +1794,29 @@ export component MainWindow inherits Window {
         }
     }
 
+    if root.setup: SetupPage {
+        phones: root.phones;
+        nearby: root.nearby;
+        daemon-ok: root.daemon-ok;
+        missing: root.missing;
+        installable: root.installable;
+        installing: root.installing;
+        health-loaded: root.health-loaded;
+        pair(id) => { root.pair(id); }
+        accept(id) => { root.accept(id); }
+        reject(id) => { root.reject(id); }
+        search => { root.search(); }
+        install => { root.install(); }
+        finish => { root.finish-setup(); }
+    }
+    PairedMoment {
+        shown: root.moment-on;
+        name: root.moment;
+    }
+
     // The status bubble: glass that drops from the top with the outcome, as the phone's.
     Rectangle {
-        property <length> area-x: root.side + 12px;
+        property <length> area-x: root.setup ? 0px : root.side + 12px;
         width: min(notice-text.preferred-width + 44px, root.width - self.area-x - 160px);
         height: max(44px, notice-text.preferred-height + 22px);
         x: self.area-x + (root.width - self.area-x - self.width) / 2;
@@ -1333,9 +1825,10 @@ export component MainWindow inherits Window {
         border-radius: 22px;
         background: Theme.popup;
         border-width: 1px;
-        border-color: @linear-gradient(180deg, Theme.rim-lit 0%, Theme.rim-base 60%);
+        border-color: @linear-gradient(Theme.rim-angle, Theme.rim-lit 0%, Theme.rim-base 40%, Theme.rim-base 60%, Theme.rim-lit.transparentize(20%) 100%);
         drop-shadow-blur: 22px;
-        drop-shadow-offset-y: 5px;
+        drop-shadow-offset-x: Theme.fall-x * 8px;
+        drop-shadow-offset-y: Theme.fall-y * 8px;
         drop-shadow-color: Theme.dark ? #00000080 : #1A2B4C26;
         notice-text := Text {
             width: parent.width - 44px;
