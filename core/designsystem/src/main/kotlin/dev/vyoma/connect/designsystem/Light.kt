@@ -48,11 +48,11 @@ object SpecularLight {
         val across: () -> Float,
     )
 
-    /** The way to the light from [center], in root coordinates. A tilt still sways it, by half: the sun stays the sun. */
+    /** The way to the light from [center], in root coordinates. */
     fun from(center: androidx.compose.ui.geometry.Offset): Float {
         val s = source ?: return angle
         val to = s.at() - center
-        return Math.toDegrees(kotlin.math.atan2(to.y, to.x).toDouble()).toFloat() + (angle - rest) * 0.5f
+        return Math.toDegrees(kotlin.math.atan2(to.y, to.x).toDouble()).toFloat()
     }
 
     /** How much of it gets to [center]: all beside it, down to a little under half across the picture. */
@@ -119,7 +119,8 @@ object SpecularLight {
 internal fun TrackSpecularLight() {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
-    val lite = GlassQuality.lite
+    // Nor under a light in the picture (the first run's sun): a sway there felt jarring (user, 2026-11-08).
+    val lite = GlassQuality.lite || SpecularLight.source != null
     DisposableEffect(context, owner, lite) {
         if (lite) {
             SpecularLight.settle()

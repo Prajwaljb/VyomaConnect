@@ -11,6 +11,8 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -96,12 +98,16 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import dev.vyoma.connect.designsystem.Backdrop
 import dev.vyoma.connect.designsystem.Blob
@@ -285,11 +291,9 @@ private fun Modifier.dunes(clock: ShowClock, ripple: Ripple, day: () -> Float): 
             drawRect(Brush.verticalGradient(0f to top, 0.6f to low, 0.62f to lit, 1f to shade))
             return@drawBehind
         }
-        // A tilt shifts the near dunes more than the far ones, as if looking through a window.
-        val tilt = (SpecularLight.angle - SpecularLight.REST) / 40f
         shader.setFloatUniform("size", size.width, size.height)
         shader.setFloatUniform("time", clock.seconds)
-        shader.setFloatUniform("pan", day() * 2.2f + tilt)
+        shader.setFloatUniform("pan", day() * 2.2f)
         shader.setFloatUniform("skyTop", top.red, top.green, top.blue)
         shader.setFloatUniform("skyLow", low.red, low.green, low.blue)
         shader.setFloatUniform("sun", sun.red, sun.green, sun.blue)
@@ -400,25 +404,39 @@ internal fun WelcomeShow(backdrop: Backdrop, clock: ShowClock, page: (Float) -> 
 /** The first scene's words, drawn into the picture so that the lens bends them too (over it, they vanished under the lens). */
 @Composable
 internal fun WelcomeTitle(visible: () -> Float, touched: Boolean) {
+    // The name and the hint come up slowly, a moment after the picture, so the dunes and the lens
+    // are seen first (user, 2026-11-08). With animations off they're just there.
+    val context = LocalContext.current
+    val still = remember { Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f }
+    val name = remember { Animatable(if (still) 1f else 0f) }
+    val prompt = remember { Animatable(if (still) 1f else 0f) }
+    LaunchedEffect(Unit) {
+        launch { delay(1500); name.animateTo(1f, tween(2200, easing = LinearOutSlowInEasing)) }
+        launch { delay(4200); prompt.animateTo(1f, tween(1600, easing = LinearOutSlowInEasing)) }
+    }
     BoxWithConstraints(Modifier.fillMaxSize().graphicsLayer { alpha = visible(); translationX = -(1f - visible()) * size.width }) {
         Text(
             "Vyoma",
             style = TextStyle(fontSize = 84.sp, fontWeight = FontWeight.Bold, letterSpacing = (-2).sp, color = Color.White, shadow = Soft),
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = maxHeight * 0.27f),
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = maxHeight * 0.27f).graphicsLayer { alpha = name.value },
         )
         val hint by animateFloatAsState(if (touched || GlassQuality.lite) 0f else 1f, VyomaMotion.effects(), label = "hint")
         Text(
             "Go on, drag the glass",
             style = MaterialTheme.typography.labelLarge.copy(shadow = Soft),
             color = Color.White,
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = maxHeight * 0.46f).graphicsLayer { alpha = hint * 0.9f },
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = maxHeight * 0.46f).graphicsLayer { alpha = hint * prompt.value * 0.9f },
         )
         Text(
-            "Your phone and your PC,\nworking as one.",
-            style = MaterialTheme.typography.headlineSmall.copy(shadow = Soft),
+            // Set like a keynote line: big, tight, the second half a step back.
+            buildAnnotatedString {
+                append("Your phone and your PC,\n")
+                withStyle(SpanStyle(color = Color.White.copy(alpha = 0.72f))) { append("working as one.") }
+            },
+            style = MaterialTheme.typography.headlineMedium.copy(fontSize = 28.sp, lineHeight = 32.sp, letterSpacing = (-0.025).em, shadow = Soft),
             color = Color.White,
             textAlign = TextAlign.Center,
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(start = 20.dp, end = 20.dp, bottom = 118.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(start = 20.dp, end = 20.dp, bottom = 122.dp),
         )
     }
 }
