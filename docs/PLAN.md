@@ -347,7 +347,11 @@ can pair on its own.
 Started 2026-11-08 (`desktop/gui`): phones in a sidebar (paired, then nearby), each phone's page with how it's
 connected, battery, Ring / Browse files / Send files, pairing with the code to compare (Accept/Reject only when the
 phone asked) and Unpair asked in place. The daemon gained a `Changed` signal and `via`/`can`/`asking` in Details.
-Next: setup and health, per-phone permissions, the activity log; then the macOS socket behind the same `Daemon` trait.
+Setup and health (2026-11-08): This PC in the sidebar (a dot when something needs the user), its page lists each
+feature ready or what it needs (needing first), checks no package fixes (firewall: on, and whether a phone got through
+on Wi-Fi; KDE Connect running beside) and advice (VA-API), with Install (pkexec, once) when it can help. Daemon:
+`Health` (JSON), `Install`, `SetupDone(ok)`.
+Next: per-phone permissions, the activity log; then the macOS socket behind the same `Daemon` trait.
 
 ### Open
 Packaging (AUR, Flatpak, Homebrew), the app's desktop name, and whether KDE users keep the option of

@@ -108,6 +108,19 @@ struct Control {
     targets: Vec<SocketAddr>,
     /// For the signals sent from tasks.
     conn: zbus::Connection,
+    /// kdeconnectd runs beside us (it keeps the cable, tethering and Bluetooth).
+    beside_kde: bool,
+}
+
+/// A phone has reached this PC over the network since start: a firewall lets it through.
+static WIFI_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// An install from the window is running.
+static INSTALLING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn note_routes(routes: &[IpAddr]) {
+    if routes.iter().any(|r| !r.is_loopback()) {
+        WIFI_SEEN.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 #[zbus::interface(name = "dev.vyoma.Desktop1")]
@@ -197,6 +210,36 @@ impl Control {
     /// A [send_files] batch is over: [error] is empty when the device fetched all [count].
     #[zbus(signal)]
     async fn files_sent(emitter: &zbus::object_server::SignalEmitter<'_>, id: &str, count: u32, error: &str) -> zbus::Result<()>;
+
+    /// This PC's setup as JSON: each feature (`ready`, or what it `needs`), whether Install can
+    /// help (`installable`, `installing`), checks no package fixes (`checks`: name, `state` ok,
+    /// info or warn, detail) and advice (`notes`).
+    async fn health(&self) -> fdo::Result<String> {
+        let beside_kde = self.beside_kde;
+        let report = tokio::task::spawn_blocking(move || health(beside_kde)).await.map_err(|e| fdo::Error::Failed(e.to_string()))?;
+        Ok(report.to_string())
+    }
+
+    /// Installs what's missing (asks for the password once); [setup_done] says how it went.
+    fn install(&self) -> fdo::Result<()> {
+        if INSTALLING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        let conn = self.conn.clone();
+        tokio::spawn(async move {
+            let ok = vyoma_companion::setup::install().await;
+            INSTALLING.store(false, std::sync::atomic::Ordering::SeqCst);
+            tracing::info!("install from the window: {}", if ok { "done" } else { "didn't finish" });
+            if let Ok(emitter) = zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
+                let _ = Control::setup_done(&emitter, ok).await;
+            }
+        });
+        Ok(())
+    }
+
+    /// An [install] is over.
+    #[zbus(signal)]
+    async fn setup_done(emitter: &zbus::object_server::SignalEmitter<'_>, ok: bool) -> zbus::Result<()>;
 
     /// Sends text to the device, or opens a link there.
     fn send_text(&self, id: String, text: String) -> fdo::Result<()> {
@@ -420,7 +463,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
     let (mounted_tx, mut mounts_done) = mpsc::unbounded_channel();
     let notifier = Notifier::new(conn.clone());
     let run = commands::Commands::new(&dir);
-    let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone(), conn: conn.clone() };
+    let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone(), conn: conn.clone(), beside_kde };
     conn.object_server().at(OBJECT_PATH, control).await?;
     conn.request_name(BUS_NAME).await.context("another Vyoma desktop app is running")?;
     // Tells the GUI when what it shows changed (checked, as many places change devices).
@@ -825,6 +868,7 @@ impl Desk {
                     let mut all = self.devices.lock().unwrap();
                     let d = all.entry(id.clone()).or_default();
                     (d.name, d.kind, d.paired, d.linked, d.incoming, d.cert, d.routes, d.remote) = (name, kind, paired, true, incoming, cert, vec![remote], Some(remote));
+                    note_routes(&d.routes);
                 }
                 if paired {
                     self.start(&id);
@@ -835,6 +879,7 @@ impl Desk {
                 let best = {
                     let mut all = self.devices.lock().unwrap();
                     let Some(d) = all.get_mut(&id) else { return };
+                    note_routes(&remotes);
                     d.remote = best(&remotes, !vyoma_companion::usb::cable_ports().is_empty());
                     d.routes = remotes;
                     d.paired.then_some(d.remote).flatten()
@@ -1194,6 +1239,48 @@ fn via(d: &DeviceView) -> Option<&'static str> {
     } else {
         "cable"
     })
+}
+
+/// [Control::health]'s report.
+fn health(beside_kde: bool) -> serde_json::Value {
+    let report = vyoma_companion::setup::report();
+    let features: Vec<_> = report
+        .features
+        .iter()
+        .map(|f| json!({ "name": capitalised(f.feature), "ready": f.ready, "needs": f.needs, "unavailable": f.unavailable }))
+        .collect();
+    let mut checks = vec![firewall()];
+    if beside_kde {
+        checks.push(json!({ "name": "KDE Connect", "state": "warn",
+            "detail": "Also running, so the USB cable, tethering and Bluetooth stay with it. Quit it to use them here." }));
+    }
+    json!({
+        "features": features,
+        "installable": report.installable,
+        "installing": INSTALLING.load(std::sync::atomic::Ordering::Relaxed),
+        "checks": checks,
+        "notes": report.notes,
+    })
+}
+
+/// Whether a firewall is up, and whether phones get through it (its rules need root to read; a
+/// phone that reached us over the network says enough). Up with none seen yet is no fault: a
+/// day on the cable proves nothing either way.
+fn firewall() -> serde_json::Value {
+    let active = ["ufw", "firewalld"].into_iter().find(|unit| {
+        std::process::Command::new("systemctl").args(["is-active", "--quiet", unit]).status().is_ok_and(|s| s.success())
+    });
+    let (state, detail) = match active {
+        None => ("ok", "Off".to_owned()),
+        Some(_) if WIFI_SEEN.load(std::sync::atomic::Ordering::Relaxed) => ("ok", "On, and your phones get through on Wi-Fi".to_owned()),
+        Some(name) => ("info", format!("{name} is on. If phones don't show up on Wi-Fi, allow ports 1714 to 1764, TCP and UDP.")),
+    };
+    json!({ "name": "Firewall", "state": state, "detail": detail })
+}
+
+fn capitalised(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
 /// What the GUI shows of every device, to tell when it changed.

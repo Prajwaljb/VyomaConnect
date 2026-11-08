@@ -1,6 +1,6 @@
 //! Vyoma's desktop window. It only shows and asks: the daemon (`vyoma-desktop`) owns the links,
 //! so closing or crashing this never drops a phone. `--snapshot <png>` renders it offscreen with
-//! made-up phones instead (`--dark`, `--scene phones|pairing|nearby|unpair|empty|down`).
+//! made-up phones instead (`--dark`, `--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|empty|down`).
 
 mod daemon;
 mod snapshot;
@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use daemon::{Daemon, DbusDaemon, Event, PhoneData};
+use daemon::{Daemon, DbusDaemon, Event, Health, PhoneData};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 slint::include_modules!();
@@ -19,6 +19,8 @@ slint::include_modules!();
 const NOTICE_FOR: Duration = Duration::from_millis(3200);
 const REREAD_EVERY: Duration = Duration::from_secs(5);
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
+/// The sidebar's id for This PC's page.
+pub const THIS_PC: &str = "this-pc";
 
 thread_local! {
     /// The devices last read, on the UI thread.
@@ -71,6 +73,34 @@ fn wire(ui: &MainWindow) {
     ui.on_unpair(act(ui, "Unpair", Some("Unpaired")));
     ui.on_ring(act(ui, "Ring", Some("Ringing the phone")));
     ui.on_browse(act(ui, "Browse", Some("Opening the phone's files…")));
+    ui.on_show_pc({
+        let ui = ui.as_weak();
+        move || {
+            if let Some(win) = ui.upgrade() {
+                win.set_selected(THIS_PC.into());
+            }
+            read_health(&ui);
+        }
+    });
+    ui.on_install({
+        let ui = ui.as_weak();
+        move || {
+            if let Some(win) = ui.upgrade() {
+                win.set_installing(true);
+            }
+            let ui = ui.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = DbusDaemon::connect().and_then(|d| d.install()) {
+                    notify(&ui, format!("{e:#}"));
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(win) = ui.upgrade() {
+                            win.set_installing(false);
+                        }
+                    });
+                }
+            });
+        }
+    });
     ui.on_search({
         let ui = ui.as_weak();
         move || {
@@ -115,6 +145,10 @@ fn watch(ui: slint::Weak<MainWindow>) {
                             }
                         }
                         Event::Sent { id, count, error } => sent(&told, id, count, error),
+                        Event::SetupDone { ok } => {
+                            notify(&told, if ok { "Installed. This PC is set up".into() } else { "The install didn't finish".into() });
+                            read_health(&told);
+                        }
                     }
                 }
             }
@@ -126,6 +160,10 @@ fn watch(ui: slint::Weak<MainWindow>) {
         loop {
             if daemon.is_none() {
                 daemon = DbusDaemon::connect().ok();
+                // Back (or there at start): This PC's state, for the sidebar's dot.
+                if daemon.is_some() {
+                    read_health(&ui);
+                }
             }
             let phones = daemon.as_ref().map(|d| d.phones());
             let phones = match phones {
@@ -151,6 +189,48 @@ fn watch(ui: slint::Weak<MainWindow>) {
             while changes.try_recv().is_ok() {}
         }
     });
+}
+
+/// Reads This PC's setup off the UI thread, then shows it.
+fn read_health(ui: &slint::Weak<MainWindow>) {
+    let ui = ui.clone();
+    std::thread::spawn(move || {
+        let health = DbusDaemon::connect().and_then(|d| d.health());
+        let _ = slint::invoke_from_event_loop(move || {
+            if let (Some(win), Ok(h)) = (ui.upgrade(), health) {
+                show_health(&win, &h);
+            }
+        });
+    });
+}
+
+pub fn show_health(ui: &MainWindow, h: &Health) {
+    // What needs something first, where it's seen without scrolling.
+    let mut order: Vec<&daemon::Feature> = h.features.iter().collect();
+    order.sort_by_key(|f| f.ready);
+    let features: Vec<Feature> = order
+        .into_iter()
+        .map(|f| Feature {
+            name: f.name.clone().into(),
+            ready: f.ready,
+            detail: if f.ready {
+                "Ready".into()
+            } else if f.needs.is_empty() {
+                "Not available here".into()
+            } else {
+                format!("Needs {}", f.needs.join(", ")).into()
+            },
+        })
+        .collect();
+    let checks: Vec<Check> = h.checks.iter().map(|c| Check { name: c.name.clone().into(), state: c.state.clone().into(), detail: c.detail.clone().into() }).collect();
+    let notes: Vec<SharedString> = h.notes.iter().map(|n| n.clone().into()).collect();
+    ui.set_features(ModelRc::new(VecModel::from(features)));
+    ui.set_checks(ModelRc::new(VecModel::from(checks)));
+    ui.set_notes(ModelRc::new(VecModel::from(notes)));
+    ui.set_installable(h.installable);
+    ui.set_installing(h.installing);
+    ui.set_attention(h.attention() as i32);
+    ui.set_health_loaded(true);
 }
 
 /// A send is over: "Sent", or why not, naming the phone.
@@ -190,6 +270,10 @@ fn show(ui: &MainWindow, phones: &[PhoneData]) {
     let current = paired.iter().chain(&nearby).find(|p| p.id == selected).or(paired.first()).or(nearby.first()).copied();
     ui.set_phones(ModelRc::new(VecModel::from(paired.iter().map(|p| to_ui(p)).collect::<Vec<_>>())));
     ui.set_nearby(ModelRc::new(VecModel::from(nearby.iter().map(|p| to_ui(p)).collect::<Vec<_>>())));
+    // This PC's page stays put however the phones change.
+    if selected == THIS_PC {
+        return;
+    }
     ui.set_has_current(current.is_some());
     if let Some(p) = current {
         if p.id != selected {

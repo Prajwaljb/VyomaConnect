@@ -206,6 +206,84 @@ pub fn check() -> Missing {
     missing
 }
 
+/// One feature as the desktop window shows it.
+pub struct FeatureState {
+    pub feature: &'static str,
+    pub ready: bool,
+    /// What would make it ready: packages, or a file the install writes.
+    pub needs: Vec<&'static str>,
+    /// Nothing here can install it (an unknown distro, no package on this one).
+    pub unavailable: bool,
+}
+
+/// Every feature that needs something on this PC, in [NEEDS]' order, and whether Install can help.
+pub struct Report {
+    pub features: Vec<FeatureState>,
+    pub installable: bool,
+    /// Things no package fixes.
+    pub notes: Vec<String>,
+}
+
+pub fn report() -> Report {
+    let distro = Distro::detect();
+    let standalone = STANDALONE.load(std::sync::atomic::Ordering::Relaxed);
+    let mut features: Vec<FeatureState> = Vec::new();
+    for need in NEEDS.iter().filter(|n| !(standalone && n.feature == "pairing")) {
+        let i = match features.iter().position(|f| f.feature == need.feature) {
+            Some(i) => i,
+            None => {
+                features.push(FeatureState { feature: need.feature, ready: true, needs: Vec::new(), unavailable: false });
+                features.len() - 1
+            }
+        };
+        if need.met() {
+            continue;
+        }
+        let f = &mut features[i];
+        f.ready = false;
+        match distro.map(|d| need.packages(d)).filter(|p| !p.is_empty()) {
+            Some(package) if !f.needs.contains(&package) => f.needs.push(package),
+            Some(_) => {}
+            None => f.unavailable = true,
+        }
+    }
+    let missing = check();
+    let udev = FeatureState { feature: "game controller over USB", ready: !missing.udev, needs: if missing.udev { vec!["a udev rule"] } else { vec![] }, unavailable: false };
+    features.push(udev);
+    if missing.webcam {
+        match features.iter_mut().find(|f| f.feature == "phone as webcam") {
+            Some(f) => {
+                f.ready = false;
+                f.needs.push("a module setting");
+            }
+            None => features.push(FeatureState { feature: "phone as webcam", ready: false, needs: vec!["a module setting"], unavailable: false }),
+        }
+    }
+    Report { features, installable: missing.installable(), notes: notes() }
+}
+
+/// Advice: what a package can't fix.
+fn notes() -> Vec<String> {
+    let mut out = Vec::new();
+    if on_path("gst-inspect-1.0") {
+        for (element, what) in [("vah264enc", "Live screen"), ("vah264dec", "Phone as webcam")] {
+            if !quiet("gst-inspect-1.0", &["--exists", element]) {
+                out.push(format!("{what} needs {element}, which comes from your graphics card's VA-API driver."));
+            }
+        }
+    }
+    out
+}
+
+/// Installs what's missing (one password prompt); whether it finished.
+pub async fn install() -> bool {
+    let Ok(missing) = tokio::task::spawn_blocking(check).await else { return false };
+    if !missing.installable() {
+        return true;
+    }
+    install_missing(&missing).await
+}
+
 /// The script run as root. Packages first, and it goes on without the webcam's module, whose build
 /// can fail on its own. Files already there are left: someone may have merged the webcam's options
 /// with OBS's.
@@ -271,12 +349,8 @@ pub fn print_check() -> bool {
         }
     }
     // A package can't fix these, so they're advice rather than something missing.
-    if on_path("gst-inspect-1.0") {
-        for (element, what) in [("vah264enc", "live screen"), ("vah264dec", "phone as webcam")] {
-            if !quiet("gst-inspect-1.0", &["--exists", element]) {
-                println!("note: {what} needs {element}, which comes from your GPU's VA-API driver");
-            }
-        }
+    for note in notes() {
+        println!("note: {note}");
     }
     missing.nothing()
 }
@@ -326,7 +400,13 @@ pub async fn offer() {
         return;
     };
     match String::from_utf8_lossy(&answer.stdout).trim() {
-        "install" => install_from_service(&missing).await,
+        "install" => {
+            if install_missing(&missing).await {
+                crate::notice::tell("emblem-success", "Vyoma is set up", "Everything it needs is installed.").await;
+            } else {
+                crate::notice::tell("dialog-warning", "Vyoma's install didn't finish", &format!("Run {} --setup in a terminal to see why.", program())).await;
+            }
+        }
         "no" => {
             let _ = tokio::fs::write(&declined_file, print).await;
         }
@@ -334,7 +414,7 @@ pub async fn offer() {
     }
 }
 
-async fn install_from_service(missing: &Missing) {
+async fn install_missing(missing: &Missing) -> bool {
     let script = script(missing, Distro::detect());
     // Out of this service's sandbox: NoNewPrivileges would stop pkexec working at all.
     let status = tokio::process::Command::new("systemd-run")
@@ -342,11 +422,7 @@ async fn install_from_service(missing: &Missing) {
         .arg(script)
         .status()
         .await;
-    if status.is_ok_and(|s| s.success()) {
-        crate::notice::tell("emblem-success", "Vyoma is set up", "Everything it needs is installed.").await;
-    } else {
-        crate::notice::tell("dialog-warning", "Vyoma's install didn't finish", &format!("Run {} --setup in a terminal to see why.", program())).await;
-    }
+    status.is_ok_and(|s| s.success())
 }
 
 fn on_path(tool: &str) -> bool {
