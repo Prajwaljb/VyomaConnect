@@ -21,6 +21,7 @@ mod notify;
 mod plugins;
 mod share;
 mod system;
+mod telephony;
 mod volume;
 
 use std::collections::HashMap;
@@ -222,6 +223,8 @@ struct Desk {
     session: Option<Session>,
     ringer: Ringer,
     ring_notice: Option<u32>,
+    /// Device id to its phone call, if one's on or was missed.
+    calls: HashMap<String, telephony::Line>,
     /// Device id to the notification showing its pairing.
     prompts: HashMap<String, u32>,
     battery: Option<system::Battery>,
@@ -446,6 +449,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
         session,
         ringer: Ringer::default(),
         ring_notice: None,
+        calls: HashMap::new(),
         prompts: HashMap::new(),
         battery: system::battery(),
     };
@@ -687,6 +691,13 @@ impl Desk {
             plugins::stop_ringing(&self.notifier, &mut self.ringer, &mut self.ring_notice).await;
             return;
         }
+        if action == "mute"
+            && let Some(id) = telephony::muting(&self.calls, notification)
+        {
+            tracing::info!("{id}: muting the ringer");
+            self.send(&id, packet(telephony::MUTE, json!({})));
+            return;
+        }
         if let Some(open) = self.opens.get(&notification) {
             match (open, action) {
                 (Open::File(p), "open") => share::open(&p.to_string_lossy()),
@@ -721,6 +732,10 @@ impl Desk {
             Event::Gone { id } => {
                 // Dropping its packets' channel ends the session, and the screen, camera and controller with it.
                 self.sessions.remove(&id);
+                if let Some(mut line) = self.calls.remove(&id) {
+                    let steps = line.gone();
+                    self.call_steps(&id, "", &mut line, steps, None).await;
+                }
                 let mut all = self.devices.lock().unwrap();
                 // Unpaired devices are only listed while they're here.
                 if all.get(&id).is_some_and(|d| d.paired) {
@@ -819,6 +834,16 @@ impl Desk {
                         let _ = self.volume.send((id, packet));
                         return;
                     }
+                    telephony::TELEPHONY => {
+                        if let Some(call) = telephony::parse(&packet) {
+                            let mut line = self.calls.remove(&id).unwrap_or_default();
+                            let steps = line.on_call(&call);
+                            tracing::info!("{id}: call {:?}{}", call.kind, if call.over { ", over" } else { "" });
+                            self.call_steps(&id, &device.name, &mut line, steps, Some(&call)).await;
+                            self.calls.insert(id, line);
+                        }
+                        return;
+                    }
                     // Each file says how many there are too.
                     SHARE_UPDATE => return,
                     _ => {}
@@ -833,6 +858,41 @@ impl Desk {
                     self.send(&id, p);
                 }
             }
+        }
+    }
+
+    /// Carries out what a call on [id]'s phone (called [phone]) needs here.
+    async fn call_steps(&mut self, id: &str, phone: &str, line: &mut telephony::Line, steps: telephony::Steps, call: Option<&telephony::Call>) {
+        for n in steps.close {
+            self.notifier.close(n).await;
+        }
+        if let Some(media) = &self.host.media {
+            if steps.pause {
+                line.paused = media.pause_all().await;
+            }
+            if steps.resume {
+                for bus in std::mem::take(&mut line.paused) {
+                    media.play_bus(&bus).await;
+                }
+            }
+        }
+        let Some(call) = call else { return };
+        let body = match &call.number {
+            Some(n) => format!("{n}, on {phone}"),
+            None => format!("On {phone}"),
+        };
+        if steps.show_ringing {
+            let title = format!("{} is calling", call.who);
+            let notice = Notice { icon: "call-start", title: &title, body: &body, actions: &[("mute", "Mute")], sticky: true, replaces: line.ringing };
+            match self.notifier.show(notice).await {
+                Ok(n) => line.ringing = Some(n),
+                Err(e) => tracing::warn!("{id}: couldn't show the call: {e:#}"),
+            }
+        }
+        if steps.show_missed {
+            let title = format!("Missed call from {}", call.who);
+            let notice = Notice { icon: "call-stop", title: &title, body: &body, actions: &[], sticky: false, replaces: line.missed };
+            line.missed = self.notifier.show(notice).await.ok();
         }
     }
 
