@@ -130,7 +130,8 @@ async fn remove_mount_point(at: &Path) {
 }
 
 /// At start: what an earlier run left under `$XDG_RUNTIME_DIR/vyoma` (it ended without unmounting).
-pub async fn tidy() {
+pub async fn tidy(dir: &Path) {
+    crate::gvfs::tidy(dir).await;
     crate::places::remove_all();
     let Ok(entries) = std::fs::read_dir(mounts_dir()) else { return };
     for entry in entries.flatten() {
@@ -155,6 +156,8 @@ pub struct Mount {
     pub path: PathBuf,
     /// The cable's socket it goes through, taken down with it.
     forward: Option<PathBuf>,
+    /// GVfs's way to it (GTK file managers), taken down with it.
+    gvfs: Option<Gvfs>,
 }
 
 impl Mount {
@@ -183,8 +186,17 @@ impl Mount {
         last_line(&mut self.child).await
     }
 
-    /// Takes down what an ended mount leaves behind: its cable socket and its folder.
+    /// Where a GTK file manager should open it (GVfs), if there.
+    pub fn gvfs_uri(&self) -> Option<String> {
+        self.gvfs.as_ref().map(|g| g.uri.clone())
+    }
+
+    /// Takes down what an ended mount leaves behind: GVfs's way, its cable socket and its folder.
     pub async fn release(&mut self) {
+        if let Some(g) = self.gvfs.take() {
+            crate::gvfs::unmount(&g.uri).await;
+            crate::gvfs::forget(&g.dir, &g.id);
+        }
         if let Some(socket) = self.forward.take() {
             vyoma_companion::usb::unforward_unix(&socket).await;
         }
@@ -211,10 +223,11 @@ fn unit_name(id: &str) -> String {
 
 /// Mounts the phone's [server]. [phone]: the link's address (loopback over the cable, where the
 /// port comes through the companion's adb forward). [key]: our private key; [cert]: the phone's.
-pub async fn mount(server: &Server, phone: IpAddr, id: &str, at: &Path, key: &Path, cert: &[u8], dir: &Path) -> Result<Mount> {
+pub async fn mount(server: &Server, phone: IpAddr, id: &str, name: &str, at: &Path, key: &Path, cert: &[u8], dir: &Path) -> Result<Mount> {
     let unit = unit_name(id);
     let mut route = Vec::new();
     let mut forward = None;
+    let way;
     if phone.is_loopback() {
         // Loopback without a cable is Bluetooth, which carries packets only; the cable's ports
         // would answer anyway (adb holds them) and reset the connection.
@@ -223,11 +236,14 @@ pub async fn mount(server: &Server, phone: IpAddr, id: &str, at: &Path, key: &Pa
         // ~10 ms a file opened instead of ~50 (usb::forward_unix).
         let socket = runtime_dir().join(unit.replace(".service", ".sock"));
         vyoma_companion::usb::forward_unix(&socket, server.port).await?;
-        route = vec!["127.0.0.1".to_owned(), "-o".to_owned(), format!("ProxyCommand={}", relay_command(&socket)?)];
+        let proxy = relay_command(&socket)?;
+        route = vec!["127.0.0.1".to_owned(), "-o".to_owned(), format!("ProxyCommand={proxy}")];
+        way = crate::gvfs::Route { host: "127.0.0.1".into(), port: None, proxy: Some(proxy) };
         forward = Some(socket);
     } else {
         // Its link's address, not the one it says: the one we know reaches it, and it can't send us elsewhere.
         let host = phone.to_string();
+        way = crate::gvfs::Route { host: host.clone(), port: Some(server.port), proxy: None };
         route.push(if host.contains(':') { format!("[{host}]") } else { host });
         route.extend(["-p".to_owned(), server.port.to_string()]);
     }
@@ -237,10 +253,31 @@ pub async fn mount(server: &Server, phone: IpAddr, id: &str, at: &Path, key: &Pa
             vyoma_companion::usb::unforward_unix(socket).await;
         }
         remove_mount_point(at).await;
-    } else if let Some(name) = at.file_name() {
-        crate::places::add(&name.to_string_lossy(), at);
+        return result;
     }
-    result.map(|m| Mount { forward, ..m })
+    // GTK file managers browse through GVfs (its mount shows in their sidebar), the rest through
+    // the mount, which GTK ones would otherwise only find by our bookmark.
+    let mut gvfs = None;
+    if crate::gvfs::wanted() {
+        let alias = crate::gvfs::alias(dir, id, name);
+        match crate::gvfs::set(dir, id, &alias, &way, &server.user, key, &dir.join("phone-hosts"), &format!("vyoma-{id}")) {
+            Ok(()) => gvfs = Some(Gvfs { uri: crate::gvfs::uri(&alias), dir: dir.to_owned(), id: id.to_owned() }),
+            Err(e) => tracing::warn!("{id}: no GVfs for the file manager, the mount instead: {e:#}"),
+        }
+    }
+    if gvfs.is_none() {
+        if let Some(name) = at.file_name() {
+            crate::places::add(&name.to_string_lossy(), at);
+        }
+    }
+    result.map(|m| Mount { forward, gvfs, ..m })
+}
+
+/// The phone as GVfs reaches it, by its alias.
+struct Gvfs {
+    uri: String,
+    dir: PathBuf,
+    id: String,
 }
 
 /// This program's path, for ssh to run it as a helper ([relay], [askpass]).
@@ -349,7 +386,7 @@ async fn run_sshfs(server: &Server, route: &[String], id: &str, unit: &str, at: 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
         if mounted(at) {
-            return Ok(Mount { child, unit: unit.to_owned(), path: at.to_owned(), forward: None });
+            return Ok(Mount { child, unit: unit.to_owned(), path: at.to_owned(), forward: None, gvfs: None });
         }
         if let Some(status) = child.try_wait()? {
             bail!("sshfs ended ({status}): {}", last_line(&mut child).await);

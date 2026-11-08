@@ -19,6 +19,7 @@ mod media;
 mod notifications;
 mod notify;
 mod plugins;
+mod gvfs;
 mod phonefiles;
 mod places;
 mod presenter;
@@ -546,7 +547,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
 
     lan.announce(&targets).await?;
     tracing::info!("{} is up as {}", env!("CARGO_PKG_NAME"), me.device_id);
-    phonefiles::tidy().await;
+    phonefiles::tidy(&dir).await;
     if beside_kde {
         tracing::info!("kdeconnectd is running: the cable, tethering and Bluetooth stay its own");
     } else {
@@ -1003,7 +1004,7 @@ impl Desk {
     fn browse(&mut self, id: String) {
         if let Some(m) = self.mounts.get_mut(&id) {
             if m.alive() {
-                share::open(&m.path.to_string_lossy());
+                show_files(m, true);
                 return;
             }
             if let Some(m) = self.mounts.remove(&id) {
@@ -1022,13 +1023,13 @@ impl Desk {
         }
         // The ended one it replaces goes first, its folder with it.
         let old = self.mounts.remove(&id);
-        let at = phonefiles::mount_point(&device.name);
+        let (at, name) = (phonefiles::mount_point(&device.name), device.name.clone());
         let (key, cert, dir, done) = (self.dir.join("privateKey.pem"), device.cert.clone(), self.dir.clone(), self.mounted.clone());
         tokio::spawn(async move {
             if let Some(old) = old {
                 old.unmount().await;
             }
-            let result = phonefiles::mount(&server, remote, &id, &at, &key, &cert, &dir).await;
+            let result = phonefiles::mount(&server, remote, &id, &name, &at, &key, &cert, &dir).await;
             let _ = done.send((id, result));
         });
     }
@@ -1083,9 +1084,7 @@ impl Desk {
         match result {
             Ok(m) => {
                 tracing::info!("{id}: files mounted");
-                if self.remounting.remove(&id).is_none() {
-                    share::open(&m.path.to_string_lossy());
-                }
+                show_files(&m, self.remounting.remove(&id).is_none());
                 self.kept.insert(id.clone());
                 self.mounts.insert(id, m);
             }
@@ -1209,6 +1208,30 @@ fn shown(devices: &Devices) -> u64 {
         (id, &d.name, &d.kind, d.paired, d.linked, &d.key, d.asking, d.battery, d.remote, via(d)).hash(&mut h);
     }
     h.finish()
+}
+
+/// Brings a mount up in the file manager: in GVfs for a GTK one (connected even when no window
+/// opens, so it's in the sidebar), else its folder. [window]: open one.
+fn show_files(m: &phonefiles::Mount, window: bool) {
+    let path = m.path.to_string_lossy().into_owned();
+    let Some(uri) = m.gvfs_uri() else {
+        if window {
+            share::open(&path);
+        }
+        return;
+    };
+    tokio::spawn(async move {
+        let shown = match gvfs::mount(&uri).await {
+            Ok(()) if window => gvfs::open(&uri).await,
+            other => other,
+        };
+        if let Err(e) = shown {
+            tracing::warn!("phone files in GVfs: {e:#}; opening the mount instead");
+            if window {
+                share::open(&path);
+            }
+        }
+    });
 }
 
 fn default_dir() -> PathBuf {
