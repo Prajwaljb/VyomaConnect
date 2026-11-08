@@ -1,0 +1,30 @@
+[package]
+name = "vyoma-gui"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Vyoma's desktop window: phones, pairing and what each can do, over the desktop app's control interface"
+
+[[bin]]
+name = "vyoma"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+png = "0.18.1"
+rfd = "0.18.0"
+serde = "1"
+serde_json = "1.0.154"
+# GPL-3.0 option of Slint's licence, as Vyoma is GPL-3.0-or-later.
+slint = { version = "1.18.1", features = ["renderer-software"] }
+futures-util = { version = "0.3", default-features = false }
+tokio = { version = "1.54.1", features = ["rt-multi-thread"] }
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
+
+[build-dependencies]
+slint-build = "1.18.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

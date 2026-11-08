@@ -1,0 +1,739 @@
+// Vyoma's desktop window: the phones in a sidebar, the chosen one's page beside it.
+// Look: the phone app's (oneui-design skill): flat grouped cards on a pale canvas (true black in
+// dark), Inter, the PC-blue accent, status colours shared with the phone, one primary action a card.
+
+import { Palette, ScrollView } from "std-widgets.slint";
+import "fonts/inter.ttf";
+
+export struct Phone {
+    id: string,
+    name: string,
+    paired: bool,
+    linked: bool,
+    // The pairing code while one's on screen, and whether the phone asked (ours to accept).
+    code: string,
+    asking: bool,
+    // "wifi", "cable", "bluetooth", or "" when away.
+    via: string,
+    // -1 when unknown.
+    battery: int,
+    charging: bool,
+    can-ring: bool,
+    can-browse: bool,
+    can-share: bool,
+}
+
+export global Theme {
+    in-out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+    out property <color> canvas: dark ? #000000 : #EDEEF2;
+    out property <color> sidebar: dark ? #111113 : #E3E5EA;
+    out property <color> card: dark ? #1C1C1E : #FFFFFF;
+    out property <color> text: dark ? #F7F8FA : #0B0C0E;
+    out property <color> muted: dark ? #AEB3BB : #50565F;
+    out property <color> accent: dark ? #7DB4FF : #3B82F6;
+    out property <color> on-accent: dark ? #0B0C0E : #FFFFFF;
+    out property <color> divider: dark ? #FFFFFF14 : #00000014;
+    // Selected sidebar row: a neutral capsule, colour only in its glyph.
+    out property <color> selection: dark ? #FFFFFF24 : #0000001A;
+    out property <color> hover: dark ? #FFFFFF10 : #0000000B;
+    out property <color> pressed: dark ? #FFFFFF14 : #0000000F;
+    out property <color> connected: dark ? #4ADE80 : #16A34A;
+    out property <color> pending: dark ? #FBBF24 : #D97706;
+    out property <color> offline: dark ? #6B7280 : #9CA3AF;
+    out property <color> error: dark ? #FF7A6E : #D93025;
+    // Icon badges (iOS system colours).
+    out property <color> blue: dark ? #0A84FF : #007AFF;
+    out property <color> green: dark ? #30D158 : #34C759;
+    out property <color> orange: dark ? #FF9F0A : #FF9500;
+    out property <color> teal: dark ? #40C8E0 : #30B0C7;
+}
+
+export global Words {
+    // One line under a phone's name in the sidebar.
+    public pure function short(p: Phone) -> string {
+        if p.code != "" { return p.asking ? "Wants to pair" : "Pairing…"; }
+        if !p.paired { return "Not paired"; }
+        if !p.linked { return "Away"; }
+        if p.via == "wifi" { return "Wi-Fi"; }
+        if p.via == "cable" { return "USB cable"; }
+        if p.via == "bluetooth" { return "Bluetooth"; }
+        return "Connected";
+    }
+
+    // The page's subtitle: how it's connected, in words.
+    public pure function headline(p: Phone) -> string {
+        if p.code != "" { return p.asking ? "Wants to pair with this PC" : "Waiting for the phone to accept"; }
+        if !p.paired { return p.linked ? "Nearby, not paired" : "Not paired"; }
+        if !p.linked { return "Away"; }
+        if p.via == "wifi" { return "Connected via Wi-Fi"; }
+        if p.via == "cable" { return "Connected by USB cable"; }
+        if p.via == "bluetooth" { return "Connected over Bluetooth"; }
+        return "Connected";
+    }
+
+    public pure function dot(p: Phone) -> color {
+        if p.code != "" { return Theme.pending; }
+        if p.paired && p.linked { return Theme.connected; }
+        return Theme.offline;
+    }
+
+    public pure function battery(p: Phone) -> string {
+        if p.battery < 0 { return "Unknown"; }
+        return p.charging ? p.battery + "%, charging" : p.battery + "%";
+    }
+}
+
+component Glyph inherits Image {
+    in property <color> tint;
+    colorize: tint;
+    width: 18px;
+    height: 18px;
+}
+
+// A coloured squircle with a white glyph, as the phone's list rows.
+component Badge inherits Rectangle {
+    in property <image> icon;
+    in property <color> fill;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    background: fill;
+    Glyph {
+        source: root.icon;
+        tint: white;
+        width: 16px;
+        height: 16px;
+    }
+}
+
+component PillButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> prominent;
+    in property <bool> destructive;
+    in property <bool> enabled: true;
+    callback clicked;
+    height: 32px;
+    min-width: label.preferred-width + 32px;
+    border-radius: self.height / 2;
+    opacity: enabled ? 1 : 0.4;
+    background: prominent
+        ? (touch.pressed ? Theme.accent.darker(0.12) : Theme.accent)
+        : (destructive ? Theme.error : Theme.accent).with-alpha(touch.pressed ? 0.22 : touch.has-hover ? 0.16 : 0.12);
+    label := Text {
+        text: root.text;
+        color: root.prominent ? Theme.on-accent : root.destructive ? Theme.error : Theme.accent;
+        font-size: 13px;
+        font-weight: 600;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A grouped card: rows inside are joined by inset dividers.
+component Card inherits Rectangle {
+    background: Theme.card;
+    border-radius: 12px;
+    clip: true;
+    VerticalLayout {
+        @children
+    }
+}
+
+component CardShadow inherits Rectangle {
+    border-radius: 12px;
+    drop-shadow-blur: Theme.dark ? 0px : 10px;
+    drop-shadow-offset-y: 2px;
+    drop-shadow-color: #0000000F;
+    background: Theme.card;
+}
+
+component SectionLabel inherits Text {
+    color: Theme.muted;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+// A tappable row: badge, title over subtitle, chevron.
+component ActionRow inherits Rectangle {
+    in property <image> icon;
+    in property <color> icon-color;
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> enabled: true;
+    in property <bool> last;
+    callback clicked;
+    height: subtitle == "" ? 46px : 58px;
+    background: enabled && touch.pressed ? Theme.pressed : enabled && touch.has-hover ? Theme.hover : transparent;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 12px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            Badge {
+                icon: root.icon;
+                fill: root.icon-color;
+                opacity: root.enabled ? 1 : 0.45;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: 14px;
+                font-weight: 500;
+                opacity: root.enabled ? 1 : 0.45;
+            }
+            if root.subtitle != "": Text {
+                text: root.subtitle;
+                color: Theme.muted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            Glyph {
+                source: @image-url("icons/chevron.svg");
+                tint: Theme.muted.with-alpha(0.6);
+                width: 14px;
+                height: 14px;
+                opacity: root.enabled ? 1 : 0.45;
+            }
+        }
+    }
+    Rectangle {
+        x: 54px;
+        y: parent.height - 1px;
+        width: parent.width - 54px;
+        height: 1px;
+        background: Theme.divider;
+        visible: !root.last;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A fact: badge, title, the value at the end.
+component InfoRow inherits Rectangle {
+    in property <image> icon;
+    in property <color> icon-color;
+    in property <string> title;
+    in property <string> value;
+    in property <bool> last;
+    height: 46px;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 16px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            Badge {
+                icon: root.icon;
+                fill: root.icon-color;
+            }
+        }
+        Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: 14px;
+            font-weight: 500;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: root.value;
+            color: Theme.muted;
+            font-size: 14px;
+            vertical-alignment: center;
+        }
+    }
+    Rectangle {
+        x: 54px;
+        y: parent.height - 1px;
+        width: parent.width - 54px;
+        height: 1px;
+        background: Theme.divider;
+        visible: !root.last;
+    }
+}
+
+component PhoneItem inherits Rectangle {
+    in property <Phone> phone;
+    in property <bool> selected;
+    callback clicked;
+    height: 50px;
+    border-radius: 10px;
+    background: selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 34px;
+                height: 34px;
+                border-radius: 10px;
+                background: Theme.accent.with-alpha(Theme.dark ? 0.2 : 0.14);
+                Glyph {
+                    source: @image-url("icons/phone.svg");
+                    tint: Theme.accent;
+                }
+                // Status dot, ringed in the sidebar's colour.
+                Rectangle {
+                    x: parent.width - 10px;
+                    y: parent.height - 10px;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 6px;
+                    background: Words.dot(root.phone);
+                    border-width: 2px;
+                    border-color: Theme.sidebar;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 1px;
+            Text {
+                text: root.phone.name;
+                color: Theme.text;
+                font-size: 13px;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Text {
+                text: Words.short(root.phone);
+                color: root.phone.code != "" ? Theme.pending : Theme.muted;
+                font-size: 12px;
+                overflow: elide;
+            }
+        }
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component PhonePage inherits Rectangle {
+    in property <Phone> phone;
+    in-out property <bool> confirm-unpair;
+    callback pair(string);
+    callback accept(string);
+    callback reject(string);
+    callback unpair(string);
+    callback ring(string);
+    callback browse(string);
+    callback send-files(string);
+
+    ScrollView {
+        VerticalLayout {
+            padding: 32px;
+            padding-top: 36px;
+            spacing: 20px;
+            alignment: start;
+
+            // Hero: the name, and how it's connected.
+            VerticalLayout {
+                spacing: 6px;
+                Text {
+                    text: root.phone.name;
+                    color: Theme.text;
+                    font-size: 30px;
+                    font-weight: 700;
+                    letter-spacing: -0.6px;
+                    overflow: elide;
+                }
+                HorizontalLayout {
+                    spacing: 7px;
+                    alignment: start;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: Words.dot(root.phone);
+                        }
+                    }
+                    Text {
+                        text: Words.headline(root.phone);
+                        color: Theme.muted;
+                        font-size: 14px;
+                    }
+                }
+            }
+
+            // A pairing on screen: the code to compare.
+            if root.phone.code != "": CardShadow {
+                Card {
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 12px;
+                        Text {
+                            text: root.phone.asking ? "Pair with " + root.phone.name + "?" : "Accept on the phone";
+                            color: Theme.text;
+                            font-size: 16px;
+                            font-weight: 600;
+                        }
+                        Text {
+                            text: root.phone.asking
+                                ? "Make sure this code matches the one on your phone, then accept."
+                                : "Accept on your phone if it shows this same code.";
+                            color: Theme.muted;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: root.phone.code;
+                            color: Theme.text;
+                            font-size: 34px;
+                            font-weight: 600;
+                            letter-spacing: 6px;
+                            horizontal-alignment: center;
+                        }
+                        if root.phone.asking: HorizontalLayout {
+                            alignment: end;
+                            spacing: 8px;
+                            PillButton {
+                                text: "Reject";
+                                clicked => { root.reject(root.phone.id); }
+                            }
+                            PillButton {
+                                text: "Accept";
+                                prominent: true;
+                                clicked => { root.accept(root.phone.id); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Nearby but not paired.
+            if !root.phone.paired && root.phone.code == "": CardShadow {
+                Card {
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 12px;
+                        Text {
+                            text: "Pair with this phone";
+                            color: Theme.text;
+                            font-size: 16px;
+                            font-weight: 600;
+                        }
+                        Text {
+                            text: root.phone.linked
+                                ? "You'll compare a code on both screens. Once paired, it connects by itself."
+                                : "It's not nearby right now. Open Vyoma on the phone, on the same network as this PC.";
+                            color: Theme.muted;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            alignment: end;
+                            PillButton {
+                                text: "Pair";
+                                prominent: true;
+                                enabled: root.phone.linked;
+                                clicked => { root.pair(root.phone.id); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // How it's connected is the hero's line; the battery is its own card.
+            if root.phone.paired: CardShadow {
+                Card {
+                    InfoRow {
+                        icon: @image-url("icons/battery.svg");
+                        icon-color: Theme.green;
+                        title: "Battery";
+                        value: root.phone.linked ? Words.battery(root.phone) : "—";
+                        last: true;
+                    }
+                }
+            }
+
+            if root.phone.paired: VerticalLayout {
+                CardShadow {
+                    Card {
+                        ActionRow {
+                            icon: @image-url("icons/bell.svg");
+                            icon-color: Theme.orange;
+                            title: "Ring phone";
+                            subtitle: "Rings loudly, even on silent";
+                            enabled: root.phone.linked && root.phone.can-ring;
+                            clicked => { root.ring(root.phone.id); }
+                        }
+                        ActionRow {
+                            icon: @image-url("icons/folder.svg");
+                            icon-color: Theme.blue;
+                            title: "Browse files";
+                            subtitle: root.phone.via == "bluetooth" ? "Needs Wi-Fi or the USB cable" : "The phone's storage in your file manager";
+                            enabled: root.phone.linked && root.phone.can-browse;
+                            clicked => { root.browse(root.phone.id); }
+                        }
+                        ActionRow {
+                            icon: @image-url("icons/send.svg");
+                            icon-color: Theme.teal;
+                            title: "Send files";
+                            subtitle: root.phone.via == "bluetooth" ? "Needs Wi-Fi or the USB cable" : "Pick files to send to the phone";
+                            enabled: root.phone.linked && root.phone.can-share;
+                            last: true;
+                            clicked => { root.send-files(root.phone.id); }
+                        }
+                    }
+                }
+            }
+
+            // Unpair asks once, in place.
+            if root.phone.paired: CardShadow {
+                Card {
+                    if !root.confirm-unpair: Rectangle {
+                        height: 46px;
+                        background: unpair-touch.pressed ? Theme.pressed : unpair-touch.has-hover ? Theme.hover : transparent;
+                        Text {
+                            x: 16px;
+                            text: "Unpair";
+                            color: Theme.error;
+                            font-size: 14px;
+                            font-weight: 500;
+                        }
+                        unpair-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.confirm-unpair = true; }
+                        }
+                    }
+                    if root.confirm-unpair: VerticalLayout {
+                        padding: 16px;
+                        spacing: 12px;
+                        Text {
+                            text: "Unpair " + root.phone.name + "? You'll need to pair again to use it here.";
+                            color: Theme.text;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            alignment: end;
+                            spacing: 8px;
+                            PillButton {
+                                text: "Cancel";
+                                clicked => { root.confirm-unpair = false; }
+                            }
+                            PillButton {
+                                text: "Unpair";
+                                destructive: true;
+                                clicked => {
+                                    root.confirm-unpair = false;
+                                    root.unpair(root.phone.id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// No phone to show: the daemon's down, or nothing's paired or nearby yet.
+component EmptyPage inherits Rectangle {
+    in property <bool> daemon-ok;
+    callback search();
+    VerticalLayout {
+        alignment: center;
+        padding: 40px;
+        // Short lines: at most ~460 px of text however wide the window.
+        padding-left: max(40px, (root.width - 460px) / 2);
+        padding-right: max(40px, (root.width - 460px) / 2);
+        spacing: 10px;
+        Text {
+            text: root.daemon-ok ? "No phones yet" : "Vyoma isn't running";
+            color: Theme.text;
+            font-size: 22px;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.daemon-ok
+                ? "Open Vyoma on your phone, on the same network as this PC. It shows up here."
+                : "The background service that talks to your phones has stopped. It starts again with your session.";
+            color: Theme.muted;
+            font-size: 14px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        if root.daemon-ok: HorizontalLayout {
+            alignment: center;
+            padding-top: 8px;
+            PillButton {
+                text: "Search again";
+                prominent: true;
+                clicked => { root.search(); }
+            }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Vyoma";
+    preferred-width: 920px;
+    preferred-height: 620px;
+    min-width: 680px;
+    min-height: 460px;
+    default-font-family: "Inter";
+    background: Theme.canvas;
+
+    in property <[Phone]> phones;
+    in property <[Phone]> nearby;
+    in property <Phone> current;
+    in property <bool> has-current;
+    in property <bool> daemon-ok: true;
+    // A short outcome or failure, shown at the bottom for a moment.
+    in property <string> notice;
+    in-out property <string> selected;
+    in-out property <bool> confirm-unpair;
+
+    callback select(string);
+    callback search();
+    callback pair(string);
+    callback accept(string);
+    callback reject(string);
+    callback unpair(string);
+    callback ring(string);
+    callback browse(string);
+    callback send-files(string);
+
+    HorizontalLayout {
+        // Sidebar.
+        Rectangle {
+            width: 248px;
+            background: Theme.sidebar;
+            VerticalLayout {
+                padding: 12px;
+                padding-top: 22px;
+                spacing: 2px;
+                Text {
+                    text: "Vyoma";
+                    color: Theme.text;
+                    font-size: 20px;
+                    font-weight: 700;
+                    letter-spacing: -0.3px;
+                }
+                Rectangle { height: 14px; }
+                if root.phones.length > 0: SectionLabel {
+                    text: "Phones";
+                    height: 24px;
+                    vertical-alignment: center;
+                }
+                for p in root.phones: PhoneItem {
+                    phone: p;
+                    selected: p.id == root.selected;
+                    clicked => {
+                        root.confirm-unpair = false;
+                        root.select(p.id);
+                    }
+                }
+                if root.nearby.length > 0: SectionLabel {
+                    text: "Nearby";
+                    height: 32px;
+                    vertical-alignment: bottom;
+                }
+                for p in root.nearby: PhoneItem {
+                    phone: p;
+                    selected: p.id == root.selected;
+                    clicked => {
+                        root.confirm-unpair = false;
+                        root.select(p.id);
+                    }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+                // Asks phones nearby to show themselves again.
+                if root.daemon-ok: Rectangle {
+                    height: 34px;
+                    border-radius: 8px;
+                    background: search-touch.pressed ? Theme.pressed : search-touch.has-hover ? Theme.hover : transparent;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        spacing: 8px;
+                        alignment: start;
+                        VerticalLayout {
+                            alignment: center;
+                            Glyph {
+                                source: @image-url("icons/refresh.svg");
+                                tint: Theme.muted;
+                                width: 16px;
+                                height: 16px;
+                            }
+                        }
+                        Text {
+                            text: "Search again";
+                            color: Theme.muted;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+                    }
+                    search-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.search(); }
+                    }
+                }
+            }
+        }
+        Rectangle {
+            width: 1px;
+            background: Theme.divider;
+        }
+        // The chosen phone.
+        Rectangle {
+            horizontal-stretch: 1;
+            if root.has-current: PhonePage {
+                phone: root.current;
+                confirm-unpair <=> root.confirm-unpair;
+                pair(id) => { root.pair(id); }
+                accept(id) => { root.accept(id); }
+                reject(id) => { root.reject(id); }
+                unpair(id) => { root.unpair(id); }
+                ring(id) => { root.ring(id); }
+                browse(id) => { root.browse(id); }
+                send-files(id) => { root.send-files(id); }
+            }
+            if !root.has-current: EmptyPage {
+                daemon-ok: root.daemon-ok;
+                search => { root.search(); }
+            }
+            // The notice, a capsule over the bottom of the page.
+            if root.notice != "": Rectangle {
+                y: parent.height - self.height - 20px;
+                x: (parent.width - self.width) / 2;
+                width: min(notice-text.preferred-width + 36px, parent.width - 48px);
+                height: max(38px, notice-text.preferred-height + 18px);
+                border-radius: 19px;
+                background: Theme.dark ? #2C2C2E : #1C1C1E;
+                drop-shadow-blur: 14px;
+                drop-shadow-offset-y: 3px;
+                drop-shadow-color: #00000030;
+                notice-text := Text {
+                    width: parent.width - 36px;
+                    text: root.notice;
+                    color: #F7F8FA;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}
