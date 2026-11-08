@@ -41,6 +41,8 @@
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <!-- Optional background clipboard sync; both only via a one-time ADB grant. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Only with "Browse this phone from your PC" on: the PC's file manager sees internal storage. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
     <uses-permission android:name="android.permission.READ_LOGS" tools:ignore="ProtectedPermissions" />
 
     <!-- SMS/phone permissions imply telephony; keep Wi-Fi-only tablets installable. -->

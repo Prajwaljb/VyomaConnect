@@ -2,6 +2,8 @@ package dev.vyoma.connect.ui
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.rounded.Folder
+import dev.vyoma.connect.container
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.rounded.PhoneAndroid
@@ -201,6 +203,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                     trailing = { RowChevron(if (phoneOn) "On" else "Off") },
                     onClick = { if (!phoneOn) askPhone.launch(PhonePermissions.all) },
                 )
+                PhoneFilesRow(resumeTick)
                 ListRow(
                     // Named as on the Clipboard tab: one feature, one name.
                     title = "Sync when closed",
@@ -845,6 +848,34 @@ private fun BluetoothRow(vm: AppViewModel, resumeTick: Int) {
         haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
         onClick = { if (needsPairing) pair() else if (needsRadio) openBluetoothSettings() else toggle(!on) },
         trailing = { VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Bluetooth") },
+    )
+}
+
+/** "Browse this phone from your PC": the switch, and Android's All files access it needs. */
+@Composable
+private fun PhoneFilesRow(resumeTick: Int) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    remember { dev.vyoma.connect.platform.PhoneFileSharing.init(context) }
+    val on by dev.vyoma.connect.platform.PhoneFileSharing.on.collectAsStateWithLifecycle()
+    val allowed = remember(resumeTick) { dev.vyoma.connect.platform.PhoneFileSharing.allowed() }
+    fun set(want: Boolean) {
+        dev.vyoma.connect.platform.PhoneFileSharing.setOn(context, want)
+        if (!want) (context.applicationContext as android.app.Application).container.phoneFiles.stopAll()
+        else if (!dev.vyoma.connect.platform.PhoneFileSharing.allowed()) runCatching { context.startActivity(dev.vyoma.connect.platform.PhoneFileSharing.accessIntent(context)) }
+    }
+    ListRow(
+        title = "Browse this phone from your PC",
+        subtitle = when {
+            !on -> "Its file manager opens your phone's storage"
+            !allowed -> "Allow All files access to finish"
+            else -> "Your PC can open and change files here"
+        },
+        icon = Icons.Rounded.Folder,
+        iconTint = SystemColor.BLUE.color,
+        showDivider = true,
+        haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
+        onClick = { if (on && !allowed) runCatching { context.startActivity(dev.vyoma.connect.platform.PhoneFileSharing.accessIntent(context)) } else set(!on) },
+        trailing = { VyomaSwitch(checked = on, onCheckedChange = ::set, contentDescription = "Browse this phone from your PC") },
     )
 }
 

@@ -19,6 +19,7 @@ mod media;
 mod notifications;
 mod notify;
 mod plugins;
+mod phonefiles;
 mod presenter;
 mod share;
 mod system;
@@ -81,6 +82,8 @@ type Devices = Arc<Mutex<HashMap<String, DeviceView>>>;
 /// What the D-Bus side asks of the main loop beyond the hub's commands.
 enum Ask {
     StopRinging,
+    /// Opens the phone's files, mounting them first.
+    Browse(String),
 }
 
 struct Control {
@@ -191,6 +194,16 @@ impl Control {
     fn stop_ringing(&self) -> fdo::Result<()> {
         self.asks.send(Ask::StopRinging).map_err(|_| fdo::Error::Failed("stopping".into()))
     }
+
+    /// Opens the device's files in the file manager (it has to allow it: Vyoma's "Browse this
+    /// phone from your PC"). Mounted under $XDG_RUNTIME_DIR/vyoma until it goes.
+    fn browse(&self, id: String) -> fdo::Result<()> {
+        let takes = self.devices.lock().unwrap().get(&id).is_some_and(|d| d.linked && plugins::takes(d, phonefiles::SFTP_REQUEST));
+        if !takes {
+            return Err(fdo::Error::NotSupported(format!("{id} can't be browsed now")));
+        }
+        self.asks.send(Ask::Browse(id)).map_err(|_| fdo::Error::Failed("stopping".into()))
+    }
 }
 
 impl Control {
@@ -228,6 +241,12 @@ struct Desk {
     calls: HashMap<String, telephony::Line>,
     /// The presenter's dot over the screen.
     presenter: presenter::Presenter,
+    /// Device id to its files, mounted.
+    mounts: HashMap<String, phonefiles::Mount>,
+    /// Finished mounts, from the tasks that make them.
+    mounted: mpsc::UnboundedSender<(String, Result<phonefiles::Mount>)>,
+    /// Where our identity and its key are.
+    dir: PathBuf,
     /// Device id to the notification showing its pairing.
     prompts: HashMap<String, u32>,
     battery: Option<system::Battery>,
@@ -353,6 +372,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
         anyhow::bail!("kdeconnectd is running as this same PC: stop it first");
     }
     let (asks_tx, mut asks) = mpsc::unbounded_channel();
+    let (mounted_tx, mut mounts_done) = mpsc::unbounded_channel();
     let notifier = Notifier::new(conn.clone());
     let run = commands::Commands::new(&dir);
     let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone() };
@@ -454,6 +474,9 @@ async fn daemon(dir: PathBuf) -> Result<()> {
         ring_notice: None,
         calls: HashMap::new(),
         presenter: presenter::Presenter::default(),
+        mounts: HashMap::new(),
+        mounted: mounted_tx,
+        dir: dir.clone(),
         prompts: HashMap::new(),
         battery: system::battery(),
     };
@@ -485,7 +508,11 @@ async fn daemon(dir: PathBuf) -> Result<()> {
                 Some(id) => desk.send(&id, p),
                 None => desk.broadcast(volume::VOLUME, p),
             },
-            Some(Ask::StopRinging) = asks.recv() => plugins::stop_ringing(&desk.notifier, &mut desk.ringer, &mut desk.ring_notice).await,
+            Some(ask) = asks.recv() => match ask {
+                Ask::StopRinging => plugins::stop_ringing(&desk.notifier, &mut desk.ringer, &mut desk.ring_notice).await,
+                Ask::Browse(id) => desk.browse(id),
+            },
+            Some((id, result)) = mounts_done.recv() => desk.on_mounted(id, result).await,
             Some(locked) = lock_changes.recv() => {
                 if desk.locked != Some(locked) {
                     desk.locked = Some(locked);
@@ -506,6 +533,9 @@ async fn daemon(dir: PathBuf) -> Result<()> {
     }
     for n in desk.prompts.values() {
         desk.notifier.close(*n).await;
+    }
+    for (_, m) in desk.mounts.drain() {
+        m.unmount().await;
     }
     plugins::stop_ringing(&desk.notifier, &mut desk.ringer, &mut desk.ring_notice).await;
     Ok(())
@@ -736,6 +766,9 @@ impl Desk {
             Event::Gone { id } => {
                 // Dropping its packets' channel ends the session, and the screen, camera and controller with it.
                 self.sessions.remove(&id);
+                if let Some(m) = self.mounts.remove(&id) {
+                    m.unmount().await;
+                }
                 if let Some(mut line) = self.calls.remove(&id) {
                     let steps = line.gone();
                     self.call_steps(&id, "", &mut line, steps, None).await;
@@ -779,6 +812,9 @@ impl Desk {
             }
             Event::Unpaired { id, name } => {
                 self.sessions.remove(&id);
+                if let Some(m) = self.mounts.remove(&id) {
+                    m.unmount().await;
+                }
                 {
                     let mut all = self.devices.lock().unwrap();
                     if all.get(&id).is_some_and(|d| d.linked) {
@@ -838,6 +874,17 @@ impl Desk {
                         let _ = self.volume.send((id, packet));
                         return;
                     }
+                    phonefiles::SFTP => {
+                        match phonefiles::parse(&packet) {
+                            phonefiles::Reply::Ready(server) => self.mount(id, &device, server),
+                            phonefiles::Reply::Failed(why) => {
+                                tracing::info!("{id}: files not browsable: {why}");
+                                plugins::tell(&self.notifier, &format!("Can't open {}'s files", device.name), &why).await;
+                            }
+                            phonefiles::Reply::Nothing => {}
+                        }
+                        return;
+                    }
                     presenter::PRESENTER => {
                         self.presenter.on_packet(&packet["body"]);
                         return;
@@ -865,6 +912,49 @@ impl Desk {
                 for p in replies {
                     self.send(&id, p);
                 }
+            }
+        }
+    }
+
+    /// Opens [id]'s files: straight away if they're mounted, else asks the phone to serve them.
+    fn browse(&mut self, id: String) {
+        if let Some(m) = self.mounts.get_mut(&id) {
+            if m.alive() {
+                share::open(&m.path.to_string_lossy());
+                return;
+            }
+            self.mounts.remove(&id);
+        }
+        tracing::info!("{id}: asking to browse its files");
+        self.send(&id, phonefiles::request());
+    }
+
+    /// The phone's server is up: mount it, off the main loop.
+    fn mount(&mut self, id: String, device: &DeviceView, server: phonefiles::Server) {
+        let Some(remote) = device.remote else { return };
+        if self.mounts.get_mut(&id).is_some_and(|m| m.alive()) {
+            return;
+        }
+        let at = phonefiles::mount_point(&device.name);
+        let (key, cert, dir, done) = (self.dir.join("privateKey.pem"), device.cert.clone(), self.dir.clone(), self.mounted.clone());
+        tokio::spawn(async move {
+            let result = phonefiles::mount(&server, remote, &id, &at, &key, &cert, &dir).await;
+            let _ = done.send((id, result));
+        });
+    }
+
+    async fn on_mounted(&mut self, id: String, result: Result<phonefiles::Mount>) {
+        match result {
+            Ok(m) => {
+                tracing::info!("{id}: files mounted");
+                share::open(&m.path.to_string_lossy());
+                if let Some(old) = self.mounts.insert(id, m) {
+                    old.unmount().await;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("{id}: couldn't mount its files: {e:#}");
+                plugins::tell(&self.notifier, "Couldn't open the phone's files", &format!("{e:#}")).await;
             }
         }
     }

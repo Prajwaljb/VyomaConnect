@@ -327,6 +327,11 @@ stops saying so once audio and calls are off for it); unpaired, it says so even 
 starts Android's pairing with the PC's address (`BluetoothFallback.pair`), a code to confirm on both. The PC
 side doesn't pair by itself.
 
+Done 2026-11-08: the phone's files in the PC's file manager over stock SFTP (`kdeconnect.sftp`, as KDE's app):
+off until Settings' "Browse this phone from your PC" (asks for All files access); the desktop app mounts it with
+sshfs under $XDG_RUNTIME_DIR/vyoma and checks the phone's host key against its pinned certificate. Asked for over
+D-Bus (`Browse`) until the GUI has a button.
+
 Still to do:
 - The portal touchpad (`pointer-token`) and the daemon's input (`remotedesktop-token`) are separate sessions, so Plasma may ask twice. Each asks once only (its token is kept), so left as is.
 

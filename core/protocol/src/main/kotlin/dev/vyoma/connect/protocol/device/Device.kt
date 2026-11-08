@@ -81,6 +81,10 @@ class Device internal constructor(
     private val links = CopyOnWriteArrayList<DeviceLink>()
 
     /** Where we currently reach this device from; empty when offline. */
+    /** Where this device can reach us: our end of its newest network link (not the cable's loopback, nor Bluetooth). */
+    val ourAddress: java.net.InetAddress?
+        get() = links.lastOrNull { !it.isClosed && it.transport != TransportKind.BLUETOOTH && !it.remoteAddress.isLoopbackAddress }?.localAddress
+
     val addresses: List<java.net.InetAddress> get() = links.filter { !it.isClosed && it.transport != TransportKind.BLUETOOTH }.map { it.remoteAddress }
 
     /**

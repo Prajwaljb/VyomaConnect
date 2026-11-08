@@ -63,6 +63,9 @@ Peers mix up number and string types, so always use the lenient `NetworkPacket.s
 Stock types live in `PacketTypes`. Check the upstream kdeconnect-kde / kdeconnect-android plugin source for exact
 body fields before implementing one.
 
+## Phone files (stock `kdeconnect.sftp`)
+PC sends `kdeconnect.sftp.request {startBrowsing:true}`; the phone replies `kdeconnect.sftp {ip, port, user:"kdeconnect", password, path, multiPaths, pathNames}` or `{errorMessage}` (it sends `{serverRunning:false}` on link start). Phone: `SftpPlugin` + `PhoneFileServer` (app platform/PhoneFiles.kt, Apache MINA SSHD on ports 1739..1764, rooted at internal storage), only with Settings' "Browse this phone from your PC" on and All files access; host key = the phone's TLS key; auth by the PC's cert key or a fresh one-time password (stored hashed). Server stops when the last PC that asked goes. Desktop (`phonefiles.rs`): mounts with sshfs at the link's address (never the `ip` it's told; loopback = cable, port + 200 through the adb mirror), StrictHostKeyChecking against a known_hosts line built from the pinned cert (kdeconnectd doesn't check). Unmounted on gone/unpair/exit.
+
 ## Presenter (stock, no companion)
 Slides are `kdeconnect.mousepad.request` keys: Page Down/Up (next/previous), F5, Esc, `key:"b"` (black screen). The pointer
 is `kdeconnect.presenter {dx, dy}` (KDE's overlay, screen -1..1 across, it multiplies dy by the aspect) then `{stop:true}`;

@@ -36,6 +36,8 @@ class DeviceLink internal constructor(
     private val closed = AtomicBoolean(false)
 
     val remoteAddress: InetAddress get() = socket.inetAddress
+    /** This end's address on the link: where the peer can reach a server of ours. */
+    val localAddress: InetAddress get() = socket.localAddress
     /** When the link came up (monotonic ms). */
     val since: Long = System.nanoTime() / 1_000_000
     val isClosed: Boolean get() = closed.get()

@@ -17,6 +17,7 @@ use crate::notifications::{NOTIFICATION, NOTIFICATION_ACTION, NOTIFICATION_REPLY
 use crate::share::{SHARE, SHARE_UPDATE};
 use crate::telephony::{MUTE, TELEPHONY};
 use crate::presenter::PRESENTER;
+use crate::phonefiles::{SFTP, SFTP_REQUEST};
 use crate::notify::{Notice, Notifier};
 use crate::system::{Battery, Ringer, Session};
 use vyoma_core::link::packet;
@@ -30,10 +31,10 @@ pub const SIGNAL: &str = "kdeconnect.connectivity_report";
 pub const SIGNAL_REQUEST: &str = "kdeconnect.connectivity_report.request";
 
 /// What we take. Not lock requests outward: phones can't be locked that way, and a KDE PC would lock.
-pub const INCOMING: &[&str] = &[PING, BATTERY, FIND, LOCK_REQUEST, SIGNAL, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, MPRIS_REQUEST, VOLUME_REQUEST, RUNCOMMAND_REQUEST, NOTIFICATION, MOUSEPAD_REQUEST, TELEPHONY, PRESENTER];
+pub const INCOMING: &[&str] = &[PING, BATTERY, FIND, LOCK_REQUEST, SIGNAL, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, MPRIS_REQUEST, VOLUME_REQUEST, RUNCOMMAND_REQUEST, NOTIFICATION, MOUSEPAD_REQUEST, TELEPHONY, PRESENTER, SFTP];
 pub const OUTGOING: &[&str] = &[
     PING, BATTERY, FIND, LOCK, SIGNAL_REQUEST, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, MPRIS, VOLUME, RUNCOMMAND,
-    NOTIFICATION_REQUEST, NOTIFICATION_REPLY, NOTIFICATION_ACTION, MOUSEPAD_ECHO, MOUSEPAD_KEYBOARDSTATE, MUTE,
+    NOTIFICATION_REQUEST, NOTIFICATION_REPLY, NOTIFICATION_ACTION, MOUSEPAD_ECHO, MOUSEPAD_KEYBOARDSTATE, MUTE, SFTP_REQUEST,
 ];
 
 /// Whether [device] is paired and its identity says it takes [kind].

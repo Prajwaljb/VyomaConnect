@@ -11,3 +11,11 @@
 # Without them every widget update fails and widgets sit on the loading layout forever.
 -keep class * extends androidx.work.InputMerger { <init>(); }
 -keep class * extends androidx.work.ListenableWorker { <init>(android.content.Context, androidx.work.WorkerParameters); }
+
+# The SFTP server (phone files on the PC) builds its parts by reflection and ServiceLoader.
+-keep class org.apache.sshd.** { *; }
+-dontwarn org.apache.sshd.**
+-dontwarn org.slf4j.**
+-dontwarn net.i2p.crypto.eddsa.**
+-dontwarn javax.management.**
+-dontwarn java.lang.management.**

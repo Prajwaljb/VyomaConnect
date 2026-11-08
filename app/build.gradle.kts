@@ -68,7 +68,7 @@ android {
 
     packaging {
         resources {
-            excludes += setOf("/META-INF/{AL2.0,LGPL2.1}", "/META-INF/LICENSE*", "/META-INF/NOTICE*", "META-INF/versions/9/OSGI-INF/MANIFEST.MF")
+            excludes += setOf("/META-INF/{AL2.0,LGPL2.1}", "/META-INF/DEPENDENCIES", "/META-INF/LICENSE*", "/META-INF/NOTICE*", "META-INF/versions/9/OSGI-INF/MANIFEST.MF")
         }
     }
 }
@@ -88,6 +88,8 @@ dependencies {
     implementation(libs.androidx.glance.appwidget)
     implementation(libs.androidx.glance.material3)
     implementation(libs.androidx.palette)
+    implementation(libs.sshd.core)
+    implementation(libs.sshd.sftp)
 
     testImplementation(libs.junit)
     testImplementation(kotlin("test-junit"))
