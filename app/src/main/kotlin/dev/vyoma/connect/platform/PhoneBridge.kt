@@ -229,17 +229,30 @@ class CallMonitor(private val context: Context, private val contacts: AndroidCon
     @Synchronized
     private fun onState(state: Int, number: String?) {
         val (name, photo) = number?.let(contacts::lookup) ?: (null to null)
+        // No number: maybe an app's call (WhatsApp...), which some phones report as a phone call.
+        val appCall = if (number == null && state != TelephonyManager.CALL_STATE_IDLE && last?.app == null) appCall() else null
+        val caller = name ?: appCall?.caller
+        val app = appCall?.app ?: last?.app
         when (state) {
-            TelephonyManager.CALL_STATE_RINGING -> emit(CallEvent.Ringing(number, name, photo))
-            TelephonyManager.CALL_STATE_OFFHOOK -> emit(CallEvent.Talking(number ?: last?.number, name ?: last?.contactName, photo ?: last?.photo))
+            TelephonyManager.CALL_STATE_RINGING -> emit(CallEvent.Ringing(number, caller, photo, app))
+            TelephonyManager.CALL_STATE_OFFHOOK -> emit(CallEvent.Talking(number ?: last?.number, caller ?: last?.contactName, photo ?: last?.photo, app))
             else -> {
                 val previous = last ?: return
                 _events.tryEmit(CallEvent.Ended(previous))
-                if (previous is CallEvent.Ringing) _events.tryEmit(CallEvent.Missed(previous.number, previous.contactName))
+                if (previous is CallEvent.Ringing) _events.tryEmit(CallEvent.Missed(previous.number, previous.contactName, app = previous.app))
                 last = null
                 restoreRinger()
             }
         }
+    }
+
+    /** The app's call notification can come a moment after the phone state: wait up to 2 s for it. */
+    private fun appCall(): NotificationBridge.AppCall? {
+        repeat(10) { i ->
+            NotificationBridge.appCall(context)?.let { return it }
+            if (i < 9) Thread.sleep(200)
+        }
+        return null
     }
 
     private fun emit(event: CallEvent) {

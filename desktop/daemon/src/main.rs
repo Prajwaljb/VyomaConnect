@@ -1158,12 +1158,9 @@ impl Desk {
             }
         }
         let Some(call) = call else { return };
-        let body = match &call.number {
-            Some(n) => format!("{n}, on {phone}"),
-            None => format!("On {phone}"),
-        };
+        let body = call.body(phone);
         if steps.show_ringing {
-            let title = format!("{} is calling", call.who);
+            let title = call.ringing_title();
             let notice = Notice { icon: "call-start", title: &title, body: &body, actions: &[("mute", "Mute")], sticky: true, replaces: line.ringing };
             match self.notifier.show(notice).await {
                 Ok(n) => line.ringing = Some(n),
@@ -1171,7 +1168,7 @@ impl Desk {
             }
         }
         if steps.show_missed {
-            let title = format!("Missed call from {}", call.who);
+            let title = call.missed_title();
             let notice = Notice { icon: "call-stop", title: &title, body: &body, actions: &[], sticky: false, replaces: line.missed };
             line.missed = self.notifier.show(notice).await.ok();
         }

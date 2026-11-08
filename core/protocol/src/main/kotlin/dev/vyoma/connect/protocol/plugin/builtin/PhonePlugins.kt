@@ -176,15 +176,19 @@ sealed interface CallEvent {
     /** Contact photo as base64 JPEG/PNG, shown in the PC's call notification. */
     val photo: String?
 
-    data class Ringing(override val number: String?, override val contactName: String?, override val photo: String?) : CallEvent
-    data class Talking(override val number: String?, override val contactName: String?, override val photo: String?) : CallEvent
-    data class Missed(override val number: String?, override val contactName: String?, override val photo: String? = null) : CallEvent
+    /** The app placing a call over the internet (WhatsApp, Signal...); null for a phone call. */
+    val app: String? get() = null
+
+    data class Ringing(override val number: String?, override val contactName: String?, override val photo: String?, override val app: String? = null) : CallEvent
+    data class Talking(override val number: String?, override val contactName: String?, override val photo: String?, override val app: String? = null) : CallEvent
+    data class Missed(override val number: String?, override val contactName: String?, override val photo: String? = null, override val app: String? = null) : CallEvent
 
     /** The call in [previous] ended; the PC withdraws its notification. */
     data class Ended(val previous: CallEvent) : CallEvent {
         override val number get() = previous.number
         override val contactName get() = previous.contactName
         override val photo get() = previous.photo
+        override val app get() = previous.app
     }
 }
 
@@ -210,7 +214,9 @@ class TelephonyPlugin(private val ctx: PluginContext, private val source: CallSo
                 ctx.send(packet(PacketTypes.TELEPHONY) {
                     put("event", name)
                     event.number?.let { put("phoneNumber", it) }
-                    put("contactName", event.contactName ?: event.number ?: "Unknown")
+                    // An app's call has no number: stock desktops show contactName, so it names the app then.
+                    put("contactName", event.contactName ?: event.number ?: event.app ?: "Unknown")
+                    event.app?.let { put("appName", it) }
                     if (!cancel) event.photo?.let { put("phoneThumbnail", it) }
                     if (cancel) put("isCancel", true)
                 })
