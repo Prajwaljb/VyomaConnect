@@ -20,6 +20,7 @@ mod notifications;
 mod notify;
 mod plugins;
 mod phonefiles;
+mod places;
 mod presenter;
 mod share;
 mod system;

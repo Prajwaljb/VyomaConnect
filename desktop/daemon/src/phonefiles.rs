@@ -96,7 +96,7 @@ fn mpint(n: &[u8]) -> Vec<u8> {
 /// open on the old one as empty; on a fresh path that window's folder is gone, and it closes.
 pub fn mount_point(name: &str) -> PathBuf {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
-    let base = runtime_dir().join("vyoma");
+    let base = mounts_dir();
     let clean: String = name.chars().map(|c| if c == '/' || c.is_control() { '_' } else { c }).collect();
     let clean = if clean.trim().is_empty() || clean.starts_with('.') { "Phone".into() } else { clean };
     loop {
@@ -108,9 +108,15 @@ pub fn mount_point(name: &str) -> PathBuf {
     }
 }
 
-/// Removes [at] and its numbered folder once nothing's mounted there, unmounting a dead mount
-/// first. Only empty folders go (rmdir), never what's in them.
+/// Where every mount lives: `$XDG_RUNTIME_DIR/vyoma`.
+pub fn mounts_dir() -> PathBuf {
+    runtime_dir().join("vyoma")
+}
+
+/// Removes [at], its sidebar entry and its numbered folder once nothing's mounted there,
+/// unmounting a dead mount first. Only empty folders go (rmdir), never what's in them.
 async fn remove_mount_point(at: &Path) {
+    crate::places::remove(at);
     if mounted(at) {
         clear(at).await;
     }
@@ -123,7 +129,8 @@ async fn remove_mount_point(at: &Path) {
 
 /// At start: what an earlier run left under `$XDG_RUNTIME_DIR/vyoma` (it ended without unmounting).
 pub async fn tidy() {
-    let Ok(entries) = std::fs::read_dir(runtime_dir().join("vyoma")) else { return };
+    crate::places::remove_all();
+    let Ok(entries) = std::fs::read_dir(mounts_dir()) else { return };
     for entry in entries.flatten() {
         let dir = entry.path();
         if let Ok(inner) = std::fs::read_dir(&dir) {
@@ -228,6 +235,8 @@ pub async fn mount(server: &Server, phone: IpAddr, id: &str, at: &Path, key: &Pa
             vyoma_companion::usb::unforward_unix(socket).await;
         }
         remove_mount_point(at).await;
+    } else if let Some(name) = at.file_name() {
+        crate::places::add(&name.to_string_lossy(), at);
     }
     result.map(|m| Mount { forward, ..m })
 }
