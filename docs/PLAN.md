@@ -331,6 +331,8 @@ Done 2026-11-08: the phone's files in the PC's file manager over stock SFTP (`kd
 off until Settings' "Browse this phone from your PC" (asks for All files access); the desktop app mounts it with
 sshfs under $XDG_RUNTIME_DIR/vyoma and checks the phone's host key against its pinned certificate. Asked for over
 D-Bus (`Browse`) until the GUI has a button.
+Loose ends, 2026-11-08: a mount survives the link moving between the cable and Wi-Fi (remounted quietly at the
+same folder), and the mirror's sound goes as Opus (128 kbit/s instead of 1.5 Mbit/s PCM) to a PC that can play it.
 
 Still to do:
 - The portal touchpad (`pointer-token`) and the daemon's input (`remotedesktop-token`) are separate sessions, so Plasma may ask twice. Each asks once only (its token is kept), so left as is.

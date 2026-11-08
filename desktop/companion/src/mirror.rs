@@ -93,7 +93,9 @@ pub async fn show(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr, 
     };
     let mut stdin = child.stdin.take().context("no stdin")?;
     let mut lines = BufReader::new(child.stdout.take().context("no stdout")?).lines();
-    state(sender, json!({ "open": true })).await;
+    // Sound comes as Opus when we can decode it (a tenth of raw PCM's 1.5 Mbit/s); else as PCM.
+    let sound: &[&str] = if can_decode_opus() { &["opus"] } else { &[] };
+    state(sender, json!({ "open": true, "sound": sound })).await;
     info!("{name}: mirroring the phone's screen");
 
     // Video waits here as long as the sound takes to be heard (see [VIDEO_DELAY_MS]); a writer
@@ -235,8 +237,9 @@ impl Drop for Player {
     }
 }
 
-/// The phone's sound while it's mirrored (`vyoma.mirror.audio {rate, channels}` + live s16le PCM),
-/// played on the PC's default output through PipeWire's pulse server until the phone stops it.
+/// The phone's sound while it's mirrored (`vyoma.mirror.audio {rate, channels, codec?}` + live
+/// s16le PCM, or with `codec: "opus"` Opus packets each after a 2-byte big-endian length), played
+/// on the PC's default output through PipeWire's pulse server until the phone stops it.
 ///
 /// Kept in step with the picture by a small jitter buffer: sound is read off the network as it
 /// comes (so it never backs up there; pacat blocking the network built a seconds-long lag), and a
@@ -249,6 +252,9 @@ pub async fn sound(me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value, 
     let body = &packet["body"];
     let rate = body["rate"].as_u64().unwrap_or(48_000).clamp(8_000, 96_000) as usize;
     let channels = body["channels"].as_u64().unwrap_or(2).clamp(1, 2) as usize;
+    let opus = body["codec"].as_str() == Some("opus");
+    // Opus decodes at these rates only.
+    let rate = if opus && ![8_000, 12_000, 16_000, 24_000, 48_000].contains(&rate) { 48_000 } else { rate };
     let mut input = payload::fetch_stream(me, pinned, phone, packet).await?;
     let mut player = std::process::Command::new("pacat")
         .args([
@@ -334,6 +340,7 @@ pub async fn sound(me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value, 
     let piece = rate / 100 * frame;
     let mut buf: Vec<u8> = Vec::with_capacity(piece * 4);
     let mut chunk = vec![0u8; 16 * 1024];
+    let decoder = if opus { Some(OpusDecoder::start(rate, channels, queue.clone(), piece)?) } else { None };
     let result = loop {
         let n = match input.read(&mut chunk).await {
             Ok(0) => break Ok(()),
@@ -341,32 +348,102 @@ pub async fn sound(me: &Identity, pinned: &[u8], phone: IpAddr, packet: &Value, 
             Err(e) => break Err(e),
         };
         buf.extend_from_slice(&chunk[..n]);
-        // Whole 10 ms pieces only; a cut sample waits for the rest.
-        let whole = buf.len() - buf.len() % piece;
-        if whole > 0 {
-            let (lock, ready) = &*queue;
-            let mut q = lock.lock().unwrap();
-            for p in buf[..whole].chunks(piece) {
-                q.pieces.push_back(p.to_vec());
+        match &decoder {
+            Some(d) => {
+                // Whole packets only; a cut one waits for the rest.
+                let mut at = 0;
+                while let Some(len) = buf.get(at..at + 2).map(|l| u16::from_be_bytes([l[0], l[1]]) as usize) {
+                    let Some(packet) = buf.get(at + 2..at + 2 + len) else { break };
+                    d.push(packet);
+                    at += 2 + len;
+                }
+                buf.drain(..at);
             }
-            while q.pieces.len() > SOUND_STUCK {
-                q.pieces.pop_front();
-            }
-            let loud = buf[..whole].chunks_exact(2).any(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs() > AUDIBLE as u16);
-            if loud {
-                LAST_SOUND_MS.store(clock(), std::sync::atomic::Ordering::Relaxed);
-            }
-            ready.notify_one();
-            drop(q);
-            buf.drain(..whole);
+            None => enqueue(&queue, &mut buf, piece),
         }
     };
+    drop(decoder);
     drop(player);
     let stats = tokio::task::spawn_blocking(move || feeder.join()).await.ok().and_then(|r| r.ok());
     if let Some((played, skipped, dry)) = stats {
         info!("{name}: phone's sound stopped ({played} pieces played, {skipped} skipped, ran dry {dry} times)");
     }
     result.map_err(Into::into)
+}
+
+/// Whole 10 ms pieces of [buf] (s16le) into the player's queue; a cut sample waits for the rest.
+fn enqueue(queue: &Shared, buf: &mut Vec<u8>, piece: usize) {
+    let whole = buf.len() - buf.len() % piece;
+    if whole == 0 {
+        return;
+    }
+    let (lock, ready) = &**queue;
+    let mut q = lock.lock().unwrap();
+    for p in buf[..whole].chunks(piece) {
+        q.pieces.push_back(p.to_vec());
+    }
+    while q.pieces.len() > SOUND_STUCK {
+        q.pieces.pop_front();
+    }
+    let loud = buf[..whole].chunks_exact(2).any(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs() > AUDIBLE as u16);
+    if loud {
+        LAST_SOUND_MS.store(clock(), std::sync::atomic::Ordering::Relaxed);
+    }
+    ready.notify_one();
+    drop(q);
+    buf.drain(..whole);
+}
+
+fn can_decode_opus() -> bool {
+    gst::init().is_ok() && ["appsrc", "opusdec", "appsink"].iter().all(|e| gst::ElementFactory::find(e).is_some())
+}
+
+/// Opus packets in, s16le into the player's queue: GStreamer's opusdec, on a thread of its own.
+struct OpusDecoder {
+    pipeline: gst::Pipeline,
+    src: gst::Element,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl OpusDecoder {
+    fn start(rate: usize, channels: usize, queue: Shared, piece: usize) -> Result<Self> {
+        gst::init()?;
+        let pipeline = gst::parse::launch(&format!(
+            "appsrc name=src format=time is-live=true do-timestamp=true \
+               caps=audio/x-opus,channel-mapping-family=0,rate={rate},channels={channels} \
+             ! opusdec plc=true ! audio/x-raw,format=S16LE,rate={rate},channels={channels},layout=interleaved \
+             ! appsink name=sink sync=false"
+        ))?
+        .downcast::<gst::Pipeline>()
+        .map_err(|_| anyhow::anyhow!("not a pipeline"))?;
+        let src = pipeline.by_name("src").context("no appsrc")?;
+        let sink = pipeline.by_name("sink").context("no appsink")?;
+        pipeline.set_state(gst::State::Playing)?;
+        let thread = std::thread::spawn(move || {
+            let mut buf = Vec::with_capacity(piece * 4);
+            // None once it's ended.
+            while let Some(sample) = sink.emit_by_name::<Option<gst::Sample>>("pull-sample", &[]) {
+                let Some(map) = sample.buffer().and_then(|b| b.map_readable().ok()) else { continue };
+                buf.extend_from_slice(&map);
+                enqueue(&queue, &mut buf, piece);
+            }
+        });
+        Ok(Self { pipeline, src, thread: Some(thread) })
+    }
+
+    fn push(&self, packet: &[u8]) {
+        let _ = self.src.emit_by_name::<gst::FlowReturn>("push-buffer", &[&gst::Buffer::from_slice(packet.to_vec())]);
+    }
+}
+
+impl Drop for OpusDecoder {
+    fn drop(&mut self) {
+        let _ = self.src.emit_by_name::<gst::FlowReturn>("end-of-stream", &[]);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+        let _ = self.pipeline.set_state(gst::State::Null);
+    }
 }
 
 /// The PC's default output's own delay (PipeWire's Latency on the sink node; a Bluetooth speaker
@@ -737,6 +814,34 @@ pub fn window(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A second of Opus from opusenc comes out as about a hundred 10 ms pieces (skipped without GStreamer's opus).
+    #[test]
+    fn opus_becomes_pieces_of_sound() {
+        if !can_decode_opus() || gst::ElementFactory::find("opusenc").is_none() {
+            return;
+        }
+        let enc = gst::parse::launch("audiotestsrc num-buffers=50 samplesperbuffer=960 ! audio/x-raw,rate=48000,channels=2 ! opusenc ! appsink name=s sync=false")
+            .unwrap()
+            .downcast::<gst::Pipeline>()
+            .unwrap();
+        let sink = enc.by_name("s").unwrap();
+        enc.set_state(gst::State::Playing).unwrap();
+        let queue: Shared = std::sync::Arc::new((Mutex::new(SoundQueue { pieces: Default::default(), done: false }), std::sync::Condvar::new()));
+        let piece = 480 * 4;
+        let decoder = OpusDecoder::start(48_000, 2, queue.clone(), piece).unwrap();
+        let mut packets = 0;
+        while let Some(sample) = sink.emit_by_name::<Option<gst::Sample>>("pull-sample", &[]) {
+            decoder.push(&sample.buffer().unwrap().map_readable().unwrap());
+            packets += 1;
+        }
+        enc.set_state(gst::State::Null).unwrap();
+        drop(decoder);
+        let q = queue.0.lock().unwrap();
+        assert!(packets >= 50, "{packets} packets");
+        assert!((95..=105).contains(&q.pieces.len()), "{} pieces", q.pieces.len());
+        assert!(q.pieces.iter().all(|p| p.len() == piece));
+    }
 
     #[test]
     fn keys_type_what_they_say() {
