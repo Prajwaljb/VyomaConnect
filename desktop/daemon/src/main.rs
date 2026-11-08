@@ -843,9 +843,10 @@ impl Desk {
             Event::Gone { id } => {
                 // Dropping its packets' channel ends the session, and the screen, camera and controller with it.
                 self.sessions.remove(&id);
-                if let Some(m) = self.mounts.remove(&id) {
-                    m.unmount().await;
-                }
+                // Its mount stays: sshfs has a connection of its own, which a blip of the link (the
+                // cable pulled with Wi-Fi to take over) needn't end, and remounting at the same path
+                // left an open file manager window looking at the old, empty one. A phone that's
+                // really gone ends sshfs within ~10 s, and check_mounts remounts it once it's back.
                 if let Some(mut line) = self.calls.remove(&id) {
                     let steps = line.gone();
                     self.call_steps(&id, "", &mut line, steps, None).await;
@@ -1012,7 +1013,7 @@ impl Desk {
     /// The phone's server is up: mount it, off the main loop.
     fn mount(&mut self, id: String, device: &DeviceView, server: phonefiles::Server) {
         let Some(remote) = device.remote else { return };
-        if self.mounts.get_mut(&id).is_some_and(|m| m.via == remote && m.alive()) {
+        if self.mounts.get_mut(&id).is_some_and(|m| m.alive()) {
             return;
         }
         // Its sshfs unit is the one the new mount replaces (same name), which the mount stops.
@@ -1025,9 +1026,11 @@ impl Desk {
         });
     }
 
-    /// [id]'s best route is now [remote] (cable, Wi-Fi): a kept mount on another remounts.
-    fn route_changed(&mut self, id: &str, remote: IpAddr) {
-        if self.kept.contains(id) && !self.mounts.get_mut(id).is_some_and(|m| m.via == remote && m.alive()) {
+    /// [id] is linked again or its best route changed: a kept mount that ended remounts. One that
+    /// still works stays on its route, however good the new one: swapping it under an open file
+    /// manager window leaves that window empty.
+    fn route_changed(&mut self, id: &str, _remote: IpAddr) {
+        if self.kept.contains(id) && !self.mounts.get_mut(id).is_some_and(|m| m.alive()) {
             self.remount(id);
         }
     }

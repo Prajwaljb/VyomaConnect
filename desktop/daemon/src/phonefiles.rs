@@ -102,8 +102,6 @@ pub struct Mount {
     child: Child,
     unit: String,
     pub path: PathBuf,
-    /// The phone's address it went to (loopback: the cable).
-    pub via: IpAddr,
     /// The cable's socket it goes through, taken down with it.
     forward: Option<PathBuf>,
 }
@@ -181,7 +179,7 @@ pub async fn mount(server: &Server, phone: IpAddr, id: &str, at: &Path, key: &Pa
         route.push(if host.contains(':') { format!("[{host}]") } else { host });
         route.extend(["-p".to_owned(), server.port.to_string()]);
     }
-    let result = run_sshfs(server, &route, id, &unit, at, key, cert, dir, phone).await;
+    let result = run_sshfs(server, &route, id, &unit, at, key, cert, dir).await;
     match (&result, &forward) {
         (Ok(_), Some(socket)) => return result.map(|m| Mount { forward: Some(socket.clone()), ..m }),
         (Err(_), Some(socket)) => vyoma_companion::usb::unforward_unix(socket).await,
@@ -256,7 +254,7 @@ fn runtime_dir() -> PathBuf {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_sshfs(server: &Server, route: &[String], id: &str, unit: &str, at: &Path, key: &Path, cert: &[u8], dir: &Path, phone: IpAddr) -> Result<Mount> {
+async fn run_sshfs(server: &Server, route: &[String], id: &str, unit: &str, at: &Path, key: &Path, cert: &[u8], dir: &Path) -> Result<Mount> {
     let alias = format!("vyoma-{id}");
     let hosts = dir.join("phone-hosts");
     vyoma_core::identity::write_private(&hosts, known_host(cert, &alias)?.as_bytes())?;
@@ -296,7 +294,7 @@ async fn run_sshfs(server: &Server, route: &[String], id: &str, unit: &str, at: 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
         if mounted(at) {
-            return Ok(Mount { child, unit: unit.to_owned(), path: at.to_owned(), via: phone, forward: None });
+            return Ok(Mount { child, unit: unit.to_owned(), path: at.to_owned(), forward: None });
         }
         if let Some(status) = child.try_wait()? {
             bail!("sshfs ended ({status}): {}", last_line(&mut child).await);
