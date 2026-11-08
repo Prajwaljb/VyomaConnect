@@ -37,7 +37,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `desktop/daemon` (`vyoma-desktop`): the standalone desktop app growing on that core (`docs/PLAN.md` section 10): pairing
   prompt as a freedesktop notification with Accept/Reject, `dev.vyoma.Desktop1` D-Bus control for the future GUI;
   stock plugins in `plugins.rs`, `clipboard.rs` (wl-clipboard), `share.rs` (files land in XDG Downloads), `media.rs`
-  (MPRIS), `volume.rs` (pactl), `commands.rs`, `notifications.rs`, `telephony.rs` (calls: notification with Mute, music paused for the call), `input.rs` (RemoteDesktop portal). `VYOMA_PLAYERS=<bus suffix>` limits it to a test player.
+  (MPRIS), `volume.rs` (pactl), `commands.rs`, `notifications.rs`, `telephony.rs` (calls: notification with Mute, music paused for the call), `presenter.rs` (the pointer dot: a layer-shell overlay, smithay-client-toolkit), `input.rs` (RemoteDesktop portal). `VYOMA_PLAYERS=<bus suffix>` limits it to a test player.
   Own identity in `~/.config/vyoma-desktop`, separate from the companion's (`--import-kde` takes over kdeconnectd's instead).
   Every `vyoma.*` feature is the companion's own code: each paired phone gets a `vyoma_companion::session::serve`.
   The phone treats it as its own companion (`DeviceIdentity.featuresOf`). The cable, tethering, Bluetooth and the setup

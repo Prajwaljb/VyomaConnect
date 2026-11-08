@@ -66,7 +66,7 @@ body fields before implementing one.
 ## Presenter (stock, no companion)
 Slides are `kdeconnect.mousepad.request` keys: Page Down/Up (next/previous), F5, Esc, `key:"b"` (black screen). The pointer
 is `kdeconnect.presenter {dx, dy}` (KDE's overlay, screen -1..1 across, it multiplies dy by the aspect) then `{stop:true}`;
-keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPlugin`, app presenter/PointerGyro.kt.
+keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPlugin`, app presenter/PointerGyro.kt. The desktop app draws it itself (`desktop/daemon/src/presenter.rs`): a 48 px wlr-layer-shell overlay that takes no input, moved by its margins, hidden on stop or after 1 s of silence; no dot on GNOME (no layer shell).
 
 ## vyoma.* extensions (companion and our own features)
 - Namespace `vyoma.<feature>[.<verb>]`, advertised in capabilities like any packet, so stock peers just don't load them.

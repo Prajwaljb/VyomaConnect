@@ -19,6 +19,7 @@ mod media;
 mod notifications;
 mod notify;
 mod plugins;
+mod presenter;
 mod share;
 mod system;
 mod telephony;
@@ -225,6 +226,8 @@ struct Desk {
     ring_notice: Option<u32>,
     /// Device id to its phone call, if one's on or was missed.
     calls: HashMap<String, telephony::Line>,
+    /// The presenter's dot over the screen.
+    presenter: presenter::Presenter,
     /// Device id to the notification showing its pairing.
     prompts: HashMap<String, u32>,
     battery: Option<system::Battery>,
@@ -450,6 +453,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
         ringer: Ringer::default(),
         ring_notice: None,
         calls: HashMap::new(),
+        presenter: presenter::Presenter::default(),
         prompts: HashMap::new(),
         battery: system::battery(),
     };
@@ -832,6 +836,10 @@ impl Desk {
                     }
                     volume::VOLUME_REQUEST => {
                         let _ = self.volume.send((id, packet));
+                        return;
+                    }
+                    presenter::PRESENTER => {
+                        self.presenter.on_packet(&packet["body"]);
                         return;
                     }
                     telephony::TELEPHONY => {
