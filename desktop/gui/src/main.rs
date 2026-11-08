@@ -1,6 +1,6 @@
 //! Vyoma's desktop window. It only shows and asks: the daemon (`vyoma-desktop`) owns the links,
 //! so closing or crashing this never drops a phone. `--snapshot <png>` renders it offscreen with
-//! made-up phones instead (`--dark`, `--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|empty|down`).
+//! made-up phones instead (`--dark`, `--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|empty|down`).
 
 mod daemon;
 mod snapshot;
@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use daemon::{Daemon, DbusDaemon, Event, Health, PhoneData};
+use daemon::{ActivityEntry, Daemon, DbusDaemon, Event, Health, PhoneData};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 slint::include_modules!();
@@ -21,6 +21,8 @@ const REREAD_EVERY: Duration = Duration::from_secs(5);
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 /// The sidebar's id for This PC's page.
 pub const THIS_PC: &str = "this-pc";
+/// And the activity's.
+pub const ACTIVITY: &str = "activity";
 
 thread_local! {
     /// The devices last read, on the UI thread.
@@ -80,6 +82,27 @@ fn wire(ui: &MainWindow) {
                 win.set_selected(THIS_PC.into());
             }
             read_health(&ui);
+        }
+    });
+    ui.on_show_activity({
+        let ui = ui.as_weak();
+        move || {
+            if let Some(win) = ui.upgrade() {
+                win.set_confirm_clear(false);
+                win.set_selected(ACTIVITY.into());
+            }
+            read_activity(&ui);
+        }
+    });
+    ui.on_clear_activity({
+        let ui = ui.as_weak();
+        move || {
+            let ui = ui.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = DbusDaemon::connect().and_then(|d| d.clear_activity()) {
+                    notify(&ui, format!("{e:#}"));
+                }
+            });
         }
     });
     ui.on_install({
@@ -156,6 +179,7 @@ fn watch(ui: slint::Weak<MainWindow>) {
                             }
                         }
                         Event::Sent { id, count, error } => sent(&told, id, count, error),
+                        Event::Activity => read_activity(&told),
                         Event::SetupDone { ok } => {
                             notify(&told, if ok { "Installed. This PC is set up".into() } else { "The install didn't finish".into() });
                             read_health(&told);
@@ -174,6 +198,7 @@ fn watch(ui: slint::Weak<MainWindow>) {
                 // Back (or there at start): This PC's state, for the sidebar's dot.
                 if daemon.is_some() {
                     read_health(&ui);
+                    read_activity(&ui);
                 }
             }
             let phones = daemon.as_ref().map(|d| d.phones());
@@ -200,6 +225,73 @@ fn watch(ui: slint::Weak<MainWindow>) {
             while changes.try_recv().is_ok() {}
         }
     });
+}
+
+/// Reads the activity off the UI thread, then shows it.
+fn read_activity(ui: &slint::Weak<MainWindow>) {
+    let ui = ui.clone();
+    std::thread::spawn(move || {
+        let list = DbusDaemon::connect().and_then(|d| d.activity());
+        let _ = slint::invoke_from_event_loop(move || {
+            if let (Some(win), Ok(list)) = (ui.upgrade(), list) {
+                show_activity(&win, &list, chrono::Local::now());
+            }
+        });
+    });
+}
+
+/// [list] (newest first) by day, as of [now]; the sidebar's line says how much today.
+pub fn show_activity(ui: &MainWindow, list: &[ActivityEntry], now: chrono::DateTime<chrono::Local>) {
+    use chrono::{Datelike, TimeZone};
+    let today = now.date_naive();
+    let mut days: Vec<(chrono::NaiveDate, Vec<ActivityEntry>)> = Vec::new();
+    let mut stamps = Vec::new();
+    for h in list {
+        let Some(at) = chrono::Local.timestamp_opt(h.time, 0).single() else { continue };
+        let day = at.date_naive();
+        match days.last_mut() {
+            Some((d, items)) if *d == day => items.push(h.clone()),
+            _ => days.push((day, vec![h.clone()])),
+        }
+        stamps.push(at);
+    }
+    let mut at = stamps.into_iter();
+    let label = |d: chrono::NaiveDate| {
+        let ago = (today - d).num_days();
+        match ago {
+            0 => "Today".to_owned(),
+            1 => "Yesterday".to_owned(),
+            2..=6 => d.format("%A").to_string(),
+            _ if d.year() == today.year() => d.format("%-d %B").to_string(),
+            _ => d.format("%-d %B %Y").to_string(),
+        }
+    };
+    let model: Vec<Day> = days
+        .iter()
+        .map(|(d, items)| Day {
+            label: label(*d).into(),
+            items: ModelRc::new(VecModel::from(
+                items
+                    .iter()
+                    .map(|h| {
+                        let time = at.next().map(|t| t.format("%H:%M").to_string()).unwrap_or_default();
+                        Happening { kind: h.kind.clone().into(), text: h.text.clone().into(), meta: format!("{} \u{b7} {time}", h.name).into() }
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+        })
+        .collect();
+    let today_count = days.first().filter(|(d, _)| *d == today).map_or(0, |(_, i)| i.len());
+    ui.set_activity_summary(
+        match (today_count, list.is_empty()) {
+            (0, true) => "Nothing yet".to_owned(),
+            (0, false) => "Nothing today".to_owned(),
+            (n, _) => format!("{n} today"),
+        }
+        .into(),
+    );
+    ui.set_days(ModelRc::new(VecModel::from(model)));
+    ui.set_activity_loaded(true);
 }
 
 /// Reads This PC's setup off the UI thread, then shows it.
@@ -281,8 +373,8 @@ fn show(ui: &MainWindow, phones: &[PhoneData]) {
     let current = paired.iter().chain(&nearby).find(|p| p.id == selected).or(paired.first()).or(nearby.first()).copied();
     ui.set_phones(ModelRc::new(VecModel::from(paired.iter().map(|p| to_ui(p)).collect::<Vec<_>>())));
     ui.set_nearby(ModelRc::new(VecModel::from(nearby.iter().map(|p| to_ui(p)).collect::<Vec<_>>())));
-    // This PC's page stays put however the phones change.
-    if selected == THIS_PC {
+    // This PC's page and the activity stay put however the phones change.
+    if selected == THIS_PC || selected == ACTIVITY {
         return;
     }
     ui.set_has_current(current.is_some());

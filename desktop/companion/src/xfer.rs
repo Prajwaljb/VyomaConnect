@@ -80,7 +80,8 @@ async fn prepare(phone_id: &str, key: &str, body: &Value) -> Result<u64> {
 }
 
 /// The payload of one `vyoma.xfer.data`: the file from `offset` to its end.
-pub async fn data(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr, phone_name: &str, packet: &Value) -> Result<()> {
+/// The saved file's name, unless it's part of a folder (whose [end] says it).
+pub async fn data(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr, phone_name: &str, packet: &Value) -> Result<Option<String>> {
     let key = packet["body"]["key"].as_str().unwrap_or_default().to_string();
     let result = receive(me, pinned, phone, &key, packet).await;
     let reply = match &result {
@@ -90,10 +91,11 @@ pub async fn data(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr, 
     sender.send(&link::packet("vyoma.xfer.done", reply)).await?;
     let saved = result?;
     let in_folder = UPLOADS.lock().unwrap().as_mut().and_then(|u| u.remove(&key)).is_some_and(|u| u.in_folder);
-    if !in_folder {
-        notify(phone_name, &saved, None);
+    if in_folder {
+        return Ok(None);
     }
-    Ok(())
+    notify(phone_name, &saved, None);
+    Ok(saved.file_name().map(|n| n.to_string_lossy().into_owned()))
 }
 
 async fn receive(me: &Identity, pinned: &[u8], phone: IpAddr, key: &str, packet: &Value) -> Result<PathBuf> {
@@ -125,11 +127,12 @@ async fn receive(me: &Identity, pinned: &[u8], phone: IpAddr, key: &str, packet:
     Ok(target)
 }
 
-/// A folder batch is done: one notification for it.
-pub fn end(phone_name: &str, body: &Value) {
-    let Some(batch) = body["batch"].as_str() else { return };
-    let Some(root) = BATCHES.lock().unwrap().as_mut().and_then(|b| b.remove(batch)) else { return };
+/// A folder batch is done: one notification for it. Its folder's name and how many files.
+pub fn end(phone_name: &str, body: &Value) -> Option<(String, u64)> {
+    let batch = body["batch"].as_str()?;
+    let root = BATCHES.lock().unwrap().as_mut().and_then(|b| b.remove(batch))?;
     notify(phone_name, &root, body["count"].as_u64());
+    Some((root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), body["count"].as_u64().unwrap_or(0)))
 }
 
 /// The folder for `rel` ("Photos/2024") under `base`; its top is named once per batch.

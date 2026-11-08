@@ -48,6 +48,19 @@ export struct Check {
     detail: string,
 }
 
+// Something a phone did here: [meta] is "Phone · 14:32".
+export struct Happening {
+    kind: string,
+    text: string,
+    meta: string,
+}
+
+// One day of the activity, newest first.
+export struct Day {
+    label: string,
+    items: [Happening],
+}
+
 export global Theme {
     in-out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
     out property <color> canvas: dark ? #000000 : #EDEEF2;
@@ -460,6 +473,215 @@ component PermitRow inherits Rectangle {
         height: 1px;
         background: Theme.divider;
         visible: !root.last;
+    }
+}
+
+// One thing in the activity: its badge, what happened, which phone and when.
+component HappeningRow inherits Rectangle {
+    in property <Happening> item;
+    in property <bool> last;
+    pure function icon(kind: string) -> image {
+        if kind == "screenshot" || kind == "screen" { return @image-url("icons/computer.svg"); }
+        if kind == "photo" { return @image-url("icons/camera.svg"); }
+        if kind == "files" { return @image-url("icons/folder.svg"); }
+        if kind == "share" { return @image-url("icons/send.svg"); }
+        if kind == "power" { return @image-url("icons/power.svg"); }
+        if kind == "webcam" { return @image-url("icons/video.svg"); }
+        if kind == "control" { return @image-url("icons/gamepad.svg"); }
+        if kind == "touchpad" { return @image-url("icons/pointer.svg"); }
+        if kind == "refused" { return @image-url("icons/blocked.svg"); }
+        return @image-url("icons/terminal.svg");
+    }
+    pure function fill(kind: string) -> color {
+        if kind == "screenshot" || kind == "share" { return Theme.teal; }
+        if kind == "screen" || kind == "files" || kind == "control" || kind == "touchpad" { return Theme.blue; }
+        if kind == "photo" { return Theme.orange; }
+        if kind == "power" { return Theme.error; }
+        if kind == "webcam" { return Theme.green; }
+        return Theme.offline;
+    }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 16px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            Badge {
+                icon: root.icon(root.item.kind);
+                fill: root.fill(root.item.kind);
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.item.text;
+                color: Theme.text;
+                font-size: 14px;
+                wrap: word-wrap;
+            }
+            Text {
+                text: root.item.meta;
+                color: Theme.muted;
+                font-size: 12px;
+            }
+        }
+    }
+    Rectangle {
+        x: 54px;
+        y: parent.height - 1px;
+        width: parent.width - 54px;
+        height: 1px;
+        background: Theme.divider;
+        visible: !root.last;
+    }
+}
+
+// The activity in the sidebar, under This PC.
+component ActivityItem inherits Rectangle {
+    in property <bool> selected;
+    in property <string> summary;
+    callback clicked;
+    height: 50px;
+    border-radius: 10px;
+    background: selected ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 34px;
+                height: 34px;
+                border-radius: 10px;
+                background: Theme.muted.with-alpha(Theme.dark ? 0.22 : 0.14);
+                Glyph {
+                    source: @image-url("icons/clock.svg");
+                    tint: Theme.text;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 1px;
+            Text {
+                text: "Activity";
+                color: Theme.text;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            Text {
+                text: root.summary;
+                color: Theme.muted;
+                font-size: 12px;
+            }
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// What phones did on this PC, by day. Clear asks once, in place.
+component ActivityPage inherits Rectangle {
+    in property <[Day]> days;
+    in property <bool> loaded;
+    in-out property <bool> confirm-clear;
+    callback clear();
+
+    ScrollView {
+        VerticalLayout {
+            padding: 32px;
+            padding-top: 36px;
+            spacing: 20px;
+            alignment: start;
+
+            HorizontalLayout {
+                spacing: 12px;
+                VerticalLayout {
+                    spacing: 6px;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: "Activity";
+                        color: Theme.text;
+                        font-size: 30px;
+                        font-weight: 700;
+                        letter-spacing: -0.6px;
+                    }
+                    Text {
+                        text: "What your phones did on this PC";
+                        color: Theme.muted;
+                        font-size: 14px;
+                    }
+                }
+                if root.days.length > 0 && !root.confirm-clear: VerticalLayout {
+                    alignment: center;
+                    PillButton {
+                        text: "Clear";
+                        clicked => { root.confirm-clear = true; }
+                    }
+                }
+            }
+
+            if root.confirm-clear: CardShadow {
+                Card {
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 12px;
+                        Text {
+                            text: "Clear the activity? It can't be brought back.";
+                            color: Theme.text;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            alignment: end;
+                            spacing: 8px;
+                            PillButton {
+                                text: "Cancel";
+                                clicked => { root.confirm-clear = false; }
+                            }
+                            PillButton {
+                                text: "Clear";
+                                destructive: true;
+                                clicked => {
+                                    root.confirm-clear = false;
+                                    root.clear();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.loaded && root.days.length == 0: Text {
+                text: "Nothing yet. When a phone takes a screenshot or a photo, moves files, or puts this PC to sleep, it shows up here.";
+                color: Theme.muted;
+                font-size: 14px;
+                wrap: word-wrap;
+            }
+
+            for d in root.days: VerticalLayout {
+                spacing: 8px;
+                SectionLabel {
+                    text: d.label;
+                    x: 4px;
+                }
+                CardShadow {
+                    Card {
+                        for e[i] in d.items: HappeningRow {
+                            item: e;
+                            last: i == d.items.length - 1;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1027,6 +1249,12 @@ export component MainWindow inherits Window {
     callback send-files(string);
     callback set-permission(string, string, bool);
     callback show-pc();
+    callback show-activity();
+    callback clear-activity();
+    in property <[Day]> days;
+    in property <bool> activity-loaded;
+    in property <string> activity-summary: "Nothing yet";
+    in-out property <bool> confirm-clear;
     callback install();
 
     HorizontalLayout {
@@ -1083,6 +1311,14 @@ export component MainWindow inherits Window {
                         root.show-pc();
                     }
                 }
+                if root.daemon-ok: ActivityItem {
+                    selected: root.selected == "activity";
+                    summary: root.activity-summary;
+                    clicked => {
+                        root.confirm-unpair = false;
+                        root.show-activity();
+                    }
+                }
                 // Asks phones nearby to show themselves again.
                 if root.daemon-ok: Rectangle {
                     height: 34px;
@@ -1132,7 +1368,13 @@ export component MainWindow inherits Window {
                 loaded: root.health-loaded;
                 install => { root.install(); }
             }
-            if root.selected != "this-pc" && root.has-current: PhonePage {
+            if root.selected == "activity" && root.daemon-ok: ActivityPage {
+                days: root.days;
+                loaded: root.activity-loaded;
+                confirm-clear <=> root.confirm-clear;
+                clear => { root.clear-activity(); }
+            }
+            if root.selected != "this-pc" && root.selected != "activity" && root.has-current: PhonePage {
                 phone: root.current;
                 confirm-unpair <=> root.confirm-unpair;
                 pair(id) => { root.pair(id); }
@@ -1144,7 +1386,7 @@ export component MainWindow inherits Window {
                 send-files(id) => { root.send-files(id); }
                 set-permission(id, key, on) => { root.set-permission(id, key, on); }
             }
-            if (root.selected != "this-pc" || !root.daemon-ok) && !root.has-current: EmptyPage {
+            if ((root.selected != "this-pc" && root.selected != "activity") || !root.daemon-ok) && !root.has-current: EmptyPage {
                 daemon-ok: root.daemon-ok;
                 search => { root.search(); }
             }

@@ -9,7 +9,7 @@ use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferTyp
 use slint::platform::{Platform, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, PhysicalSize};
 
-use crate::daemon::{Check, Feature, Health, Permission, PhoneData};
+use crate::daemon::{ActivityEntry, Check, Feature, Health, Permission, PhoneData};
 use crate::{MainWindow, Theme};
 
 const WIDTH: u32 = 920;
@@ -50,6 +50,30 @@ pub fn run(path: &str, dark: bool, scene: &str) -> Result<()> {
         crate::apply(&ui, Some(phones(scene)));
         crate::show_health(&ui, &health(scene == "pc-setup"));
     }
+    if scene == "activity" || scene == "activity-empty" {
+        ui.set_selected(crate::ACTIVITY.into());
+        crate::apply(&ui, Some(phones(scene)));
+    }
+    // Made up, around a fixed noon so the days read the same every time.
+    let noon = chrono::TimeZone::with_ymd_and_hms(&chrono::Local, 2026, 11, 8, 12, 0, 0).single().context("no such time")?;
+    let at = |mins_ago: i64| (noon - chrono::Duration::minutes(mins_ago)).timestamp();
+    let ev = |mins_ago: i64, name: &str, kind: &str, text: &str| ActivityEntry { time: at(mins_ago), name: name.into(), kind: kind.into(), text: text.into() };
+    let list = if scene == "activity" {
+        vec![
+            ev(4, "Pixel 9 Pro", "screenshot", "Took a screenshot"),
+            ev(12, "Pixel 9 Pro", "files", "Copied \u{201c}Report final.pdf\u{201d} from this PC"),
+            ev(38, "Work phone", "refused", "Refused: \u{201c}See and control this screen\u{201d} is off"),
+            ev(95, "Pixel 9 Pro", "touchpad", "Was the touchpad"),
+            ev(60 * 20, "Pixel 9 Pro", "power", "Put the PC to sleep"),
+            ev(60 * 21, "Pixel 9 Pro", "share", "Shared 12 files with this PC"),
+            ev(60 * 22, "Pixel 9 Pro", "photo", "Took a photo with the camera"),
+            ev(60 * 24 * 4, "Work phone", "webcam", "Was the webcam"),
+            ev(60 * 24 * 4 + 5, "Work phone", "command", "Ran \u{201c}Lock screen\u{201d}"),
+        ]
+    } else {
+        vec![]
+    };
+    crate::show_activity(&ui, &list, noon);
     if scene == "notice" {
         ui.set_notice("Opening the phone's files…".into());
     }
