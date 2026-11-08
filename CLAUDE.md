@@ -46,7 +46,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `desktop/gui` (`vyoma-gui`, binary `vyoma`): the desktop app's window, Slint (GPL-3.0 option) in the phone app's look
   (`ui/app.slint`: flat grouped cards, Inter, PC-blue accent). It only shows and asks: `src/daemon.rs` is the `Daemon`
   trait (D-Bus `dev.vyoma.Desktop1` today, a local socket on macOS later), rereading on the daemon's `Changed` signal.
-  `vyoma --snapshot out.png [--dark] [--scene phones|pairing|nearby|unpair|notice|empty|down]` renders it offscreen
+  `vyoma --snapshot out.png [--dark] [--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|empty|down]` renders it offscreen
   with made-up phones: check the look with that, never by capturing the screen.
 - `desktop/companion`: lib + bin (the session loop is `session.rs`, shared with the desktop app); the bin is the Rust daemon beside stock kdeconnectd, built on `vyoma-core`. Dials only phones kdeconnectd trusts (mDNS), pairs with
   no prompt via `CompanionProof` (signed with kdeconnectd's key; phone verifies against the pinned PC cert), speaks

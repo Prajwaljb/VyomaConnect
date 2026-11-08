@@ -9,7 +9,7 @@ use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferTyp
 use slint::platform::{Platform, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, PhysicalSize};
 
-use crate::daemon::PhoneData;
+use crate::daemon::{Check, Feature, Health, PhoneData};
 use crate::{MainWindow, Theme};
 
 const WIDTH: u32 = 920;
@@ -45,6 +45,11 @@ pub fn run(path: &str, dark: bool, scene: &str) -> Result<()> {
     if scene == "unpair" {
         ui.set_confirm_unpair(true);
     }
+    if scene.starts_with("pc") {
+        ui.set_selected(crate::THIS_PC.into());
+        crate::apply(&ui, Some(phones(scene)));
+        crate::show_health(&ui, &health(scene == "pc-setup"));
+    }
     if scene == "notice" {
         ui.set_notice("Opening the phone's files…".into());
     }
@@ -61,6 +66,29 @@ pub fn run(path: &str, dark: bool, scene: &str) -> Result<()> {
     let bytes: Vec<u8> = pixels.iter().flat_map(|p| [p.r, p.g, p.b]).collect();
     png.write_header()?.write_image_data(&bytes)?;
     Ok(())
+}
+
+fn health(missing: bool) -> Health {
+    let names = ["Sound", "Volume", "Clipboard", "Notifications", "Browsing the phone", "Live screen", "Phone screen", "Phone as webcam", "Game controller over USB"];
+    let features = names
+        .iter()
+        .map(|n| {
+            let needs: Vec<String> = match (*n, missing) {
+                ("Browsing the phone", true) => vec!["sshfs".into()],
+                ("Phone as webcam", true) => vec!["v4l2loopback-dkms".into(), "a module setting".into()],
+                _ => vec![],
+            };
+            Feature { name: (*n).into(), ready: needs.is_empty(), needs, unavailable: false }
+        })
+        .collect();
+    let mut checks = vec![Check { name: "Firewall".into(), state: "ok".into(), detail: "On, and your phones get through on Wi-Fi".into() }];
+    let mut notes = vec![];
+    if missing {
+        checks[0] = Check { name: "Firewall".into(), state: "info".into(), detail: "ufw is on. If phones don't show up on Wi-Fi, allow ports 1714 to 1764, TCP and UDP.".into() };
+        checks.push(Check { name: "KDE Connect".into(), state: "warn".into(), detail: "Also running, so the USB cable, tethering and Bluetooth stay with it. Quit it to use them here.".into() });
+        notes.push("Live screen needs vah264enc, which comes from your graphics card's VA-API driver.".into());
+    }
+    Health { features, installable: missing, installing: false, checks, notes }
 }
 
 fn phones(scene: &str) -> Vec<PhoneData> {

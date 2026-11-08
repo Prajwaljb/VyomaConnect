@@ -46,6 +46,69 @@ impl PhoneData {
     }
 }
 
+/// A feature that needs something on the PC.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Feature {
+    pub name: String,
+    pub ready: bool,
+    /// What would make it ready ("sshfs", "a udev rule"), if anything here can.
+    pub needs: Vec<String>,
+    pub unavailable: bool,
+}
+
+/// Something no package fixes: ok, worth knowing (info), or in the way (warn).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Check {
+    pub name: String,
+    pub state: String,
+    pub detail: String,
+}
+
+/// This PC's setup.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Health {
+    pub features: Vec<Feature>,
+    pub installable: bool,
+    pub installing: bool,
+    pub checks: Vec<Check>,
+    pub notes: Vec<String>,
+}
+
+impl Health {
+    /// From the daemon's `Health` JSON.
+    pub fn from_json(v: &Value) -> Self {
+        let strings = |v: &Value| v.as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect()).unwrap_or_default();
+        let list = |k: &str| v[k].as_array().cloned().unwrap_or_default();
+        Health {
+            features: list("features")
+                .iter()
+                .map(|f| Feature {
+                    name: f["name"].as_str().unwrap_or("").to_owned(),
+                    ready: f["ready"].as_bool().unwrap_or(true),
+                    needs: strings(&f["needs"]),
+                    unavailable: f["unavailable"].as_bool().unwrap_or(false),
+                })
+                .collect(),
+            installable: v["installable"].as_bool().unwrap_or(false),
+            installing: v["installing"].as_bool().unwrap_or(false),
+            checks: list("checks")
+                .iter()
+                .map(|c| Check {
+                    name: c["name"].as_str().unwrap_or("").to_owned(),
+                    state: c["state"].as_str().unwrap_or("info").to_owned(),
+                    detail: c["detail"].as_str().unwrap_or("").to_owned(),
+                })
+                .collect(),
+            notes: strings(&v["notes"]),
+        }
+    }
+
+    /// How many things need the user: features not ready, and checks in the way.
+    pub fn attention(&self) -> usize {
+        self.features.iter().filter(|f| !f.ready).count() + self.checks.iter().filter(|c| c.state == "warn").count()
+    }
+}
+
 /// What the daemon says without being asked.
 #[derive(Debug, PartialEq)]
 pub enum Event {
@@ -53,6 +116,8 @@ pub enum Event {
     Changed,
     /// A batch of files went to [id]; [error] is empty when all [count] arrived.
     Sent { id: String, count: u32, error: String },
+    /// An install from the window is over.
+    SetupDone { ok: bool },
 }
 
 /// What the window asks of the daemon.
@@ -62,6 +127,9 @@ pub trait Daemon: Send + Sync {
     fn act(&self, method: &str, id: &str) -> Result<()>;
     fn send_files(&self, id: &str, paths: Vec<String>) -> Result<()>;
     fn search(&self) -> Result<()>;
+    fn health(&self) -> Result<Health>;
+    /// Installs what's missing; [Event::SetupDone] follows.
+    fn install(&self) -> Result<()>;
     /// Blocks until the daemon says something (an error once it's gone away).
     fn next_event(&self) -> Result<Event>;
 }
@@ -122,6 +190,15 @@ impl Daemon for DbusDaemon {
         self.call("Refresh", &())
     }
 
+    fn health(&self) -> Result<Health> {
+        let json: String = self.call("Health", &())?;
+        Ok(Health::from_json(&serde_json::from_str(&json)?))
+    }
+
+    fn install(&self) -> Result<()> {
+        self.call("Install", &())
+    }
+
     fn next_event(&self) -> Result<Event> {
         let mut signals = self.signals.lock().unwrap();
         runtime().block_on(async {
@@ -136,6 +213,10 @@ impl Daemon for DbusDaemon {
                     Some("FilesSent") => {
                         let (id, count, error): (String, u32, String) = message.body().deserialize()?;
                         return Ok(Event::Sent { id, count, error });
+                    }
+                    Some("SetupDone") => {
+                        let (ok,): (bool,) = message.body().deserialize()?;
+                        return Ok(Event::SetupDone { ok });
                     }
                     _ => {}
                 }
@@ -167,6 +248,15 @@ mod tests {
             println!("paired {} linked {} via {:?} battery {} can ring/browse/share {}/{}/{}", p.paired, p.linked, p.via, p.battery.is_some(), p.can_ring, p.can_browse, p.can_share);
         }
         assert!(!phones.is_empty());
+    }
+
+    #[test]
+    fn reads_the_pcs_health() {
+        let v = json!({ "features": [{ "name": "Sound", "ready": true, "needs": [] }, { "name": "Browsing the phone", "ready": false, "needs": ["sshfs"] }],
+            "installable": true, "checks": [{ "name": "Firewall", "state": "info", "detail": "d" }, { "name": "KDE Connect", "state": "warn", "detail": "k" }], "notes": ["n"] });
+        let h = Health::from_json(&v);
+        assert_eq!((h.features.len(), h.features[1].needs.clone(), h.installable, h.notes.len()), (2, vec!["sshfs".to_owned()], true, 1));
+        assert_eq!(h.attention(), 2, "a missing feature and a check in the way; info isn't a fault");
     }
 
     #[test]
