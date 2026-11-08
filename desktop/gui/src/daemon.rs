@@ -129,6 +129,26 @@ impl Health {
     }
 }
 
+/// Something a phone did on this PC.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ActivityEntry {
+    /// Unix seconds.
+    pub time: i64,
+    /// The phone's name.
+    pub name: String,
+    /// For its icon: screenshot, photo, screen, files, share, power, webcam, control, refused, command.
+    pub kind: String,
+    pub text: String,
+}
+
+impl ActivityEntry {
+    /// From the daemon's `Activity` JSON.
+    pub fn list(v: &Value) -> Vec<ActivityEntry> {
+        let text = |e: &Value, k: &str| e[k].as_str().unwrap_or("").to_owned();
+        v.as_array().map(|a| a.iter().map(|e| ActivityEntry { time: e["time"].as_i64().unwrap_or(0), name: text(e, "name"), kind: text(e, "kind"), text: text(e, "text") }).collect()).unwrap_or_default()
+    }
+}
+
 /// What the daemon says without being asked.
 #[derive(Debug, PartialEq)]
 pub enum Event {
@@ -138,6 +158,8 @@ pub enum Event {
     Sent { id: String, count: u32, error: String },
     /// An install from the window is over.
     SetupDone { ok: bool },
+    /// The activity has something new.
+    Activity,
 }
 
 /// What the window asks of the daemon.
@@ -152,6 +174,9 @@ pub trait Daemon: Send + Sync {
     fn set_permission(&self, id: &str, key: &str, on: bool) -> Result<()>;
     /// Installs what's missing; [Event::SetupDone] follows.
     fn install(&self) -> Result<()>;
+    /// What phones did here, newest first.
+    fn activity(&self) -> Result<Vec<ActivityEntry>>;
+    fn clear_activity(&self) -> Result<()>;
     /// Blocks until the daemon says something (an error once it's gone away).
     fn next_event(&self) -> Result<Event>;
 }
@@ -232,6 +257,15 @@ impl Daemon for DbusDaemon {
         self.call("SetPermission", &(id, key, on))
     }
 
+    fn activity(&self) -> Result<Vec<ActivityEntry>> {
+        let json: String = self.call("Activity", &())?;
+        Ok(ActivityEntry::list(&serde_json::from_str(&json)?))
+    }
+
+    fn clear_activity(&self) -> Result<()> {
+        self.call("ClearActivity", &())
+    }
+
     fn next_event(&self) -> Result<Event> {
         let mut signals = self.signals.lock().unwrap();
         runtime().block_on(async {
@@ -247,6 +281,7 @@ impl Daemon for DbusDaemon {
                         let (id, count, error): (String, u32, String) = message.body().deserialize()?;
                         return Ok(Event::Sent { id, count, error });
                     }
+                    Some("ActivityChanged") => return Ok(Event::Activity),
                     Some("SetupDone") => {
                         let (ok,): (bool,) = message.body().deserialize()?;
                         return Ok(Event::SetupDone { ok });

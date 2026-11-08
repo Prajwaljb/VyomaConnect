@@ -42,6 +42,7 @@ use vyoma_core::identity::Identity;
 use vyoma_core::lan::{Lan, Ports, Rules, UDP_PORT};
 use vyoma_core::link::packet;
 use vyoma_core::trust::TrustStore;
+use vyoma_companion::activity::Activity;
 use vyoma_companion::permits::{Permit, Permits};
 use vyoma_companion::session::{self as features, Host, Phone};
 use zbus::fdo;
@@ -112,6 +113,7 @@ struct Control {
     /// kdeconnectd runs beside us (it keeps the cable, tethering and Bluetooth).
     beside_kde: bool,
     permits: Arc<Permits>,
+    activity: Arc<Activity>,
 }
 
 /// A phone has reached this PC over the network since start: a firewall lets it through.
@@ -276,6 +278,19 @@ impl Control {
     fn stop_ringing(&self) -> fdo::Result<()> {
         self.asks.send(Ask::StopRinging).map_err(|_| fdo::Error::Failed("stopping".into()))
     }
+
+    /// What phones did here, newest first, as JSON: [{time (Unix seconds), phone (id), name, kind, text}].
+    fn activity(&self) -> String {
+        Value::Array(self.activity.recent()).to_string()
+    }
+
+    fn clear_activity(&self) {
+        self.activity.clear();
+    }
+
+    /// [activity] has something new (or was cleared).
+    #[zbus(signal)]
+    async fn activity_changed(emitter: &zbus::object_server::SignalEmitter<'_>) -> zbus::Result<()>;
 
     /// What the device may do here, as JSON: [{key, name, detail, on}], in the window's order.
     fn permissions(&self, id: String) -> String {
@@ -483,7 +498,8 @@ async fn daemon(dir: PathBuf) -> Result<()> {
     let notifier = Notifier::new(conn.clone());
     let run = commands::Commands::new(&dir);
     let permits = Arc::new(Permits::load(dir.join("permissions.json")));
-    let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone(), conn: conn.clone(), beside_kde, permits: permits.clone() };
+    let activity = Arc::new(Activity::load(dir.join("activity.json")));
+    let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone(), conn: conn.clone(), beside_kde, permits: permits.clone(), activity: activity.clone() };
     conn.object_server().at(OBJECT_PATH, control).await?;
     conn.request_name(BUS_NAME).await.context("another Vyoma desktop app is running")?;
     // Tells the GUI when what it shows changed (checked, as many places change devices).
@@ -499,6 +515,17 @@ async fn daemon(dir: PathBuf) -> Result<()> {
                     if let Ok(emitter) = zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
                         let _ = Control::changed(&emitter).await;
                     }
+                }
+            }
+        });
+    }
+    // And when the activity grew.
+    {
+        let (conn, mut ticks) = (conn.clone(), activity.subscribe());
+        tokio::spawn(async move {
+            while ticks.changed().await.is_ok() {
+                if let Ok(emitter) = zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
+                    let _ = Control::activity_changed(&emitter).await;
                 }
             }
         });
@@ -569,7 +596,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
             None
         }
     };
-    let host = Arc::new(Host { me: me.clone(), media: player, away: Arc::default(), permits });
+    let host = Arc::new(Host { me: me.clone(), media: player, away: Arc::default(), permits, activity });
 
     let mut desk = Desk {
         host,
@@ -788,6 +815,12 @@ impl Desk {
         let (done, replaces) = (batch.done, batch.notice);
         if done >= r.count {
             self.batches.remove(&r.id);
+            let text = if r.count <= 1 {
+                format!("Shared \u{201c}{}\u{201d} with this PC", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+            } else {
+                format!("Shared {} files with this PC", r.count)
+            };
+            self.host.activity.add(&r.id, &features::phone_name(&device), "share", text);
         }
         let n = if r.count <= 1 {
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -1025,7 +1058,10 @@ impl Desk {
                         }
                         if let Some(key) = body["key"].as_str() {
                             match self.run.run(key) {
-                                Some(name) => tracing::info!("{id}: ran {name}"),
+                                Some(name) => {
+                                    tracing::info!("{id}: ran {name}");
+                                    self.host.activity.add(&id, &features::phone_name(&device.name), "command", format!("Ran \u{201c}{name}\u{201d}"));
+                                }
                                 None => tracing::info!("{id}: no command {key}"),
                             }
                         }

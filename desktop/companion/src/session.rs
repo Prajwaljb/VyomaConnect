@@ -13,6 +13,7 @@ use vyoma_core::identity::Identity;
 use vyoma_core::link::{Sender, packet};
 use vyoma_core::payload;
 
+use crate::activity::{self, Activity};
 use crate::permits::{self, Permit, Permits};
 use crate::{accessory, away, bluetooth, camera, desktop, files, gamepad, media, mirror, paste, pc, pointer, screen, screenshot, specs, stats, wallpaper, webcam, xfer};
 
@@ -33,6 +34,8 @@ pub struct Host {
     pub away: Arc<away::Away>,
     /// What each phone may do here.
     pub permits: Arc<Permits>,
+    /// What phones did here.
+    pub activity: Arc<Activity>,
 }
 
 /// The phone at the other end.
@@ -82,6 +85,11 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
     if let Some(address) = bluetooth::address().await {
         let _ = sender.send(&packet("vyoma.bluetooth", json!({ "address": address }))).await;
     }
+    let log = {
+        let (activity, id, name) = (host.activity.clone(), phone_id.to_owned(), name.clone());
+        move |kind: activity::Kind, text: String| activity.add(&id, &name, kind, text)
+    };
+    let log = Arc::new(log);
     let mut switches = host.permits.subscribe();
     // A refusal goes out at most this often per feature: streams (controller states, touches) repeat.
     let mut refused: std::collections::HashMap<Permit, Instant> = std::collections::HashMap::new();
@@ -132,6 +140,7 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
             if refused.get(&permit).is_none_or(|t| now.duration_since(*t) > Duration::from_secs(2)) {
                 refused.insert(permit, now);
                 info!("{name}: {kind} refused, {} is off for this phone", permit.key());
+                log("refused", format!("Refused: \u{201c}{}\u{201d} is off", permit.name()));
                 let _ = sender.send(&permits::denied(permit, &p)).await;
             }
             continue;
@@ -147,10 +156,13 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
             "vyoma.screenshot.request" => {
                 // One at a time; repeated taps while one is in flight are ignored.
                 if shot_task.as_ref().is_none_or(|t| t.is_finished()) {
-                    let (sender, host, pinned, name) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone());
+                    let (sender, host, pinned, name, log) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone(), log.clone());
                     shot_task = Some(tokio::spawn(async move {
                         match screenshot::capture_and_send(&sender, &host.me, &pinned, &name).await {
-                            Ok(()) => info!("{name}: sent a screenshot"),
+                            Ok(()) => {
+                                info!("{name}: sent a screenshot");
+                                log("screenshot", "Took a screenshot".into());
+                            }
                             Err(e) => warn!("{name}: screenshot failed: {e:#}"),
                         }
                     }));
@@ -159,10 +171,13 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
             "vyoma.camera.request" => {
                 // One at a time, like screenshots.
                 if photo_task.as_ref().is_none_or(|t| t.is_finished()) {
-                    let (sender, host, pinned, name) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone());
+                    let (sender, host, pinned, name, log) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone(), log.clone());
                     photo_task = Some(tokio::spawn(async move {
                         match camera::capture_and_send(&sender, &host.me, &pinned, &name).await {
-                            Ok(()) => info!("{name}: sent a camera photo"),
+                            Ok(()) => {
+                                info!("{name}: sent a camera photo");
+                                log("photo", "Took a photo with the camera".into());
+                            }
                             Err(e) => warn!("{name}: camera photo failed: {e:#}"),
                         }
                     }));
@@ -170,8 +185,8 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
             }
             "vyoma.screen.request" => {
                 // A new request replaces a cast still running (the phone reopened the viewer).
-                if let Some(t) = screen_task.take() {
-                    t.abort();
+                if !stop(screen_task.take()) {
+                    log("screen", "Watched the screen".into());
                 }
                 let (sender, host, pinned, name) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone());
                 let (touches, inputs) = tokio::sync::mpsc::unbounded_channel();
@@ -185,8 +200,8 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
             }
             "vyoma.webcam" => {
                 // A new stream replaces one still running (the phone switched cameras).
-                if let Some(t) = webcam_task.take() {
-                    t.abort();
+                if !stop(webcam_task.take()) {
+                    log("webcam", "Was the webcam".into());
                 }
                 turn_tx.send_replace(p["body"]["rotate"].as_u64().unwrap_or(0) as u32);
                 let (sender, host, pinned, name, phone, turn) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone(), from, turn_tx.subscribe());
@@ -245,8 +260,8 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
                 turn_tx.send_replace(p["body"]["rotate"].as_u64().unwrap_or(0) as u32);
             }
             "vyoma.webcam.mic" => {
-                if let Some(t) = mic_task.take() {
-                    t.abort();
+                if !stop(mic_task.take()) {
+                    log("webcam", "Was the microphone".into());
                 }
                 let (sender, host, pinned, name, phone) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone(), from);
                 mic_task = Some(tokio::spawn(async move {
@@ -321,6 +336,7 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
             "vyoma.gamepad.state" => {
                 let s = gamepad::State::parse(&p["body"]);
                 if pad.as_ref().is_none_or(|(_, t)| t.is_finished()) {
+                    log("control", "Was a game controller".into());
                     let (tx, rx) = tokio::sync::mpsc::channel(64);
                     pad = Some((tx, tokio::spawn(gamepad::run(rx, sender.clone(), name.clone()))));
                 }
@@ -356,8 +372,11 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
             }
             "vyoma.pointer.request" => {
                 // A new request replaces the last (the radio dropped and the phone came back).
-                if let Some((tx, _)) = touchpad.take() {
-                    let _ = tx.try_send(pointer::Frame::Close);
+                match touchpad.take() {
+                    Some((tx, _)) => {
+                        let _ = tx.try_send(pointer::Frame::Close);
+                    }
+                    None => log("touchpad", "Was the touchpad".into()),
                 }
                 let (tx, rx) = tokio::sync::mpsc::channel(256);
                 touchpad = Some((tx.clone(), tokio::spawn(pointer::serve(sender.clone(), name.clone(), tx, rx))));
@@ -396,20 +415,26 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
                 });
             }
             "vyoma.files.get" => {
-                let (sender, host, pinned, name) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone());
+                let (sender, host, pinned, name, log) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone(), log.clone());
                 let rel = p["body"]["path"].as_str().unwrap_or_default().to_string();
                 file_tasks.spawn(async move {
                     match files::send(&sender, &host.me, &pinned, &rel, &name).await {
-                        Ok(()) => info!("{name}: sent a file"),
+                        Ok(()) => {
+                            info!("{name}: sent a file");
+                            log("files", format!("Copied \u{201c}{}\u{201d} from this PC", activity::file_name(&rel)));
+                        }
                         Err(e) => warn!("{name}: file transfer failed: {e:#}"),
                     }
                 });
             }
             "vyoma.files.put" => {
-                let (sender, host, pinned, name, phone) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone(), from);
+                let (sender, host, pinned, name, phone, log) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone(), from, log.clone());
                 file_tasks.spawn(async move {
                     match files::receive(&sender, &host.me, &pinned, phone, &p, &name).await {
-                        Ok(()) => info!("{name}: received a file"),
+                        Ok(()) => {
+                            info!("{name}: received a file");
+                            log("files", format!("Saved \u{201c}{}\u{201d} to this PC", activity::file_name(p["body"]["name"].as_str().unwrap_or("a file"))));
+                        }
                         Err(e) => warn!("{name}: upload failed: {e:#}"),
                     }
                 });
@@ -423,17 +448,43 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
                 });
             }
             "vyoma.xfer.data" => {
-                let (sender, host, pinned, name, phone) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone(), from);
+                let (sender, host, pinned, name, phone, log) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone(), from, log.clone());
                 file_tasks.spawn(async move {
                     match xfer::data(&sender, &host.me, &pinned, phone, &name, &p).await {
-                        Ok(()) => info!("{name}: received a file"),
+                        Ok(saved) => {
+                            info!("{name}: received a file");
+                            if let Some(file) = saved {
+                                log("files", format!("Sent \u{201c}{file}\u{201d} to this PC"));
+                            }
+                        }
                         Err(e) => warn!("{name}: transfer stopped: {e:#}"),
                     }
                 });
             }
-            "vyoma.xfer.end" => xfer::end(&name, &p["body"]),
+            "vyoma.xfer.end" => {
+                if let Some((folder, count)) = xfer::end(&name, &p["body"]) {
+                    log("files", format!("Sent the folder \u{201c}{folder}\u{201d} to this PC ({count} {})", if count == 1 { "file" } else { "files" }));
+                }
+            }
             "vyoma.away" => host.away.configure(phone_id, &p["body"]),
             "vyoma.pc.request" | "vyoma.pc.set" | "vyoma.pc.power" | "vyoma.pc.wake" => {
+                // Before it's done: a shut down may not leave time after.
+                match kind {
+                    "vyoma.pc.wake" => log("power", "Woke and unlocked the PC".into()),
+                    "vyoma.pc.power" => {
+                        let what = match p["body"]["action"].as_str().unwrap_or_default() {
+                            "sleep" => "Put the PC to sleep",
+                            "restart" => "Restarted the PC",
+                            "shutdown" => "Shut down the PC",
+                            "logout" => "Logged out of the PC",
+                            _ => "",
+                        };
+                        if !what.is_empty() {
+                            log("power", what.into());
+                        }
+                    }
+                    _ => {}
+                }
                 let _ = pc.send(p);
             }
             _ => {}

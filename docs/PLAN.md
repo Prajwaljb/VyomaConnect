@@ -355,7 +355,11 @@ Per-phone permissions (2026-11-08): each paired phone's page has "Allow this pho
 controller, this PC's files, camera, webcam, power), all on by default, only offs kept in `permissions.json`, dropped on
 unpair. Off refuses with `vyoma.denied` (the phone shows why where it was waiting, else a toast) and stops what was
 running. Daemon: `Permissions(id)` (JSON), `SetPermission(id, key, on)`.
-Next: the activity log; then the macOS socket behind the same `Daemon` trait.
+Activity (2026-11-08): an Activity page under This PC lists what phones did here by day (screenshots, photos, the live
+screen, files both ways, shares, power and wake, webcam, touchpad and controller, refusals, commands run), the newest
+500 kept in `activity.json` (`vyoma_companion::activity`), Clear asked in place. Daemon: `Activity()` (JSON),
+`ClearActivity()`, signal `ActivityChanged`.
+Next: the macOS socket behind the same `Daemon` trait.
 
 ### Open
 Packaging (AUR, Flatpak, Homebrew), the app's desktop name, and whether KDE users keep the option of
