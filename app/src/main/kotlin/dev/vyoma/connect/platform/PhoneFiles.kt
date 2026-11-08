@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.apache.sshd.common.file.virtualfs.VirtualFileSystemFactory
 import org.apache.sshd.common.keyprovider.KeyPairProvider
+import org.apache.sshd.common.session.Session
+import org.apache.sshd.common.session.SessionListener
 import org.apache.sshd.common.util.io.PathUtils
 import org.apache.sshd.common.util.security.SecurityUtils
 import org.apache.sshd.server.SshServer
@@ -28,11 +30,18 @@ import org.apache.sshd.sftp.server.SftpSubsystem
 import org.apache.sshd.sftp.server.SftpSubsystemConfigurator
 import org.apache.sshd.sftp.server.SftpSubsystemFactory
 import java.io.IOException
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.nio.file.Path
 import java.security.KeyPair
 import java.security.MessageDigest
 import java.security.PublicKey
 import java.security.SecureRandom
+import java.util.Collections
+import java.util.IdentityHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 /**
  * "Browse this phone from your PC": off until turned on in Settings, and then only with Android's
@@ -62,25 +71,36 @@ object PhoneFileSharing {
 /**
  * The SFTP server the PC mounts (Apache MINA SSHD, as KDE Connect's app), rooted at internal storage.
  * Its host key is our TLS key, so the PC can check it against the certificate it pinned; a PC signs
- * in with its own certificate's key, or the password we sent it over the TLS link.
+ * in with its own certificate's key, or the password we sent it over the TLS link. Connections come
+ * only from the asking PCs' link addresses (or loopback, the cable); others are dropped before the
+ * key exchange. It stops when idle: [IDLE_MINUTES] after the last session, or if none comes.
  */
 class AndroidPhoneFileServer(private val app: Context, private val hostKey: () -> KeyPair) : PhoneFileServer {
     private val lock = Any()
     private var sshd: SshServer? = null
-    /** The PCs that asked, while they're here: who may sign in by key, and who keeps it running. */
-    private val peers = mutableSetOf<PublicKey>()
+    /** The PCs that asked, while they're here, by their key's encoding: who may sign in by key, from where, and who keeps it running. */
+    private val peers = mutableMapOf<String, Peer>()
     @Volatile private var passwordHash = ByteArray(0)
+    /** Sessions let in, for the idle stop. */
+    private val sessions = Collections.newSetFromMap(IdentityHashMap<Session, Boolean>())
+    private val timer = Executors.newSingleThreadScheduledExecutor { Thread(it, "PhoneFiles idle").apply { isDaemon = true } }
+    private var idle: ScheduledFuture<*>? = null
+
+    private class Peer(val key: PublicKey?, val from: Set<InetAddress>)
+
+    private fun PublicKey?.id() = this?.encoded?.let { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) } ?: ""
 
     init {
         PhoneFileSharing.init(app)
     }
 
-    override fun start(peerKey: PublicKey?): Result<PhoneFileServer.Running> = runCatching {
+    override fun start(peerKey: PublicKey?, from: Collection<InetAddress>): Result<PhoneFileServer.Running> = runCatching {
         synchronized(lock) {
             check(PhoneFileSharing.on.value) { "Turn on \"Browse this phone from your PC\" in Vyoma's settings" }
             check(PhoneFileSharing.allowed()) { "Vyoma needs All files access on the phone to share its files" }
-            peerKey?.let(peers::add)
+            peers[peerKey.id()] = Peer(peerKey, from.toSet())
             val server = sshd?.takeIf { it.isStarted } ?: open().also { sshd = it }
+            if (sessions.isEmpty()) idleSoon()
             // A fresh one each time it's asked for: sessions already in keep going.
             val password = ByteArray(21).also(SecureRandom()::nextBytes).let { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE) }
             passwordHash = sha256(password)
@@ -90,7 +110,7 @@ class AndroidPhoneFileServer(private val app: Context, private val hostKey: () -
     }
 
     override fun stop(peerKey: PublicKey?) = synchronized(lock) {
-        peerKey?.let(peers::remove)
+        peers.remove(peerKey.id())
         if (peers.isEmpty()) close()
     }
 
@@ -101,6 +121,9 @@ class AndroidPhoneFileServer(private val app: Context, private val hostKey: () -
     }
 
     private fun close() {
+        idle?.cancel(false)
+        idle = null
+        sessions.clear()
         sshd?.let { s ->
             runCatching { s.stop(true) }
             VLog.i(TAG, "stopped")
@@ -117,8 +140,11 @@ class AndroidPhoneFileServer(private val app: Context, private val hostKey: () -
                 user == SftpPlugin.USER && MessageDigest.isEqual(sha256(password), passwordHash)
             }
             publickeyAuthenticator = PublickeyAuthenticator { user, key, _ ->
-                user == SftpPlugin.USER && synchronized(lock) { peers.any { it.encoded.contentEquals(key.encoded) } }
+                user == SftpPlugin.USER && synchronized(lock) { peers.values.any { it.key?.encoded?.contentEquals(key.encoded) == true } }
             }
+            // Password (stock KDE Connect) and key (ours) are the ways in.
+            keyboardInteractiveAuthenticator = null
+            addSessionListener(Gate())
         }
         // In KDE Connect's range, which the PC's adb forward also covers, so it works over the cable.
         for (port in PORTS) {
@@ -159,12 +185,52 @@ class AndroidPhoneFileServer(private val app: Context, private val hostKey: () -
         }
     }
 
+    /** Drops strangers on connect, and keeps the sessions let in for the idle stop. */
+    private inner class Gate : SessionListener {
+        override fun sessionCreated(session: Session) {
+            val from = (session.remoteAddress as? InetSocketAddress)?.address
+            val known = from != null && synchronized(lock) {
+                (from.isLoopbackAddress || peers.values.any { from in it.from }).also { known ->
+                    if (known) {
+                        sessions += session
+                        idle?.cancel(false)
+                        idle = null
+                    }
+                }
+            }
+            if (!known) {
+                VLog.i(TAG, "refused a connection from outside the PC's link")
+                session.close(true)
+            }
+        }
+
+        override fun sessionClosed(session: Session) = synchronized(lock) {
+            if (sessions.remove(session) && sessions.isEmpty()) idleSoon()
+        }
+    }
+
+    /** Stops the server if no session comes in [IDLE_MINUTES]. Called holding [lock]. */
+    private fun idleSoon() {
+        idle?.cancel(false)
+        val server = sshd ?: return
+        idle = timer.schedule({
+            synchronized(lock) {
+                if (sshd === server && sessions.isEmpty()) {
+                    VLog.i(TAG, "idle")
+                    peers.clear()
+                    close()
+                }
+            }
+        }, IDLE_MINUTES, TimeUnit.MINUTES)
+    }
+
     private fun sha256(s: String) = MessageDigest.getInstance("SHA-256").digest(s.toByteArray())
 
     companion object {
         private const val TAG = "PhoneFiles"
         private val PORTS = 1739..1764
         private const val STATVFS = "statvfs@openssh.com"
+        private const val IDLE_MINUTES = 2L
         private const val ST_NOSUID = 2L
 
         init {
