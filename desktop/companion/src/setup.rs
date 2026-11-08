@@ -39,6 +39,8 @@ enum Probe {
     Gst(&'static str),
     /// A kernel module that's either built in or can be loaded.
     Module(&'static str),
+    /// GVfs's SFTP, which GTK file managers browse the phone through (Dolphin uses the mount).
+    GvfsSftp,
 }
 
 struct Need {
@@ -64,6 +66,7 @@ impl Need {
             Probe::Tool(tool) => on_path(tool),
             Probe::Gst(plugin) => quiet("gst-inspect-1.0", &[plugin]),
             Probe::Module(module) => quiet("modinfo", &["-F", "filename", module]),
+            Probe::GvfsSftp => !gtk_file_manager() || gvfs_sftp(),
         }
     }
 }
@@ -85,6 +88,7 @@ const NEEDS: &[Need] = &[
     need("USB", Probe::Tool("adb"), "android-tools", "adb", "android-tools"),
     need("wallpaper and camera", Probe::Tool("ffmpeg"), "ffmpeg", "ffmpeg", "ffmpeg-free"),
     need("browsing the phone", Probe::Tool("sshfs"), "sshfs", "sshfs", "fuse-sshfs"),
+    need("browsing the phone", Probe::GvfsSftp, "gvfs", "gvfs-backends", "gvfs"),
     need("live screen", Probe::Tool("gst-launch-1.0"), "gstreamer", "gstreamer1.0-tools", "gstreamer1"),
     need("live screen", Probe::Gst("pipewire"), "gst-plugin-pipewire", "gstreamer1.0-pipewire", "pipewire-gstreamer"),
     need("live screen", Probe::Gst("coreelements"), "gstreamer", "gstreamer1.0-tools", "gstreamer1"),
@@ -98,6 +102,21 @@ const NEEDS: &[Need] = &[
     // Comes with some kernels (CachyOS); built for the others, which needs their headers.
     need("phone as webcam", Probe::Module("v4l2loopback"), "v4l2loopback-dkms", "v4l2loopback-dkms", ""),
 ];
+
+/// Whether folders open in a file manager built on GIO (Thunar, Nautilus, Nemo, Caja, PCManFM,
+/// elementary Files), which browses the phone best through GVfs: they treat a FUSE mount as a
+/// local disk and wait on it in their window. Dolphin and the rest get the mount.
+pub fn gtk_file_manager() -> bool {
+    const GIO: [&str; 6] = ["thunar", "nautilus", "nemo", "caja", "pcmanfm", "io.elementary.files"];
+    let Ok(out) = std::process::Command::new("xdg-mime").args(["query", "default", "inode/directory"]).output() else { return false };
+    let app = String::from_utf8_lossy(&out.stdout).to_lowercase();
+    GIO.iter().any(|name| app.contains(name))
+}
+
+/// Whether GVfs can do SFTP here (its mount description, wherever the distro puts the daemons).
+pub fn gvfs_sftp() -> bool {
+    std::path::Path::new("/usr/share/gvfs/mounts/sftp.mount").exists()
+}
 
 /// Set by the desktop app, which pairs by itself and so needs no kdeconnectd.
 static STANDALONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
