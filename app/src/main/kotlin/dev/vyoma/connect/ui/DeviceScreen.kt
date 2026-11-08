@@ -21,7 +21,6 @@ import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Usb
 import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.Terminal
-import androidx.compose.material.icons.rounded.DesktopWindows
 import android.widget.Toast
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -37,8 +36,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.launch
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -77,7 +74,6 @@ fun DeviceScreen(
     var confirmUnpair by rememberSaveable { mutableStateOf(false) }
     var showCommands by rememberSaveable { mutableStateOf(false) }
     val status = LocalStatus.current
-    val scope = rememberCoroutineScope()
     val companion = devices.firstOrNull { it.identity.featuresOf == deviceId && it.isPaired && it.isReachable }
     val companionOnline = companion != null
     val companionPlugin = remember(companion?.identity?.deviceId, companion?.plugins) {
@@ -129,20 +125,6 @@ fun DeviceScreen(
                         iconTint = SystemColor.CYAN.color,
                         showDivider = true,
                         onClick = { vm.ping(deviceId); status.show("Pinged: look for it on the PC") },
-                    )
-                    // Vyoma's own PC app: its window, on this phone's page (what this phone may do there, Activity, Commands).
-                    if (companionPlugin?.hasWindow == true) ListRow(
-                        title = "Open Vyoma on the PC",
-                        subtitle = "This phone's page in Vyoma's window there",
-                        icon = Icons.Rounded.DesktopWindows,
-                        iconTint = SystemColor.BLUE.color,
-                        showDivider = true,
-                        onClick = {
-                            scope.launch {
-                                if (vm.openPcWindow(deviceId)) status.show("Opened on your PC")
-                                else status.show("Couldn't reach your PC", failure = true)
-                            }
-                        },
                     )
                     ListRow(
                         title = "Commands",

@@ -61,12 +61,12 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str) -> Result<()> {
         ui.set_selected(crate::COMMANDS.into());
         crate::apply(&ui, Some(phones(scene)));
         let c = |key: &str, name: &str, command: &str, fingerprint: bool| crate::daemon::CommandData { key: key.into(), name: name.into(), command: command.into(), fingerprint };
-        let list = if scene == "commands-empty" { vec![] } else { vec![c("1", "Lock the screen", "loginctl lock-session", false), c("2", "Shut down", "systemctl poweroff", true), c("3", "Start the backup", "~/bin/backup --quiet", false)] };
+        let list = if scene == "commands-empty" { vec![] } else { vec![c("1", "Start the backup", "~/bin/backup --quiet", false), c("2", "Empty the trash", "gio trash --empty", true), c("3", "Turn the screens off", "kscreen-doctor --dpms off", false)] };
         crate::show_commands(&ui, &list);
         if scene == "commands-edit" {
             ui.set_edit_key("2".into());
-            ui.set_edit_name("Shut down".into());
-            ui.set_edit_command("systemctl poweroff".into());
+            ui.set_edit_name("Empty the trash".into());
+            ui.set_edit_command("gio trash --empty".into());
             ui.set_edit_fingerprint(true);
             ui.set_editing(true);
         }

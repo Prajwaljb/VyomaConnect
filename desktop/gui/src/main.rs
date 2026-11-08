@@ -33,14 +33,34 @@ pub const ACTIVITY: &str = "activity";
 /// And the commands'.
 pub const COMMANDS: &str = "commands";
 
-/// Ready-made commands the Commands page offers until added: (name, command line, fingerprint).
-const SUGGESTIONS: &[(&str, &str, bool)] = &[
-    ("Lock the screen", "loginctl lock-session", false),
-    ("Mute or unmute", "pactl set-sink-mute @DEFAULT_SINK@ toggle", false),
-    ("Sleep", "systemctl suspend", false),
-    ("Shut down", "systemctl poweroff", true),
-];
-
+/// Ready-made commands for the Commands page: only what the phone can't already do itself (it
+/// locks, mutes, sleeps and shuts the PC down on its own), and only what this PC has the tools for.
+/// (name, command line, ask for fingerprint).
+fn suggestions() -> &'static [(&'static str, String, bool)] {
+    static LIST: std::sync::OnceLock<Vec<(&'static str, String, bool)>> = std::sync::OnceLock::new();
+    LIST.get_or_init(|| {
+        let has = |tool: &str| std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(tool).is_file()));
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_lowercase();
+        let mut out = Vec::new();
+        if desktop.contains("kde") && has("kscreen-doctor") {
+            out.push(("Turn the screens off", "kscreen-doctor --dpms off".to_owned(), false));
+        } else if desktop.contains("gnome") && has("busctl") {
+            out.push(("Turn the screens off", "busctl --user call org.gnome.Shell /org/gnome/ScreenSaver org.gnome.ScreenSaver SetActive b true".to_owned(), false));
+        }
+        if has("powerprofilesctl") {
+            out.push(("Power saver", "powerprofilesctl set power-saver".to_owned(), false));
+            out.push(("Balanced power", "powerprofilesctl set balanced".to_owned(), false));
+            out.push(("Full performance", "powerprofilesctl set performance".to_owned(), false));
+        }
+        if has("gio") {
+            out.push(("Empty the trash", "gio trash --empty".to_owned(), true));
+        }
+        if desktop.contains("kde") && has("systemctl") {
+            out.push(("Restart the panel and desktop", "systemctl --user restart plasma-plasmashell".to_owned(), false));
+        }
+        out
+    })
+}
 thread_local! {
     /// The devices last read, on the UI thread.
     static SHOWN: RefCell<Vec<PhoneData>> = const { RefCell::new(Vec::new()) };
@@ -99,10 +119,10 @@ fn read_commands(ui: &slint::Weak<MainWindow>) {
 /// The commands, and the suggestions whose command line isn't among them yet.
 pub fn show_commands(ui: &MainWindow, list: &[CommandData]) {
     let to = |c: &CommandData| Command { key: c.key.clone().into(), name: c.name.clone().into(), command: c.command.clone().into(), fingerprint: c.fingerprint };
-    let suggestions: Vec<Command> = SUGGESTIONS
+    let suggestions: Vec<Command> = suggestions()
         .iter()
-        .filter(|(_, line, _)| !list.iter().any(|c| c.command.trim() == *line))
-        .map(|(name, line, fingerprint)| Command { key: "".into(), name: (*name).into(), command: (*line).into(), fingerprint: *fingerprint })
+        .filter(|(_, line, _)| !list.iter().any(|c| c.command.trim() == line.as_str()))
+        .map(|(name, line, fingerprint)| Command { key: "".into(), name: (*name).into(), command: line.as_str().into(), fingerprint: *fingerprint })
         .collect();
     ui.set_commands(ModelRc::new(VecModel::from(list.iter().map(to).collect::<Vec<_>>())));
     ui.set_suggestions(ModelRc::new(VecModel::from(suggestions)));

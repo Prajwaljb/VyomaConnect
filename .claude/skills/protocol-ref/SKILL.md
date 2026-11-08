@@ -79,12 +79,6 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
   is the caller, or the app's name when it doesn't say, so stock desktops still read sensibly).
 - `vyoma.denied` (PC → phone, `feature`, `name`, `request`, `path`/`key`): that request's feature is off for this phone
   in the desktop app (`desktop/companion/src/permits.rs`); an empty `request` means a running one was stopped.
-- `vyoma.window {page}` (phone → PC, no reply): open Vyoma's window there (`desktop/daemon/src/window.rs`: the running
-  window's `dev.vyoma.Window1.Show`, else `systemd-run --user vyoma --page ..`). `page`: "phone" (the sender's own page),
-  "commands", "this-pc", "activity" or ""; anything else is ignored, and only paired phones are heard. Only Vyoma's PC app
-  advertises it (the companion has no window), so the phone offers it on `WINDOW in incomingCapabilities`
-  (`CompanionPlugin.hasWindow`): setup's "Vyoma on your PC" step and the PC's page. Stock `runcommand.request {setup}`
-  opens the Commands page the same way.
 - Real-time streams (gamepad, video) don't go through the JSON link: negotiate over a vyoma packet, then use a
   dedicated socket (UDP with AEAD for input, TLS/TCP for video).
 

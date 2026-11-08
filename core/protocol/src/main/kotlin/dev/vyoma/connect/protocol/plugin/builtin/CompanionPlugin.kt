@@ -449,12 +449,6 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     /** Turns the PC's screens back on and unlocks it (the stock unlock left a dark screen dark). */
     suspend fun wake() = ctx.send(packet(PC_WAKE))
 
-    /** Whether the PC has a window to open: Vyoma's own PC app does, a companion beside KDE Connect doesn't. */
-    val hasWindow: Boolean get() = WINDOW in ctx.device.identity.incomingCapabilities
-
-    /** Opens Vyoma's window on the PC: [page] "phone" (this phone's page), "commands", "this-pc", "activity" or "". */
-    suspend fun openWindow(page: String = "phone") = ctx.send(packet(WINDOW) { put("page", page) })
-
     private var pendingPaste: CompletableDeferred<String?>? = null
     private val _typingFailed = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
     /** Text sent to the live screen didn't all arrive. */
@@ -1350,7 +1344,6 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val PC_POWER = "vyoma.pc.power"
         const val PC_POWERED = "vyoma.pc.powered"
         const val PC_WAKE = "vyoma.pc.wake"
-        const val WINDOW = "vyoma.window"
         const val AWAY = "vyoma.away"
         const val GAMEPAD_STATE = "vyoma.gamepad.state"
         const val GAMEPAD_CLOSE = "vyoma.gamepad.close"
@@ -1401,7 +1394,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
             incoming = setOf(POINTER_READY, BLUETOOTH, PASTE_READY, STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, SPECS, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED, WEBCAM_STATE, MIRROR_INPUT, MIRROR_STATE, DENIED),
-            outgoing = setOf(POINTER_REQUEST, POINTER_CLOSE, PASTE, STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, SCREEN_INPUT, SCREEN_TOUCH, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, WINDOW, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, SPECS_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, USB_ACCESSORY, WEBCAM, WEBCAM_MIC, WEBCAM_TURN, MIRROR, MIRROR_AUDIO, MIRROR_COPY, MIRROR_VOLUME),
+            outgoing = setOf(POINTER_REQUEST, POINTER_CLOSE, PASTE, STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, SCREEN_INPUT, SCREEN_TOUCH, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, SPECS_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, USB_ACCESSORY, WEBCAM, WEBCAM_MIC, WEBCAM_TURN, MIRROR, MIRROR_AUDIO, MIRROR_COPY, MIRROR_VOLUME),
         ) { CompanionPlugin(it, sink) }
     }
 }
