@@ -234,7 +234,7 @@ class GamepadActivity : ComponentActivity() {
                 val profile = all.firstOrNull { it.id == currentId } ?: all.first()
                 val padName = if (profile.kind == PadKind.DUALSENSE) "DualSense" else "Xbox controller"
                 val status = when {
-                    plugin == null -> "Needs Vyoma's companion running on the PC"
+                    plugin == null -> "Needs Vyoma running on the PC"
                     error != null -> error
                     else -> "$padName on ${pcName ?: "the PC"}" + (when (route) {
                         GamepadRoute.USB -> " · cable"

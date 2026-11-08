@@ -81,24 +81,24 @@ const NEEDS: &[Need] = &[
     need("pairing", Probe::Tool("kdeconnect-cli"), "kdeconnect", "kdeconnect", "kde-connect"),
     need("sound", Probe::Tool("pactl"), "libpulse", "pulseaudio-utils", "pulseaudio-utils"),
     need("volume", Probe::Tool("wpctl"), "wireplumber", "wireplumber", "wireplumber"),
-    need("phone screen sound", Probe::Tool("pw-dump"), "pipewire", "pipewire-bin", "pipewire-utils"),
+    need("phone on PC sound", Probe::Tool("pw-dump"), "pipewire", "pipewire-bin", "pipewire-utils"),
     need("clipboard", Probe::Tool("wl-copy"), "wl-clipboard", "wl-clipboard", "wl-clipboard"),
     need("notifications", Probe::Tool("notify-send"), "libnotify", "libnotify-bin", "libnotify"),
     need("opening files", Probe::Tool("xdg-open"), "xdg-utils", "xdg-utils", "xdg-utils"),
     need("USB", Probe::Tool("adb"), "android-tools", "adb", "android-tools"),
     need("wallpaper and camera", Probe::Tool("ffmpeg"), "ffmpeg", "ffmpeg", "ffmpeg-free"),
-    need("browsing the phone", Probe::Tool("sshfs"), "sshfs", "sshfs", "fuse-sshfs"),
-    need("browsing the phone", Probe::GvfsSftp, "gvfs", "gvfs-backends", "gvfs"),
-    need("live screen", Probe::Tool("gst-launch-1.0"), "gstreamer", "gstreamer1.0-tools", "gstreamer1"),
-    need("live screen", Probe::Gst("pipewire"), "gst-plugin-pipewire", "gstreamer1.0-pipewire", "pipewire-gstreamer"),
-    need("live screen", Probe::Gst("coreelements"), "gstreamer", "gstreamer1.0-tools", "gstreamer1"),
-    need("live screen", Probe::Gst("videoconvertscale"), "gst-plugins-base", "gstreamer1.0-plugins-base", "gstreamer1-plugins-base"),
-    need("phone screen", Probe::Gst("opengl"), "gst-plugins-base", "gstreamer1.0-gl", "gstreamer1-plugins-base"),
+    need("phone files", Probe::Tool("sshfs"), "sshfs", "sshfs", "fuse-sshfs"),
+    need("phone files", Probe::GvfsSftp, "gvfs", "gvfs-backends", "gvfs"),
+    need("PC screen on the phone", Probe::Tool("gst-launch-1.0"), "gstreamer", "gstreamer1.0-tools", "gstreamer1"),
+    need("PC screen on the phone", Probe::Gst("pipewire"), "gst-plugin-pipewire", "gstreamer1.0-pipewire", "pipewire-gstreamer"),
+    need("PC screen on the phone", Probe::Gst("coreelements"), "gstreamer", "gstreamer1.0-tools", "gstreamer1"),
+    need("PC screen on the phone", Probe::Gst("videoconvertscale"), "gst-plugins-base", "gstreamer1.0-plugins-base", "gstreamer1-plugins-base"),
+    need("phone on PC", Probe::Gst("opengl"), "gst-plugins-base", "gstreamer1.0-gl", "gstreamer1-plugins-base"),
     need("video", Probe::Gst("videoparsersbad"), "gst-plugins-bad", "gstreamer1.0-plugins-bad", "gstreamer1-plugins-bad-free"),
     need("video", Probe::Gst("va"), "gst-plugin-va", "gstreamer1.0-plugins-bad", "gstreamer1-plugins-bad-free"),
-    need("phone screen", Probe::Gst("libav"), "gst-libav", "gstreamer1.0-libav", "gstreamer1-plugin-libav"),
-    need("phone screen sound", Probe::Gst("opus"), "gst-plugins-base", "gstreamer1.0-plugins-base", "gstreamer1-plugins-base"),
-    need("phone screen sound", Probe::Gst("app"), "gst-plugins-base", "gstreamer1.0-plugins-base", "gstreamer1-plugins-base"),
+    need("phone on PC", Probe::Gst("libav"), "gst-libav", "gstreamer1.0-libav", "gstreamer1-plugin-libav"),
+    need("phone on PC sound", Probe::Gst("opus"), "gst-plugins-base", "gstreamer1.0-plugins-base", "gstreamer1-plugins-base"),
+    need("phone on PC sound", Probe::Gst("app"), "gst-plugins-base", "gstreamer1.0-plugins-base", "gstreamer1-plugins-base"),
     // Comes with some kernels (CachyOS); built for the others, which needs their headers.
     need("phone as webcam", Probe::Module("v4l2loopback"), "v4l2loopback-dkms", "v4l2loopback-dkms", ""),
 ];
@@ -266,7 +266,7 @@ pub fn report() -> Report {
 fn notes() -> Vec<String> {
     let mut out = Vec::new();
     if on_path("gst-inspect-1.0") {
-        for (element, what) in [("vah264enc", "Live screen"), ("vah264dec", "Phone as webcam")] {
+        for (element, what) in [("vah264enc", "PC screen on the phone"), ("vah264dec", "Phone as webcam")] {
             if !quiet("gst-inspect-1.0", &["--exists", element]) {
                 out.push(format!("{what} needs {element}, which comes from your graphics card's VA-API driver."));
             }

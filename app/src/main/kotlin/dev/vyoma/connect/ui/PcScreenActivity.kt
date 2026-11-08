@@ -231,7 +231,7 @@ class PcScreenActivity : ComponentActivity() {
         val found = findCompanion()
         plugin = found
         if (found == null) {
-            phase.value = Phase.Failed("Vyoma's companion isn't connected on the PC")
+            phase.value = Phase.Failed("Vyoma isn't connected on the PC")
             return
         }
         phase.value = Phase.Connecting

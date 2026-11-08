@@ -223,7 +223,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun continueOnPhone(pcId: String) = viewModelScope.launch {
         val app = getApplication<android.app.Application>()
-        val plugin = companionOf(pcId) ?: return@launch toast(app, "Vyoma's companion isn't running on the PC")
+        val plugin = companionOf(pcId) ?: return@launch toast(app, "Vyoma isn't running on the PC")
         plugin.handoff().fold(
             onSuccess = { h ->
                 if (!LinkService.looksLikeUrl(h.url)) return@launch toast(app, "No app here can open that link")

@@ -109,9 +109,9 @@ private val corePermissions = buildList {
 private fun Context.granted(permission: String) =
     ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
-/** Where the companion's install steps are, for the phone to open on the PC. */
-internal const val COMPANION_URL = "https://github.com/Prajwaljb/VyomaConnect/tree/main/desktop/companion#install"
-internal const val COMPANION_INSTALL = "git clone https://github.com/Prajwaljb/VyomaConnect && VyomaConnect/desktop/companion/install.sh"
+/** Where Vyoma's PC app is explained and installed from, for the phone to open on the PC. */
+internal const val PC_APP_URL = "https://github.com/Prajwaljb/VyomaConnect/tree/main/desktop/daemon#install"
+internal const val PC_APP_INSTALL = "git clone https://github.com/Prajwaljb/VyomaConnect && VyomaConnect/desktop/daemon/install.sh"
 
 /**
  * First run: the show ([WelcomeShow]), then setup one step at a time on the same picture. Each step
@@ -196,7 +196,8 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
     var demoPaired by rememberSaveable { mutableStateOf(!BuildConfig.DEMO) }
     val realPaired = devices.filter { it.isPaired && !it.isCompanion }
     val paired = if (demoPaired) realPaired else emptyList()
-    val companionOn = demoPaired && devices.any { it.isCompanion && it.isReachable }
+    // Vyoma on the PC: its own app (the paired PC itself has Vyoma's features), or the companion beside KDE Connect.
+    val companionOn = demoPaired && devices.any { it.identity.featuresOf != null && it.isPaired && it.isReachable }
     val available = (if (demoPaired) emptyList() else realPaired) + devices.filter { !it.isPaired && !it.isCompanion && it.isReachable && it !in pairing }
 
     // The first thing left to do is the one that's open; a finger can open another.
@@ -236,7 +237,7 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
                     when (current) {
                         0 -> "Let's find your PC. This takes a minute."
                         1 -> "Step 2 of 4: pair with your PC"
-                        2 -> "Paired. Your PC can do more with the companion."
+                        2 -> "Paired. Vyoma on your PC does much more."
                         else -> "Nearly there"
                     },
                     style = MaterialTheme.typography.bodyLarge,
@@ -281,13 +282,13 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
                     }
                     pairing.isEmpty() -> {
                         SearchingCard(vm)
-                        Tip("Nothing on the PC yet? Install KDE Connect from its app store (GSConnect on GNOME), then open it.")
+                        Tip("Nothing on the PC yet? Get Vyoma for it from github.com/Prajwaljb/VyomaConnect, or KDE Connect from its app store (GSConnect on GNOME).")
                     }
                 }
             }
         }
         item(key = "companion") {
-            SetupCard(backdrop, 3, "Add the companion on your PC", if (companionOn) "Connected" else "Optional, and worth it", companionOn, opened == 2, { opened = 2 }) {
+            SetupCard(backdrop, 3, "Vyoma on your PC", if (companionOn) "Connected" else "Optional, and worth it", companionOn, opened == 2, { opened = 2 }) {
                 CompanionSetup(vm, companionOn, paired.firstOrNull()?.identity?.deviceId)
             }
         }
@@ -389,31 +390,31 @@ private fun Tip(text: String) {
     }
 }
 
-/** What the companion adds, and how to get it: from here the phone can open the page on the PC itself. */
+/** What Vyoma's PC app adds, and how to get it: from here the phone can open its page on the PC itself. */
 @Composable
 internal fun CompanionSetup(vm: AppViewModel, online: Boolean, pcId: String?) {
     val context = LocalContext.current
     val status = LocalStatus.current
     val scope = rememberCoroutineScope()
     if (online) {
-        Tip("It's running. Screen, camera, stats and files are on Home now.")
+        Tip("It's running. Screen, camera, stats and files are on Home now, and Vyoma's window on the PC shows this phone.")
         return
     }
     Text(
-        "A small app for your PC that adds what KDE Connect can't: its live screen, this phone as its webcam and game controller, its stats and power, and files both ways.",
+        "Vyoma for your PC, in place of KDE Connect: its screen on this phone, this phone as its webcam and game controller, its stats and power, files both ways, and a window to run it all. It keeps this pairing.",
         style = MaterialTheme.typography.bodyMedium,
     )
     Text("Run this on your PC. It installs what it needs and starts by itself:", style = MaterialTheme.typography.bodyMedium)
-    Text(COMPANION_INSTALL, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+    Text(PC_APP_INSTALL, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (pcId != null) PillButton("Open on PC", onClick = {
             scope.launch {
-                if (vm.openOnPc(pcId, COMPANION_URL)) status.show("Opened on your PC", haptic = false)
+                if (vm.openOnPc(pcId, PC_APP_URL)) status.show("Opened on your PC", haptic = false)
                 else status.show("Couldn't reach your PC", failure = true)
             }
         }, prominent = false)
         PillButton("Copy", onClick = {
-            context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("install", COMPANION_INSTALL))
+            context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("install", PC_APP_INSTALL))
             status.show("Copied", haptic = false)
         }, prominent = false)
     }

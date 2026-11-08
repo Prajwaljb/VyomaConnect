@@ -180,7 +180,7 @@ class MirrorActivity : ComponentActivity() {
 
 private fun subtitle(s: PhoneMirror.Status): String = when {
     !s.on -> "Off"
-    s.pc == null -> "Waiting for Vyoma's companion on the PC"
+    s.pc == null -> "Waiting for Vyoma on the PC"
     s.open -> "Showing on ${s.pc}"
     else -> "Opening on ${s.pc}…"
 }

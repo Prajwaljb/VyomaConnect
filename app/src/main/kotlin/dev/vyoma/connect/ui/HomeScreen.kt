@@ -526,7 +526,7 @@ private fun CompanionPromoCard(vm: AppViewModel, pcId: String?, onDismiss: () ->
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            "The Vyoma companion on your PC adds its live screen, camera, files and load to this page.",
+            "Vyoma on your PC adds its screen, camera, files and load to this page.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -538,7 +538,7 @@ private fun CompanionPromoCard(vm: AppViewModel, pcId: String?, onDismiss: () ->
     }
     if (showing) dev.vyoma.connect.designsystem.GlassDialog(
         onDismissRequest = { showing = false },
-        title = { Text("The Vyoma companion") },
+        title = { Text("Vyoma on your PC") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { CompanionSetup(vm, online = false, pcId) } },
         confirmButton = { dev.vyoma.connect.designsystem.DialogButton(onClick = { showing = false }) { Text("Close") } },
     )

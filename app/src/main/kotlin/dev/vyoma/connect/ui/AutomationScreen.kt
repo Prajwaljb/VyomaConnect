@@ -395,9 +395,9 @@ fun RuleEditorScreen(vm: AppViewModel, ruleId: String?, onBack: () -> Unit) {
         if (away) {
             item(key = "away-note") {
                 Text(
-                    "Your phone can't reach the PC once it's gone, so the PC does these itself through the companion: " +
+                    "Your phone can't reach the PC once it's gone, so the PC does these itself, through Vyoma on it: " +
                         "lock, pause and mute. It waits until it hasn't heard from the phone for about half a minute." +
-                        if (!vm.hasCompanion()) " Install the companion on your PC for these to work." else "",
+                        if (!vm.hasCompanion()) " Install Vyoma on your PC for these to work." else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 20.dp),
@@ -613,7 +613,7 @@ private fun PickerDialog(vm: AppViewModel, slot: Slot, away: Boolean, onDismiss:
                         }
                         ListRow(
                             title = label,
-                            subtitle = if (needsCompanion) "Needs the companion on your PC" else null,
+                            subtitle = if (needsCompanion) "Needs Vyoma on your PC" else null,
                             icon = look.icon,
                             iconTint = look.color.color,
                             horizontalPadding = 0.dp,

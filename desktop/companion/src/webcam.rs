@@ -47,7 +47,14 @@ const OPEN_TRIES: u32 = 10;
 const OPEN_WAIT: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// What the user is told when the loopback device is missing.
-const SETUP: &str = "The PC needs a one-time setup for the phone camera: run vyoma-companion --setup on it";
+/// What the phone shows when the camera module is missing ("one-time setup" is what it looks for).
+fn setup_needed() -> &'static str {
+    if crate::setup::is_standalone() {
+        "The PC needs a one-time setup for the phone camera: click Install on This PC in Vyoma's window there"
+    } else {
+        "The PC needs a one-time setup for the phone camera: click Install in Vyoma's notification there, or run vyoma-companion --setup"
+    }
+}
 
 // VIDIOC_S_FMT = _IOWR('V', 5, struct v4l2_format), 208 bytes on 64-bit.
 const VIDIOC_S_FMT: libc::c_ulong = 0xc0d0_5605;
@@ -157,7 +164,7 @@ pub async fn camera(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr
     let w = body["w"].as_u64().unwrap_or(1280).clamp(320, 1920) as u32 & !1;
     let h = body["h"].as_u64().unwrap_or(720).clamp(240, 1080) as u32 & !1;
     let Some(path) = device() else {
-        state(sender, json!({ "error": SETUP })).await;
+        state(sender, json!({ "error": setup_needed() })).await;
         bail!("no {LABEL} device (v4l2loopback not loaded)");
     };
     // A stream replacing the last one: the old one lets go of the device a moment later.

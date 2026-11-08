@@ -466,7 +466,7 @@ private fun AccentPicker(chosen: Palette, onPick: (Palette) -> Unit) {
     if (chosen == Palette.PC) Spacer(Modifier.height(2.dp))
     LiquidReveal(chosen == Palette.PC) {
         Text(
-            if (AppCanvas.wallpaper == null) "Needs the companion on your PC" else "Colours and light follow your desktop",
+            if (AppCanvas.wallpaper == null) "Needs Vyoma on your PC" else "Colours and light follow your desktop",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 20.dp),
@@ -611,7 +611,7 @@ internal fun ClipboardSetupDialog(vm: AppViewModel, onDismiss: () -> Unit) {
                     SetupStep(3, "Click Allow on your PC", "In the notification Vyoma shows, or on this phone's page in Vyoma's window. This turns on by itself after that.", done = false)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        if (manual) "Hide the command" else "No companion on the PC?",
+                        if (manual) "Hide the command" else "No Vyoma on the PC?",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(vertical = 8.dp).pressable(haptic = Haptic.Tap) { manual = !manual },
@@ -679,7 +679,7 @@ internal fun UsbHelpDialog(onDismiss: () -> Unit) {
                 Spacer(Modifier.height(12.dp))
                 Text("USB debugging", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "For developers who keep it on anyway. With the Vyoma companion on your PC it connects by itself when you plug in; without it, run this on the PC once per plug-in:",
+                    "For developers who keep it on anyway. With Vyoma on your PC it connects by itself when you plug in; without it, run this on the PC once per plug-in:",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(6.dp))
@@ -726,7 +726,7 @@ private fun SteadierRow(resumeTick: Int) {
     val waiting = when (ready) {
         BluetoothFallback.Readiness.NO_ADAPTER -> "This phone has no Bluetooth."
         BluetoothFallback.Readiness.RADIO_OFF -> "Turn on Bluetooth to use it."
-        BluetoothFallback.Readiness.PC_UNKNOWN -> "Connect once with the companion on your PC, so Vyoma can find it."
+        BluetoothFallback.Readiness.PC_UNKNOWN -> "Connect once with Vyoma on your PC, so this phone can find it over Bluetooth."
         BluetoothFallback.Readiness.NOT_PAIRED -> "Pair this phone with your PC in Bluetooth settings."
         else -> null
     }
@@ -757,7 +757,7 @@ private fun SteadierRow(resumeTick: Int) {
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
-                    "Needs the companion on your PC, which asks once to allow control of the cursor.",
+                    "Needs Vyoma on your PC, which asks once to allow control of the cursor.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

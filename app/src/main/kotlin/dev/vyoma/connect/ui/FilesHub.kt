@@ -135,7 +135,7 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
                 SectionCard(Modifier.animateItem()) {
                     ListRow(
                         title = "Browse PC files",
-                        subtitle = if (pc == null) "Connect to your PC first" else "Needs the Vyoma companion on the PC",
+                        subtitle = if (pc == null) "Connect to your PC first" else "Needs Vyoma on the PC",
                         icon = Icons.Rounded.FolderOff,
                         iconTint = SystemColor.GRAY.color,
                     )
