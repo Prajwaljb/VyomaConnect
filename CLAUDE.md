@@ -17,6 +17,7 @@ scripts/deploy.sh debug          # install + launch on phone
                                  # Settings > Generate log writes perf/device diagnostics to Downloads (app/.../demo/)
 (cd desktop/companion && cargo build --release)   # Linux companion (Rust); run inside it for its .cargo linker fix
 (cd desktop/companion && cargo test --release -p vyoma-core && cargo test --release)   # core + companion tests
+(cd desktop/gui && cargo build --release && ./target/release/vyoma)   # the desktop window (talks to vyoma-desktop)
 (cd desktop/daemon && cargo build --release && VYOMA_DIR=<scratch dir> VYOMA_ALLOW=<ids> VYOMA_ANNOUNCE=<IPs> ./target/release/vyoma-desktop)
                                  # standalone desktop app (in development, not installed); drive it with
                                  # busctl --user call dev.vyoma.Desktop /dev/vyoma/Desktop dev.vyoma.Desktop1 Devices|Pair|Accept|Reject|Unpair|Refresh|Browse.
@@ -37,11 +38,16 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `desktop/daemon` (`vyoma-desktop`): the standalone desktop app growing on that core (`docs/PLAN.md` section 10): pairing
   prompt as a freedesktop notification with Accept/Reject, `dev.vyoma.Desktop1` D-Bus control for the future GUI;
   stock plugins in `plugins.rs`, `clipboard.rs` (wl-clipboard), `share.rs` (files land in XDG Downloads), `media.rs`
-  (MPRIS), `volume.rs` (pactl), `commands.rs`, `notifications.rs`, `telephony.rs` (calls: notification with Mute, music paused for the call), `presenter.rs` (the pointer dot: a layer-shell overlay, smithay-client-toolkit), `phonefiles.rs` (D-Bus `Browse`: the phone's SFTP mounted with sshfs under $XDG_RUNTIME_DIR/vyoma, host key checked against its cert; sshfs runs as a transient `vyoma-files-<id>` user unit, as the app's own unit has NoNewPrivileges), `input.rs` (RemoteDesktop portal). `VYOMA_PLAYERS=<bus suffix>` limits it to a test player.
+  (MPRIS), `volume.rs` (pactl), `commands.rs`, `notifications.rs`, `telephony.rs` (calls: notification with Mute, music paused for the call), `presenter.rs` (the pointer dot: a layer-shell overlay, smithay-client-toolkit), `phonefiles.rs` (D-Bus `Browse`: the phone's SFTP mounted with sshfs under $XDG_RUNTIME_DIR/vyoma, host key checked against its cert; sshfs runs as a transient `vyoma-files-<id>` user unit, as the app's own unit has NoNewPrivileges; over the cable through an adb forward on a Unix socket, which the binary's own `--relay` mode gives ssh as its ProxyCommand: adb's TCP listener keeps Nagle on, ~50 ms an open; the one-time password goes by SSH_ASKPASS, never sshfs's password_stdin, which gives up after 60 s), `input.rs` (RemoteDesktop portal). `VYOMA_PLAYERS=<bus suffix>` limits it to a test player.
   Own identity in `~/.config/vyoma-desktop`, separate from the companion's (`--import-kde` takes over kdeconnectd's instead).
   Every `vyoma.*` feature is the companion's own code: each paired phone gets a `vyoma_companion::session::serve`.
   The phone treats it as its own companion (`DeviceIdentity.featuresOf`). The cable, tethering, Bluetooth and the setup
   offer start only while kdeconnectd isn't running. `install.sh` takes over from KDE Connect (`--undo` gives it back): never run it unasked.
+- `desktop/gui` (`vyoma-gui`, binary `vyoma`): the desktop app's window, Slint (GPL-3.0 option) in the phone app's look
+  (`ui/app.slint`: flat grouped cards, Inter, PC-blue accent). It only shows and asks: `src/daemon.rs` is the `Daemon`
+  trait (D-Bus `dev.vyoma.Desktop1` today, a local socket on macOS later), rereading on the daemon's `Changed` signal.
+  `vyoma --snapshot out.png [--dark] [--scene phones|pairing|nearby|unpair|notice|empty|down]` renders it offscreen
+  with made-up phones: check the look with that, never by capturing the screen.
 - `desktop/companion`: lib + bin (the session loop is `session.rs`, shared with the desktop app); the bin is the Rust daemon beside stock kdeconnectd, built on `vyoma-core`. Dials only phones kdeconnectd trusts (mDNS), pairs with
   no prompt via `CompanionProof` (signed with kdeconnectd's key; phone verifies against the pinned PC cert), speaks
   `vyoma.*` packets. Phone folds it into its PC (`DeviceIdentity.companionOf`, `DeviceState.isCompanion`).

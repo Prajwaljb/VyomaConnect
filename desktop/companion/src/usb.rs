@@ -124,6 +124,31 @@ pub fn cable_ports() -> Vec<u16> {
     CABLE.lock().unwrap().iter().map(|(_, p)| *p).collect()
 }
 
+/// Makes the Unix socket [at] reach the plugged-in phone's [port] (the first phone, as the TCP
+/// forwards). Unlike adb's TCP listener, which keeps Nagle's algorithm on and so held a second
+/// small reply for the PC's delayed ack (~40 ms each SFTP open), a Unix socket sends at once; and
+/// in $XDG_RUNTIME_DIR only this user can reach it.
+pub async fn forward_unix(at: &std::path::Path, port: u16) -> Result<()> {
+    let adb = find_adb().context("adb isn't installed")?;
+    let serial = CABLE.lock().unwrap().first().map(|(s, _)| s.clone()).context("no phone on the cable")?;
+    let local = format!("localfilesystem:{}", at.display());
+    // One left by an earlier run would keep its listener (on a file deleted below) and take the
+    // new forward's place, so nothing would answer at [at].
+    run(&adb, &serial, &["forward", "--remove", &local]).await;
+    let _ = std::fs::remove_file(at);
+    run(&adb, &serial, &["forward", &local, &format!("tcp:{port}")]).await.context("adb couldn't forward to the phone")?;
+    Ok(())
+}
+
+/// Takes down a [forward_unix] (gone anyway once the phone's unplugged).
+pub async fn unforward_unix(at: &std::path::Path) {
+    let serial = CABLE.lock().unwrap().first().map(|(s, _)| s.clone());
+    if let (Some(adb), Some(serial)) = (find_adb(), serial) {
+        run(&adb, &serial, &["forward", "--remove", &format!("localfilesystem:{}", at.display())]).await;
+    }
+    let _ = std::fs::remove_file(at);
+}
+
 /// Re-creates the tunnel on any plugged-in Vyoma phone that has lost it.
 async fn recheck_tunnels(adb: &PathBuf) {
     let devices = list_devices(adb).await;
