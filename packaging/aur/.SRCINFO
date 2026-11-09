@@ -1,6 +1,6 @@
 pkgbase = vyoma
 	pkgdesc = Your Android phone and your Linux PC, working as one: files, clipboard, calls, screens and remote control (KDE Connect protocol)
-	pkgver = 0.4.0
+	pkgver = 0.4.1
 	pkgrel = 1
 	url = https://github.com/Prajwaljb/VyomaConnect
 	install = vyoma.install
@@ -39,7 +39,7 @@ pkgbase = vyoma
 	optdepends = thunar: Send to your phone from Thunar
 	optdepends = firewalld: opened for phones automatically when it runs
 	options = !lto
-	source = vyoma-0.4.0.tar.gz::https://github.com/Prajwaljb/VyomaConnect/archive/refs/tags/v0.4.0.tar.gz
-	sha256sums = f442872fc1250a9ca68ddeda2ccf1897cb25c582542e93914292c737ab2b91ee
+	source = vyoma-0.4.1.tar.gz::https://github.com/Prajwaljb/VyomaConnect/archive/refs/tags/v0.4.1.tar.gz
+	sha256sums = d33d438911350aa9da7d5195f371c576e4d1a2e9fc541f069b6d725541d589d2
 
 pkgname = vyoma
