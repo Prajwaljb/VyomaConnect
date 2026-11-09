@@ -1,0 +1,13 @@
+post_install() {
+    echo ">>> To finish, run this once as your user (not root):"
+    echo ">>>     /usr/share/vyoma/install.sh"
+    echo ">>> Vyoma takes over from KDE Connect and keeps its pairings; '/usr/share/vyoma/install.sh --undo' gives it back."
+}
+
+post_upgrade() {
+    echo ">>> Restart Vyoma to use the new version: systemctl --user restart vyoma-desktop"
+}
+
+pre_remove() {
+    echo ">>> Before removing, run '/usr/share/vyoma/install.sh --undo' as your user to give the PC back to KDE Connect."
+}

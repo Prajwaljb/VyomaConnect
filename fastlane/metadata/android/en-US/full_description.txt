@@ -1,0 +1,39 @@
+<p><b>Your Android phone and your Linux PC, working as one.</b> Files, clipboard, calls, notifications, screens and remote control, all over your own network. Open source, no account, no cloud.</p>
+
+<p>Vyoma speaks the KDE Connect protocol. Pair it with Vyoma's PC app for everything below, or with KDE Connect or GSConnect for the essentials.</p>
+
+<p><b>Files, both ways</b></p>
+<ul>
+<li>Send files and whole folders in either direction, resumable over a dropped connection</li>
+<li>Browse your PC's files from the phone, and the phone from your PC's file manager</li>
+<li>Right-click "Send to your phone" on the PC</li>
+</ul>
+
+<p><b>One clipboard</b>, with history, even while the app is closed.</p>
+
+<p><b>Calls and notifications on the PC</b>, with replies and a Mute button for calls.</p>
+
+<p><b>Your PC in your pocket</b></p>
+<ul>
+<li>See and control its screen, take screenshots, take a photo with its camera</li>
+<li>Live CPU, GPU, memory and temperature; brightness, per-app volume and media</li>
+<li>Lock, sleep, restart or shut down; continue the video it's playing on the phone</li>
+</ul>
+
+<p><b>Your phone as a PC accessory</b></p>
+<ul>
+<li>Touchpad and keyboard with gestures, presenter remote with a laser pointer</li>
+<li>Webcam and microphone for any video call app</li>
+<li>Game controller with gyro aiming and a layout per game</li>
+<li>The phone's screen in a window on the PC, which you can click and type in</li>
+</ul>
+
+<p><b>Commands and rules</b>: run your own PC commands, behind a fingerprint for the sensitive ones, and let rules do the routine, like locking the PC when you walk away.</p>
+
+<p><b>Widgets and Quick Settings tiles</b> for everything you use most.</p>
+
+<p><b>Always connected</b>: Wi-Fi, USB cable, USB tethering, Bluetooth, or an IP address for Tailscale and other VPNs.</p>
+
+<p><b>Private by design</b>: phone and PC talk directly and encrypted. Pairing needs a matching code on both screens, and the PC decides what each phone may do.</p>
+
+<p>The PC app runs on Linux with KDE Plasma; GNOME, other desktops and macOS are coming.</p>

@@ -141,6 +141,8 @@ pub struct Update {
     pub updating: bool,
     /// The clone it was installed from is still there to build from.
     pub can_update: bool,
+    /// Installed by a package manager, which updates it.
+    pub packaged: bool,
 }
 
 impl Health {
@@ -176,6 +178,7 @@ impl Health {
                 checks: v["update"]["checks"].as_bool().unwrap_or(true),
                 updating: v["update"]["updating"].as_bool().unwrap_or(false),
                 can_update: v["update"]["canUpdate"].as_bool().unwrap_or(false),
+                packaged: v["update"]["packaged"].as_bool().unwrap_or(false),
             },
         }
     }

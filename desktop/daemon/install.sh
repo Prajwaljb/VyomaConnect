@@ -4,9 +4,16 @@
 # and the companion, whose work it now does, is stopped. `install.sh --undo` puts KDE Connect back.
 # It asks for your password only to install packages and open the firewall.
 # `install.sh --update` moves this copy to the newest release and installs that, pairings kept.
+# Installed by a package (as /usr/share/vyoma/install.sh) it builds nothing: it only takes over.
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH= cd -- "$here/../.." && pwd)
+packaged=
+bin="$HOME/.local/bin"
+if [ ! -f "$here/Cargo.toml" ] && [ -x /usr/bin/vyoma-desktop ]; then
+    packaged=1
+    bin=/usr/bin
+fi
 # Rust from rustup, which a systemd unit's PATH (the window's Update) doesn't have.
 if [ -d "$HOME/.cargo/bin" ]; then PATH="$HOME/.cargo/bin:$PATH"; fi
 config=${XDG_CONFIG_HOME:-$HOME/.config}
@@ -30,6 +37,12 @@ if [ "${1:-}" = "--update" ] || [ "${1:-}" = "--updating" ]; then
     trap 'finish $?' EXIT
 fi
 
+if [ "${1:-}" = "--update" ] && [ -n "$packaged" ]; then
+    trap - EXIT
+    echo "Vyoma came from your package manager: update it there."
+    exit 0
+fi
+
 if [ "${1:-}" = "--update" ]; then
     echo "Getting the newest release..."
     git -C "$root" fetch --quiet --tags --force origin
@@ -49,14 +62,16 @@ fi
 
 if [ "${1:-}" = "--undo" ]; then
     systemctl --user disable --now vyoma-desktop 2>/dev/null || true
-    "$HOME/.local/bin/vyoma-desktop" --remove-menus 2>/dev/null || true
-    rm -f "$autostart" "$activation" "$data/applications/vyoma.desktop" "$data/icons/hicolor/scalable/apps/vyoma.svg"
+    "$bin/vyoma-desktop" --remove-menus 2>/dev/null || true
+    rm -f "$autostart" "$activation"
+    [ -n "$packaged" ] || rm -f "$data/applications/vyoma.desktop" "$data/icons/hicolor/scalable/apps/vyoma.svg"
     [ -f "$config/systemd/user/vyoma-companion.service" ] && systemctl --user enable --now vyoma-companion
     (setsid kdeconnectd >/dev/null 2>&1 &)
     echo "KDE Connect is back. Vyoma's desktop app keeps its folder ($config/vyoma-desktop) until you remove it."
     exit 0
 fi
 
+if [ -z "$packaged" ]; then
 if ! command -v cargo >/dev/null 2>&1 || ! command -v cc >/dev/null 2>&1 || ! command -v pkg-config >/dev/null 2>&1; then
     echo "Installing what's needed to build it..."
     if command -v pacman >/dev/null 2>&1; then as_root pacman -S --needed --noconfirm rust gcc pkgconf
@@ -80,7 +95,8 @@ install -Dm755 "$here/../gui/target/release/vyoma" "$HOME/.local/bin/vyoma"
 mkdir -p "$data/applications"
 sed "s|@BIN@|$HOME/.local/bin/vyoma|" "$here/dist/vyoma.desktop" >"$data/applications/vyoma.desktop"
 install -Dm644 "$here/dist/vyoma.svg" "$data/icons/hicolor/scalable/apps/vyoma.svg"
-"$HOME/.local/bin/vyoma-desktop" --setup
+fi
+"$bin/vyoma-desktop" --setup
 
 # KDE Connect's ports, as its own packages open them.
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
@@ -92,7 +108,7 @@ fi
 
 # Phones paired with this PC stay paired: its identity is kdeconnectd's.
 if [ ! -e "$config/vyoma-desktop/device_id" ] && [ -e "$config/kdeconnect/privateKey.pem" ]; then
-    "$HOME/.local/bin/vyoma-desktop" --import-kde
+    "$bin/vyoma-desktop" --import-kde
 fi
 
 mkdir -p "$(dirname "$autostart")" "$(dirname "$activation")"
@@ -101,12 +117,17 @@ printf '[D-BUS Service]\nName=org.kde.kdeconnect\nExec=/bin/false\n' >"$activati
 systemctl --user disable --now vyoma-companion 2>/dev/null || true
 pkill -x kdeconnectd 2>/dev/null || true
 
-install -Dm644 "$here/dist/vyoma-desktop.service" "$config/systemd/user/vyoma-desktop.service"
+if [ -n "$packaged" ]; then
+    # The package's unit, not one a source install left behind.
+    rm -f "$config/systemd/user/vyoma-desktop.service"
+else
+    install -Dm644 "$here/dist/vyoma-desktop.service" "$config/systemd/user/vyoma-desktop.service"
+fi
 systemctl --user daemon-reload
 systemctl --user enable vyoma-desktop
 systemctl --user restart vyoma-desktop
 echo "Done: Vyoma's desktop app is this PC's KDE Connect now. Logs: journalctl --user -u vyoma-desktop. Undo: $0 --undo"
 # Its window, on its first-run setup: pairing with the phone, side by side with the phone's own steps.
 if [ -z "$updating" ] && [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then
-    (setsid "$HOME/.local/bin/vyoma" >/dev/null 2>&1 &)
+    (setsid "$bin/vyoma" >/dev/null 2>&1 &)
 fi

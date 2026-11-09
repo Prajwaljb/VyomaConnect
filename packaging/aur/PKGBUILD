@@ -1,0 +1,45 @@
+# Maintainer: Prajwal JB
+pkgname=vyoma
+pkgver=0.4.0
+pkgrel=1
+pkgdesc="Your Android phone and your Linux PC, working as one: files, clipboard, calls, screens and remote control (KDE Connect protocol)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Prajwaljb/VyomaConnect"
+license=('GPL-3.0-or-later')
+depends=('glib2' 'gstreamer' 'gst-plugins-base' 'gst-plugins-base-libs' 'gst-plugins-bad' 'gst-plugin-pipewire'
+         'gst-plugin-va' 'gst-libav' 'fontconfig' 'freetype2' 'libxkbcommon' 'wayland' 'libglvnd' 'libx11' 'libxcb'
+         'pipewire' 'wireplumber' 'libpulse' 'wl-clipboard' 'libnotify' 'xdg-utils' 'android-tools' 'ffmpeg'
+         'sshfs' 'gvfs' 'curl')
+makedepends=('cargo' 'pkgconf')
+optdepends=('v4l2loopback-dkms: the phone as a webcam (CachyOS kernels already have it)'
+            'thunar: Send to your phone from Thunar'
+            'firewalld: opened for phones automatically when it runs')
+install=vyoma.install
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "VyomaConnect-$pkgver/desktop"
+    export RUSTUP_TOOLCHAIN=stable
+    (cd daemon && cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')")
+    (cd gui && cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')")
+}
+
+build() {
+    cd "VyomaConnect-$pkgver/desktop"
+    export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+    (cd daemon && cargo build --frozen --release)
+    (cd gui && cargo build --frozen --release)
+}
+
+package() {
+    cd "VyomaConnect-$pkgver/desktop"
+    install -Dm755 daemon/target/release/vyoma-desktop "$pkgdir/usr/bin/vyoma-desktop"
+    install -Dm755 gui/target/release/vyoma "$pkgdir/usr/bin/vyoma"
+    install -Dm755 daemon/install.sh "$pkgdir/usr/share/vyoma/install.sh"
+    install -Dm644 daemon/dist/vyoma.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/vyoma.svg"
+    sed 's|@BIN@|/usr/bin/vyoma|' daemon/dist/vyoma.desktop | install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/vyoma.desktop"
+    sed 's|%h/.local/bin/vyoma-desktop|/usr/bin/vyoma-desktop|' daemon/dist/vyoma-desktop.service |
+        install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/user/vyoma-desktop.service"
+    install -Dm644 ../LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
