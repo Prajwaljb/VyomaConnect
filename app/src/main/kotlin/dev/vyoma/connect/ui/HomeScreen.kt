@@ -298,7 +298,7 @@ fun HomeScreen(
                     away.forEachIndexed { i, state ->
                         ListRow(
                             title = state.identity.deviceName,
-                            subtitle = "Open KDE Connect on it, or join the same network",
+                            subtitle = "Wake it, or join the same network",
                             icon = state.identity.deviceType.icon(),
                             iconTint = SystemColor.GRAY.color,
                             showDivider = i < away.lastIndex,
@@ -414,6 +414,7 @@ internal fun SearchingCard(vm: AppViewModel, modifier: Modifier = Modifier) {
     var adding by rememberSaveable { mutableStateOf(false) }
     var usb by rememberSaveable { mutableStateOf(false) }
     var others by rememberSaveable { mutableStateOf(false) }
+    var getApp by rememberSaveable { mutableStateOf(false) }
     var round by remember { mutableIntStateOf(0) }
     val color = MaterialTheme.colorScheme.primary
     val wave = remember { Animatable(0f) }
@@ -443,7 +444,7 @@ internal fun SearchingCard(vm: AppViewModel, modifier: Modifier = Modifier) {
         Text("Looking for your PC", style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
         Spacer(Modifier.height(16.dp))
         listOf(
-            "Open KDE Connect on your PC",
+            "Open Vyoma on your PC",
             "Put both on the same Wi-Fi",
             "Tap your PC when it shows up here",
         ).forEachIndexed { i, step ->
@@ -467,6 +468,11 @@ internal fun SearchingCard(vm: AppViewModel, modifier: Modifier = Modifier) {
         text = {
             Column {
                 ListRow(
+                    title = "Get Vyoma for your PC", subtitle = "Not on it yet? Send it the link",
+                    icon = Icons.Rounded.Computer, iconTint = SystemColor.GREEN.color, horizontalPadding = 0.dp, showDivider = true,
+                    onClick = { others = false; getApp = true },
+                )
+                ListRow(
                     title = "Enter its address", subtitle = "For Tailscale, or when Wi-Fi hides it",
                     icon = Icons.Rounded.Lan, iconTint = SystemColor.BLUE.color, horizontalPadding = 0.dp, showDivider = true,
                     onClick = { others = false; adding = true },
@@ -482,6 +488,12 @@ internal fun SearchingCard(vm: AppViewModel, modifier: Modifier = Modifier) {
     )
     if (adding) AddHostDialog(vm) { adding = false }
     if (usb) UsbHelpDialog { usb = false }
+    if (getApp) GlassDialog(
+        onDismissRequest = { getApp = false },
+        title = { Text("Vyoma on your PC") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { CompanionSetup(vm, online = false, pcId = null) } },
+        confirmButton = { DialogButton(onClick = { getApp = false }) { Text("Close") } },
+    )
 }
 
 /**
@@ -499,7 +511,7 @@ private fun AwayCard(vm: AppViewModel, modifier: Modifier = Modifier) {
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            "Wake the PC and open KDE Connect, on the same Wi-Fi as this phone.",
+            "Wake the PC and check it's on the same Wi-Fi as this phone.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -512,7 +524,7 @@ private fun AwayCard(vm: AppViewModel, modifier: Modifier = Modifier) {
     if (usb) UsbHelpDialog { usb = false }
 }
 
-/** Once, after the first pair: what the companion adds. Dismissed for good. */
+/** Once, after the first pair with a PC without Vyoma: what Vyoma on the PC adds. Dismissed for good. */
 @Composable
 private fun CompanionPromoCard(vm: AppViewModel, pcId: String?, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
     var showing by rememberSaveable { mutableStateOf(false) }
@@ -526,7 +538,7 @@ private fun CompanionPromoCard(vm: AppViewModel, pcId: String?, onDismiss: () ->
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            "Vyoma on your PC adds its screen, camera, files and load to this page.",
+            "Vyoma on your PC adds its screen, camera, files and stats to this page.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

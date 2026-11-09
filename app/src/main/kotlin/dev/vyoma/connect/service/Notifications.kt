@@ -338,7 +338,7 @@ object Notifications {
         NotificationCompat.Builder(context, CH_EVENTS)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("$deviceName's identity changed")
-            .setContentText("Its security key no longer matches. Unpair and pair again if you reinstalled KDE Connect.")
+            .setContentText("Its security key no longer matches. If its app was reinstalled, unpair and pair again.")
             .setStyle(NotificationCompat.BigTextStyle())
             .setContentIntent(openApp(context))
             .setAutoCancel(true)
