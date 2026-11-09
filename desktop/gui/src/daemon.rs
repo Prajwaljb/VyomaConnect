@@ -364,9 +364,22 @@ impl Daemon for DbusDaemon {
 }
 
 /// A D-Bus error's own message, without zbus's wrapping.
+/// What went wrong, in words for the person at the window: bus errors name the bus, not the problem.
 fn reason(e: zbus::Error) -> String {
+    const NOT_RUNNING: &str = "Vyoma isn't running here right now. It restarts by itself; if it doesn't, use Start Vyoma";
     match e {
-        zbus::Error::MethodError(_, Some(msg), _) => msg,
+        zbus::Error::MethodError(name, msg, _) => match name.as_str() {
+            "org.freedesktop.DBus.Error.ServiceUnknown" | "org.freedesktop.DBus.Error.NameHasNoOwner" => NOT_RUNNING.into(),
+            "org.freedesktop.DBus.Error.NoReply" | "org.freedesktop.DBus.Error.Timeout" => "Vyoma didn't answer in time. Try again".into(),
+            "org.freedesktop.DBus.Error.UnknownMethod" => "This window and Vyoma's background service are different versions. Restart Vyoma to match them".into(),
+            // The daemon's own words; "stopping" is it shutting down mid-request.
+            _ => match msg {
+                Some(m) if m == "stopping" => "Vyoma is restarting. Try again in a moment".into(),
+                Some(m) => m,
+                None => "Something went wrong in Vyoma. Try again".into(),
+            },
+        },
+        zbus::Error::InputOutput(_) => NOT_RUNNING.into(),
         e => e.to_string(),
     }
 }
