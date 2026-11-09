@@ -131,7 +131,7 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     // Set up already: only Android's log question, asked again on each restart of the app, is missing.
                     if (sync == dev.vyoma.connect.platform.AndroidClipboard.SyncState.WAITING) ListRow(
                         title = "Allow log access",
-                        subtitle = "Android asks after each update of Vyoma. Allow it, and copies go to your PC by themselves",
+                        subtitle = "Tap Ask again, then Allow one-time access, and copies go to your PC by themselves. Android didn't ask? Restart the phone, then open Vyoma",
                         icon = Icons.Rounded.Sync,
                         iconTint = SystemColor.ORANGE.color,
                         trailing = { RowChevron("Ask again") },
