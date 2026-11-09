@@ -75,8 +75,8 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
         // Sending is the one action, so it sits up top and the history comes first on the page.
         // Clearing can't be undone, so it asks first.
         actions = {
-            // Copies go by themselves with background sync on: sending by hand is only for without it.
-            if (!background) BounceIconButton(onClick = { context.startActivity(ClipboardActivity.intent(context)) }) { Icon(Icons.AutoMirrored.Rounded.Send, "Send what's copied to PC") }
+            // Sending by hand stays even with background sync on, in case a copy didn't go.
+            BounceIconButton(onClick = { context.startActivity(ClipboardActivity.intent(context)) }) { Icon(Icons.AutoMirrored.Rounded.Send, "Send what's copied to PC") }
             if (history.isNotEmpty()) BounceIconButton(onClick = { clearing = true }) { Icon(Icons.Rounded.DeleteSweep, "Clear history") }
         },
     ) {
