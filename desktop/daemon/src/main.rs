@@ -312,8 +312,12 @@ impl Control {
     async fn health(&self) -> fdo::Result<String> {
         let (beside_kde, updates) = (self.beside_kde, self.updates.clone());
         let shell = if vyoma_companion::desktop::is_gnome() { Some(vyoma_companion::shell::version().await) } else { None };
+        let lock = system::cannot_lock().await;
         let report = tokio::task::spawn_blocking(move || {
             let mut report = health(beside_kde, shell);
+            if let (Some(why), Some(checks)) = (lock, report["checks"].as_array_mut()) {
+                checks.push(json!({ "name": "Screen lock", "state": "info", "detail": why }));
+            }
             report["update"] = updates.status();
             report
         })

@@ -80,7 +80,7 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
   `kdeconnect.telephony` `appName` (an app's internet call, e.g. WhatsApp: no number; `contactName`
   is the caller, or the app's name when it doesn't say, so stock desktops still read sensibly).
 - `vyoma.echo.request {n}` (PC → phone) → `vyoma.echo {n}`: the desktop app times one every 5 s and shows the median of the last 5 as the phone page's Response (Details `rtt`, with `since` = when it linked). The desktop app no longer asks for `kdeconnect.connectivity_report` (signal).
-- `vyoma.denied` (PC → phone, `feature`, `name`, `request`, `path`/`key`): that request's feature is off for this phone
+- `vyoma.denied` (PC → phone, `feature`, `name`, `request`, `path`/`key`, optional `reason`): that request's feature is off for this phone (or, with `reason`, the PC can't do it: GNOME without GDM can't lock; the phone shows the reason)
   in the desktop app (`desktop/companion/src/permits.rs`); an empty `request` means a running one was stopped.
 - Real-time streams (gamepad, video) don't go through the JSON link: negotiate over a vyoma packet, then use a
   dedicated socket (UDP with AEAD for input, TLS/TCP for video).
