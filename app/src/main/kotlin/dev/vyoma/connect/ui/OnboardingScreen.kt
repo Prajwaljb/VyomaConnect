@@ -331,7 +331,7 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
                 Column(Modifier.fillMaxWidth().glassChrome(backdrop, SETUP_SHAPE, blur = 3.dp, bevel = 16.dp).padding(20.dp)) {
                     Text("Good to know", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(10.dp))
-                    Tip("Tiles with three dots do more when you hold them: hold Send clip for your clipboard history.")
+                    Tip("Tiles with three dots do more when you hold them: hold Send files to send photos or a whole folder.")
                     Tip("Hold the round touchpad button for the game controller and presenter.")
                     Tip("Everything here can be changed later in Settings.")
                 }
