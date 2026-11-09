@@ -160,6 +160,7 @@ import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Sensors
+import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.PhotoCamera
@@ -1159,7 +1160,7 @@ internal fun runGuarded(context: Context, vm: AppViewModel, id: String, cmd: Rem
     }
     when {
         cmd.everyTime -> AppLock.confirm(context, "To run ${cmd.name}", run)
-        cmd.fingerprint || AppLock.commandLocked(context, id, cmd.key) -> AppLock.askForCommand(context, "To run ${cmd.name}", run)
+        cmd.fingerprint -> AppLock.askForCommand(context, "To run ${cmd.name}", run)
         else -> run()
     }
 }
@@ -1169,7 +1170,6 @@ internal fun runGuarded(context: Context, vm: AppViewModel, id: String, cmd: Rem
 internal fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) {
     val status = LocalStatus.current
     val context = LocalContext.current
-    var lockChanges by remember { mutableIntStateOf(0) }
     val device = remember(id) { vm.device(id) }
     val commands by (device?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands ?: remember { MutableStateFlow(emptyList()) }).collectAsState()
     GlassDialog(
@@ -1181,33 +1181,17 @@ internal fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) 
             } else {
                 Column(Modifier.heightIn(max = 360.dp).fadingVerticalScroll(rememberScrollState())) {
                     commands.forEachIndexed { i, cmd ->
-                        // The PC can ask for it too; then it's changed there, not here.
-                        val locked = remember(lockChanges, cmd.key, cmd.fingerprint) { cmd.fingerprint || AppLock.commandLocked(context, id, cmd.key) }
-                        fun setLocked(want: Boolean) {
-                            if (cmd.fingerprint) {
-                                status.show("The PC asks for it: change it in Commands there", icon = Icons.Rounded.Terminal)
-                                return
-                            }
-                            fun save() {
-                                AppLock.setCommandLocked(context, id, cmd.key, want)
-                                lockChanges++
-                            }
-                            // Anyone holding the phone could otherwise just switch it off first.
-                            if (want) save() else AppLock.confirm(context, "To let ${cmd.name} run without asking", ::save)
-                        }
-                        // Names only: the shell line is for editing, on the PC or in its details.
+                        // Names only: the shell line is for editing, on the PC. Whether it asks for the
+                        // fingerprint is set there too, never here, where whoever holds the phone could undo it.
                         ListRow(
                             title = cmd.name,
-                            // Says what the switch is for: alone, it could read as the command being on or off.
-                            subtitle = if (cmd.everyTime) "Asks every time, set on the PC" else if (cmd.fingerprint) "Asks for your fingerprint, set on the PC" else if (locked) "Asks for your fingerprint" else "Runs straight away",
+                            subtitle = if (cmd.everyTime) "Asks for your fingerprint every time" else if (cmd.fingerprint) "Asks for your fingerprint" else null,
                             subtitleMaxLines = 1,
                             icon = Icons.Rounded.Terminal,
                             iconTint = SystemColor.GRAY.color,
                             showDivider = i < commands.lastIndex,
                             horizontalPadding = 0.dp,
-                            trailing = {
-                                VyomaSwitch(checked = locked, onCheckedChange = ::setLocked, contentDescription = "Ask for fingerprint before ${cmd.name}")
-                            },
+                            trailing = if (cmd.fingerprint) ({ Icon(Icons.Rounded.Fingerprint, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp)) }) else null,
                             onClick = {
                                 runGuarded(context, vm, id, cmd, status)
                                 onDismiss()

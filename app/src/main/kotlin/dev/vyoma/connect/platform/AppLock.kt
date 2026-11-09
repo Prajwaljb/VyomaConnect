@@ -24,8 +24,8 @@ import dev.vyoma.connect.protocol.VLog
 /**
  * Someone holding this phone unlocked shouldn't get into the PC with it: unlocking it, its files,
  * its screen, its camera, its power actions, the touchpad, keyboard and presenter, and the clipboard
- * history ask for a fingerprint (or the phone's PIN) first, and so does any command the owner marked
- * (see [commandLocked]). Once is enough for one go at using Vyoma; the go ends when the phone's
+ * history ask for a fingerprint (or the phone's PIN) first, and so does any command marked so in
+ * Commands on the PC (only there: a switch here could be turned off by whoever holds the phone). Once is enough for one go at using Vyoma; the go ends when the phone's
  * screen turns off or after [AWAY_MS] away from the app. Asked at the first of those, not when the
  * app opens, so skipping a song right after unlocking the phone takes no second fingerprint. Rules
  * run unattended, so they aren't asked; their triggers were set up here.
@@ -39,7 +39,8 @@ object AppLock {
     private const val TAG = "AppLock"
     private const val PREFS = "app_lock"
     private const val KEY_ENABLED = "enabled"
-    private const val KEY_COMMANDS = "commands"
+    /** Commands this phone used to lock itself, before the PC became the only place to mark them. */
+    private const val KEY_OLD_COMMANDS = "commands"
     private const val KEY_UNLOCK_COUNTS = "unlock_counts"
     private const val AUTHENTICATORS = Authenticators.BIOMETRIC_WEAK or Authenticators.DEVICE_CREDENTIAL
 
@@ -47,6 +48,7 @@ object AppLock {
     private var asking = false
 
     fun install(app: Application) {
+        prefs(app).edit().remove(KEY_OLD_COMMANDS).apply()
         app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) {
                 session.started()
@@ -96,18 +98,6 @@ object AppLock {
     fun unlockCounts(context: Context) = prefs(context).getBoolean(KEY_UNLOCK_COUNTS, false)
 
     fun setUnlockCounts(context: Context, on: Boolean) = prefs(context).edit().putBoolean(KEY_UNLOCK_COUNTS, on).apply()
-
-    private fun commandEntry(pc: String, key: String) = "$pc/$key"
-
-    /** Whether this command of this PC asks first. Chosen per command, so it holds even with the lock above off. */
-    fun commandLocked(context: Context, pc: String, key: String) =
-        commandEntry(pc, key) in prefs(context).getStringSet(KEY_COMMANDS, emptySet()).orEmpty()
-
-    fun setCommandLocked(context: Context, pc: String, key: String, locked: Boolean) {
-        val all = prefs(context).getStringSet(KEY_COMMANDS, emptySet()).orEmpty().toMutableSet()
-        if (locked) all += commandEntry(pc, key) else all -= commandEntry(pc, key)
-        prefs(context).edit().putStringSet(KEY_COMMANDS, all).apply()
-    }
 
     /** Runs [then] once a marked command may go: the same one pass per go at using Vyoma. */
     fun askForCommand(context: Context, why: String, then: () -> Unit) {

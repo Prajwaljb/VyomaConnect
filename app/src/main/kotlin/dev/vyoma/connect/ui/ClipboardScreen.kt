@@ -63,13 +63,14 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
     // The page leaves with a slide when the lock closes: nothing to read while it does.
     val history = if (AppLock.isOpen(context)) clips else emptyList()
     val status = LocalStatus.current
-    val background = vm.backgroundClipboardSync()
+    val sync by vm.clipboardSync.collectAsStateWithLifecycle()
+    val background = sync == dev.vyoma.connect.platform.AndroidClipboard.SyncState.ON
     var setup by rememberSaveable { mutableStateOf(false) }
     var clearing by rememberSaveable { mutableStateOf(false) }
 
     CollapsingHeaderScaffold(
         title = "Clipboard",
-        subtitle = if (background) "Syncing automatically" else "Syncs while Vyoma is open",
+        subtitle = if (background) "Copies go to your PC by themselves" else "Syncs while Vyoma is open",
         navigation = onBack?.let { back -> { BounceIconButton(onClick = back) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } } },
         // Sending is the one action, so it sits up top and the history comes first on the page.
         // Clearing can't be undone, so it asks first.
@@ -126,8 +127,15 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
         if (!background) {
             item(key = "bg") {
                 SectionCard(Modifier.padding(top = 8.dp)) {
-                    // Opens the setup right here (it used to point at a Settings section by a wrong name).
-                    ListRow(
+                    // Set up already: only Android's log question, asked again on each restart of the app, is missing.
+                    if (sync == dev.vyoma.connect.platform.AndroidClipboard.SyncState.WAITING) ListRow(
+                        title = "Allow log access",
+                        subtitle = "Android asks after each update of Vyoma. Allow it, and copies go to your PC by themselves",
+                        icon = Icons.Rounded.Sync,
+                        iconTint = SystemColor.ORANGE.color,
+                        trailing = { RowChevron("Ask again") },
+                        onClick = { vm.retryClipboardSync() },
+                    ) else ListRow(
                         title = "Sync when closed",
                         subtitle = "One-time setup from your PC",
                         icon = Icons.Rounded.Sync,

@@ -72,7 +72,10 @@ fn main() -> anyhow::Result<()> {
     if let Some(at) = args.iter().position(|a| a == "--snapshot") {
         let path = args.get(at + 1).ok_or_else(|| anyhow::anyhow!("--snapshot needs a path"))?;
         let scene = args.iter().position(|a| a == "--scene").and_then(|i| args.get(i + 1)).map(String::as_str).unwrap_or("phones");
-        return snapshot::run(path, args.iter().any(|a| a == "--dark"), args.iter().any(|a| a == "--plain"), scene);
+        let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1));
+        let size = value("--size").and_then(|s| s.split_once('x')).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
+        let scroll = value("--scroll").and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        return snapshot::run(path, args.iter().any(|a| a == "--dark"), args.iter().any(|a| a == "--plain"), scene, size, scroll);
     }
     let page = args.iter().position(|a| a == "--page").and_then(|i| args.get(i + 1)).cloned().unwrap_or_default();
     let ui = MainWindow::new()?;
@@ -118,11 +121,11 @@ fn read_commands(ui: &slint::Weak<MainWindow>) {
 
 /// The commands, and the suggestions whose command line isn't among them yet.
 pub fn show_commands(ui: &MainWindow, list: &[CommandData]) {
-    let to = |c: &CommandData| Command { key: c.key.clone().into(), name: c.name.clone().into(), command: c.command.clone().into(), fingerprint: c.fingerprint, every: c.every_time };
+    let to = |c: &CommandData| Command { key: c.key.clone().into(), name: c.name.clone().into(), command: c.command.clone().into(), shown: breakable(&c.command).into(), fingerprint: c.fingerprint, every: c.every_time };
     let suggestions: Vec<Command> = suggestions()
         .iter()
         .filter(|(_, line, _)| !list.iter().any(|c| c.command.trim() == line.as_str()))
-        .map(|(name, line, fingerprint)| Command { key: "".into(), name: (*name).into(), command: line.as_str().into(), fingerprint: *fingerprint, every: false })
+        .map(|(name, line, fingerprint)| Command { key: "".into(), name: (*name).into(), command: line.as_str().into(), shown: breakable(line).into(), fingerprint: *fingerprint, every: false })
         .collect();
     ui.set_commands(ModelRc::new(VecModel::from(list.iter().map(to).collect::<Vec<_>>())));
     ui.set_suggestions(ModelRc::new(VecModel::from(suggestions)));
@@ -484,7 +487,7 @@ pub fn show_activity(ui: &MainWindow, list: &[ActivityEntry], now: chrono::DateT
                     .iter()
                     .map(|h| {
                         let time = at.next().map(|t| t.format("%H:%M").to_string()).unwrap_or_default();
-                        Happening { kind: h.kind.clone().into(), text: h.text.clone().into(), meta: format!("{} \u{b7} {time}", h.name).into() }
+                        Happening { kind: h.kind.clone().into(), text: breakable(&h.text).into(), meta: breakable(&format!("{} \u{b7} {time}", h.name)).into() }
                     })
                     .collect::<Vec<_>>(),
             )),
@@ -617,9 +620,10 @@ fn show(ui: &MainWindow, phones: &[PhoneData]) {
 }
 
 fn to_ui(p: &PhoneData) -> Phone {
+    let up = p.since.map(|at| connected_for(chrono::Local::now().timestamp_millis() - at)).unwrap_or_default();
     Phone {
         id: p.id.clone().into(),
-        name: p.name.clone().into(),
+        name: breakable(&p.name).into(),
         paired: p.paired,
         linked: p.linked,
         code: p.code.clone().into(),
@@ -631,7 +635,11 @@ fn to_ui(p: &PhoneData) -> Phone {
         can_browse: p.can_browse,
         can_share: p.can_share,
         clip: p.clip.clone().into(),
-        sims: std::rc::Rc::new(slint::VecModel::from(p.sims.iter().map(|(label, network, level)| Sim { label: label.into(), network: network.into(), level: *level }).collect::<Vec<_>>())).into(),
+        rtt: p.rtt.map_or(-1, |ms| ms.clamp(0, 99_999) as i32),
+        up_value: up.0.into(),
+        up_unit: up.1.into(),
+        up_value2: up.2.into(),
+        up_unit2: up.3.into(),
         permits: std::rc::Rc::new(slint::VecModel::from(
             p.permits.iter().map(|x| Permission { key: x.key.clone().into(), name: x.name.clone().into(), detail: x.detail.clone().into(), on: x.on }).collect::<Vec<_>>(),
         ))
@@ -659,4 +667,73 @@ fn notify(ui: &slint::Weak<MainWindow>, text: String) {
             }
         });
     });
+}
+
+/// [text] with invisible break points in its long words (file names, paths, command lines), so it
+/// wraps inside its row: a word that can't break pushed the page wider than the window and hid its
+/// end. Display only: what's edited or saved keeps the plain text.
+pub fn breakable(text: &str) -> String {
+    const LONG: usize = 18;
+    let mut out = String::with_capacity(text.len() + 8);
+    for (i, word) in text.split(' ').enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        if word.chars().count() <= LONG {
+            out.push_str(word);
+            continue;
+        }
+        let mut run = 0;
+        for c in word.chars() {
+            out.push(c);
+            run += 1;
+            if matches!(c, '_' | '-' | '.' | '/' | '\\' | ':' | ',' | '=' | '&' | '?') || run >= LONG {
+                out.push('\u{200b}');
+                run = 0;
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod breakable_tests {
+    #[test]
+    fn long_words_get_break_points_and_short_ones_stay() {
+        assert_eq!(super::breakable("Took a screenshot"), "Took a screenshot");
+        let b = super::breakable("Copied \u{201c}Screen_Recording_20261108.mp4\u{201d}");
+        assert_eq!(b.replace('\u{200b}', ""), "Copied \u{201c}Screen_Recording_20261108.mp4\u{201d}");
+        assert!(b.split(|c: char| c == ' ' || c == '\u{200b}').all(|w| w.chars().count() <= 18));
+    }
+}
+
+/// How long a phone's been connected, as the card shows it: up to two number-and-unit pairs.
+pub fn connected_for(ms: i64) -> (String, &'static str, String, &'static str) {
+    let mins = ms.max(0) / 60_000;
+    let (h, d) = (mins / 60, mins / (60 * 24));
+    let pair = |n: i64, u| if n > 0 { (n.to_string(), u) } else { (String::new(), "") };
+    if mins < 1 {
+        ("<1".into(), "min", String::new(), "")
+    } else if h < 1 {
+        (mins.to_string(), "min", String::new(), "")
+    } else if d < 1 {
+        let (v, u) = pair(mins % 60, "min");
+        (h.to_string(), "h", v, u)
+    } else {
+        let (v, u) = pair(h % 24, "h");
+        (d.to_string(), "d", v, u)
+    }
+}
+
+#[cfg(test)]
+mod connected_tests {
+    use super::connected_for;
+    #[test]
+    fn reads_like_a_person_would_say_it() {
+        assert_eq!(connected_for(20_000), ("<1".into(), "min", String::new(), ""));
+        assert_eq!(connected_for(14 * 60_000), ("14".into(), "min", String::new(), ""));
+        assert_eq!(connected_for((2 * 60 + 14) * 60_000), ("2".into(), "h", "14".into(), "min"));
+        assert_eq!(connected_for(2 * 3_600_000), ("2".into(), "h", String::new(), ""));
+        assert_eq!(connected_for((3 * 24 + 5) * 3_600_000), ("3".into(), "d", "5".into(), "h"));
+    }
 }
