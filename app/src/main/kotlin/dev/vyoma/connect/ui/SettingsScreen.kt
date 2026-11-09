@@ -169,7 +169,12 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
         item(key = "sync-label") { SectionLabel("Share with your PC") }
         item(key = "sync") {
             val notifOn = remember(resumeTick) { NotificationBridge.isEnabled(context) }
-            val clipOn = remember(resumeTick) { vm.backgroundClipboardSync() }
+            val clipGranted = remember(resumeTick) { vm.backgroundClipboardSync() }
+            // Granted from the PC isn't syncing yet: Android's log question, asked after each
+            // restart of Vyoma, has to be answered too. Said as on the Clipboard page.
+            val clipSync by vm.clipboardSync.collectAsStateWithLifecycle()
+            val clipOn = clipSync == dev.vyoma.connect.platform.AndroidClipboard.SyncState.ON
+            val clipWaiting = clipGranted && !clipOn
             var phoneTick by remember { mutableIntStateOf(0) }
             val phoneOn = remember(resumeTick, phoneTick) { PhonePermissions.allGranted(context) }
             val askPhone = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -207,12 +212,21 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                 ListRow(
                     // Named as on the Clipboard tab: one feature, one name.
                     title = "Sync when closed",
-                    subtitle = if (clipOn) "Copies sync even when Vyoma is closed"
-                    else "One-time setup from your PC",
+                    subtitle = when {
+                        clipOn -> "Copies sync even when Vyoma is closed"
+                        clipWaiting -> "Tap, then Allow one-time access when Android asks"
+                        else -> "One-time setup from your PC"
+                    },
                     icon = Icons.Rounded.ContentPaste,
                     iconTint = SystemColor.ORANGE.color,
-                    trailing = { RowChevron(if (clipOn) "On" else "Off") },
-                    onClick = { if (!clipOn) showAdbHelp = true },
+                    trailing = { RowChevron(if (clipOn) "On" else if (clipWaiting) "Ask again" else "Off") },
+                    onClick = {
+                        when {
+                            clipOn -> showAdbHelp = true
+                            clipWaiting -> vm.retryClipboardSync()
+                            else -> showAdbHelp = true
+                        }
+                    },
                 )
             }
         }
@@ -599,7 +613,7 @@ internal fun ClipboardSetupDialog(vm: AppViewModel, onDismiss: () -> Unit) {
         text = {
             Column(Modifier.heightIn(max = 460.dp).fadingVerticalScroll(rememberScrollState())) {
                 if (granted) {
-                    Text("Anything you copy now reaches your PC, even with Vyoma closed. It stays until you uninstall, so you can turn USB debugging off again.")
+                    Text("Anything you copy now reaches your PC, even with Vyoma closed. The setup from your PC stays, so USB debugging can go off again. After Vyoma restarts or updates, Android asks once more for log access: allow it.")
                 } else {
                     Text("Android only lets the app in front read the clipboard. A computer can lift that once, and your PC can do it for you.")
                     Spacer(Modifier.height(16.dp))
