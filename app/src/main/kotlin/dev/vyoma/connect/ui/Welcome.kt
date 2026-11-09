@@ -377,7 +377,9 @@ internal fun WelcomeShow(backdrop: Backdrop, clock: ShowClock, intro: WelcomeInt
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val width = constraints.maxWidth.toFloat()
-        HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1) { p ->
+        // No swiping on before Show me is there: the intro plays first, then the button says what's next.
+        val canSwipe by remember { derivedStateOf { intro.controls.value >= 0.5f } }
+        HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1, userScrollEnabled = canSwipe) { p ->
             Column(
                 Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(start = 20.dp, end = 20.dp, top = 56.dp, bottom = 118.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
