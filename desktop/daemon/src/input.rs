@@ -239,12 +239,14 @@ pub async fn run(dir: PathBuf, mut requests: mpsc::UnboundedReceiver<(Instant, S
     // A scroll under way, where the desktop needs telling when the fingers lift: the phone doesn't
     // say, so a pause does.
     let mut scrolling = false;
+    let mut lock = vyoma_companion::scroll::ScrollLock::default();
     loop {
         let next = if scrolling {
             match tokio::time::timeout(SCROLL_LIFT, requests.recv()).await {
                 Ok(next) => next,
                 Err(_) => {
                     scrolling = false;
+                    lock.reset();
                     if let Some(s) = &session {
                         let finish = HashMap::from([("finish", Variant::from(true))]);
                         let _ = s.call("NotifyPointerAxis", &(&s.path, finish, 0.0f64, 0.0f64)).await;
@@ -296,8 +298,13 @@ pub async fn run(dir: PathBuf, mut requests: mpsc::UnboundedReceiver<(Instant, S
                 }
                 Act::Scroll(dx, dy) => {
                     scrolling = vyoma_companion::desktop::scroll_needs_finish();
+                    // Where scrolls are fingers on a touchpad, locked to their way as a touchpad's.
+                    let shaped = if scrolling { lock.feed(dx, dy) } else { Some((dx, dy)) };
                     let sign = vyoma_companion::desktop::scroll_sign();
-                    s.fast("NotifyPointerAxis", &(&s.path, opts(), dx * sign, dy * sign)).await
+                    match shaped {
+                        Some((dx, dy)) => s.fast("NotifyPointerAxis", &(&s.path, opts(), dx * sign, dy * sign)).await,
+                        None => Ok(()),
+                    }
                 }
                 Act::Button(b, down) => {
                     // The portal handles calls concurrently: a click mustn't land before its move.

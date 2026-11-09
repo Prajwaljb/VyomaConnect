@@ -23,6 +23,7 @@ pub mod screen;
 pub mod screenshot;
 pub mod session;
 pub mod shell;
+pub mod scroll;
 pub mod setup;
 pub mod specs;
 pub mod stats;
