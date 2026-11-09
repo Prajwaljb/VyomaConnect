@@ -114,7 +114,8 @@ internal const val PC_APP_URL = "https://github.com/Prajwaljb/VyomaConnect/tree/
 internal const val PC_APP_INSTALL = "git clone https://github.com/Prajwaljb/VyomaConnect && VyomaConnect/desktop/daemon/install.sh"
 
 /**
- * First run: the show ([WelcomeShow]), then setup one step at a time on the same picture. Each step
+ * First run: the show ([WelcomeShow]), then setup one step at a time on the same picture. Vyoma's PC
+ * app comes before pairing: it's what the phone pairs with (KDE Connect is the fallback). Each step
  * opens when its turn comes, says why it's asking, and closes into a tick when done. The day runs
  * through it: night while it's looking for the PC, the sun rising as it pairs, morning at the end.
  */
@@ -196,15 +197,21 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
     var demoPaired by rememberSaveable { mutableStateOf(!BuildConfig.DEMO) }
     val realPaired = devices.filter { it.isPaired && !it.isCompanion }
     val paired = if (demoPaired) realPaired else emptyList()
-    // Vyoma on the PC: its own app (the paired PC itself has Vyoma's features), or the companion beside KDE Connect.
-    val companionOn = demoPaired && devices.any { it.identity.featuresOf != null && it.isPaired && it.isReachable }
     val available = (if (demoPaired) emptyList() else realPaired) + devices.filter { !it.isPaired && !it.isCompanion && it.isReachable && it !in pairing }
+    // Vyoma on the PC, seen before pairing too (its announcement says what it can do): its own app, or
+    // the companion beside KDE Connect. A PC that's only KDE Connect still pairs, with less to offer.
+    val vyomaPc = devices.firstOrNull { it.identity.featuresOf != null && it.isReachable && (it.isPaired || !it.isCompanion) }
+    val vyomaOn = vyomaPc != null
+    // KDE Connect (or GSConnect) instead: the PC step stands aside and pairing opens.
+    var withoutVyoma by rememberSaveable { mutableStateOf(false) }
+    val anyPc = paired.isNotEmpty() || available.isNotEmpty() || pairing.isNotEmpty()
 
-    // The first thing left to do is the one that's open; a finger can open another.
+    // The first thing left to do is the one that's open; a finger can open another. Once any PC shows
+    // up, pairing comes next whatever it runs: Vyoma's PC app takes over KDE Connect's pairing anyway.
     val current = when {
         !coreOn -> 0
-        paired.isEmpty() -> 1
-        !companionOn -> 2
+        paired.isEmpty() && !vyomaOn && !anyPc && !withoutVyoma -> 1
+        paired.isEmpty() -> 2
         else -> 3
     }
     var opened by rememberSaveable { mutableIntStateOf(current) }
@@ -236,8 +243,8 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
                 Text(
                     when (current) {
                         0 -> "Let's find your PC. This takes a minute."
-                        1 -> "Step 2 of 4: pair with your PC"
-                        2 -> "Paired. Vyoma on your PC does much more."
+                        1 -> "Step 2 of 4: Vyoma on your PC"
+                        2 -> "Step 3 of 4: pair with your PC"
                         else -> "Nearly there"
                     },
                     style = MaterialTheme.typography.bodyLarge,
@@ -252,8 +259,23 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
                 if (!coreOn) PillButton("Allow", onClick = { askCore.launch(corePermissions) }, large = true)
             }
         }
+        item(key = "pc-app") {
+            val status = when {
+                vyomaOn -> "On " + vyomaPc!!.identity.deviceName
+                anyPc -> "Your PC has KDE Connect: Vyoma does more"
+                withoutVyoma -> "Using KDE Connect"
+                else -> "What your phone pairs with"
+            }
+            SetupCard(backdrop, 2, "Vyoma on your PC", status, vyomaOn, opened == 1, { opened = 1 }) {
+                CompanionSetup(vm, vyomaOn, paired.firstOrNull()?.identity?.deviceId)
+                if (!vyomaOn && !anyPc && !withoutVyoma) {
+                    Tip("Already use KDE Connect or GSConnect? Vyoma pairs with them too, with fewer features.")
+                    PillButton("Use KDE Connect", onClick = { withoutVyoma = true }, prominent = false)
+                }
+            }
+        }
         item(key = "pair") {
-            SetupCard(backdrop, 2, "Pair with your PC", paired.firstOrNull()?.identity?.deviceName ?: "Both need to agree once", paired.isNotEmpty(), opened == 1, { opened = 1 }) {
+            SetupCard(backdrop, 3, "Pair with your PC", paired.firstOrNull()?.identity?.deviceName ?: "Both need to agree once", paired.isNotEmpty(), opened == 2, { opened = 2 }) {
                 pairing.forEach { state ->
                     PairingCard(
                         state = state,
@@ -278,18 +300,13 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
                                 },
                             )
                         }
-                        if (paired.isEmpty()) Tip("You'll be asked to check a code matches on both screens: that's how you know it's your PC.")
+                        if (paired.isEmpty()) Tip("You'll check that a code matches on both screens, and accept on the PC too: Vyoma asks there in a notification and in its window.")
                     }
                     pairing.isEmpty() -> {
                         SearchingCard(vm)
-                        Tip("Nothing on the PC yet? Get Vyoma for it from github.com/Prajwaljb/VyomaConnect, or KDE Connect from its app store (GSConnect on GNOME).")
+                        Tip("Not showing up? Check Vyoma (or KDE Connect) is running on the PC and both are on the same Wi-Fi, or plug the phone in with a cable.")
                     }
                 }
-            }
-        }
-        item(key = "companion") {
-            SetupCard(backdrop, 3, "Vyoma on your PC", if (companionOn) "Connected" else "Optional, and worth it", companionOn, opened == 2, { opened = 2 }) {
-                CompanionSetup(vm, companionOn, paired.firstOrNull()?.identity?.deviceId)
             }
         }
         item(key = "extras") {
@@ -397,11 +414,11 @@ internal fun CompanionSetup(vm: AppViewModel, online: Boolean, pcId: String?) {
     val status = LocalStatus.current
     val scope = rememberCoroutineScope()
     if (online) {
-        Tip("It's running. Screen, camera, stats and files are on Home now, and Vyoma's window on the PC shows this phone.")
+        Tip("It's running there. Pair with it next; its window on the PC walks through the same steps.")
         return
     }
     Text(
-        "Vyoma for your PC, in place of KDE Connect: its screen on this phone, this phone as its webcam and game controller, its stats and power, files both ways, and a window to run it all. It keeps this pairing.",
+        "Vyoma's app for your PC, what this phone pairs with: its screen on this phone, this phone as its webcam and game controller, its stats and power, files both ways, and a window to run it all. It takes over from KDE Connect and keeps its pairings.",
         style = MaterialTheme.typography.bodyMedium,
     )
     Text("Run this on your PC. It installs what it needs and starts by itself:", style = MaterialTheme.typography.bodyMedium)
@@ -412,6 +429,11 @@ internal fun CompanionSetup(vm: AppViewModel, online: Boolean, pcId: String?) {
                 if (vm.openOnPc(pcId, PC_APP_URL)) status.show("Opened on your PC", haptic = false)
                 else status.show("Couldn't reach your PC", failure = true)
             }
+        }, prominent = false)
+        // No PC paired yet to open it on: send the page to yourself (mail, a chat) and open it there.
+        if (pcId == null) PillButton("Send link", onClick = {
+            val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, PC_APP_URL)
+            runCatching { context.startActivity(Intent.createChooser(send, "Send the link to your PC")) }
         }, prominent = false)
         PillButton("Copy", onClick = {
             context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("install", PC_APP_INSTALL))

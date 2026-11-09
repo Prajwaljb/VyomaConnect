@@ -12,6 +12,9 @@ calls, media and commands. Its window shows your phones and lets you choose what
 git clone https://github.com/Prajwaljb/VyomaConnect && VyomaConnect/desktop/daemon/install.sh
 ```
 
+Install it before pairing: it's what Vyoma on your phone pairs with. When it's done, its window
+opens on the same setup steps as the phone, so you pair from both screens at once.
+
 This builds it, installs it for your user with a menu entry ("Vyoma"), starts it at login, and
 takes over from KDE Connect, keeping its pairings. It asks for your password to install the
 packages it needs and to open the firewall for phones on Wi-Fi. Anything missing later shows on
