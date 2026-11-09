@@ -102,13 +102,48 @@ if [ "${1:-}" = "--undo" ]; then
 fi
 
 if [ -z "$packaged" ]; then
-if ! command -v cargo >/dev/null 2>&1 || ! command -v cc >/dev/null 2>&1 || ! command -v pkg-config >/dev/null 2>&1; then
+# The newest Rust any of the crates asks for (cargo names the crate when that moves up).
+min_rust=1.96
+rust_ok() {
+    v=$(cargo --version 2>/dev/null | awk '{print $2}')
+    [ -n "$v" ] && [ "$(printf '%s\n%s\n' "$min_rust" "$v" | sort -V | head -n1)" = "$min_rust" ]
+}
+# The C libraries the build links (the mirror window's video, the window's fonts, the keyboard), by pkg-config name.
+libs_ok() {
+    command -v cc >/dev/null 2>&1 && command -v pkg-config >/dev/null 2>&1 &&
+        pkg-config --exists gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0 gstreamer-gl-1.0 gio-2.0 fontconfig xkbcommon
+}
+if ! libs_ok || ! rust_ok; then
     echo "Installing what's needed to build it..."
-    if command -v pacman >/dev/null 2>&1; then as_root pacman -S --needed --noconfirm rust gcc pkgconf
-    elif command -v apt-get >/dev/null 2>&1; then as_root sh -c 'apt-get update && apt-get install -y cargo build-essential pkg-config'
-    elif command -v dnf >/dev/null 2>&1; then as_root dnf install -y cargo gcc pkgconf-pkg-config
-    else
-        echo "No known package manager: install Rust (cargo) and a C compiler, then run this again." >&2
+    if command -v pacman >/dev/null 2>&1; then
+        as_root pacman -S --needed --noconfirm rust gcc pkgconf gstreamer gst-plugins-base-libs fontconfig libxkbcommon
+    elif command -v apt-get >/dev/null 2>&1; then
+        as_root sh -c 'apt-get update && apt-get install -y build-essential pkg-config libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libfontconfig-dev libxkbcommon-dev'
+        # Debian's and Ubuntu's own Rust is older than the build needs: theirs only when it's new enough.
+        rust_ok || as_root apt-get install -y cargo || true
+    elif command -v dnf >/dev/null 2>&1; then
+        as_root dnf install -y gcc pkgconf-pkg-config gstreamer1-devel gstreamer1-plugins-base-devel fontconfig-devel libxkbcommon-devel
+        rust_ok || as_root dnf install -y cargo || true
+    elif ! libs_ok; then
+        echo "No known package manager: install a C compiler, pkg-config and the GStreamer (with its base plugins) and fontconfig and xkbcommon development files, then run this again." >&2
+        exit 1
+    fi
+fi
+# Still too old (or none): a current Rust for this user from rustup, which the distro packages.
+if ! rust_ok; then
+    if ! command -v rustup >/dev/null 2>&1 && ! command -v rustup-init >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then as_root apt-get install -y rustup || true
+        elif command -v dnf >/dev/null 2>&1; then as_root dnf install -y rustup || true
+        fi
+    fi
+    if command -v rustup >/dev/null 2>&1; then
+        rustup toolchain install stable --profile minimal && rustup default stable
+    elif command -v rustup-init >/dev/null 2>&1; then
+        rustup-init -y --no-modify-path --profile minimal
+    fi
+    PATH="$HOME/.cargo/bin:$PATH"
+    if ! rust_ok; then
+        echo "Vyoma needs Rust $min_rust or newer to build. Install it from https://rustup.rs, then run this again." >&2
         exit 1
     fi
 fi

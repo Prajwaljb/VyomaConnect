@@ -15,6 +15,8 @@ makedepends=('cargo' 'pkgconf')
 options=('!lto')
 optdepends=('v4l2loopback-dkms: the phone as a webcam (CachyOS kernels already have it)'
             'thunar: Send to your phone from Thunar'
+            'python-nautilus: Send to your phone from GNOME Files'
+            'ddcutil: brightness of external monitors on GNOME'
             'firewalld: opened for phones automatically when it runs')
 install=vyoma.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")

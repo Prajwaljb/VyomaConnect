@@ -113,7 +113,8 @@ When something happens, Vyoma does something for you.
 - **Updates itself** with one click, pairings kept.
 - **Takes over from KDE Connect** with your pairings, and gives it back with `install.sh --undo`.
 - **Runs on KDE Plasma and GNOME.** On GNOME a small Shell extension, installed with the app, brings clipboard
-  sync, the presenter's pointer, three-finger Overview swipes and a Reply dialog for the phone's notifications.
+  sync, the presenter's pointer, three-finger Overview swipes, silent screenshots, GNOME's own volume and
+  brightness pop-ups, and a Reply dialog for the phone's notifications. Locking needs GNOME's login screen (GDM).
 
 ## With KDE Connect on the PC
 
