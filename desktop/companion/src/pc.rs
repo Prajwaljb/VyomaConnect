@@ -1,7 +1,13 @@
-//! PC controls: screen brightness (Plasma's ScreenBrightness service, internal panels and DDC
-//! monitors alike), the volume of each app playing sound (PipeWire through pactl), and sleep,
-//! restart, shut down and log out (Plasma's own, so the session is saved and apps are asked to
-//! close, exactly as from the desktop's menu). Everything runs as the logged-in user; no root.
+//! PC controls: screen brightness, the volume of each app playing sound (PipeWire through pactl),
+//! and sleep, restart, shut down and log out. Each through the desktop's own service where it has
+//! one, so the session is saved and apps are asked to close, exactly as from its menu:
+//! - Plasma: its ScreenBrightness service (internal panels and DDC monitors alike), its Shutdown
+//!   and Solid power services, `kscreen-doctor` to wake the screens.
+//! - GNOME (and other desktops on Mutter): Mutter's backlight for built-in panels, `ddcutil` for
+//!   monitors, its session manager to restart, shut down or log out (it shows its own 60 s
+//!   countdown, which whoever is at the PC can cancel), Mutter's power-save mode to wake.
+//! - Anywhere: logind to sleep, `ddcutil` for monitors.
+//! Everything runs as the logged-in user; no root.
 
 use std::time::Duration;
 
@@ -16,6 +22,10 @@ use crate::link::{Sender, packet};
 
 const BRIGHTNESS: &str = "org.kde.ScreenBrightness";
 const BRIGHTNESS_PATH: &str = "/org/kde/ScreenBrightness";
+const MUTTER: &str = "org.gnome.Mutter.DisplayConfig";
+const MUTTER_PATH: &str = "/org/gnome/Mutter/DisplayConfig";
+/// Ids of Mutter's panels: its connector ("eDP-1") with what isn't a letter or digit as `_`.
+const MUTTER_ID: &str = "mutter_";
 
 /// One per link: handles `vyoma.pc.request`/`vyoma.pc.set`/`vyoma.pc.power` packets in the order they
 /// came, so a slider's last value always lands last. A burst of sets for the same slider (the phone
@@ -101,15 +111,56 @@ pub async fn set(body: &Value) -> Result<()> {
 /// `vyoma.pc.power {action}`: sleep, restart, shutdown or logout.
 pub async fn power(action: &str) -> Result<()> {
     let conn = Connection::session().await.context("no session bus")?;
-    let (service, path, iface, method) = match action {
-        "sleep" => ("org.kde.Solid.PowerManagement", "/org/kde/Solid/PowerManagement/Actions/SuspendSession", "org.kde.Solid.PowerManagement.Actions.SuspendSession", "suspendToRam"),
-        "restart" => ("org.kde.Shutdown", "/Shutdown", "org.kde.Shutdown", "logoutAndReboot"),
-        "shutdown" => ("org.kde.Shutdown", "/Shutdown", "org.kde.Shutdown", "logoutAndShutdown"),
-        "logout" => ("org.kde.Shutdown", "/Shutdown", "org.kde.Shutdown", "logout"),
+    let kde = |path, iface, method| (Some(("org.kde.Shutdown", path, iface, method)), "Plasma");
+    let (call, who) = match action {
+        "sleep" if has_owner(&conn, "org.kde.Solid.PowerManagement").await => (
+            Some(("org.kde.Solid.PowerManagement", "/org/kde/Solid/PowerManagement/Actions/SuspendSession", "org.kde.Solid.PowerManagement.Actions.SuspendSession", "suspendToRam")),
+            "Plasma",
+        ),
+        // Everywhere else logind, which the desktop's own lock-on-sleep follows.
+        "sleep" => {
+            let system = Connection::system().await.context("no system bus")?;
+            system
+                .call_method(Some("org.freedesktop.login1"), "/org/freedesktop/login1", Some("org.freedesktop.login1.Manager"), "Suspend", &(true,))
+                .await
+                .context("the PC refused to sleep")?;
+            return Ok(());
+        }
+        "restart" | "shutdown" | "logout" if has_owner(&conn, "org.kde.Shutdown").await => match action {
+            "restart" => kde("/Shutdown", "org.kde.Shutdown", "logoutAndReboot"),
+            "shutdown" => kde("/Shutdown", "org.kde.Shutdown", "logoutAndShutdown"),
+            _ => kde("/Shutdown", "org.kde.Shutdown", "logout"),
+        },
+        "restart" | "shutdown" | "logout" if has_owner(&conn, GNOME_SESSION).await => {
+            let gnome = |method| Some((GNOME_SESSION, "/org/gnome/SessionManager", GNOME_SESSION, method));
+            match action {
+                // Mode 1: no "are you sure", the phone already asked.
+                "logout" => {
+                    conn.call_method(Some(GNOME_SESSION), "/org/gnome/SessionManager", Some(GNOME_SESSION), "Logout", &(1u32,)).await.context("GNOME refused to log out")?;
+                    return Ok(());
+                }
+                "restart" => (gnome("Reboot"), "GNOME"),
+                _ => (gnome("Shutdown"), "GNOME"),
+            }
+        }
+        "restart" | "shutdown" | "logout" => (None, ""),
         other => bail!("unknown action {other}"),
     };
-    conn.call_method(Some(service), path, Some(iface), method, &()).await.with_context(|| format!("Plasma refused to {action}"))?;
+    let Some((service, path, iface, method)) = call else {
+        bail!("this desktop can't be asked to {action} from the phone yet");
+    };
+    conn.call_method(Some(service), path, Some(iface), method, &()).await.with_context(|| format!("{who} refused to {action}"))?;
     Ok(())
+}
+
+const GNOME_SESSION: &str = "org.gnome.SessionManager";
+
+/// Whether [name] is served on [conn]'s bus right now.
+async fn has_owner(conn: &Connection, name: &str) -> bool {
+    match conn.call_method(Some("org.freedesktop.DBus"), "/org/freedesktop/DBus", Some("org.freedesktop.DBus"), "NameHasOwner", &(name,)).await {
+        Ok(reply) => reply.body().deserialize::<bool>().unwrap_or(false),
+        Err(_) => false,
+    }
 }
 
 /**
@@ -119,11 +170,19 @@ pub async fn power(action: &str) -> Result<()> {
  * too (the same logind call, in case the stock unlock arrived first while the screen was off).
  */
 pub async fn wake() -> Result<()> {
-    let dpms = tokio::time::timeout(Duration::from_secs(4), tokio::process::Command::new("kscreen-doctor").args(["--dpms", "on"]).kill_on_drop(true).output()).await;
-    if !matches!(dpms, Ok(Ok(ref o)) if o.status.success()) {
-        warn!("couldn't turn the displays on (kscreen-doctor)");
-    }
     let session = Connection::session().await.context("no session bus")?;
+    if has_owner(&session, MUTTER).await {
+        // GNOME: power-save mode 0 is "on".
+        let on = zbus::Variant::from(0i32);
+        if let Err(e) = session.call_method(Some(MUTTER), MUTTER_PATH, Some("org.freedesktop.DBus.Properties"), "Set", &(MUTTER, "PowerSaveMode", on)).await {
+            warn!("couldn't turn the displays on (Mutter): {e}");
+        }
+    } else {
+        let dpms = tokio::time::timeout(Duration::from_secs(4), tokio::process::Command::new("kscreen-doctor").args(["--dpms", "on"]).kill_on_drop(true).output()).await;
+        if !matches!(dpms, Ok(Ok(ref o)) if o.status.success()) {
+            warn!("couldn't turn the displays on (kscreen-doctor)");
+        }
+    }
     let _ = session.call_method(Some("org.freedesktop.ScreenSaver"), "/org/freedesktop/ScreenSaver", Some("org.freedesktop.ScreenSaver"), "SimulateUserActivity", &()).await;
     let system = Connection::system().await.context("no system bus")?;
     system
@@ -133,9 +192,71 @@ pub async fn wake() -> Result<()> {
     Ok(())
 }
 
+/// Every screen whose brightness can be set: Plasma's list where it runs, else Mutter's panels
+/// and the monitors ddcutil reaches.
 async fn displays() -> Result<Vec<Value>> {
     let conn = Connection::session().await?;
-    let names: Vec<String> = prop(&conn, BRIGHTNESS_PATH, "DisplaysDBusNames").await?.try_into()?;
+    if has_owner(&conn, BRIGHTNESS).await {
+        return kde_displays(&conn).await;
+    }
+    let mut out = mutter_displays(&conn).await.unwrap_or_default();
+    for m in crate::ddc::monitors().await {
+        if let Ok(value) = crate::ddc::brightness(m.bus).await {
+            out.push(json!({ "id": crate::ddc::id(m.bus), "label": m.label, "internal": false, "value": value }));
+        }
+    }
+    Ok(out)
+}
+
+/// Mutter's backlights: built-in panels, as `(serial, [{connector, active, min, max, value}])`.
+async fn mutter_backlights(conn: &Connection) -> Result<(u32, Vec<std::collections::HashMap<String, OwnedVariant>>)> {
+    let v: OwnedVariant = conn
+        .call_method(Some(MUTTER), MUTTER_PATH, Some("org.freedesktop.DBus.Properties"), "Get", &(MUTTER, "Backlight"))
+        .await?
+        .body()
+        .deserialize()?;
+    Ok(v.try_into()?)
+}
+
+fn mutter_id(connector: &str) -> String {
+    format!("{MUTTER_ID}{}", connector.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect::<String>())
+}
+
+async fn mutter_displays(conn: &Connection) -> Result<Vec<Value>> {
+    let (_, lights) = mutter_backlights(conn).await?;
+    let mut out = Vec::new();
+    for l in lights {
+        let int = |k: &str| l.get(k).and_then(|v| i32::try_from(v).ok());
+        let (Some(min), Some(max), Some(value)) = (int("min"), int("max"), int("value")) else { continue };
+        let Some(connector) = l.get("connector").and_then(|v| String::try_from(v.try_clone().ok()?).ok()) else { continue };
+        if max <= min || !l.get("active").and_then(|v| bool::try_from(v).ok()).unwrap_or(true) {
+            continue;
+        }
+        out.push(json!({ "id": mutter_id(&connector), "label": "Built-in display", "internal": true, "value": (value - min) as f64 / (max - min) as f64 }));
+    }
+    Ok(out)
+}
+
+async fn set_mutter_brightness(conn: &Connection, id: &str, level: f64) -> Result<()> {
+    let (serial, lights) = mutter_backlights(conn).await?;
+    for l in lights {
+        let int = |k: &str| l.get(k).and_then(|v| i32::try_from(v).ok());
+        let Some(connector) = l.get("connector").and_then(|v| String::try_from(v.try_clone().ok()?).ok()) else { continue };
+        if mutter_id(&connector) != id {
+            continue;
+        }
+        let (Some(min), Some(max)) = (int("min"), int("max")) else { bail!("no brightness range") };
+        let value = min + ((level.clamp(0.01, 1.0)) * (max - min) as f64).round() as i32;
+        conn.call_method(Some(MUTTER), MUTTER_PATH, Some(MUTTER), "SetBacklight", &(serial, connector.as_str(), value.clamp(min, max)))
+            .await
+            .context("GNOME refused the brightness")?;
+        return Ok(());
+    }
+    bail!("that display is gone")
+}
+
+async fn kde_displays(conn: &Connection) -> Result<Vec<Value>> {
+    let names: Vec<String> = prop(conn, BRIGHTNESS_PATH, "DisplaysDBusNames").await?.try_into()?;
     let mut out = Vec::new();
     for name in names {
         let path = format!("{BRIGHTNESS_PATH}/{name}");
@@ -164,7 +285,13 @@ async fn set_brightness(display: &str, level: f64) -> Result<()> {
     if !display.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         bail!("bad display id");
     }
+    if let Some(bus) = crate::ddc::bus_of(display) {
+        return crate::ddc::set_brightness(bus, level).await;
+    }
     let conn = Connection::session().await.context("no session bus")?;
+    if display.starts_with(MUTTER_ID) {
+        return set_mutter_brightness(&conn, display, level).await;
+    }
     let path = format!("{BRIGHTNESS_PATH}/{display}");
     let max: i32 = conn
         .call_method(Some(BRIGHTNESS), path.as_str(), Some("org.freedesktop.DBus.Properties"), "Get", &(format!("{BRIGHTNESS}.Display"), "MaxBrightness"))
@@ -240,9 +367,12 @@ mod tests {
     async fn reads_and_rewrites_brightness() {
         let s = super::state().await;
         println!("{s:#}");
-        if let Some(d) = s["displays"].as_array().and_then(|d| d.first()) {
+        // Only one at 1% or more: below that the phone's floor would change it for real.
+        if let Some(d) = s["displays"].as_array().and_then(|d| d.iter().find(|d| d["value"].as_f64().is_some_and(|v| v >= 0.01))) {
             super::set(&serde_json::json!({ "display": d["id"], "brightness": d["value"] })).await.unwrap();
-            assert_eq!(super::state().await["displays"][0]["value"], d["value"]);
+            let after = super::state().await;
+            let same = after["displays"].as_array().unwrap().iter().find(|e| e["id"] == d["id"]).unwrap()["value"].clone();
+            assert_eq!(same, d["value"]);
         }
     }
 

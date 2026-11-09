@@ -58,7 +58,7 @@ Set up the PC first, then the phone.
 
 ### 1. Your PC
 
-Vyoma runs on Linux with KDE Plasma. Support for GNOME, other desktops and macOS is coming in
+Vyoma runs on Linux with KDE Plasma or GNOME. Support for other desktops and macOS is coming in
 future releases.
 
 ```sh
@@ -68,6 +68,10 @@ git clone https://github.com/Prajwaljb/VyomaConnect && VyomaConnect/desktop/daem
 The installer builds Vyoma, adds it to your app menu, starts it at login and takes over from KDE
 Connect with your pairings intact. It asks for your password once, to install what it needs and
 let phones through the firewall. Prefer KDE Connect after all? `install.sh --undo` puts it back.
+
+On GNOME, the installer also adds Vyoma's small GNOME Shell extension, which clipboard sync, the
+presenter's pointer and replying to notifications need. Log out and back in once to turn it on.
+GSConnect is switched off while Vyoma runs, as both use the same port.
 
 When a new version is out, Vyoma tells you and updates itself with one click, your pairings kept
 (or run `install.sh --update`).
@@ -125,8 +129,8 @@ PC, opens its files or shows its screen.
 ## Something not right?
 
 [Open an issue](https://github.com/Prajwaljb/VyomaConnect/issues) and say what you did, what
-happened, and which phone, distro and desktop you're on. Vyoma is built on KDE Plasma 6 with
-Wayland; the installer also supports Debian, Ubuntu and Fedora, and reports from those are
+happened, and which phone, distro and desktop you're on. Vyoma is built on KDE Plasma 6 and GNOME
+with Wayland; the installer also supports Debian, Ubuntu and Fedora, and reports from those are
 especially welcome.
 
 ## Build it yourself

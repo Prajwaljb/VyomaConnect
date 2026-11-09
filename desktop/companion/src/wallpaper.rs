@@ -12,7 +12,7 @@ pub const COLS: usize = 4;
 pub const ROWS: usize = 4;
 
 pub async fn colors() -> Result<Vec<[u8; 3]>> {
-    let path = current().context("couldn't find Plasma's wallpaper image")?;
+    let path = current().context("couldn't find the desktop's wallpaper image")?;
     let out = tokio::time::timeout(
         Duration::from_secs(10),
         tokio::process::Command::new("ffmpeg")
@@ -30,19 +30,58 @@ pub async fn colors() -> Result<Vec<[u8; 3]>> {
     Ok(out.stdout.chunks_exact(3).take(COLS * ROWS).map(|c| [c[0], c[1], c[2]]).collect())
 }
 
-/// What identifies the wallpaper as shown: its file and when the file and Plasma's setting last
-/// changed. Cheap (a config read and two stats), so it can be checked every few seconds.
+/// What identifies the wallpaper as shown: its file and when the file and the desktop's setting
+/// last changed. Cheap (a config read and two stats), so it can be checked every few seconds.
 pub fn signature() -> Option<(PathBuf, Option<std::time::SystemTime>, Option<std::time::SystemTime>)> {
     let home = std::env::var_os("HOME")?;
-    let config = Path::new(&home).join(".config/plasma-org.kde.plasma.desktop-appletsrc");
+    // GNOME keeps its settings in dconf's one file.
+    let config = if crate::desktop::is_gnome() { Path::new(&home).join(".config/dconf/user") } else { Path::new(&home).join(".config/plasma-org.kde.plasma.desktop-appletsrc") };
     let path = current()?;
     let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
     Some((path.clone(), mtime(&path), mtime(&config)))
 }
 
+/// The image the desktop shows: GNOME's background (its dark one in dark mode), else Plasma's.
+fn current() -> Option<PathBuf> {
+    if crate::desktop::is_gnome() {
+        return gnome();
+    }
+    plasma()
+}
+
+/// GNOME's background from its settings. A slideshow (an XML file of images, which GNOME's own
+/// day-and-night ones are) gives its first image.
+fn gnome() -> Option<PathBuf> {
+    let get = |schema: &str, key: &str| {
+        let out = std::process::Command::new("gsettings").args(["get", schema, key]).output().ok()?;
+        let v = String::from_utf8_lossy(&out.stdout).trim().trim_matches('\'').to_owned();
+        (out.status.success() && !v.is_empty()).then_some(v)
+    };
+    let dark = get("org.gnome.desktop.interface", "color-scheme").is_some_and(|v| v == "prefer-dark");
+    let uri = (if dark { get("org.gnome.desktop.background", "picture-uri-dark") } else { None }).or_else(|| get("org.gnome.desktop.background", "picture-uri"))?;
+    let path = PathBuf::from(unescape(uri.strip_prefix("file://").unwrap_or(&uri)));
+    if path.extension().is_some_and(|e| e == "xml") {
+        return slideshow_first(&std::fs::read_to_string(&path).ok()?).map(PathBuf::from).filter(|p| p.is_file());
+    }
+    resolve(&path)
+}
+
+/// The first `<file>` of a GNOME slideshow, or of its `<static>` part.
+fn slideshow_first(xml: &str) -> Option<String> {
+    let start = xml.find("<file>")? + "<file>".len();
+    let end = start + xml[start..].find("</file>")?;
+    let inner = xml[start..end].trim();
+    // A timed one names a size per file: <file><size width=".." ..>path</size></file>.
+    let inner = match inner.find('>') {
+        Some(i) if inner.starts_with('<') => inner[i + 1..].split('<').next().unwrap_or("").trim(),
+        _ => inner,
+    };
+    (!inner.is_empty()).then(|| inner.to_owned())
+}
+
 /// The image Plasma's desktop shows (the first screen's), from its desktop config. A wallpaper
 /// package resolves to its largest image; no image set means Plasma's default, Next.
-fn current() -> Option<PathBuf> {
+fn plasma() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     let config = Path::new(&home).join(".config/plasma-org.kde.plasma.desktop-appletsrc");
     let image = std::fs::read_to_string(config).ok().and_then(|text| image_setting(&text));
@@ -99,6 +138,15 @@ fn unescape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_a_gnome_slideshow() {
+        let timed = "<background><static><duration>8.0</duration><file>/usr/share/backgrounds/gnome/a-l.jpg</file></static></background>";
+        assert_eq!(slideshow_first(timed).as_deref(), Some("/usr/share/backgrounds/gnome/a-l.jpg"));
+        let sized = "<background><static><file><size width=\"1920\" height=\"1080\">/x/b.png</size></file></static></background>";
+        assert_eq!(slideshow_first(sized).as_deref(), Some("/x/b.png"));
+        assert_eq!(slideshow_first("<background/>"), None);
+    }
 
     #[test]
     fn finds_the_image_setting() {

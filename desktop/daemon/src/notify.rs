@@ -110,7 +110,7 @@ impl Notifier {
 }
 
 /// Bodies are read as markup, and names come from the phone.
-fn escape(text: &str) -> String {
+pub fn escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 

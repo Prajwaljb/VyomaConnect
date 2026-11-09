@@ -3,9 +3,10 @@
 //! by the aspect, as kdeconnectd does), `{stop: true}` hides it, and so does a second without word
 //! (the phone keeps sending while it's held).
 //!
-//! It's a wlr-layer-shell surface on the overlay layer (KWin, wlroots and COSMIC have it; GNOME
-//! doesn't, and there the dot just never shows): a small square that takes no input, moved with its
-//! margins, so a move redraws nothing. Its own thread and Wayland connection, made on first use.
+//! It's a wlr-layer-shell surface on the overlay layer (KWin, wlroots and COSMIC have it): a small
+//! square that takes no input, moved with its margins, so a move redraws nothing. Its own thread and
+//! Wayland connection, made on first use. GNOME has no layer shell, so there Vyoma's GNOME extension
+//! draws the same dot (`vyoma_companion::shell::point`).
 
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -45,6 +46,8 @@ pub struct Presenter {
     orders: Option<channel::Sender<Order>>,
     /// Wayland or its layer shell isn't there: said once, then quiet.
     failed: bool,
+    /// On GNOME: the moves, in order, to the extension.
+    gnome: Option<tokio::sync::mpsc::UnboundedSender<Order>>,
 }
 
 impl Presenter {
@@ -55,6 +58,11 @@ impl Presenter {
             let (Some(dx), Some(dy)) = (number(&body["dx"]), number(&body["dy"])) else { return };
             Order::Move(dx.clamp(-2.0, 2.0), dy.clamp(-2.0, 2.0))
         };
+        if vyoma_companion::desktop::is_gnome() {
+            let tx = self.gnome.get_or_insert_with(through_shell);
+            let _ = tx.send(order);
+            return;
+        }
         if self.orders.is_none() && !self.failed && matches!(order, Order::Move(..)) {
             match start() {
                 Ok(tx) => self.orders = Some(tx),
@@ -71,6 +79,26 @@ impl Presenter {
             self.orders = None;
         }
     }
+}
+
+/// One task passes the moves on in order; the extension hides the dot after a quiet second itself.
+fn through_shell() -> tokio::sync::mpsc::UnboundedSender<Order> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let mut said = false;
+        while let Some(order) = rx.recv().await {
+            let done = match order {
+                Order::Move(dx, dy) => vyoma_companion::shell::point(dx, dy).await,
+                Order::Stop => vyoma_companion::shell::hide_pointer().await,
+            };
+            if let Err(e) = done
+                && !std::mem::replace(&mut said, true)
+            {
+                tracing::warn!("no presenter pointer: {e:#}");
+            }
+        }
+    });
+    tx
 }
 
 /// Peers send numbers either way (see the protocol notes).

@@ -86,6 +86,7 @@ const NEEDS: &[Need] = &[
     need("notifications", Probe::Tool("notify-send"), "libnotify", "libnotify-bin", "libnotify"),
     need("opening files", Probe::Tool("xdg-open"), "xdg-utils", "xdg-utils", "xdg-utils"),
     need("updates", Probe::Tool("curl"), "curl", "curl", "curl"),
+    need("monitor brightness", Probe::Tool("ddcutil"), "ddcutil", "ddcutil", "ddcutil"),
     need("USB", Probe::Tool("adb"), "android-tools", "adb", "android-tools"),
     need("wallpaper and camera", Probe::Tool("ffmpeg"), "ffmpeg", "ffmpeg", "ffmpeg-free"),
     need("phone files", Probe::Tool("sshfs"), "sshfs", "sshfs", "fuse-sshfs"),

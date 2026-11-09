@@ -1,7 +1,8 @@
 //! The touchpad's three-finger swipes, stepped the way Plasma's own touchpad gestures step:
 //! up goes desktop → windows → Overview → Grid, down goes back Grid → Overview → windows → desktop.
 //! A shortcut alone can't do that (Meta+D in Overview, or Meta+W over the shown desktop, land
-//! somewhere odd), so each step reads where KWin is first.
+//! somewhere odd), so each step reads where KWin is first. On GNOME, Vyoma's extension steps the
+//! Overview as GNOME's own swipes do: windows → Overview → apps grid.
 //!
 //! `vyoma.desktop.step {up: bool}` → `vyoma.desktop.stepped {view: "desktop"|"windows"|"overview"|"grid"}`
 //! (where it ended up) or `{error}`.
@@ -11,6 +12,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Context, Result};
 use zbus::Connection;
 use zbus::OwnedVariant;
+
+/// The session runs GNOME (also Ubuntu's and other GNOME-based ones), from the desktop name the
+/// session gives its services.
+pub fn is_gnome() -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|p| p.eq_ignore_ascii_case("gnome")))
+}
 
 /// Whether the open Overview is in its grid mode. KWin shows both as one effect, so this is
 /// remembered from the steps taken here (and forgotten once the Overview closes).
@@ -38,6 +45,13 @@ async fn toggle_desktop(conn: &Connection) -> Result<()> {
 }
 
 pub async fn step(up: bool) -> Result<&'static str> {
+    if is_gnome() {
+        return Ok(match crate::shell::step(up).await?.as_str() {
+            "grid" => "grid",
+            "overview" => "overview",
+            _ => "windows",
+        });
+    }
     let conn = Connection::session().await.context("no session bus")?;
     let effects: Vec<String> = get(&conn, "/Effects", "org.kde.kwin.Effects", "activeEffects").await?.try_into().context("activeEffects")?;
     let overview = effects.iter().any(|e| e == "overview");

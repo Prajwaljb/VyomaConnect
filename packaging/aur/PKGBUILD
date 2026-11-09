@@ -39,6 +39,8 @@ package() {
     install -Dm755 daemon/target/release/vyoma-desktop "$pkgdir/usr/bin/vyoma-desktop"
     install -Dm755 gui/target/release/vyoma "$pkgdir/usr/bin/vyoma"
     install -Dm755 daemon/install.sh "$pkgdir/usr/share/vyoma/install.sh"
+    # GNOME's extension; install.sh turns it on.
+    install -Dm644 -t "$pkgdir/usr/share/gnome-shell/extensions/vyoma@vyoma.dev" gnome-extension/metadata.json gnome-extension/extension.js
     install -Dm644 daemon/dist/vyoma.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/vyoma.svg"
     sed 's|@BIN@|/usr/bin/vyoma|' daemon/dist/vyoma.desktop | install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/vyoma.desktop"
     sed 's|%h/.local/bin/vyoma-desktop|/usr/bin/vyoma-desktop|' daemon/dist/vyoma-desktop.service |

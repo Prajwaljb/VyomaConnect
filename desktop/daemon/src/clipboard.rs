@@ -2,15 +2,12 @@
 //! them as `kdeconnect.clipboard`, and a device that links gets the current one with when it was
 //! copied (`kdeconnect.clipboard.connect`), which it takes only if that's newer than its own.
 //!
-//! Through wl-clipboard, which needs the compositor's data-control protocol (KWin, wlroots,
-//! COSMIC); GNOME has none, so it will need its own way there.
+//! Through `vyoma_companion::clip`: wl-clipboard where the compositor has the data-control
+//! protocol (KWin, wlroots, COSMIC), Vyoma's GNOME extension on GNOME.
 
-use std::process::Stdio;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command;
 use tokio::sync::mpsc;
 use vyoma_core::link::packet;
 
@@ -19,8 +16,6 @@ pub const CLIPBOARD_CONNECT: &str = "kdeconnect.clipboard.connect";
 
 /// Larger copies stay on the PC: every device would get the whole of it on each change.
 const MAX_TEXT: usize = 1 << 20;
-/// Password managers (KeePassXC, KWallet) mark what they copy with this; it's never sent.
-const SECRET_HINT: &str = "x-kde-passwordManagerHint";
 
 /// What's on the clipboard as far as the devices know, and since when (ms).
 #[derive(Default)]
@@ -72,51 +67,40 @@ fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-/// Sends the clipboard's text each time it changes, for as long as wl-paste runs.
+/// Sends the clipboard's text each time it changes, for as long as it can follow it.
 pub async fn watch(out: mpsc::UnboundedSender<String>) -> anyhow::Result<()> {
-    let mut child = Command::new("wl-paste").args(["--watch", "echo"]).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true).spawn()?;
-    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
-    while lines.next_line().await?.is_some() {
-        let Some(text) = current().await else { continue };
-        if out.send(text).is_err() {
-            break;
+    let (tick, mut ticks) = mpsc::unbounded_channel::<()>();
+    let reader = tokio::spawn(async move {
+        while ticks.recv().await.is_some() {
+            // A burst of changes (an app offering several types) reads once.
+            while ticks.try_recv().is_ok() {}
+            let Some(text) = current().await else { continue };
+            if out.send(text).is_err() {
+                break;
+            }
         }
-    }
-    anyhow::bail!("wl-paste stopped: {}", child.wait().await?)
-}
-
-/// wl-paste waits on whichever app owns the clipboard, which can be frozen.
-async fn wl_paste(args: &[&str]) -> Option<Vec<u8>> {
-    let out = tokio::time::timeout(Duration::from_secs(2), Command::new("wl-paste").args(args).stderr(Stdio::null()).kill_on_drop(true).output()).await.ok()?.ok()?;
-    out.status.success().then_some(out.stdout)
+    });
+    let followed = vyoma_companion::clip::follow(move || {
+        let _ = tick.send(());
+    })
+    .await;
+    reader.abort();
+    followed
 }
 
 /// The clipboard's text, unless it has none, is too big or is a password.
 async fn current() -> Option<String> {
-    let types = String::from_utf8(wl_paste(&["--list-types"]).await?).ok()?;
-    if types.lines().any(|t| t == SECRET_HINT) || !types.lines().any(|t| t.starts_with("text/") || t == "UTF8_STRING" || t == "STRING" || t == "TEXT") {
-        return None;
-    }
-    let text = wl_paste(&["--no-newline", "--type", "text"]).await?;
+    let text = vyoma_companion::clip::text().await?;
     if text.len() > MAX_TEXT {
         tracing::info!("clipboard holds {} KiB of text, too much to send", text.len() >> 10);
         return None;
     }
-    String::from_utf8(text).ok()
+    Some(text)
 }
 
 /// Puts [text] on this PC's clipboard.
 pub async fn set(text: &str) {
-    let spawned = Command::new("wl-copy").args(["--type", "text/plain;charset=utf-8"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
-    let Ok(mut c) = spawned else {
-        tracing::warn!("can't set the clipboard: no wl-copy");
-        return;
-    };
-    if let Some(mut stdin) = c.stdin.take() {
-        let _ = stdin.write_all(text.as_bytes()).await;
-    }
-    // wl-copy forks a server to hold the clipboard and its first process exits.
-    let _ = tokio::time::timeout(Duration::from_secs(2), c.wait()).await;
+    vyoma_companion::clip::set(text).await;
 }
 
 #[cfg(test)]

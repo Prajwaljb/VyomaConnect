@@ -103,6 +103,23 @@ struct Shown {
     note: Note,
 }
 
+/// A reply to ask for in a dialog (see [Mirror::take_reply]).
+#[derive(Debug, PartialEq)]
+pub struct ReplyAsk {
+    pub device: String,
+    pub reply_id: String,
+    pub heading: String,
+    /// The message being answered.
+    pub text: String,
+    pub placeholder: String,
+}
+
+impl ReplyAsk {
+    pub fn packet(&self, message: &str) -> Value {
+        packet(NOTIFICATION_REPLY, json!({ "requestReplyId": self.reply_id, "message": message }))
+    }
+}
+
 /// Which notification here is which on which phone.
 #[derive(Default)]
 pub struct Mirror {
@@ -139,6 +156,17 @@ impl Mirror {
         self.by_notice.remove(&notice)
     }
 
+    /// Its Reply button was pressed where the desktop has no inline replies (GNOME, Cinnamon...):
+    /// what asking for the text needs. It's forgotten here, so the notification closing as the
+    /// button is pressed doesn't dismiss it on the phone before the reply goes.
+    pub fn take_reply(&mut self, notice: u32) -> Option<ReplyAsk> {
+        self.by_notice.get(&notice)?.note.reply.as_ref()?;
+        let s = self.forget(notice)?;
+        let heading = s.note.heading();
+        let to = if s.note.title.is_empty() { s.note.app.clone() } else { s.note.title.clone() };
+        Some(ReplyAsk { device: s.device, reply_id: s.note.reply.unwrap_or_default(), heading, text: s.note.text, placeholder: format!("Reply to {to}") })
+    }
+
     /// What to tell which phone after something happened to one of ours.
     pub fn heard(&mut self, h: &Heard) -> Option<(String, Value)> {
         match h {
@@ -158,6 +186,23 @@ impl Mirror {
             }
         }
     }
+}
+
+/// Asks for the text of a reply where notifications have no reply field: in GNOME's own dialog
+/// (through Vyoma's extension), else zenity's. `None` if cancelled.
+pub async fn ask_reply(ask: &ReplyAsk) -> Result<Option<String>> {
+    if vyoma_companion::desktop::is_gnome() {
+        return vyoma_companion::shell::ask_reply(&ask.heading, &ask.text, &ask.placeholder).await;
+    }
+    let out = tokio::process::Command::new("zenity")
+        // Its text is read as markup, and it comes from the phone.
+        .args(["--entry", "--title", &ask.heading, "--text", &crate::notify::escape(&ask.text), "--ok-label", "Send"])
+        .kill_on_drop(true)
+        .output()
+        .await
+        .context("this desktop's notifications have no reply field, and zenity isn't installed to ask instead")?;
+    let text = String::from_utf8_lossy(&out.stdout).trim_end_matches('\n').to_owned();
+    Ok(Some(text).filter(|t| out.status.success() && !t.trim().is_empty()))
 }
 
 /// Where icon [name] is kept.

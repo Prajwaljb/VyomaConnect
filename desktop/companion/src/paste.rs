@@ -2,11 +2,9 @@
 //! keymap has, so such text goes on the clipboard for a Ctrl+V. Whatever the user had copied comes
 //! back a moment after the last one, unless they've copied something new meanwhile.
 
-use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
@@ -51,37 +49,36 @@ pub async fn put(text: &str) -> Result<()> {
     Ok(())
 }
 
-/// wl-paste waits on whichever app owns the clipboard, which can be frozen: it mustn't hold [STATE].
-async fn wl_paste(args: &[&str]) -> Option<std::process::Output> {
-    tokio::time::timeout(std::time::Duration::from_secs(2), Command::new("wl-paste").args(args).kill_on_drop(true).output()).await.ok()?.ok()
-}
-
 async fn current_text() -> Option<String> {
-    let out = wl_paste(&["--no-newline", "--type", "text/plain"]).await?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    crate::clip::text().await
 }
 
+/// What's on the clipboard, to put back: its best type and bytes. GNOME's extension deals in
+/// text only, so there it's the text.
 async fn read_clipboard() -> Option<(String, Vec<u8>)> {
-    let list = wl_paste(&["--list-types"]).await?;
-    if !list.status.success() {
-        return None;
+    if crate::desktop::is_gnome() {
+        return crate::clip::text().await.map(|t| ("text/plain;charset=utf-8".to_owned(), t.into_bytes()));
     }
-    let list = String::from_utf8_lossy(&list.stdout).into_owned();
+    let list = String::from_utf8_lossy(&crate::clip::wl_paste(&["--list-types"]).await?).into_owned();
     let offered: Vec<&str> = list.lines().collect();
     let kind = TYPES.iter().find(|t| offered.contains(t)).copied().or(offered.first().copied())?;
-    let out = wl_paste(&["--no-newline", "--type", kind]).await?;
-    out.status.success().then(|| (kind.to_string(), out.stdout))
+    let bytes = crate::clip::wl_paste(&["--no-newline", "--type", kind]).await?;
+    Some((kind.to_string(), bytes))
 }
 
 async fn restore(saved: Option<(String, Vec<u8>)>) {
-    let Some((kind, bytes)) = saved else {
-        let _ = Command::new("wl-copy").arg("--clear").status().await;
-        return;
-    };
-    let Ok(mut c) = Command::new("wl-copy").args(["--type", &kind]).stdin(Stdio::piped()).spawn() else { return };
-    if let Some(mut stdin) = c.stdin.take() {
-        let _ = stdin.write_all(&bytes).await;
+    match saved {
+        Some((_, bytes)) if crate::desktop::is_gnome() => {
+            crate::clip::set(&String::from_utf8_lossy(&bytes)).await;
+        }
+        Some((kind, bytes)) => {
+            crate::clip::copy_as(&kind, &bytes).await;
+        }
+        None if crate::desktop::is_gnome() => {
+            crate::clip::set("").await;
+        }
+        None => {
+            let _ = Command::new("wl-copy").arg("--clear").status().await;
+        }
     }
-    // wl-copy forks a server to hold the clipboard and its first process exits.
-    let _ = tokio::time::timeout(Duration::from_secs(2), c.wait()).await;
 }
