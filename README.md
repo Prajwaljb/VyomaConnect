@@ -25,8 +25,9 @@ cable, fingerprint-protected commands, and a PC window that shows exactly what e
 <img src="docs/screenshots/phone-setup.png" width="240" alt="The phone's setup steps">
 </p>
 
-**Files, both ways.** Send files and whole folders in either direction. Browse your PC from the
-phone, and open the phone's storage right in your PC's file manager. A dropped connection picks up
+**Files, both ways.** Send files and whole folders in either direction: on the PC, right-click and
+pick **Send to** your phone. Browse your PC from the phone, and open the phone's storage right in
+your PC's file manager. A dropped connection picks up
 where it left off.
 
 **One clipboard.** Copy on one, paste on the other.

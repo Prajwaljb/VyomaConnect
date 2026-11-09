@@ -15,7 +15,7 @@ import dev.vyoma.connect.service.Notifications
 import java.io.File
 import java.io.OutputStream
 
-/** Files from the PC land in Downloads/Vyoma through MediaStore, so no storage permission is needed. */
+/** Files from the PC land in Downloads/Vyoma (a sent folder inside it, as it was) through MediaStore, so no storage permission is needed. */
 class AndroidShareSink(private val context: Context, private val clipboard: AndroidClipboard) : ShareSink {
 
     override fun onText(from: Device, text: String) {
@@ -25,11 +25,11 @@ class AndroidShareSink(private val context: Context, private val clipboard: Andr
 
     override fun onUrl(from: Device, url: String) = Notifications.linkReceived(context, from.name, url)
 
-    override fun createFile(from: Device, name: String, size: Long, lastModified: Long?): IncomingFile? {
+    override fun createFile(from: Device, name: String, size: Long, lastModified: Long?, folder: String?): IncomingFile? {
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, name)
             put(MediaStore.Downloads.MIME_TYPE, mimeOf(name))
-            put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/Vyoma")
+            put(MediaStore.Downloads.RELATIVE_PATH, listOfNotNull("${Environment.DIRECTORY_DOWNLOADS}/Vyoma", folder).joinToString("/"))
             put(MediaStore.Downloads.IS_PENDING, 1)
             if (size >= 0) put(MediaStore.Downloads.SIZE, size)
         }

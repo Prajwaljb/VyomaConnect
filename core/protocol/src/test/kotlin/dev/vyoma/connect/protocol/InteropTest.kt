@@ -60,7 +60,7 @@ class InteropTest {
     private val sink = object : ShareSink {
         override fun onText(from: Device, text: String) = Unit
         override fun onUrl(from: Device, url: String) = Unit
-        override fun createFile(from: Device, name: String, size: Long, lastModified: Long?) = object : IncomingFile {
+        override fun createFile(from: Device, name: String, size: Long, lastModified: Long?, folder: String?) = object : IncomingFile {
             val buffer = java.io.ByteArrayOutputStream()
             override val output = buffer
             override fun complete(): String { received[name] = buffer.toByteArray(); return name }
