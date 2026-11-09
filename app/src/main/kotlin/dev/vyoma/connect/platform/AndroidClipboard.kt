@@ -1,5 +1,7 @@
 package dev.vyoma.connect.platform
 
+import kotlinx.coroutines.delay
+import android.os.SystemClock
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ClipData
@@ -146,10 +148,17 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
             _syncState.value = SyncState.NEEDS_GRANT
             return
         }
-        if (!again && watcher?.isActive == true) return
+        // A reader Android turned down stays unanswered: opening Vyoma again asks again, once its
+        // ~60 s memory of the refusal is over.
+        val unanswered = _syncState.value == SyncState.WAITING && SystemClock.elapsedRealtime() - askedAt > ASK_AGAIN_AFTER_MS
+        if (!again && watcher?.isActive == true && !unanswered) return
         watcher?.cancel()
         _syncState.value = SyncState.WAITING
+        askedAt = SystemClock.elapsedRealtime()
         watcher = scope.launch(Dispatchers.IO) {
+            // Android only asks while Vyoma is on screen, and on a cold start the reader got there
+            // before Android counted it as such, so it was turned down without asking.
+            delay(SETTLE_MS)
             val marker = "Denying clipboard access to ${context.packageName}"
             val process = runCatching {
                 // ClipboardService logs through Slog, i.e. the system buffer, the quiet one; warnings
@@ -180,6 +189,8 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
             }
         }
     }
+
+    private var askedAt = 0L
 
     private var overlay: View? = null
     private var focused = false
@@ -226,6 +237,8 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
 
     private companion object {
         const val TAG = "Clipboard"
+        private const val SETTLE_MS = 1_000L
+        private const val ASK_AGAIN_AFTER_MS = 65_000L
         const val HISTORY_SIZE = 30
         const val MAX_STORED_CHARS = 20_000
 
