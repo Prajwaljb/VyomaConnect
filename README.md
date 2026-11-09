@@ -66,10 +66,17 @@ The installer builds Vyoma, adds it to your app menu, starts it at login and tak
 Connect with your pairings intact. It asks for your password once, to install what it needs and
 let phones through the firewall. Prefer KDE Connect after all? `install.sh --undo` puts it back.
 
+When a new version is out, Vyoma tells you and updates itself with one click, your pairings kept
+(or run `install.sh --update`).
+
 ### 2. Your phone
 
 Download the APK from [Releases](https://github.com/Prajwaljb/VyomaConnect/releases/latest) and
 open it. Android 12 or newer.
+
+To get every update automatically, add this repository to
+[Obtainium](https://github.com/ImranR98/Obtainium):
+`https://github.com/Prajwaljb/VyomaConnect`.
 
 The signing certificate's SHA-256 fingerprint, for anyone who checks
 (`apksigner verify --print-certs`):
@@ -98,7 +105,8 @@ app restarts, Android asks once for log access: tap **Allow one-time access**. T
 also has a Send button for a quick manual push.
 
 **Private by design.** Your phone and PC talk directly, encrypted, over your own network, cable or
-Bluetooth. No account, no server. Pairing needs a matching code on both screens, the PC window
+Bluetooth. No account, no server. The only thing that goes online is the PC app's daily look for a
+new version on GitHub, which you can turn off on **This PC**. Pairing needs a matching code on both screens, the PC window
 decides what each phone may do, and the phone can ask for your fingerprint before it unlocks the
 PC, opens its files or shows its screen.
 

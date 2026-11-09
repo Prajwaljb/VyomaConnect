@@ -1236,8 +1236,16 @@ component PcPage inherits Page {
     in property <bool> installing;
     in property <int> attention;
     in property <bool> loaded;
+    // The PC app's version, a newer release ("" when none), and the daily check.
+    in property <string> version;
+    in property <string> update-latest;
+    in property <bool> update-checks;
+    in property <bool> updating;
+    in property <bool> can-update;
     callback install();
     callback setup();
+    callback update();
+    callback update-checks-toggled(bool);
     title: "This PC";
     glyph: @image-url("icons/computer.svg");
     subtitle: !loaded ? "Checking…" : attention == 0 ? "Ready for everything" : attention == 1 ? "1 thing to set up" : attention + " things to set up";
@@ -1286,6 +1294,30 @@ component PcPage inherits Page {
             for n in root.notes: Tip {
                 text: n;
             }
+        }
+    }
+
+    if root.loaded && root.version != "": Section {
+        label: "Updates";
+        Row {
+            has-icon: false;
+            first: true;
+            title: "Vyoma " + root.version;
+            subtitle: root.updating ? "Updating. Vyoma restarts by itself when it's done."
+                : root.update-latest != "" && root.can-update ? "Vyoma " + root.update-latest + " is out"
+                : root.update-latest != "" ? "Vyoma " + root.update-latest + " is out. Run install.sh --update in your copy of Vyoma."
+                : root.update-checks ? "Up to date" : "Not checking for updates";
+            action: root.update-latest != "" && root.can-update && !root.updating ? "Update" : "";
+            act => { root.update(); }
+        }
+        Row {
+            has-icon: false;
+            last: true;
+            title: "Check for updates";
+            subtitle: "Once a day, on GitHub";
+            switch: true;
+            on: root.update-checks;
+            clicked => { root.update-checks-toggled(!root.update-checks); }
         }
     }
 
@@ -2228,6 +2260,11 @@ export component MainWindow inherits Window {
     in property <bool> installing;
     in property <int> attention;
     in property <bool> health-loaded;
+    in property <string> version;
+    in property <string> update-latest;
+    in property <bool> update-checks: true;
+    in-out property <bool> updating;
+    in property <bool> can-update;
     // The activity (selected: "activity").
     in property <[Day]> days;
     in property <bool> activity-loaded;
@@ -2282,6 +2319,8 @@ export component MainWindow inherits Window {
     pure callback check-command(string, string, string) -> string;
     callback clear-activity();
     callback install();
+    callback update();
+    callback update-checks-toggled(bool);
     callback finish-setup();
 
     property <length> side: 268px;
@@ -2476,8 +2515,15 @@ export component MainWindow inherits Window {
             installing: root.installing;
             attention: root.attention;
             loaded: root.health-loaded;
+            version: root.version;
+            update-latest: root.update-latest;
+            update-checks: root.update-checks;
+            updating: root.updating;
+            can-update: root.can-update;
             install => { root.install(); }
             setup => { root.setup = true; }
+            update => { root.update(); }
+            update-checks-toggled(on) => { root.update-checks-toggled(on); }
         }
         if root.selected == "activity" && root.daemon-ok: ActivityPage {
             days: root.days;

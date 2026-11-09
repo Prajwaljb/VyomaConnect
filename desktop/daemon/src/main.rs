@@ -27,6 +27,7 @@ mod presenter;
 mod share;
 mod system;
 mod telephony;
+mod update;
 mod volume;
 mod window;
 
@@ -123,6 +124,7 @@ struct Control {
     beside_kde: bool,
     permits: Arc<Permits>,
     activity: Arc<Activity>,
+    updates: Arc<update::Updates>,
 }
 
 /// A phone has reached this PC over the network since start: a firewall lets it through.
@@ -308,9 +310,27 @@ impl Control {
     /// help (`installable`, `installing`), checks no package fixes (`checks`: name, `state` ok,
     /// info or warn, detail) and advice (`notes`).
     async fn health(&self) -> fdo::Result<String> {
-        let beside_kde = self.beside_kde;
-        let report = tokio::task::spawn_blocking(move || health(beside_kde)).await.map_err(|e| fdo::Error::Failed(e.to_string()))?;
+        let (beside_kde, updates) = (self.beside_kde, self.updates.clone());
+        let report = tokio::task::spawn_blocking(move || {
+            let mut report = health(beside_kde);
+            report["update"] = updates.status();
+            report
+        })
+        .await
+        .map_err(|e| fdo::Error::Failed(e.to_string()))?;
         Ok(report.to_string())
+    }
+
+    /// Updates the PC app to the newest release (This PC's Update); it restarts when done.
+    async fn update(&self) -> fdo::Result<()> {
+        self.updates.start().await.map_err(|e| fdo::Error::Failed(format!("{e:#}")))
+    }
+
+    /// Turns the daily check for a new release on or off.
+    async fn set_update_checks(&self, on: bool, #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>) -> fdo::Result<()> {
+        self.updates.set_checks(on);
+        let _ = Control::changed(&emitter).await;
+        Ok(())
     }
 
     /// Installs what's missing (asks for the password once); [setup_done] says how it went.
@@ -615,7 +635,11 @@ async fn daemon(dir: PathBuf) -> Result<()> {
     let permits = Arc::new(Permits::load(dir.join("permissions.json")));
     let activity = Arc::new(Activity::load(dir.join("activity.json")));
     clip_load(&dir);
-    let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone(), conn: conn.clone(), beside_kde, permits: permits.clone(), activity: activity.clone() };
+    let updates = Arc::new(update::Updates::load(&dir));
+    if std::env::var_os("VYOMA_DIR").is_none() {
+        tokio::spawn(updates.clone().run());
+    }
+    let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone(), conn: conn.clone(), beside_kde, permits: permits.clone(), activity: activity.clone(), updates: updates.clone() };
     conn.object_server().at(OBJECT_PATH, control).await?;
     conn.request_name(BUS_NAME).await.context("another Vyoma desktop app is running")?;
     // Tells the GUI when what it shows changed (checked, as many places change devices).

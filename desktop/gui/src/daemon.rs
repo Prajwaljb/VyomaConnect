@@ -127,6 +127,20 @@ pub struct Health {
     pub installing: bool,
     pub checks: Vec<Check>,
     pub notes: Vec<String>,
+    pub update: Update,
+}
+
+/// The PC app's version and whether a newer one is out.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Update {
+    pub current: String,
+    /// The newer release, while there is one (and checks are on).
+    pub latest: Option<String>,
+    pub page: String,
+    pub checks: bool,
+    pub updating: bool,
+    /// The clone it was installed from is still there to build from.
+    pub can_update: bool,
 }
 
 impl Health {
@@ -155,6 +169,14 @@ impl Health {
                 })
                 .collect(),
             notes: strings(&v["notes"]),
+            update: Update {
+                current: v["update"]["current"].as_str().unwrap_or("").to_owned(),
+                latest: v["update"]["latest"].as_str().map(str::to_owned),
+                page: v["update"]["page"].as_str().unwrap_or("").to_owned(),
+                checks: v["update"]["checks"].as_bool().unwrap_or(true),
+                updating: v["update"]["updating"].as_bool().unwrap_or(false),
+                can_update: v["update"]["canUpdate"].as_bool().unwrap_or(false),
+            },
         }
     }
 
@@ -215,6 +237,9 @@ pub trait Daemon: Send + Sync {
     fn remove_command(&self, key: &str) -> Result<()>;
     /// Installs what's missing; [Event::SetupDone] follows.
     fn install(&self) -> Result<()>;
+    /// Updates the PC app to the newest release; the daemon restarts when it's done.
+    fn update(&self) -> Result<()>;
+    fn set_update_checks(&self, on: bool) -> Result<()>;
     /// What phones did here, newest first.
     fn activity(&self) -> Result<Vec<ActivityEntry>>;
     fn clear_activity(&self) -> Result<()>;
@@ -294,6 +319,14 @@ impl Daemon for DbusDaemon {
 
     fn install(&self) -> Result<()> {
         self.call("Install", &())
+    }
+
+    fn update(&self) -> Result<()> {
+        self.call("Update", &())
+    }
+
+    fn set_update_checks(&self, on: bool) -> Result<()> {
+        self.call("SetUpdateChecks", &(on,))
     }
 
     fn set_permission(&self, id: &str, key: &str, on: bool) -> Result<()> {
@@ -408,6 +441,9 @@ mod tests {
         let h = Health::from_json(&v);
         assert_eq!((h.features.len(), h.features[1].needs.clone(), h.installable, h.notes.len()), (2, vec!["sshfs".to_owned()], true, 1));
         assert_eq!(h.attention(), 2, "a missing feature and a check in the way; info isn't a fault");
+        assert_eq!((h.update.latest.clone(), h.update.checks), (None, true), "an older daemon says nothing of updates");
+        let u = Health::from_json(&json!({ "update": { "current": "0.3.0", "latest": "0.4.0", "checks": true, "canUpdate": true } })).update;
+        assert_eq!((u.current.as_str(), u.latest.as_deref(), u.can_update, u.updating), ("0.3.0", Some("0.4.0"), true, false));
     }
 
     #[test]

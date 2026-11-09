@@ -191,7 +191,8 @@ fn health(missing: bool) -> Health {
         checks.push(Check { name: "KDE Connect".into(), state: "warn".into(), detail: "Also running, so the USB cable, tethering and Bluetooth stay with it. Quit it to use them here.".into() });
         notes.push("PC screen on the phone needs vah264enc, which comes from your graphics card's VA-API driver.".into());
     }
-    Health { features, installable: missing, installing: false, checks, notes }
+    let update = crate::daemon::Update { current: "0.3.0".into(), latest: missing.then(|| "0.4.0".into()), checks: true, can_update: true, ..Default::default() };
+    Health { features, installable: missing, installing: false, checks, notes, update }
 }
 
 fn phones(scene: &str) -> Vec<PhoneData> {
