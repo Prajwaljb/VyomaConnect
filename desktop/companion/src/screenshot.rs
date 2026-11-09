@@ -1,5 +1,6 @@
 //! PC screenshot to phone. Spectacle (always on Plasma) captures in the background with no
 //! prompt or notification of its own, so we show one; the image travels as a payload (see payload.rs).
+//! On GNOME, which lets only its own parts capture without asking, Vyoma's extension does (PNG).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -14,7 +15,8 @@ use crate::payload;
 /// Captures the whole desktop and offers it to the phone. On failure the phone gets an error
 /// packet instead, so it never waits on a spinner.
 pub async fn capture_and_send(sender: &Sender, me: &Identity, pinned: &[u8], phone_name: &str) -> Result<()> {
-    let image = match capture().await {
+    let gnome = crate::desktop::is_gnome();
+    let image = match if gnome { crate::shell::screenshot().await } else { capture().await } {
         Ok(bytes) => bytes,
         Err(e) => {
             sender.send(&link::packet("vyoma.screenshot", json!({ "error": format!("{e:#}") }))).await?;
@@ -22,7 +24,7 @@ pub async fn capture_and_send(sender: &Sender, me: &Identity, pinned: &[u8], pho
         }
     };
     crate::notice::tell("camera-photo", "Screenshot taken from your phone", &format!("{phone_name} took a screenshot of this PC.")).await;
-    let announce: Value = link::packet("vyoma.screenshot", json!({ "format": "webp" }));
+    let announce: Value = link::packet("vyoma.screenshot", json!({ "format": if gnome { "png" } else { "webp" } }));
     payload::offer(sender, me, pinned, announce, image.len() as u64, image.as_slice()).await
 }
 

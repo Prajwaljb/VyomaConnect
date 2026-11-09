@@ -10,6 +10,7 @@ import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import * as Dialog from 'resource:///org/gnome/shell/ui/dialog.js';
@@ -20,7 +21,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const BUS = 'dev.vyoma.Shell';
 const PATH = '/dev/vyoma/Shell';
-const VERSION = 2;
+const VERSION = 3;
 
 const IFACE = `<node>
   <interface name="dev.vyoma.Shell1">
@@ -31,6 +32,8 @@ const IFACE = `<node>
     <method name="HidePointer"/>
     <method name="Step"><arg type="b" direction="in"/><arg type="s" direction="out"/></method>
     <method name="SwitchWorkspace"><arg type="b" direction="in"/></method>
+    <method name="Screenshot"><arg type="ay" direction="out"/></method>
+    <method name="Screens"><arg type="a(ii)" direction="out"/></method>
     <method name="AskReply">
       <arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="s" direction="in"/>
       <arg type="s" direction="out"/>
@@ -206,6 +209,32 @@ export default class VyomaExtension extends Extension {
                 Main.wm.actionMoveWorkspace(next);
             return null;
         });
+    }
+
+    // The whole desktop as PNG, for the phone's Screenshot: GNOME lets only its own tools capture
+    // without asking, and the shell is one.
+    ScreenshotAsync(_params, invocation) {
+        this._answer(invocation, async () => {
+            const stream = Gio.MemoryOutputStream.new_resizable();
+            await new Promise((resolve, reject) => {
+                new Shell.Screenshot().screenshot(false, stream, (shooter, result) => {
+                    try {
+                        shooter.screenshot_finish(result);
+                        resolve();
+                    } catch (e) {
+                        reject(e);
+                    }
+                });
+            });
+            stream.close(null);
+            return new GLib.Variant('(ay)', [stream.steal_as_bytes().toArray()]);
+        });
+    }
+
+    // Each screen's size in logical pixels (scaled, turned), for sizing windows.
+    ScreensAsync(_params, invocation) {
+        this._answer(invocation, async () =>
+            new GLib.Variant('(a(ii))', [Main.layoutManager.monitors.map(m => [m.width, m.height])]));
     }
 
     _step(up) {

@@ -474,6 +474,11 @@ impl Drop for DelayVideo {
 /// The window's largest picture: 85% of the smallest screen, so a tall phone fits on any of them.
 async fn bounds() -> (u32, u32) {
     let fallback = (1000, 1000);
+    if crate::desktop::is_gnome() {
+        let screens = crate::shell::screens().await.unwrap_or_default();
+        let smallest = screens.iter().filter(|(w, h)| *w > 0 && *h > 0).fold(None, |best: Option<(i32, i32)>, &(w, h)| Some(best.map_or((w, h), |(bw, bh)| (bw.min(w), bh.min(h)))));
+        return smallest.map_or(fallback, |(w, h)| ((w as f64 * 0.85) as u32, (h as f64 * 0.85) as u32));
+    }
     let out = tokio::time::timeout(Duration::from_secs(3), tokio::process::Command::new("kscreen-doctor").arg("-j").kill_on_drop(true).output()).await;
     let Ok(Ok(out)) = out else { return fallback };
     let Ok(v) = serde_json::from_slice::<Value>(&out.stdout) else { return fallback };
@@ -514,7 +519,7 @@ unsafe extern "C" {
     fn xkb_keymap_key_get_syms_by_level(keymap: *mut libc::c_void, key: u32, layout: u32, level: u32, syms: *mut *const u32) -> libc::c_int;
 }
 
-/// The desktop's first layout (Plasma's kxkbrc), read once: what each key types plain and with
+/// The desktop's first layout ([crate::desktop::keyboard_layout]), read once: what each key types plain and with
 /// Shift.
 pub(crate) struct Layout {
     /// Plain keysym → the same key's Shift keysym. GStreamer's X11 window names keys by their
@@ -529,19 +534,14 @@ pub(crate) fn layout() -> &'static Layout {
     static LAYOUT: std::sync::OnceLock<Layout> = std::sync::OnceLock::new();
     LAYOUT.get_or_init(|| {
         let mut out = Layout { shifted: Default::default(), keys: Default::default() };
-        let name = std::env::var("HOME")
-            .ok()
-            .and_then(|h| std::fs::read_to_string(format!("{h}/.config/kxkbrc")).ok())
-            .and_then(|c| c.lines().find_map(|l| l.strip_prefix("LayoutList=").map(|v| v.split(',').next().unwrap_or("us").trim().to_string())))
-            .filter(|l| !l.is_empty())
-            .unwrap_or_else(|| "us".into());
-        let Ok(name) = std::ffi::CString::new(name) else { return out };
+        let (name, variant) = crate::desktop::keyboard_layout();
+        let (Ok(name), Ok(variant)) = (std::ffi::CString::new(name), std::ffi::CString::new(variant)) else { return out };
         unsafe {
             let ctx = xkb_context_new(0);
             if ctx.is_null() {
                 return out;
             }
-            let names = RuleNames { rules: std::ptr::null(), model: std::ptr::null(), layout: name.as_ptr(), variant: std::ptr::null(), options: std::ptr::null() };
+            let names = RuleNames { rules: std::ptr::null(), model: std::ptr::null(), layout: name.as_ptr(), variant: variant.as_ptr(), options: std::ptr::null() };
             let km = xkb_keymap_new_from_names(ctx, &names, 0);
             if km.is_null() {
                 return out;

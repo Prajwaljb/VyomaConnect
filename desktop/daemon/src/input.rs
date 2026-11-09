@@ -92,25 +92,20 @@ unsafe extern "C" {
 }
 
 /// Keysym → the key that types it in the desktop's first layout (evdev code) and whether Shift
-/// is needed. Plasma's layout from kxkbrc; others get "us" until their desktops are done.
+/// is needed. The desktop's first layout (`vyoma_companion::desktop::keyboard_layout`).
 fn layout() -> &'static HashMap<u32, (i32, bool)> {
     static LAYOUT: std::sync::OnceLock<HashMap<u32, (i32, bool)>> = std::sync::OnceLock::new();
     LAYOUT.get_or_init(|| {
         let mut keys = HashMap::new();
-        let name = std::env::var("HOME")
-            .ok()
-            .and_then(|h| std::fs::read_to_string(format!("{h}/.config/kxkbrc")).ok())
-            .and_then(|c| c.lines().find_map(|l| l.strip_prefix("LayoutList=").map(|v| v.split(',').next().unwrap_or("us").trim().to_owned())))
-            .filter(|l| !l.is_empty())
-            .unwrap_or_else(|| "us".into());
-        let Ok(name) = std::ffi::CString::new(name) else { return keys };
+        let (name, variant) = vyoma_companion::desktop::keyboard_layout();
+        let (Ok(name), Ok(variant)) = (std::ffi::CString::new(name), std::ffi::CString::new(variant)) else { return keys };
         // SAFETY: plain libxkbcommon calls; the keymap and context live as long as the process.
         unsafe {
             let ctx = xkb_context_new(0);
             if ctx.is_null() {
                 return keys;
             }
-            let names = RuleNames { rules: std::ptr::null(), model: std::ptr::null(), layout: name.as_ptr(), variant: std::ptr::null(), options: std::ptr::null() };
+            let names = RuleNames { rules: std::ptr::null(), model: std::ptr::null(), layout: name.as_ptr(), variant: variant.as_ptr(), options: std::ptr::null() };
             let km = xkb_keymap_new_from_names(ctx, &names, 0);
             if km.is_null() {
                 return keys;
