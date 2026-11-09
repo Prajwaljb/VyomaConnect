@@ -1,113 +1,123 @@
-<p align="center"><img src="desktop/daemon/dist/vyoma.svg" width="96" alt=""></p>
+<p align="center"><img src="desktop/daemon/dist/vyoma.svg" width="140" alt="Vyoma"></p>
 
 <h1 align="center">Vyoma</h1>
 
-<p align="center">Your Android phone and your Linux PC, working as one.<br>
-Open source, no account, no cloud. Speaks the KDE Connect protocol.</p>
+<p align="center"><b>Your Android phone and your Linux PC, working as one.</b><br>
+Files, clipboard, calls, notifications, screens and remote control, all over your own network.<br>
+Open source. No account. No cloud.</p>
+
+<p align="center"><a href="https://github.com/Prajwaljb/VyomaConnect/releases/latest"><b>Download</b></a> ·
+<a href="#get-started">Get started</a> ·
+<a href="https://github.com/Prajwaljb/VyomaConnect/issues">Report an issue</a></p>
 
 <p align="center"><img src="docs/screenshots/desktop-phone.png" width="760" alt="Vyoma's PC window showing a connected phone: battery, connection, response time, and Send files, Phone files and Ring"></p>
 
-Vyoma is two apps that work together: an app for your phone and an app for your PC. On the PC it
-replaces KDE Connect and keeps your existing pairings. On the phone it also pairs with plain KDE
-Connect or GSConnect, with fewer features.
+Vyoma is a phone app and a PC app built to work together. It speaks the KDE Connect protocol, so
+it moves into your desktop without losing a single pairing, then goes well beyond it: screen
+mirroring both ways, your phone as a webcam or game controller, resumable transfers over a USB
+cable, fingerprint-protected commands, and a PC window that shows exactly what each phone can do.
 
-## What it does
+## What you get
 
-- **Files, both ways.** Send files and whole folders, browse your PC's files from the phone, and open
-  the phone's storage in your PC's file manager. Transfers resume after a dropped connection.
-- **Clipboard.** Copy on one side, paste on the other.
-- **Notifications and calls** from the phone show up on the PC, with a Mute button for calls.
-- **Your PC from the phone.** See and control its screen, take screenshots, take a photo with its
-  camera, see its CPU, memory and temperature, change brightness and per-app volume, control
-  music, lock it, or put it to sleep.
-- **Your phone as a PC accessory.** A touchpad and keyboard, a presenter remote, a webcam and
-  microphone, or a game controller with gyro aiming. Show the phone's screen in a window on the PC.
-- **Commands and rules.** Run commands on the PC from the phone; sensitive ones can ask for your
-  fingerprint first. Rules do things for you, like locking the PC when you walk away.
-- **Widgets and quick settings tiles** for the things you do most.
-- **Connects any way it can:** the same Wi-Fi, a USB cable (faster and steadier), Bluetooth when
-  there's no Wi-Fi, or by IP address for Tailscale and other VPNs.
+**Files, both ways.** Send files and whole folders in either direction. Browse your PC from the
+phone, and open the phone's storage right in your PC's file manager. A dropped connection picks up
+where it left off.
 
-## Get it
+**One clipboard.** Copy on one, paste on the other.
 
-Install the PC app first: it's what the phone pairs with.
+**Calls and notifications on the PC.** See who's calling and mute the ringer from your desk.
 
-### 1. On your PC
+**Your PC in your pocket.** View and control its screen, grab a screenshot, snap a photo with its
+camera, watch CPU, memory and temperature, set brightness and per-app volume, control music, lock
+it or put it to sleep.
 
-You need Linux with KDE Plasma (tested on Wayland). GNOME and others are planned.
+**Your phone as a PC accessory.** Touchpad and keyboard, presenter remote, webcam and microphone,
+or a game controller with gyro aiming. Put the phone's screen in a window on the PC.
+
+**Commands and rules.** Run your own commands on the PC from the phone, with a fingerprint check
+for the sensitive ones. Rules handle the routine, like locking the PC when you walk away.
+
+**Widgets and quick settings tiles** for everything you use most.
+
+**Always connected.** Wi-Fi, a USB cable for top speed, Bluetooth when there's no Wi-Fi, or an IP
+address for Tailscale and other VPNs. Vyoma picks the best route on its own.
+
+## Get started
+
+Set up the PC first, then the phone.
+
+### 1. Your PC
+
+Vyoma runs on Linux with KDE Plasma. Support for GNOME, other desktops and macOS is coming in
+future releases.
 
 ```sh
 git clone https://github.com/Prajwaljb/VyomaConnect && VyomaConnect/desktop/daemon/install.sh
 ```
 
-This builds Vyoma (a few minutes the first time), installs it for your user with a menu entry,
-starts it at login, and takes over from KDE Connect, keeping its pairings. It asks for your
-password to install the packages it needs and to open the firewall for phones on Wi-Fi. Anything
-missing later shows on **This PC** in Vyoma's window, with an Install button.
+The installer builds Vyoma, adds it to your app menu, starts it at login and takes over from KDE
+Connect with your pairings intact. It asks for your password once, to install what it needs and
+let phones through the firewall. Prefer KDE Connect after all? `install.sh --undo` puts it back.
 
-`install.sh --undo` gives the PC back to KDE Connect.
+### 2. Your phone
 
-### 2. On your phone
+Download the APK from [Releases](https://github.com/Prajwaljb/VyomaConnect/releases/latest) and
+open it. Android 12 or newer.
 
-Download `vyoma-<version>.apk` from [Releases](https://github.com/Prajwaljb/VyomaConnect/releases) and
-open it. It needs Android 12 or newer.
-
-To check the download is genuine, its signing certificate's SHA-256 fingerprint is:
+The signing certificate's SHA-256 fingerprint, for anyone who checks
+(`apksigner verify --print-certs`):
 
 ```
 7F:EB:FF:09:7C:EF:AA:F1:2C:CF:3A:C6:ED:2E:C8:EA:A0:C0:9A:7A:0A:77:83:8B:B8:2E:E5:3E:00:04:84:B1
 ```
 
-(`apksigner verify --print-certs vyoma-<version>.apk` shows it.)
-
 ### 3. Pair
 
-Open Vyoma on the phone and on the PC. Both show the same setup steps: pick your PC, then check
-that the code on the phone matches the one on the PC. After that they find each other by
-themselves.
+Open Vyoma on both. The phone and the PC walk you through the same steps: pick your PC, confirm the
+code matches on both screens, done. From then on they find each other automatically.
 
 <p align="center"><img src="docs/screenshots/desktop-setup.png" width="640" alt="The PC's setup: pairing, with the code to compare against the phone"></p>
 
 ## Good to know
 
-**Already use KDE Connect or GSConnect?** The phone app pairs with them too. You get the basics
-(files, clipboard, notifications, media, commands, touchpad and presenter); the rest needs Vyoma's
-PC app.
+**Works with KDE Connect and GSConnect too.** The phone app pairs with either one and covers the
+essentials: files, clipboard, notifications, media, commands, touchpad and presenter. Vyoma's PC
+app unlocks everything else.
 
-**Clipboard while Vyoma is closed.** Android only lets the app on screen read the clipboard. To
-send copies with Vyoma closed, plug the phone into the PC once with USB debugging on and click
-**Allow** on the phone's page in Vyoma's window; you can turn USB debugging off afterwards. Android
-then asks for log access each time Vyoma restarts (after an update or a phone restart): tap
-**Allow one-time access**. Without this, copies sync while Vyoma is open, and the Clipboard page
-has a Send button.
+**Clipboard in the background.** Android lets only the app on screen read the clipboard. Vyoma
+works around that: plug the phone into the PC once with USB debugging on and click **Allow** on the
+phone's page in Vyoma's window. After that, copies reach the PC even with Vyoma closed. When the
+app restarts, Android asks once for log access: tap **Allow one-time access**. The Clipboard page
+also has a Send button for a quick manual push.
 
-**Your data stays home.** Phones and PCs talk directly over your own network, cable or Bluetooth,
-encrypted, with no account and no server. A phone works with a PC only after you compare codes on
-both screens. In Vyoma's PC window you choose what each phone may do, and the phone can ask for
-your fingerprint before it unlocks the PC, opens its files or shows its screen.
-
-**Tested on** a Galaxy S24 FE (Android 17, One UI 9) with CachyOS and KDE Plasma 6 on Wayland. The
-installer also supports Debian, Ubuntu and Fedora, but hasn't been tried there yet:
-[an issue](https://github.com/Prajwaljb/VyomaConnect/issues) with what happened helps a lot.
+**Private by design.** Your phone and PC talk directly, encrypted, over your own network, cable or
+Bluetooth. No account, no server. Pairing needs a matching code on both screens, the PC window
+decides what each phone may do, and the phone can ask for your fingerprint before it unlocks the
+PC, opens its files or shows its screen.
 
 <p align="center"><img src="docs/screenshots/desktop-commands-dark.png" width="640" alt="The PC's Commands page in dark mode, with commands that ask for a fingerprint"></p>
+
+## Something not right?
+
+[Open an issue](https://github.com/Prajwaljb/VyomaConnect/issues) and say what you did, what
+happened, and which phone, distro and desktop you're on. Vyoma is built on KDE Plasma 6 with
+Wayland; the installer also supports Debian, Ubuntu and Fedora, and reports from those are
+especially welcome.
 
 ## Build it yourself
 
 ```sh
-# Phone app (needs JDK 21 and the Android SDK)
+# Phone app (JDK 21 and the Android SDK)
 ./gradlew :app:assembleRelease
 
-# PC app and its window (needs Rust)
+# PC app and its window (Rust)
 (cd desktop/daemon && cargo build --release)
 (cd desktop/gui && cargo build --release)
 ```
 
-A demo build (`./gradlew :app:assembleDemo`) runs with a simulated PC, no network needed.
-
-How it fits together is in [docs/PLAN.md](docs/PLAN.md).
+`./gradlew :app:assembleDemo` builds a demo with a simulated PC, no network needed. The
+architecture is in [docs/PLAN.md](docs/PLAN.md).
 
 ## Licence
 
-GPL-3.0-or-later, as KDE Connect is. Vyoma isn't affiliated with KDE; it speaks the KDE Connect
-protocol so it works alongside it.
+GPL-3.0-or-later, like KDE Connect. Vyoma is an independent project, not affiliated with KDE.

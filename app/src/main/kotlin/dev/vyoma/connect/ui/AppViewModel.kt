@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.BuildConfig
+
 import dev.vyoma.connect.data.LiteGlass
 import dev.vyoma.connect.automation.Action
 import dev.vyoma.connect.automation.Rule
@@ -105,14 +107,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Whether to show first-run setup; null until known. People who already paired a PC (before
-     * setup existed, or after reinstalling with data kept) skip it.
+     * setup existed, or after reinstalling with data kept) skip it. Not the demo: its made-up PC
+     * is paired from the start, which closed setup the moment the hub came up.
      */
     val showOnboarding: StateFlow<Boolean?> = settings.onboarded.map { !it }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     init {
         viewModelScope.launch {
-            if (!settings.onboarded.first() && container.obtainHub().trustStore.all().isNotEmpty()) settings.setOnboarded()
+            if (!BuildConfig.DEMO && !settings.onboarded.first() && container.obtainHub().trustStore.all().isNotEmpty()) settings.setOnboarded()
         }
     }
 
