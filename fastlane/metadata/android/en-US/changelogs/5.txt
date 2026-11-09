@@ -1,0 +1,4 @@
+• Send to your phone from the PC's file manager: right-click any file or folder
+• Folders keep their structure when sent from the PC
+• The PC app finds new versions and updates itself in one click
+• The demo's setup no longer closes by itself

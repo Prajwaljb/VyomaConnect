@@ -57,6 +57,12 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   plus the READ_LOGS / SYSTEM_ALERT_WINDOW grants, once the PC has allowed that APK's signing key (src/usb.rs). Installed as a systemd user unit.
   Installs its own runtime dependencies (src/setup.rs): notification with an Install button at start, or `--check` / `--setup [--dry-run]`; `install.sh` builds and installs it all. A new external tool it runs must be added to `NEEDS` there.
 
+- `packaging/aur`: the AUR package `vyoma` (PKGBUILD + `.SRCINFO`, from the release tarball; binaries in /usr/bin, the
+  KDE handoff left to `/usr/share/vyoma/install.sh`, which builds nothing when packaged; the update check then only
+  says a release is out). `fastlane/metadata/android/en-US`: store listing for IzzyOnDroid/F-Droid (changelogs/<versionCode>.txt).
+- Releasing: bump `VERSION` and `versionCode`, add the changelog, build the APK, `gh release create vX.Y.Z` with
+  `vyoma-X.Y.Z.apk` + `.sha256`, then the PKGBUILD's pkgver and sha256 (`makepkg -g`) and `makepkg --printsrcinfo > .SRCINFO`.
+
 ## Conventions
 - Protocol details and extension rules: the `protocol-ref` skill. Design rules: the `oneui-design` skill.
 - Device/plugin state is mutated only on the device's serial dispatcher; never block in `Plugin.onPacket`.

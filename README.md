@@ -8,6 +8,7 @@ Open source. No account. No cloud.</p>
 
 <p align="center"><a href="https://github.com/Prajwaljb/VyomaConnect/releases/latest"><b>Download</b></a> ·
 <a href="#get-started">Get started</a> ·
+<a href="docs/FEATURES.md">All features</a> ·
 <a href="https://github.com/Prajwaljb/VyomaConnect/issues">Report an issue</a></p>
 
 <p align="center"><img src="docs/screenshots/desktop-phone.png" width="760" alt="Vyoma's PC window showing a connected phone: battery, connection, response time, and Send files, Phone files and Ring"></p>
@@ -48,6 +49,8 @@ for the sensitive ones. Rules handle the routine, like locking the PC when you w
 
 **Always connected.** Wi-Fi, a USB cable for top speed, Bluetooth when there's no Wi-Fi, or an IP
 address for Tailscale and other VPNs. Vyoma picks the best route on its own.
+
+**And a lot more:** see [everything Vyoma does](docs/FEATURES.md).
 
 ## Get started
 

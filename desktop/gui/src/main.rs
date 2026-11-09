@@ -635,6 +635,7 @@ pub fn show_health(ui: &MainWindow, h: &Health) {
     ui.set_update_checks(u.checks);
     ui.set_updating(u.updating);
     ui.set_can_update(u.can_update);
+    ui.set_update_packaged(u.packaged);
     ui.set_health_loaded(true);
 }
 

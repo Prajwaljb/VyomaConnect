@@ -3,7 +3,8 @@
 //! Updating runs `install.sh --update` from the folder Vyoma was installed from (`install.sh`
 //! notes it in `source`): it moves that clone to the release, builds, installs and restarts this
 //! app, pairings and settings kept. It runs as its own transient unit, as it restarts this one, and
-//! tells by itself if it fails; the new build says it's done when it starts.
+//! tells by itself if it fails; the new build says it's done when it starts. Installed by a
+//! package manager (under /usr), it only says a release is out: updating is the package's job.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -65,7 +66,7 @@ impl Updates {
     pub fn status(&self) -> Value {
         let s = self.state.lock().unwrap();
         let newer = (!s.off && is_newer(&s.latest, current())).then(|| s.latest.clone());
-        json!({ "current": current(), "latest": newer, "page": s.page, "checks": !s.off, "updating": updating(), "canUpdate": self.clone_dir().is_some() })
+        json!({ "current": current(), "latest": newer, "page": s.page, "checks": !s.off, "updating": updating(), "canUpdate": !packaged() && self.clone_dir().is_some(), "packaged": packaged() })
     }
 
     pub fn set_checks(&self, on: bool) {
@@ -84,6 +85,7 @@ impl Updates {
         if updating() {
             return Ok(());
         }
+        anyhow::ensure!(!packaged(), "Vyoma came from your package manager: update it there.");
         let dir = self.clone_dir().context("Vyoma's folder isn't where it was installed from. Run install.sh --update from your copy of Vyoma.")?;
         let script = dir.join("desktop/daemon/install.sh");
         let status = tokio::process::Command::new("systemd-run")
@@ -140,12 +142,19 @@ impl Updates {
         }
     }
 
-    /// The notification about [version], with Update and What's new.
+    /// The notification about [version], with Update (unless a package manager does that) and What's new.
     async fn offer(&self, version: &str, page: &str) {
+        let (update, body) = if packaged() {
+            ("", "Update it with your package manager. Your phones stay paired.")
+        } else {
+            ("--action=update=Update", "Update this PC now: it takes a few minutes and keeps your phones paired.")
+        };
         let answer = tokio::process::Command::new("notify-send")
-            .args(["--app-name=Vyoma", "--icon=vyoma", "--hint=string:desktop-entry:vyoma", "--wait", "--action=update=Update", "--action=notes=What's new", "--"])
+            .args(["--app-name=Vyoma", "--icon=vyoma", "--hint=string:desktop-entry:vyoma", "--wait", "--action=notes=What's new"])
+            .args((!update.is_empty()).then_some(update))
+            .arg("--")
             .arg(format!("Vyoma {version} is out"))
-            .arg("Update this PC now: it takes a few minutes and keeps your phones paired.")
+            .arg(body)
             .kill_on_drop(true)
             .output()
             .await;
@@ -159,6 +168,11 @@ impl Updates {
             _ => {}
         }
     }
+}
+
+/// Installed by a package manager: this binary lives under /usr.
+fn packaged() -> bool {
+    std::env::current_exe().is_ok_and(|p| p.starts_with("/usr/"))
 }
 
 /// Whether an update is running now.
