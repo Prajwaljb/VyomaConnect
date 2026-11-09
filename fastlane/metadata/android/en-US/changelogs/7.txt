@@ -1,0 +1,3 @@
+• The PC app now runs on GNOME too: clipboard sync, the presenter's pointer, screenshots, the touchpad's swipes, replying to notifications, brightness and volume with GNOME's own pop-ups
+• What the PC can't do (like lock without GNOME's login screen) shows in the app's status bubble
+• Walk-away rules lock GNOME the way its own Lock does

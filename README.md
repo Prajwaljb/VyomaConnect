@@ -70,8 +70,10 @@ Connect with your pairings intact. It asks for your password once, to install wh
 let phones through the firewall. Prefer KDE Connect after all? `install.sh --undo` puts it back.
 
 On GNOME, the installer also adds Vyoma's small GNOME Shell extension, which clipboard sync, the
-presenter's pointer and replying to notifications need. Log out and back in once to turn it on.
-GSConnect is switched off while Vyoma runs, as both use the same port.
+presenter's pointer, screenshots, the touchpad's swipes and replying to notifications need. Log out
+and back in once to turn it on; Vyoma's window shows whether it's on under This PC. GSConnect is
+switched off while Vyoma runs, as both use the same port. Locking the PC from the phone needs GNOME's
+own login screen (GDM).
 
 When a new version is out, Vyoma tells you and updates itself with one click, your pairings kept
 (or run `install.sh --update`).

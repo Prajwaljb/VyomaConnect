@@ -27,9 +27,10 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.29.0", features = ["v4"] }
 zbus = { version = "6", default-features = false, features = ["tokio", "service"] }
-gstreamer = { version = "0.25", features = ["v1_26"] }
-gstreamer-video = { version = "0.25", features = ["v1_26"] }
-gstreamer-gl = { version = "0.25", features = ["v1_26"] }
+# 1.22: the mirror window's key modifiers and scrolls. No higher, so Debian 12 and Ubuntu 24.04 build it.
+gstreamer = { version = "0.25", features = ["v1_22"] }
+gstreamer-video = { version = "0.25", features = ["v1_22"] }
+gstreamer-gl = { version = "0.25", features = ["v1_22"] }
 x11rb = "0.13"
 
 [profile.release]
