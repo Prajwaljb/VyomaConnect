@@ -1,0 +1,2 @@
+• A cleaner APK for app stores: no build metadata only Google can read
+• Everything from 0.4.0: Send to your phone from the PC's file manager, folders that keep their structure, and a PC app that updates itself
