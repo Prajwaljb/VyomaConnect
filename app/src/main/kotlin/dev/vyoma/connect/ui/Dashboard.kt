@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.platform.AndroidClipboard
+
 import androidx.compose.animation.animateContentSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -345,6 +347,7 @@ fun PcDashboard(
     val context = LocalContext.current
     val status = LocalStatus.current
     val haptics = LocalHapticFeedback.current
+    val clipSync by vm.clipboardSync.collectAsStateWithLifecycle()
     when (section) {
         // One card for the PC's state: its battery, and with the companion its load and heat, as
         // one row of gauges (a battery ring, a clipboard tile and a gauge card were three).
@@ -443,7 +446,9 @@ fun PcDashboard(
                 }
                 else Control(Icons.Rounded.TouchApp, "Touchpad", SystemColor.ORANGE, opens = true, onClick = onTouchpad),
                 // Find PC's old slot (the user had no use for it, 2026-11).
-                Control(Icons.Rounded.ContentPasteGo, "Send clip", SystemColor.TEAL, onHold = onClipboard) {
+                // With background sync, copies go by themselves: the tile opens what was copied instead.
+                if (clipSync == AndroidClipboard.SyncState.ON) Control(Icons.Rounded.ContentPaste, "Clipboard", SystemColor.TEAL, opens = true, onClick = onClipboard)
+                else Control(Icons.Rounded.ContentPasteGo, "Send clip", SystemColor.TEAL, onHold = onClipboard) {
                     if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied to send", failure = true)
                 },
                 // What the phone can become: all of it hidden behind long presses before, so a tap opens

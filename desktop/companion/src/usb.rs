@@ -369,7 +369,7 @@ fn ask_to_allow(adb: PathBuf, serial: String, pkg: &'static str, digest: String)
         let answer = tokio::time::timeout(
             ASK_WAIT,
             tokio::process::Command::new("notify-send")
-                .args(["--app-name=Vyoma", "--icon=dialog-password", "--action=allow=Allow", "--action=no=Not now"])
+                .args(["--app-name=Vyoma", "--hint=string:desktop-entry:vyoma", "--icon=dialog-password", "--action=allow=Allow", "--action=no=Not now"])
                 .arg(format!("Allow Vyoma on {model}?"))
                 .arg(body)
                 .kill_on_drop(true)

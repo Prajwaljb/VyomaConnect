@@ -56,7 +56,7 @@ impl Notifier {
     /// [reply] as its placeholder; what's typed comes back as [Heard::Replied].
     pub async fn show_with(&self, notice: Notice<'_>, image: Option<&std::path::Path>, reply: Option<&str>) -> Result<u32> {
         let mut actions: Vec<&str> = notice.actions.iter().flat_map(|(key, label)| [*key, *label]).collect();
-        let mut hints: HashMap<&str, Variant> = HashMap::from([("desktop-entry", Variant::from("vyoma-desktop"))]);
+        let mut hints: HashMap<&str, Variant> = HashMap::from([("desktop-entry", Variant::from("vyoma"))]);
         if let Some(path) = image.and_then(|p| p.to_str()) {
             hints.insert("image-path", Variant::from(path.to_owned()));
         }

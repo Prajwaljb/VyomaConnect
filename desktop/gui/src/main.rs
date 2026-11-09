@@ -65,6 +65,10 @@ thread_local! {
     /// The devices last read, on the UI thread.
     static SHOWN: RefCell<Vec<PhoneData>> = const { RefCell::new(Vec::new()) };
     static NOTICES: RefCell<u64> = const { RefCell::new(0) };
+    /// The commands last read, for the editor's checks.
+    static COMMANDS_SHOWN: RefCell<Vec<CommandData>> = const { RefCell::new(Vec::new()) };
+    /// What the status bubble's button does while it shows.
+    static NOTICE_ACTION: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
 }
 
 fn main() -> anyhow::Result<()> {
@@ -78,6 +82,8 @@ fn main() -> anyhow::Result<()> {
         return snapshot::run(path, args.iter().any(|a| a == "--dark"), args.iter().any(|a| a == "--plain"), scene, size, scroll);
     }
     let page = args.iter().position(|a| a == "--page").and_then(|i| args.get(i + 1)).cloned().unwrap_or_default();
+    // The app id the desktop matches to vyoma.desktop: Vyoma's name and icon on the taskbar.
+    let _ = slint::set_xdg_app_id("vyoma");
     let ui = MainWindow::new()?;
     // Another window is open: it shows the page, this one ends. No bus at all: run anyway.
     if !instance::claim(&ui, &page).unwrap_or(true) {
@@ -128,6 +134,7 @@ pub fn show_commands(ui: &MainWindow, list: &[CommandData]) {
         .map(|(name, line, fingerprint)| Command { key: "".into(), name: (*name).into(), command: line.as_str().into(), shown: breakable(line).into(), fingerprint: *fingerprint, every: false })
         .collect();
     ui.set_commands(ModelRc::new(VecModel::from(list.iter().map(to).collect::<Vec<_>>())));
+    COMMANDS_SHOWN.with(|c| *c.borrow_mut() = list.to_vec());
     ui.set_suggestions(ModelRc::new(VecModel::from(suggestions)));
 }
 
@@ -274,13 +281,37 @@ fn wire(ui: &MainWindow) {
         let ui = ui.as_weak();
         move |key| {
             let ui = ui.clone();
+            let gone = COMMANDS_SHOWN.with(|c| c.borrow().iter().find(|c| c.key == key.as_str()).cloned());
             std::thread::spawn(move || match DbusDaemon::connect().and_then(|d| d.remove_command(&key)) {
                 Ok(()) => {
-                    notify(&ui, "Deleted".into());
                     read_commands(&ui);
+                    let Some(gone) = gone else { return notify(&ui, "Deleted".into()) };
+                    // Undo puts it back as it was (under a new key: phones just see it listed again).
+                    let again = ui.clone();
+                    notify_with(&ui, format!("Deleted \u{201c}{}\u{201d}", gone.name), "Undo", move || {
+                        std::thread::spawn(move || match DbusDaemon::connect().and_then(|d| d.save_command("", &gone.name, &gone.command, gone.fingerprint, gone.every_time)) {
+                            Ok(_) => {
+                                notify(&again, format!("\u{201c}{}\u{201d} is back", gone.name));
+                                read_commands(&again);
+                            }
+                            Err(e) => notify(&again, format!("{e:#}")),
+                        });
+                    });
                 }
                 Err(e) => notify(&ui, format!("{e:#}")),
             });
+        }
+    });
+    ui.on_check_command(|key, name, command| COMMANDS_SHOWN.with(|c| command_warning(&key, &name, &command, &c.borrow(), &|p| on_path(p))).into());
+    ui.on_notice_acted({
+        let ui = ui.as_weak();
+        move || {
+            if let Some(win) = ui.upgrade() {
+                win.set_notice_on(false);
+            }
+            if let Some(act) = NOTICE_ACTION.with(|a| a.borrow_mut().take()) {
+                act();
+            }
         }
     });
     ui.on_allow_clipboard({
@@ -318,6 +349,21 @@ fn wire(ui: &MainWindow) {
                 COMMANDS => win.invoke_show_commands(),
                 id => win.invoke_select(id.into()),
             }
+        }
+    });
+    // The daemon stopped (crashed past its restarts, or was stopped): start its unit again; the
+    // window reconnects by itself once it's up.
+    ui.on_start_daemon({
+        let ui = ui.as_weak();
+        move || {
+            let ui = ui.clone();
+            std::thread::spawn(move || {
+                let started = std::process::Command::new("systemctl").args(["--user", "start", "vyoma-desktop"]).status();
+                match started {
+                    Ok(s) if s.success() => notify(&ui, "Starting Vyoma\u{2026}".into()),
+                    _ => notify(&ui, "Vyoma couldn't start. Run vyoma-desktop in a terminal to see why".into()),
+                }
+            });
         }
     });
     ui.on_search({
@@ -649,6 +695,16 @@ fn to_ui(p: &PhoneData) -> Phone {
 
 /// Shows [text] in the bubble at the top of the window for a moment.
 fn notify(ui: &slint::Weak<MainWindow>, text: String) {
+    show_notice(ui, text, "", None);
+}
+
+/// A notice with a button ([label], e.g. Undo) that runs [act] on the UI thread; it stays longer,
+/// so there's time to reach it.
+fn notify_with(ui: &slint::Weak<MainWindow>, text: String, label: &'static str, act: impl FnOnce() + Send + 'static) {
+    show_notice(ui, text, label, Some(Box::new(act)));
+}
+
+fn show_notice(ui: &slint::Weak<MainWindow>, text: String, label: &'static str, act: Option<Box<dyn FnOnce() + Send>>) {
     let ui = ui.clone();
     let _ = slint::invoke_from_event_loop(move || {
         let Some(win) = ui.upgrade() else { return };
@@ -656,10 +712,13 @@ fn notify(ui: &slint::Weak<MainWindow>, text: String) {
             *c.borrow_mut() += 1;
             *c.borrow()
         });
+        let lasts = if act.is_some() { NOTICE_FOR * 2 } else { NOTICE_FOR };
+        NOTICE_ACTION.with(|a| *a.borrow_mut() = act.map(|f| f as Box<dyn FnOnce()>));
         win.set_notice(text.into());
+        win.set_notice_action(label.into());
         win.set_notice_on(true);
         // The words stay while the bubble rises away.
-        slint::Timer::single_shot(NOTICE_FOR, move || {
+        slint::Timer::single_shot(lasts, move || {
             if NOTICES.with(|c| *c.borrow()) == n {
                 if let Some(win) = ui.upgrade() {
                     win.set_notice_on(false);
@@ -735,5 +794,115 @@ mod connected_tests {
         assert_eq!(connected_for((2 * 60 + 14) * 60_000), ("2".into(), "h", "14".into(), "min"));
         assert_eq!(connected_for(2 * 3_600_000), ("2".into(), "h", String::new(), ""));
         assert_eq!(connected_for((3 * 24 + 5) * 3_600_000), ("3".into(), "d", "5".into(), "h"));
+    }
+}
+
+/// Whether [program] (no slash) is a file this PC can run, on PATH.
+fn on_path(program: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let runs = |p: std::path::PathBuf| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
+    if program.contains('/') {
+        let path = match program.strip_prefix("~/") {
+            Some(rest) => std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(rest)),
+            None => Some(program.into()),
+        };
+        return path.is_some_and(runs);
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    // The daemon runs as a user service, which also looks in ~/.local/bin.
+    let local = std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/bin"));
+    std::env::split_paths(&path).chain(local).any(|dir| runs(dir.join(program)))
+}
+
+/// The program a command line starts with, as sh would read it: past `VAR=value`s, unquoted.
+/// None when it starts with shell syntax (a subshell, `if`, a builtin) that has no program to find.
+fn first_program(command: &str) -> Option<String> {
+    let mut words = Vec::new();
+    let (mut word, mut quote, mut chars) = (String::new(), None::<char>, command.trim().chars());
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => word.push(c),
+            (None, '\'' | '"') => quote = Some(c),
+            (None, '\\') => word.extend(chars.next()),
+            (None, c) if c.is_whitespace() || ";|&<>()".contains(c) => {
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+                if !c.is_whitespace() {
+                    words.push(c.to_string());
+                }
+            }
+            (None, c) => word.push(c),
+        }
+        if words.iter().any(|w| !w.contains('=') || w.starts_with('=')) {
+            break;
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    let first = words.into_iter().find(|w| !(w.contains('=') && !w.starts_with('=')))?;
+    const SHELL: &[&str] = &[
+        "(", "{", "!", "if", "for", "while", "until", "case", "cd", "echo", "printf", "test", "[", "export", "exec", "eval",
+        "source", ".", "true", "false", "kill", "read", "set", "unset", "wait", "exit", "command", "type", "ulimit", "umask", "trap",
+    ];
+    (!SHELL.contains(&first.as_str()) && !first.starts_with('$') && !first.starts_with('`')).then_some(first)
+}
+
+/// What looks like a mistake in a command being edited, in words; "" if nothing does.
+pub fn command_warning(key: &str, name: &str, command: &str, others: &[CommandData], runs: &dyn Fn(&str) -> bool) -> String {
+    let program = first_program(command);
+    match program.as_deref() {
+        Some("sudo" | "doas") => {
+            return "Commands run without a terminal, so sudo can't ask for your password. Use pkexec, which asks in a window, or a command that doesn't need it.".into()
+        }
+        Some(p) if !runs(p) => {
+            return if p.contains('/') {
+                format!("Nothing at {p} runs: check the path, and that the file is executable.")
+            } else {
+                format!("This PC has no program called \u{201c}{p}\u{201d}. Check the spelling, or give its full path.")
+            }
+        }
+        _ => {}
+    }
+    let name = name.trim();
+    if !name.is_empty() && others.iter().any(|c| c.key != key && c.name.trim().eq_ignore_ascii_case(name)) {
+        return format!("Another command is already called \u{201c}{name}\u{201d}. A name of its own tells them apart on the phone.");
+    }
+    String::new()
+}
+
+#[cfg(test)]
+mod command_checks {
+    use super::*;
+
+    fn cmd(key: &str, name: &str) -> CommandData {
+        CommandData { key: key.into(), name: name.into(), command: "true".into(), fingerprint: false, every_time: false }
+    }
+
+    #[test]
+    fn finds_the_program_as_sh_would() {
+        assert_eq!(first_program("  backup --quiet"), Some("backup".into()));
+        assert_eq!(first_program("LANG=C FOO='a b' ls -l"), Some("ls".into()));
+        assert_eq!(first_program("'/opt/My App/run' x"), Some("/opt/My App/run".into()));
+        assert_eq!(first_program("~/bin/x;y"), Some("~/bin/x".into()));
+        assert_eq!(first_program("cd /tmp && make"), None);
+        assert_eq!(first_program("(sleep 1; x)"), None);
+        assert_eq!(first_program("$EDITOR file"), None);
+        assert_eq!(first_program(""), None);
+    }
+
+    #[test]
+    fn warns_about_likely_mistakes_only() {
+        let have = |p: &str| ["ls", "pkexec", "systemctl"].contains(&p);
+        let list = [cmd("a", "Lock"), cmd("b", "Backup")];
+        assert!(command_warning("", "Files", "lsx -l", &list, &have).contains("lsx"));
+        assert!(command_warning("", "Update", "sudo pacman -Syu", &list, &have).contains("pkexec"));
+        assert!(command_warning("", "lock ", "ls", &list, &have).contains("already called"));
+        // Editing a command doesn't clash with itself.
+        assert_eq!(command_warning("a", "Lock", "ls", &list, &have), "");
+        assert_eq!(command_warning("", "Restart", "pkexec systemctl reboot", &list, &have), "");
+        assert_eq!(command_warning("", "Go", "cd ~ && make", &list, &have), "");
     }
 }

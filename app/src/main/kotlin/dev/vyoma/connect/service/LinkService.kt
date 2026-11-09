@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.Uri
+import dev.vyoma.connect.platform.AndroidClipboard
 import dev.vyoma.connect.platform.Handoff
 import dev.vyoma.connect.platform.outgoingFile
 import dev.vyoma.connect.platform.readable
@@ -211,6 +212,11 @@ class LinkService : LifecycleService() {
         }
         lifecycleScope.launch {
             dev.vyoma.connect.mirror.PhoneMirror.status.map { it.on to it.pc }.distinctUntilChanged()
+                .collect { Notifications.updateService(this@LinkService, lastConnected) }
+        }
+        // Send clipboard leaves the notification once copies go by themselves.
+        lifecycleScope.launch {
+            container.clipboard.syncState.map { it == AndroidClipboard.SyncState.ON }.distinctUntilChanged()
                 .collect { Notifications.updateService(this@LinkService, lastConnected) }
         }
         lifecycleScope.launch {
