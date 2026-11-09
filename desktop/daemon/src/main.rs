@@ -669,8 +669,10 @@ async fn daemon(dir: PathBuf) -> Result<()> {
             loop {
                 let mut phones: Vec<menus::Phone> = devices.lock().unwrap().iter().filter(|(_, d)| d.paired).map(|(id, d)| menus::Phone { id: id.clone(), name: d.name.clone() }).collect();
                 phones.sort_by(|a, b| (&a.name, &a.id).cmp(&(&b.name, &b.id)));
-                if last.as_ref() != Some(&phones) {
-                    last = Some(phones.clone());
+                // Also when a file manager, or Nautilus's Python extensions, comes or goes.
+                let now = (phones.clone(), menus::installed());
+                if last.as_ref() != Some(&now) {
+                    last = Some(now);
                     let _ = tokio::task::spawn_blocking(move || menus::update(&phones)).await;
                 }
                 tokio::time::sleep(CHANGES_EVERY).await;

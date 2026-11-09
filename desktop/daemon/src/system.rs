@@ -44,21 +44,26 @@ const LOGIN: &str = "org.freedesktop.login1";
 const SESSION: &str = "org.freedesktop.login1.Session";
 const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 
-/// The user's graphical session, as logind knows it.
+/// The user's graphical session, as logind knows it: looked up on each use, never kept, as it
+/// changes under a running service (a new login while the last one is still closing; the service
+/// started before logind had moved the user's display over to the new one).
 #[derive(Clone)]
 pub struct Session {
     conn: Connection,
-    path: OwnedObjectPath,
 }
 
 impl Session {
-    /// `session/auto` resolves to the user's display session even from a service outside it, but
-    /// signals come from its real path, so that's looked up once.
     pub async fn find(system: Connection) -> Result<Self> {
-        let id: String = Self::get(&system, "/org/freedesktop/login1/session/auto", "Id").await?.try_into()?;
-        let path: OwnedObjectPath =
-            system.call_method(Some(LOGIN), "/org/freedesktop/login1", Some("org.freedesktop.login1.Manager"), "GetSession", &(id,)).await?.body().deserialize()?;
-        Ok(Self { conn: system, path })
+        let session = Self { conn: system };
+        session.path().await?;
+        Ok(session)
+    }
+
+    /// `session/auto` resolves to the user's display session even from a service outside it;
+    /// signals come from its real path.
+    async fn path(&self) -> Result<OwnedObjectPath> {
+        let id: String = Self::get(&self.conn, "/org/freedesktop/login1/session/auto", "Id").await?.try_into()?;
+        Ok(self.conn.call_method(Some(LOGIN), "/org/freedesktop/login1", Some("org.freedesktop.login1.Manager"), "GetSession", &(id,)).await?.body().deserialize()?)
     }
 
     async fn get(conn: &Connection, path: &str, name: &str) -> Result<OwnedVariant> {
@@ -66,27 +71,31 @@ impl Session {
     }
 
     pub async fn locked(&self) -> Result<bool> {
-        Ok(Self::get(&self.conn, self.path.as_str(), "LockedHint").await?.try_into()?)
+        Ok(Self::get(&self.conn, self.path().await?.as_str(), "LockedHint").await?.try_into()?)
     }
 
     pub async fn set_locked(&self, lock: bool) -> Result<()> {
         let method = if lock { "Lock" } else { "Unlock" };
-        self.conn.call_method(Some(LOGIN), self.path.as_str(), Some(SESSION), method, &()).await.with_context(|| format!("logind {method}"))?;
+        let path = self.path().await?;
+        self.conn.call_method(Some(LOGIN), path.as_str(), Some(SESSION), method, &()).await.with_context(|| format!("logind {method}"))?;
         Ok(())
     }
 
-    /// Each change of the lock, as it happens.
+    /// Each change of the lock, as it happens: any session's, kept if it's the display session now.
     pub async fn watch(&self, out: tokio::sync::mpsc::UnboundedSender<bool>) -> Result<()> {
-        let rule = MatchRule::builder().msg_type(zbus::message::Type::Signal).interface(PROPERTIES).member("PropertiesChanged").path(self.path.as_str()).build()?;
+        let rule = MatchRule::builder().msg_type(zbus::message::Type::Signal).sender(LOGIN).interface(PROPERTIES).member("PropertiesChanged").path_namespace("/org/freedesktop/login1/session").build()?;
         let mut stream = MessageStream::for_match_rule(rule, &self.conn, None).await?;
         while let Some(Ok(msg)) = stream.next().await {
             let Ok((iface, changed, _)) = msg.body().deserialize::<(String, HashMap<String, OwnedVariant>, Vec<String>)>() else { continue };
             if iface != SESSION {
                 continue;
             }
-            if let Some(locked) = changed.get("LockedHint").and_then(|v| bool::try_from(v).ok())
-                && out.send(locked).is_err()
-            {
+            let Some(locked) = changed.get("LockedHint").and_then(|v| bool::try_from(v).ok()) else { continue };
+            let from = msg.header().path().map(|p| p.to_string());
+            if self.path().await.ok().map(|p| p.to_string()) != from {
+                continue;
+            }
+            if out.send(locked).is_err() {
                 break;
             }
         }
