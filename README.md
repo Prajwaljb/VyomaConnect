@@ -19,6 +19,12 @@ cable, fingerprint-protected commands, and a PC window that shows exactly what e
 
 ## What you get
 
+<p align="center">
+<img src="docs/screenshots/phone-welcome.png" width="240" alt="Vyoma's welcome screen on the phone">
+<img src="docs/screenshots/phone-home.png" width="240" alt="The phone's home screen: the PC's battery and stats, its music, volume and display brightness">
+<img src="docs/screenshots/phone-setup.png" width="240" alt="The phone's setup steps">
+</p>
+
 **Files, both ways.** Send files and whole folders in either direction. Browse your PC from the
 phone, and open the phone's storage right in your PC's file manager. A dropped connection picks up
 where it left off.
