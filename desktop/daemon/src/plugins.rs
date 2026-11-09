@@ -1,6 +1,6 @@
 //! The stock KDE Connect plugins, the PC's part of each, as the phone's plugins expect it
 //! (core/protocol's SimplePlugins.kt and PhonePlugins.kt): ping, battery both ways, the PC's screen
-//! lock, ringing either side, and the phone's mobile signal. The clipboard and sharing are in their
+//! lock and ringing either side. The clipboard and sharing are in their
 //! own modules.
 //!
 //! A packet only goes to a paired device whose identity says it takes that type.
@@ -27,13 +27,11 @@ pub const BATTERY: &str = "kdeconnect.battery";
 pub const FIND: &str = "kdeconnect.findmyphone.request";
 pub const LOCK: &str = "kdeconnect.lock";
 pub const LOCK_REQUEST: &str = "kdeconnect.lock.request";
-pub const SIGNAL: &str = "kdeconnect.connectivity_report";
-pub const SIGNAL_REQUEST: &str = "kdeconnect.connectivity_report.request";
 
 /// What we take. Not lock requests outward: phones can't be locked that way, and a KDE PC would lock.
-pub const INCOMING: &[&str] = &[PING, BATTERY, FIND, LOCK_REQUEST, SIGNAL, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, MPRIS_REQUEST, VOLUME_REQUEST, RUNCOMMAND_REQUEST, NOTIFICATION, MOUSEPAD_REQUEST, TELEPHONY, PRESENTER, SFTP];
+pub const INCOMING: &[&str] = &[PING, BATTERY, FIND, LOCK_REQUEST, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, MPRIS_REQUEST, VOLUME_REQUEST, RUNCOMMAND_REQUEST, NOTIFICATION, MOUSEPAD_REQUEST, TELEPHONY, PRESENTER, SFTP];
 pub const OUTGOING: &[&str] = &[
-    PING, BATTERY, FIND, LOCK, SIGNAL_REQUEST, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, MPRIS, VOLUME, RUNCOMMAND,
+    PING, BATTERY, FIND, LOCK, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, MPRIS, VOLUME, RUNCOMMAND,
     NOTIFICATION_REQUEST, NOTIFICATION_REPLY, NOTIFICATION_ACTION, MOUSEPAD_ECHO, MOUSEPAD_KEYBOARDSTATE, MUTE, SFTP_REQUEST,
 ];
 
@@ -42,8 +40,7 @@ pub fn takes(device: &DeviceView, kind: &str) -> bool {
     device.paired && device.incoming.iter().any(|t| t == kind)
 }
 
-/// What a device that just became reachable and paired is sent: the PC's battery and lock, and a
-/// request for its signal.
+/// What a device that just became reachable and paired is sent: the PC's battery and lock.
 pub fn started(device: &DeviceView, battery: Option<Battery>, locked: Option<bool>) -> Vec<Value> {
     let mut out = Vec::new();
     if let Some(b) = battery.filter(|_| takes(device, BATTERY)) {
@@ -51,9 +48,6 @@ pub fn started(device: &DeviceView, battery: Option<Battery>, locked: Option<boo
     }
     if let Some(l) = locked.filter(|_| takes(device, LOCK)) {
         out.push(lock_packet(l));
-    }
-    if takes(device, SIGNAL_REQUEST) {
-        out.push(packet(SIGNAL_REQUEST, json!({})));
     }
     out
 }
@@ -114,13 +108,6 @@ pub async fn on_packet(cx: Context<'_>, device: &mut DeviceView, p: &Value) -> V
                 return vec![lock_packet(locked)];
             }
         }
-        SIGNAL => {
-            device.signal = body["signalStrengths"].as_object().map(|subs| {
-                subs.iter()
-                    .map(|(sub, s)| json!({ "sim": sub, "network": s["networkType"].as_str().unwrap_or(""), "level": s["signalStrength"].as_i64().unwrap_or(0).clamp(0, 4) }))
-                    .collect()
-            });
-        }
         other => tracing::debug!("{}: no plugin for {other}", device.name),
     }
     Vec::new()
@@ -152,9 +139,9 @@ mod tests {
     fn only_what_a_device_takes_is_sent() {
         let battery = Battery { charge: 55, charging: false };
         let b = Some(battery);
-        let phone = paired(&[BATTERY, LOCK, SIGNAL_REQUEST]);
+        let phone = paired(&[BATTERY, LOCK]);
         let kinds: Vec<_> = started(&phone, b, Some(true)).iter().map(|p| p["type"].as_str().unwrap().to_owned()).collect();
-        assert_eq!(kinds, [BATTERY, LOCK, SIGNAL_REQUEST]);
+        assert_eq!(kinds, [BATTERY, LOCK]);
         assert!(started(&paired(&[PING]), b, Some(true)).is_empty());
         assert!(started(&DeviceView { paired: false, ..phone }, b, Some(true)).is_empty(), "nothing before pairing");
         assert!(started(&paired(&[BATTERY]), None, None).is_empty(), "a desktop has no battery to send");

@@ -258,7 +258,6 @@ class LinkService : LifecycleService() {
         }
 
         mediaSession = PcMediaSession(this, container.media).also { it.start(lifecycleScope) }
-        container.clipboard.startBackgroundSync()
         startPhoneMonitors()
         container.automation.start()
 

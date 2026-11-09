@@ -19,13 +19,6 @@ export struct Permission {
     on: bool,
 }
 
-// One SIM's signal: [level] 0..4, [network] "5G".
-export struct Sim {
-    label: string,
-    network: string,
-    level: int,
-}
-
 export struct Phone {
     id: string,
     name: string,
@@ -42,7 +35,13 @@ export struct Phone {
     can-ring: bool,
     can-browse: bool,
     can-share: bool,
-    sims: [Sim],
+    // How fast it answers, in ms (-1 until timed), and how long it's been connected, as up to two
+    // number-and-unit pairs ("2" "h" "14" "min").
+    rtt: int,
+    up-value: string,
+    up-unit: string,
+    up-value2: string,
+    up-unit2: string,
     // Background clipboard sync: "on", "ask" (plugged in, waiting for Allow) or "plug".
     clip: string,
     // What it may do on this PC (paired phones only).
@@ -55,6 +54,8 @@ export struct Command {
     key: string,
     name: string,
     command: string,
+    // [command] as shown, with break points in its long words.
+    shown: string,
     fingerprint: bool,
     every: bool,
 }
@@ -84,6 +85,11 @@ export struct Happening {
 export struct Day {
     label: string,
     items: [Happening],
+}
+
+// Snapshots only: how far each page starts scrolled (past the end means to the end).
+export global Snap {
+    in property <length> scroll: 0px;
 }
 
 export global Theme {
@@ -161,9 +167,6 @@ export global Words {
         if p.code != "" { return p.asking ? "Wants to pair with this PC" : "Waiting for the phone to accept"; }
         if !p.paired { return p.linked ? "Nearby, not paired" : "Not paired"; }
         if !p.linked { return "Away"; }
-        if p.via == "wifi" { return "Connected via Wi-Fi"; }
-        if p.via == "cable" { return "Connected by USB cable"; }
-        if p.via == "bluetooth" { return "Connected over Bluetooth"; }
         return "Connected";
     }
 
@@ -180,9 +183,10 @@ export global Words {
         return Theme.error;
     }
 
-    public pure function signal-color(level: int) -> color {
-        if level >= 3 { return Theme.connected; }
-        if level == 2 { return Theme.pending; }
+    // A response time's colour: quick enough to feel instant, noticeable, slow.
+    public pure function rtt-color(ms: int) -> color {
+        if ms <= 40 { return Theme.connected; }
+        if ms <= 150 { return Theme.pending; }
         return Theme.error;
     }
 }
@@ -401,12 +405,16 @@ component Row inherits Rectangle {
                 font-size: 15px;
                 font-weight: 500;
                 wrap: word-wrap;
+                // Its full height at its real width, never fewer lines: a layout short of room
+                // otherwise took a line from the last row, which then spilled out of its card.
+                min-height: self.preferred-height;
             }
             if root.subtitle != "": Text {
                 text: root.subtitle;
                 color: Theme.muted;
                 font-size: 13px;
                 wrap: word-wrap;
+                min-height: self.preferred-height;
             }
         }
         if root.value != "": Text {
@@ -475,12 +483,14 @@ component StatusRow inherits Rectangle {
                 font-size: 15px;
                 font-weight: 500;
                 wrap: word-wrap;
+                min-height: self.preferred-height;
             }
             if root.subtitle != "": Text {
                 text: root.subtitle;
                 color: Theme.muted;
                 font-size: 13px;
                 wrap: word-wrap;
+                min-height: self.preferred-height;
             }
         }
         if root.value != "": Text {
@@ -616,38 +626,143 @@ component Ring inherits Rectangle {
 }
 
 // A meter: name and reading over a 6 px capsule bar that eases to each new value.
-component Meter inherits VerticalLayout {
+// A figure as Apple shows one: the number large, its unit small beside it on the same baseline,
+// what it is under them, with a dot in its colour when it has one.
+component Stat inherits VerticalLayout {
     in property <string> label;
-    in property <string> reading;
-    in property <float> value;
-    in property <color> tone;
-    property <float> shown: root.value;
-    animate shown { duration: 700ms; easing: cubic-bezier(0.2, 0.9, 0.25, 1); }
-    spacing: 8px;
+    in property <string> value;
+    in property <string> unit;
+    in property <string> value2;
+    in property <string> unit2;
+    in property <bool> has-dot;
+    in property <color> dot;
+    spacing: 2px;
+    alignment: center;
     HorizontalLayout {
+        alignment: start;
+        spacing: 3px;
         Text {
-            text: root.label;
+            text: root.value;
             color: Theme.text;
-            font-size: 14px;
-            horizontal-stretch: 1;
-        }
-        Text {
-            text: root.reading;
-            color: Theme.text;
-            font-size: 14px;
+            font-size: 24px;
             font-weight: 600;
+            vertical-alignment: bottom;
+        }
+        if root.unit != "": VerticalLayout {
+            alignment: end;
+            padding-bottom: 3px;
+            Text {
+                text: root.unit;
+                color: Theme.muted;
+                font-size: 13px;
+                font-weight: 500;
+            }
+        }
+        // A little more air between the pairs ("2 h  14 min").
+        if root.value2 != "": HorizontalLayout {
+            padding-left: 5px;
+            Text {
+                text: root.value2;
+                color: Theme.text;
+                font-size: 24px;
+                font-weight: 600;
+                vertical-alignment: bottom;
+            }
+        }
+        if root.unit2 != "": VerticalLayout {
+            alignment: end;
+            padding-bottom: 3px;
+            Text {
+                text: root.unit2;
+                color: Theme.muted;
+                font-size: 13px;
+                font-weight: 500;
+            }
         }
     }
-    Rectangle {
-        height: 6px;
-        border-radius: 3px;
-        background: Theme.track;
-        Rectangle {
-            x: 0;
-            width: parent.width * max(0, min(1, root.shown));
-            border-radius: 3px;
-            background: root.tone;
+    HorizontalLayout {
+        alignment: start;
+        spacing: 6px;
+        if root.has-dot: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: root.dot;
+            }
         }
+        Text {
+            text: root.label;
+            color: Theme.muted;
+            font-size: 12px;
+        }
+    }
+}
+
+// The phone and this PC joined by a line, with how they're joined on it: a cable, Wi-Fi or
+// Bluetooth. Lit while connected; the line breaks around the label rather than run under it.
+component LinkLine inherits Rectangle {
+    in property <string> via;
+    in property <bool> linked;
+    height: 34px;
+    property <length> end: 34px;
+    property <color> line: root.linked ? Theme.connected : Theme.track;
+    property <string> words: !root.linked ? "Away" : root.via == "cable" ? "USB cable" : root.via == "wifi" ? "Wi-Fi" : root.via == "bluetooth" ? "Bluetooth" : "Connected";
+    for i in 2: Rectangle {
+        x: i == 0 ? 0px : parent.width - root.end;
+        width: root.end;
+        height: root.end;
+        border-radius: root.end / 2;
+        background: Theme.raised;
+        border-width: 1px;
+        border-color: Theme.rim;
+        Glyph {
+            source: i == 0 ? @image-url("icons/phone.svg") : @image-url("icons/computer.svg");
+            tint: Theme.text;
+            width: 16px;
+            height: 16px;
+        }
+    }
+    chip := Rectangle {
+        width: chip-row.preferred-width;
+        height: 26px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 13px;
+        background: Theme.raised;
+        chip-row := HorizontalLayout {
+            padding-left: root.via != "" && root.linked ? 9px : 12px;
+            padding-right: 12px;
+            spacing: 5px;
+            if root.via != "" && root.linked: VerticalLayout {
+                alignment: center;
+                Glyph {
+                    source: root.via == "cable" ? @image-url("icons/cable.svg") : root.via == "bluetooth" ? @image-url("icons/bluetooth.svg") : @image-url("icons/wifi.svg");
+                    tint: Theme.connected;
+                    width: 14px;
+                    height: 14px;
+                }
+            }
+            Text {
+                text: root.words;
+                color: root.linked ? Theme.text : Theme.muted;
+                font-size: 12px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+    }
+    for i in 2: Rectangle {
+        property <length> from: i == 0 ? root.end + 6px : chip.x + chip.width + 6px;
+        property <length> to: i == 0 ? chip.x - 6px : parent.width - root.end - 6px;
+        x: self.from;
+        width: max(0px, self.to - self.from);
+        y: (parent.height - 2px) / 2;
+        height: 2px;
+        border-radius: 1px;
+        background: root.line;
+        opacity: root.linked ? 0.7 : 1;
     }
 }
 
@@ -665,12 +780,14 @@ component AskCard inherits Glass {
             font-weight: 600;
             horizontal-alignment: center;
             wrap: word-wrap;
+            min-height: self.preferred-height;
         }
         Text {
             text: root.body;
             color: Theme.muted;
             font-size: 14px;
             wrap: word-wrap;
+            min-height: self.preferred-height;
             horizontal-alignment: center;
         }
         @children
@@ -696,6 +813,7 @@ component Tip inherits HorizontalLayout {
         color: Theme.muted;
         font-size: 13px;
         wrap: word-wrap;
+        min-height: self.preferred-height;
         horizontal-stretch: 1;
     }
 }
@@ -743,6 +861,23 @@ component Page inherits Rectangle {
     property <length> hero: max(200px, min(290px, root.height * 0.34));
     property <bool> entered;
     init => { root.entered = true; }
+    property <length> snap: Snap.scroll;
+    changed snap => {
+        scroll.content-y = -min(root.snap, max(0px, scroll.content-height - scroll.visible-height));
+    }
+    // Docked, the title bubble gets the top band to itself: the page stops just under it. This
+    // window can't blur what passes under glass (the phone can), and text under the bubble was
+    // unreadable. No shade, no fade: the wallpaper shows in the band.
+    band := Rectangle {
+        y: root.docked ? 66px : 0px;
+        animate y { duration: 220ms; easing: ease-out; }
+        width: root.width;
+        height: root.height - self.y;
+        clip: true;
+    Rectangle {
+        y: -band.y;
+        width: root.width;
+        height: root.height;
     scroll := ScrollView {
         width: root.width;
         height: root.height;
@@ -786,6 +921,8 @@ component Page inherits Rectangle {
             }
             @children
         }
+    }
+    }
     }
     // Past the hero, the title docks in a bubble at the top.
     property <bool> docked: -scroll.content-y > root.hero - 64px;
@@ -936,16 +1073,16 @@ component PhonePage inherits Page {
         }
     }
 
-    // Glanceable state first: the battery ring and the signal, as the phone's status card.
+    // Glanceable state first, as the phone's status card: its battery, then the link to this PC,
+    // how fast it answers and for how long it's been connected.
     if root.phone.paired: Glass {
         opacity: root.phone.linked ? 1 : 0.6;
         animate opacity { duration: 300ms; }
         HorizontalLayout {
             padding: 20px;
-            padding-left: 24px;
-            padding-right: 26px;
-            spacing: 28px;
-            alignment: root.phone.sims.length > 0 ? stretch : center;
+            padding-left: 22px;
+            padding-right: 24px;
+            spacing: 26px;
             VerticalLayout {
                 alignment: center;
                 spacing: 4px;
@@ -957,19 +1094,40 @@ component PhonePage inherits Page {
                 Text {
                     text: !root.phone.linked ? "Away" : root.phone.charging ? "Charging" : "Battery";
                     color: Theme.muted;
-                    font-size: 13px;
+                    font-size: 12px;
                     horizontal-alignment: center;
                 }
             }
-            if root.phone.sims.length > 0: VerticalLayout {
+            VerticalLayout {
                 alignment: center;
                 spacing: 18px;
                 horizontal-stretch: 1;
-                for s in root.phone.sims: Meter {
-                    label: s.label;
-                    reading: s.network;
-                    value: root.phone.linked ? s.level / 4 : 0;
-                    tone: Words.signal-color(s.level);
+                LinkLine {
+                    via: root.phone.via;
+                    linked: root.phone.linked;
+                }
+                HorizontalLayout {
+                    spacing: 16px;
+                    Stat {
+                        horizontal-stretch: 1;
+                        label: "Response";
+                        value: root.phone.linked && root.phone.rtt >= 0 ? root.phone.rtt : "—";
+                        unit: root.phone.linked && root.phone.rtt >= 0 ? "ms" : "";
+                        has-dot: root.phone.linked && root.phone.rtt >= 0;
+                        dot: Words.rtt-color(root.phone.rtt);
+                    }
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.divider;
+                    }
+                    Stat {
+                        horizontal-stretch: 1;
+                        label: "Connected for";
+                        value: root.phone.linked && root.phone.up-value != "" ? root.phone.up-value : "—";
+                        unit: root.phone.linked ? root.phone.up-unit : "";
+                        value2: root.phone.linked ? root.phone.up-value2 : "";
+                        unit2: root.phone.linked ? root.phone.up-unit2 : "";
+                    }
                 }
             }
         }
@@ -1192,6 +1350,7 @@ component ActivityPage inherits Page {
         color: Theme.muted;
         font-size: 15px;
         wrap: word-wrap;
+        min-height: self.preferred-height;
         horizontal-alignment: center;
     }
 
@@ -1275,6 +1434,7 @@ component CommandsPage inherits Page {
         color: Theme.muted;
         font-size: 15px;
         wrap: word-wrap;
+        min-height: self.preferred-height;
         horizontal-alignment: center;
     }
 
@@ -1284,7 +1444,7 @@ component CommandsPage inherits Page {
             icon: @image-url("icons/terminal.svg");
             icon-color: Theme.green;
             title: c.name;
-            subtitle: c.command;
+            subtitle: c.shown;
             value: c.every ? "Fingerprint, every time" : c.fingerprint ? "Fingerprint" : "";
             tappable: true;
             first: i == 0;
@@ -1315,7 +1475,7 @@ component CommandsPage inherits Page {
             icon: @image-url("icons/terminal.svg");
             icon-color: Theme.gray;
             title: c.name;
-            subtitle: c.command;
+            subtitle: c.shown;
             action: "Add";
             first: i == 0;
             last: i == root.suggestions.length - 1;
@@ -1440,6 +1600,7 @@ component CommandSheet inherits Rectangle {
                                 color: Theme.muted;
                                 font-size: 13px;
                                 wrap: word-wrap;
+                                min-height: self.preferred-height;
                             }
                         }
                         VerticalLayout {
@@ -1490,6 +1651,7 @@ component CommandSheet inherits Rectangle {
                                         color: Theme.muted;
                                         font-size: 13px;
                                         wrap: word-wrap;
+                                        min-height: self.preferred-height;
                                     }
                                 }
                                 VerticalLayout {
@@ -1542,6 +1704,7 @@ component EmptyPage inherits Page {
         color: Theme.muted;
         font-size: 15px;
         wrap: word-wrap;
+        min-height: self.preferred-height;
         horizontal-alignment: center;
     }
     if root.daemon-ok: HorizontalLayout {
@@ -1747,6 +1910,7 @@ component SetupPage inherits Page {
                         color: Theme.muted;
                         font-size: 14px;
                         wrap: word-wrap;
+                        min-height: self.preferred-height;
                         horizontal-alignment: center;
                     }
                     Text {
@@ -1985,12 +2149,14 @@ component Dialog inherits Rectangle {
                 font-size: 18px;
                 font-weight: 600;
                 wrap: word-wrap;
+                min-height: self.preferred-height;
             }
             Text {
                 text: root.body;
                 color: Theme.text;
                 font-size: 14px;
                 wrap: word-wrap;
+                min-height: self.preferred-height;
             }
             HorizontalLayout {
                 alignment: end;
@@ -2354,6 +2520,7 @@ export component MainWindow inherits Window {
             font-size: 14px;
             font-weight: 500;
             wrap: word-wrap;
+            min-height: self.preferred-height;
             horizontal-alignment: center;
         }
     }

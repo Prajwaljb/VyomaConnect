@@ -55,6 +55,11 @@ use share::{SHARE, SHARE_UPDATE, Shared};
 use system::{Ringer, Session};
 
 const BUS_NAME: &str = "dev.vyoma.Desktop";
+/// The window's response time: `vyoma.echo.request {n}`, which Vyoma on the phone answers with `vyoma.echo {n}`.
+const ECHO_REQUEST: &str = "vyoma.echo.request";
+const ECHO: &str = "vyoma.echo";
+const ECHO_EVERY: Duration = Duration::from_secs(5);
+const ECHOES_KEPT: usize = 5;
 const OBJECT_PATH: &str = "/dev/vyoma/Desktop";
 /// How often phones tethered to this PC (or whose hotspot it's on) are told it's here, while unlinked.
 const TETHER_EVERY: Duration = Duration::from_secs(3);
@@ -81,14 +86,16 @@ pub struct DeviceView {
     pub incoming: Vec<String>,
     /// Charge, charging, low.
     pub battery: Option<(i64, bool, bool)>,
-    /// Each SIM's network and level (0..4).
-    pub signal: Option<Vec<Value>>,
     /// The certificate its links show, which its payloads must show too.
     pub cert: Vec<u8>,
     /// Its best link's address ([best]): Wi-Fi over the cable over Bluetooth.
     pub remote: Option<IpAddr>,
     /// Every link's address.
     pub routes: Vec<IpAddr>,
+    /// When it linked (unix ms), while linked.
+    pub linked_at: Option<i64>,
+    /// Its last few echo round trips (ms), newest last; the window shows their median.
+    pub trips: Vec<u32>,
 }
 
 type Devices = Arc<Mutex<HashMap<String, DeviceView>>>;
@@ -158,7 +165,7 @@ impl Control {
         out
     }
 
-    /// One device's state as JSON: battery, signal, how it's linked (`via`: wifi, cable or
+    /// One device's state as JSON: battery, how it's linked (`via`: wifi, cable or
     /// bluetooth), what it can do here (`can`) and the rest of [devices].
     fn details(&self, id: String) -> fdo::Result<String> {
         let all = self.devices.lock().unwrap();
@@ -173,7 +180,14 @@ impl Control {
         });
         let linked_paired = all.values().filter(|d| d.paired && d.linked).count();
         let clip = clipboard_sync(&id, d, linked_paired);
-        Ok(json!({ "name": d.name, "type": d.kind, "paired": d.paired, "linked": d.linked, "key": d.key, "asking": d.asking, "battery": battery, "signal": d.signal, "via": via(d), "can": can, "clipboardSync": clip }).to_string())
+        // The typical round trip, not the latest: one slow answer shouldn't make the link look bad.
+        // `since`: when it linked (unix ms); `rtt`: how fast it answers (ms).
+        let rtt = (!d.trips.is_empty()).then(|| {
+            let mut t = d.trips.clone();
+            t.sort_unstable();
+            t[t.len() / 2]
+        });
+        Ok(json!({ "name": d.name, "type": d.kind, "paired": d.paired, "linked": d.linked, "key": d.key, "asking": d.asking, "battery": battery, "via": via(d), "can": can, "clipboardSync": clip, "rtt": rtt, "since": d.linked_at }).to_string())
     }
 
     /// Lets the plugged-in phone's clipboard sync work with Vyoma closed (the USB notification's
@@ -425,6 +439,9 @@ struct Desk {
     refused_input: HashMap<String, std::time::Instant>,
     /// Device id to its running features session, which takes its vyoma.* packets.
     sessions: HashMap<String, mpsc::UnboundedSender<(Value, IpAddr)>>,
+    /// Device id to the echo it was last sent and when, for the window's response time.
+    echoes: HashMap<String, (u64, std::time::Instant)>,
+    echo_n: u64,
 }
 
 /// A file fetched from a device, or why not.
@@ -633,6 +650,8 @@ async fn daemon(dir: PathBuf) -> Result<()> {
         host,
         refused_input: HashMap::new(),
         sessions: HashMap::new(),
+        echoes: HashMap::new(),
+        echo_n: 0,
         me: me.clone(),
         conn: conn.clone(),
         clipboard: Clipboard::default(),
@@ -678,8 +697,10 @@ async fn daemon(dir: PathBuf) -> Result<()> {
 
     let mut battery_tick = tokio::time::interval(BATTERY_EVERY);
     let mut mounts_tick = tokio::time::interval(MOUNTS_EVERY);
+    let mut echo_tick = tokio::time::interval(ECHO_EVERY);
     loop {
         tokio::select! {
+            _ = echo_tick.tick() => desk.send_echoes(),
             Some(event) = events.recv() => desk.on_event(event).await,
             Some(h) = pressed.recv() => desk.on_heard(h).await,
             Some((id, note)) = iconed.recv() => desk.show_note(&id, note).await,
@@ -756,6 +777,30 @@ impl Desk {
             self.send(id, input::keyboard_state());
         }
         self.start_features(id, &device);
+    }
+
+    /// Times each linked phone's link that answers echoes: one at a time, every [ECHO_EVERY].
+    fn send_echoes(&mut self) {
+        let due: Vec<String> = self.devices.lock().unwrap().iter().filter(|(_, d)| d.linked && plugins::takes(d, ECHO_REQUEST)).map(|(id, _)| id.clone()).collect();
+        for id in due {
+            self.echo_n += 1;
+            self.echoes.insert(id.clone(), (self.echo_n, std::time::Instant::now()));
+            self.send(&id, packet(ECHO_REQUEST, json!({ "n": self.echo_n })));
+        }
+    }
+
+    fn on_echo(&mut self, id: &str, packet: &Value) {
+        let Some((n, sent)) = self.echoes.get(id).copied() else { return };
+        if packet["body"]["n"].as_u64() != Some(n) {
+            return;
+        }
+        self.echoes.remove(id);
+        let ms = sent.elapsed().as_millis().min(60_000) as u32;
+        if let Some(d) = self.devices.lock().unwrap().get_mut(id) {
+            d.trips.push(ms);
+            let extra = d.trips.len().saturating_sub(ECHOES_KEPT);
+            d.trips.drain(..extra);
+        }
     }
 
     /// Serves the device's vyoma.* packets, if it sends any, until it's gone or unpaired.
@@ -952,6 +997,9 @@ impl Desk {
                 {
                     let mut all = self.devices.lock().unwrap();
                     let d = all.entry(id.clone()).or_default();
+                    if !d.linked {
+                        (d.linked_at, d.trips) = (Some(vyoma_core::link::now_ms()), Vec::new());
+                    }
                     (d.name, d.kind, d.paired, d.linked, d.incoming, d.cert, d.routes, d.remote) = (name, kind, paired, true, incoming, cert, vec![remote], Some(remote));
                     note_routes(&d.routes);
                 }
@@ -986,9 +1034,10 @@ impl Desk {
                 }
                 let mut all = self.devices.lock().unwrap();
                 // Unpaired devices are only listed while they're here.
+                self.echoes.remove(&id);
                 if all.get(&id).is_some_and(|d| d.paired) {
                     let d = all.get_mut(&id).unwrap();
-                    (d.linked, d.battery, d.signal) = (false, None, None);
+                    (d.linked, d.battery, d.linked_at, d.trips) = (false, None, None, Vec::new());
                 } else {
                     all.remove(&id);
                 }
@@ -1032,7 +1081,7 @@ impl Desk {
                     let mut all = self.devices.lock().unwrap();
                     if all.get(&id).is_some_and(|d| d.linked) {
                         let d = all.get_mut(&id).unwrap();
-                        (d.paired, d.battery, d.signal) = (false, None, None);
+                        (d.paired, d.battery) = (false, None);
                     } else {
                         all.remove(&id);
                     }
@@ -1041,6 +1090,9 @@ impl Desk {
             }
             Event::Packet { id, packet, from } => {
                 let Some(mut device) = self.devices.lock().unwrap().get(&id).cloned() else { return };
+                if packet["type"] == ECHO {
+                    return self.on_echo(&id, &packet);
+                }
                 if packet["type"].as_str().is_some_and(|t| t.starts_with("vyoma.")) {
                     if let Some(session) = self.sessions.get(&id) {
                         let _ = session.send((packet, from));
@@ -1142,7 +1194,7 @@ impl Desk {
                 let replies = plugins::on_packet(cx, &mut device, &packet).await;
                 // Only what the plugin keeps; the rest may have changed meanwhile.
                 if let Some(d) = self.devices.lock().unwrap().get_mut(&id) {
-                    (d.battery, d.signal) = (device.battery, device.signal);
+                    d.battery = device.battery;
                 }
                 for p in replies {
                     self.send(&id, p);
@@ -1482,8 +1534,8 @@ fn identity(me: &Identity) -> Value {
             "deviceName": host_name(),
             "deviceType": if system::battery().is_some() { "laptop" } else { "desktop" },
             "protocolVersion": 8,
-            "incomingCapabilities": ([plugins::INCOMING, features::INCOMING].concat()),
-            "outgoingCapabilities": ([plugins::OUTGOING, features::OUTGOING].concat()),
+            "incomingCapabilities": ([plugins::INCOMING, features::INCOMING, &[ECHO]].concat()),
+            "outgoingCapabilities": ([plugins::OUTGOING, features::OUTGOING, &[ECHO_REQUEST]].concat()),
         }),
     )
 }

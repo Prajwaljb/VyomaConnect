@@ -23,8 +23,10 @@ pub struct PhoneData {
     pub can_ring: bool,
     pub can_browse: bool,
     pub can_share: bool,
-    /// Each SIM's signal: its label, network ("5G") and level 0..4.
-    pub sims: Vec<(String, String, i32)>,
+    /// How fast it answers (ms), once timed.
+    pub rtt: Option<i64>,
+    /// When it connected (unix ms), while connected.
+    pub since: Option<i64>,
     /// Background clipboard sync: "on", "ask" (plugged in, waiting for Allow) or "plug".
     pub clip: String,
     /// What it may do here (paired phones).
@@ -91,23 +93,12 @@ impl PhoneData {
             can_ring: can("ring"),
             can_browse: can("browse"),
             can_share: can("share"),
-            sims: sims(&v["signal"]),
+            rtt: v["rtt"].as_i64(),
+            since: v["since"].as_i64(),
             clip: v["clipboardSync"].as_str().unwrap_or("plug").to_owned(),
             permits: Vec::new(),
         }
     }
-}
-
-/// The SIMs in `signal` ({sim, network, level}), named "SIM 1", "SIM 2" in order; one alone is "Signal".
-fn sims(v: &Value) -> Vec<(String, String, i32)> {
-    let list = v.as_array().map(Vec::as_slice).unwrap_or_default();
-    list.iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let label = if list.len() == 1 { "Signal".to_owned() } else { format!("SIM {}", i + 1) };
-            (label, s["network"].as_str().unwrap_or("").to_owned(), s["level"].as_i64().unwrap_or(0).clamp(0, 4) as i32)
-        })
-        .collect()
 }
 
 /// A feature that needs something on the PC.

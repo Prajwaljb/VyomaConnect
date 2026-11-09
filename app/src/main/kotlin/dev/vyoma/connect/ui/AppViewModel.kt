@@ -198,6 +198,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun copyClip(text: String) = container.clipboard.copy(text)
     fun clearClipHistory() = container.clipboard.clearHistory()
     fun backgroundClipboardSync() = container.clipboard.backgroundSyncAvailable()
+    /** Whether copies here are reaching the PC by themselves right now. */
+    val clipboardSync get() = container.clipboard.syncState
+    /** Starts the clipboard watcher again from here, in front, so Android asks about log access again. */
+    fun retryClipboardSync() = container.clipboard.startBackgroundSync(again = true)
 
     /** Opens [url] in the PC's browser, as a shared link. */
     suspend fun openOnPc(id: String, url: String): Boolean = device(id)?.plugin<dev.vyoma.connect.protocol.plugin.builtin.SharePlugin>(dev.vyoma.connect.protocol.plugin.builtin.SharePlugin.ID)?.sendUrl(url) == true
@@ -267,10 +271,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** The connected PC's commands, for a "Run command" action. */
     fun pcCommands(): List<dev.vyoma.connect.protocol.plugin.builtin.RemoteCommand> =
         dev.vyoma.connect.service.Commands.primary(container)?.plugin<RunCommandPlugin>(RunCommandPlugin.ID)?.commands?.value.orEmpty()
-    /** Whether the connected PC's command [key] asks for the fingerprint when run by hand. */
-    fun pcCommandLocked(key: String): Boolean = dev.vyoma.connect.service.Commands.primary(container)?.let {
-        AppLock.commandLocked(getApplication(), it.id, key) || pcCommands().any { c -> c.key == key && c.fingerprint }
-    } == true
+    /** Whether the connected PC marked its command [key] to ask for the fingerprint when run by hand. */
+    fun pcCommandLocked(key: String): Boolean = pcCommands().any { c -> c.key == key && c.fingerprint }
     /** Whether a companion has ever paired (walk-away rules and some actions need it). */
     fun hasCompanion(): Boolean = container.hub.value?.devices?.value?.values?.any { it.state.value.identity.featuresOf != null && it.state.value.isPaired } == true
 

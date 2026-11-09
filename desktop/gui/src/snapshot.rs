@@ -12,6 +12,7 @@ use slint::{ComponentHandle, PhysicalSize};
 use crate::daemon::{ActivityEntry, Check, Feature, Health, Permission, PhoneData};
 use crate::{MainWindow, Theme};
 
+/// The window's size, unless `--size WxH` says otherwise (the smallest it goes is 780x540).
 const WIDTH: u32 = 920;
 const HEIGHT: u32 = 620;
 /// Rendered at twice the size, as on a HiDPI screen.
@@ -25,13 +26,14 @@ impl Platform for Offscreen {
     }
 }
 
-pub fn run(path: &str, dark: bool, plain: bool, scene: &str) -> Result<()> {
+pub fn run(path: &str, dark: bool, plain: bool, scene: &str, size: Option<(u32, u32)>, scroll: f32) -> Result<()> {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(Offscreen(window.clone()))).map_err(|e| anyhow::anyhow!("{e:?}"))?;
     let ui = MainWindow::new()?;
     ui.global::<Theme>().set_dark(dark);
     window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: SCALE });
-    let (w, h) = ((WIDTH as f32 * SCALE) as u32, (HEIGHT as f32 * SCALE) as u32);
+    let (width, height) = size.unwrap_or((WIDTH, HEIGHT));
+    let (w, h) = ((width as f32 * SCALE) as u32, (height as f32 * SCALE) as u32);
     window.set_size(PhysicalSize::new(w, h));
     match scene {
         "down" => crate::apply(&ui, None),
@@ -81,7 +83,7 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str) -> Result<()> {
             ui.set_editing(true);
         }
     }
-    if scene == "activity" || scene == "activity-empty" {
+    if scene.starts_with("activity") {
         ui.set_selected(crate::ACTIVITY.into());
         crate::apply(&ui, Some(phones(scene)));
     }
@@ -89,12 +91,15 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str) -> Result<()> {
     let noon = chrono::TimeZone::with_ymd_and_hms(&chrono::Local, 2026, 11, 8, 12, 0, 0).single().context("no such time")?;
     let at = |mins_ago: i64| (noon - chrono::Duration::minutes(mins_ago)).timestamp();
     let ev = |mins_ago: i64, name: &str, kind: &str, text: &str| ActivityEntry { time: at(mins_ago), name: name.into(), kind: kind.into(), text: text.into() };
-    let list = if scene == "activity" {
+    // activity-late: the list arrives after the page opened, as it does from the daemon.
+    let late = scene == "activity-late";
+    let list = if scene == "activity" || late {
         vec![
             ev(4, "Pixel 9 Pro", "screenshot", "Took a screenshot"),
             ev(12, "Pixel 9 Pro", "files", "Copied \u{201c}Quarterly report for the whole team, final version two.pdf\u{201d} from this PC"),
             ev(38, "Work phone", "refused", "Refused: \u{201c}See and control this screen\u{201d} is off"),
             ev(95, "Pixel 9 Pro", "touchpad", "Was the touchpad"),
+            ev(97, "Pixel 9 Pro", "files", "Copied \u{201c}Screen_Recording_20261108_103512_Chrome.mp4\u{201d} from this PC"),
             ev(60 * 20, "Pixel 9 Pro", "power", "Put the PC to sleep"),
             ev(60 * 21, "Pixel 9 Pro", "share", "Shared 12 files with this PC"),
             ev(60 * 22, "Pixel 9 Pro", "photo", "Took a photo with the camera"),
@@ -104,7 +109,7 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str) -> Result<()> {
     } else {
         vec![]
     };
-    crate::show_activity(&ui, &list, noon);
+    crate::show_activity(&ui, if late { &[] } else { &list }, noon);
     if scene == "notice" {
         ui.set_notice("Opening the phone's files…".into());
         ui.set_notice_on(true);
@@ -123,6 +128,21 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str) -> Result<()> {
     // Draw once so pages start rising in, then again once every enter animation has settled.
     let mut pixels = vec![Rgb8Pixel::new(0, 0, 0); (w * h) as usize];
     slint::platform::update_timers_and_animations();
+    window.draw_if_needed(|renderer| {
+        renderer.render(&mut pixels, w as usize);
+    });
+    if late {
+        crate::show_activity(&ui, &list, noon);
+        slint::platform::update_timers_and_animations();
+        window.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, w as usize);
+        });
+    }
+    // Laid out now: scroll, if asked (pages follow Snap.scroll as it changes).
+    ui.global::<crate::Snap>().set_scroll(scroll);
+    // A frame at the new scroll, so what follows it (the docked title) starts moving now.
+    slint::platform::update_timers_and_animations();
+    window.request_redraw();
     window.draw_if_needed(|renderer| {
         renderer.render(&mut pixels, w as usize);
     });
@@ -176,7 +196,7 @@ fn phones(scene: &str) -> Vec<PhoneData> {
         permit("webcam", "Be this PC's webcam and mic", "The phone's camera and microphone in calls here", true),
         permit("power", "Wake, unlock, sleep and shut down", "Also log out and restart", false),
     ];
-    main.sims = vec![("SIM 1".into(), "5G".into(), 4), ("SIM 2".into(), "LTE".into(), 2)];
+    (main.rtt, main.since) = (Some(6), Some(chrono::Local::now().timestamp_millis() - (2 * 60 + 14) * 60_000));
     let away = PhoneData { paired: true, clip: "plug".into(), ..phone("b", "Work phone") };
     let mut near = PhoneData { linked: true, ..phone("c", "OnePlus 12") };
     if scene == "pairing" {

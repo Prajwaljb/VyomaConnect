@@ -129,49 +129,73 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
 
     fun canDrawOverlays(): Boolean = Settings.canDrawOverlays(context)
 
+    /** Whether copies here really reach the PC by themselves: [SyncState.ON] once the system log is readable. */
+    enum class SyncState { NEEDS_GRANT, WAITING, ON }
+
+    private val _syncState = MutableStateFlow(SyncState.NEEDS_GRANT)
+    val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
     /**
-     * Starts following the system log. Start it while the app is in front: Android 13+ asks the
-     * user once per process to allow log access, and only shows that prompt to a foreground app.
+     * Follows the system log. Call it with Vyoma in front only: Android 13+ asks about each new
+     * logcat reader whether it may see other apps' lines, it can only ask an app in front, and it
+     * refuses one started in the background without asking, and keeps refusing for about a minute
+     * after (what broke this: the service started it at launch, so opening Vyoma never got asked).
+     * [again] starts a fresh reader, so Android asks again.
      */
-    fun startBackgroundSync() {
-        if (watcher?.isActive == true || !backgroundSyncAvailable()) return
+    fun startBackgroundSync(again: Boolean = false) {
+        if (!backgroundSyncAvailable()) {
+            _syncState.value = SyncState.NEEDS_GRANT
+            return
+        }
+        if (!again && watcher?.isActive == true) return
+        watcher?.cancel()
+        _syncState.value = SyncState.WAITING
         watcher = scope.launch(Dispatchers.IO) {
             val marker = "Denying clipboard access to ${context.packageName}"
             val process = runCatching {
-                // ClipboardService logs through Slog, i.e. the system buffer: reading only that one keeps
-                // logcat from pulling the (much busier) main buffer through the kernel to filter it.
-                ProcessBuilder("logcat", "-b", "system", "-T", "1", "-v", "brief", "ClipboardService:E", "*:S").redirectErrorStream(true).start()
+                // ClipboardService logs through Slog, i.e. the system buffer, the quiet one; warnings
+                // and up only. -T 1 replays its last line at once: any line at all proves the log is
+                // readable, as Vyoma never writes there.
+                ProcessBuilder("logcat", "-b", "system", "-T", "1", "-v", "brief", "*:W").redirectErrorStream(true).start()
             }.getOrElse {
                 VLog.w(TAG, "can't read logcat: ${it.message}")
+                _syncState.value = SyncState.NEEDS_GRANT
                 return@launch
             }
-            VLog.i(TAG, "background clipboard sync on")
+            VLog.i(TAG, "background clipboard sync starting")
             try {
                 process.inputStream.bufferedReader().useLines { lines ->
                     for (line in lines) {
                         if (!isActive) break
+                        if (_syncState.value != SyncState.ON) {
+                            _syncState.value = SyncState.ON
+                            VLog.i(TAG, "background clipboard sync on: the system log is readable")
+                        }
                         if (marker in line) main.post(::grabFocusAndRead)
                     }
                 }
             } finally {
                 process.destroy()
+                if (watcher == coroutineContext[Job]) _syncState.value = if (backgroundSyncAvailable()) SyncState.WAITING else SyncState.NEEDS_GRANT
                 VLog.i(TAG, "background clipboard sync stopped")
             }
         }
     }
 
     private var overlay: View? = null
+    private var focused = false
 
     /** A 1px, invisible, focusable overlay: focus is what the clipboard check wants. */
     @SuppressLint("ClickableViewAccessibility")
     private fun grabFocusAndRead() {
         if (overlay != null || !canDrawOverlays()) return
         val wm = context.getSystemService(WindowManager::class.java)
+        focused = false
         val view = object : View(context) {
             override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
                 super.onWindowFocusChanged(hasWindowFocus)
                 if (hasWindowFocus) {
-                    readNow()
+                    focused = true
+                    if (readNow() == null) VLog.i(TAG, "copy seen, focus came, nothing new to send")
                     // Not from inside this callback: the framework is still dispatching the focus
                     // change and touches the view right after we return, which crashed the app.
                     main.post { removeOverlay(wm) }
@@ -187,8 +211,11 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
         runCatching { wm.addView(view, params) }.onSuccess {
             overlay = view
             // Never linger if focus doesn't come.
-            main.postDelayed({ removeOverlay(wm) }, 600)
-        }
+            main.postDelayed({
+                if (overlay === view && !focused) VLog.w(TAG, "copy seen, but Android gave the reading window no focus")
+                removeOverlay(wm)
+            }, 600)
+        }.onFailure { VLog.w(TAG, "copy seen, but the reading window couldn't open: ${it.message}") }
     }
 
     private fun removeOverlay(wm: WindowManager) {
