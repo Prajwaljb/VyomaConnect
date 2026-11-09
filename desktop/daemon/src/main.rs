@@ -311,7 +311,7 @@ impl Control {
     /// info or warn, detail) and advice (`notes`).
     async fn health(&self) -> fdo::Result<String> {
         let (beside_kde, updates) = (self.beside_kde, self.updates.clone());
-        let shell = vyoma_companion::desktop::is_gnome().then_some(vyoma_companion::shell::available().await);
+        let shell = if vyoma_companion::desktop::is_gnome() { Some(vyoma_companion::shell::version().await) } else { None };
         let report = tokio::task::spawn_blocking(move || {
             let mut report = health(beside_kde, shell);
             report["update"] = updates.status();
@@ -1569,8 +1569,8 @@ fn via(d: &DeviceView) -> Option<&'static str> {
 }
 
 /// [Control::health]'s report.
-/// [shell]: on GNOME, whether Vyoma's extension is running.
-fn health(beside_kde: bool, shell: Option<bool>) -> serde_json::Value {
+/// [shell]: on GNOME, the running extension's version, if it runs.
+fn health(beside_kde: bool, shell: Option<Option<u32>>) -> serde_json::Value {
     let report = vyoma_companion::setup::report();
     let features: Vec<_> = report
         .features
@@ -1610,10 +1610,12 @@ fn firewall() -> serde_json::Value {
 }
 
 /// Vyoma's GNOME extension: clipboard sync, the presenter's pointer and the Overview need it.
-fn gnome_extension(running: bool) -> serde_json::Value {
+fn gnome_extension(running: Option<u32>) -> serde_json::Value {
     const UUID: &str = "vyoma@vyoma.dev";
-    let detail = if running {
+    let detail = if running.is_some_and(|v| v >= vyoma_companion::shell::VERSION) {
         return json!({ "name": "GNOME extension", "state": "ok", "detail": "On" });
+    } else if running.is_some() {
+        "Updated. Log out and back in once to finish: until then, the newest touchpad gestures wait."
     } else if ![menus::data_home(), PathBuf::from("/usr/share")].into_iter().map(|d| d.join("gnome-shell/extensions").join(UUID)).any(|d| d.join("extension.js").exists()) {
         "Not installed. Run install.sh again to add it: clipboard sync and the presenter's pointer need it."
     } else if std::process::Command::new("gsettings")

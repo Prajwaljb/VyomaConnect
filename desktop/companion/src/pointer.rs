@@ -25,6 +25,8 @@ const TAG_LEN: usize = 16;
 const FRAME_LEN: usize = BODY_LEN + TAG_LEN;
 /// Every 32nd frame is echoed, so the phone can time the round trip.
 const ECHO_EVERY: u32 = 32;
+/// No scroll for this long: the fingers lifted.
+const SCROLL_LIFT: Duration = Duration::from_millis(150);
 /// BTN_LEFT, BTN_RIGHT, BTN_MIDDLE.
 const BUTTONS: [i32; 3] = [0x110, 0x111, 0x112];
 
@@ -136,14 +138,32 @@ pub async fn serve(sender: Sender, name: String, tx: mpsc::Sender<Frame>, mut rx
     }
     let mut held = [false; BUTTONS.len()];
     let mut moved = false;
-    while let Some(frame) = rx.recv().await {
+    // As in the daemon's input.rs: a pause in scrolling tells the desktop the fingers lifted.
+    let mut scrolling = false;
+    loop {
+        let frame = if scrolling {
+            match tokio::time::timeout(SCROLL_LIFT, rx.recv()).await {
+                Ok(f) => f,
+                Err(_) => {
+                    scrolling = false;
+                    let _ = session.axis_end().await;
+                    continue;
+                }
+            }
+        } else {
+            rx.recv().await
+        };
+        let Some(frame) = frame else { break };
         let done = match frame {
             Frame::KeepAwake => Ok(()),
             Frame::Move(dx, dy) => {
                 moved = true;
                 session.relative(dx, dy).await
             }
-            Frame::Scroll(dx, dy) => session.axis(dx, dy).await,
+            Frame::Scroll(dx, dy) => {
+                scrolling = crate::desktop::scroll_needs_finish();
+                session.axis(dx, dy).await
+            }
             Frame::Button(b, down) => {
                 // The portal handles calls concurrently: a click mustn't land before its move.
                 if std::mem::take(&mut moved) {

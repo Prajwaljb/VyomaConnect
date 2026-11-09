@@ -337,7 +337,13 @@ impl Pointer {
     }
 
     pub async fn axis(&self, dx: f64, dy: f64) -> Result<()> {
-        self.call_fast("NotifyPointerAxis", &(&self.session, opts([]), dx, dy)).await
+        let sign = crate::desktop::scroll_sign();
+        self.call_fast("NotifyPointerAxis", &(&self.session, opts([]), dx * sign, dy * sign)).await
+    }
+
+    /// The fingers lifted after a scroll (see [crate::desktop::scroll_needs_finish]).
+    pub async fn axis_end(&self) -> Result<()> {
+        self.call("NotifyPointerAxis", &(&self.session, opts([("finish", Variant::Bool(true))]), 0.0f64, 0.0f64)).await
     }
 
     /// Returns once the portal has dealt with the moves before it.
@@ -364,7 +370,8 @@ impl Pointer {
             }
             "scroll" => {
                 self.to(i, true).await?;
-                let (dx, dy) = (i["dx"].as_f64().unwrap_or(0.0), i["dy"].as_f64().unwrap_or(0.0));
+                let sign = crate::desktop::scroll_sign();
+                let (dx, dy) = (i["dx"].as_f64().unwrap_or(0.0) * sign, i["dy"].as_f64().unwrap_or(0.0) * sign);
                 self.call_fast("NotifyPointerAxis", &(&self.session, opts([]), dx, dy)).await
             }
             "text" => {
