@@ -17,6 +17,7 @@ as_root() {
 
 if [ "${1:-}" = "--undo" ]; then
     systemctl --user disable --now vyoma-desktop 2>/dev/null || true
+    "$HOME/.local/bin/vyoma-desktop" --remove-menus 2>/dev/null || true
     rm -f "$autostart" "$activation" "$data/applications/vyoma.desktop" "$data/icons/hicolor/scalable/apps/vyoma.svg"
     [ -f "$config/systemd/user/vyoma-companion.service" ] && systemctl --user enable --now vyoma-companion
     (setsid kdeconnectd >/dev/null 2>&1 &)

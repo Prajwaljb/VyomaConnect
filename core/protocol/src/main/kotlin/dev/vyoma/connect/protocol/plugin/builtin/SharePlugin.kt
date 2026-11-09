@@ -75,8 +75,11 @@ interface ShareSink {
     fun onText(from: Device, text: String)
     fun onUrl(from: Device, url: String)
 
-    /** Create the destination for an incoming file; null refuses it. */
-    fun createFile(from: Device, name: String, size: Long, lastModified: Long?): IncomingFile?
+    /**
+     * Create the destination for an incoming file; null refuses it. [folder]: the folder it came in
+     * ("Photos/2024", already made safe by [safeFolder]), to rebuild under the usual place.
+     */
+    fun createFile(from: Device, name: String, size: Long, lastModified: Long?, folder: String? = null): IncomingFile?
 
     /** Like [createFile], for images that belong with the user's pictures (PC screenshots). */
     fun createPicture(from: Device, name: String, size: Long): IncomingFile? = createFile(from, name, size, null)
@@ -109,11 +112,13 @@ class SharePlugin(private val ctx: PluginContext, private val sink: ShareSink) :
 
     private fun receiveFile(packet: NetworkPacket) {
         val name = sanitizeFileName(packet.string("filename") ?: "file-${System.currentTimeMillis()}")
+        // Vyoma's PC app sends a folder as its files, each with the folder it's in.
+        val folder = packet.string("folder")?.let(::safeFolder)
         val size = packet.payloadSize
         ctx.scope.launch(Dispatchers.IO) {
             downloadLock.withLock {
                 val id = Transfers.start(ctx.device, name, incoming = true, total = size)
-                val target = sink.createFile(ctx.device, name, size, packet.long("lastModified"))
+                val target = sink.createFile(ctx.device, name, size, packet.long("lastModified"), folder)
                 if (target == null) {
                     Transfers.finish(id, ok = false)
                     return@withLock
@@ -183,5 +188,18 @@ class SharePlugin(private val ctx: PluginContext, private val sink: ShareSink) :
             val base = name.substringAfterLast('/').substringAfterLast('\\').replace(Regex("[\\u0000-\\u001f]"), "").trim()
             return base.trimStart('.').ifBlank { "file-${System.currentTimeMillis()}" }.take(200)
         }
+
+        /**
+         * A folder path from a peer, made safe to rebuild: each part a plain, visible name, no way
+         * up or out, not too deep. Null when nothing usable is left.
+         */
+        fun safeFolder(path: String): String? = path.split('/', '\\')
+            .map { it.replace(Regex("[\\u0000-\\u001f]"), "").trim().trimStart('.').trim().take(100) }
+            .filter { it.isNotEmpty() }
+            .take(MAX_FOLDER_DEPTH)
+            .joinToString("/")
+            .ifEmpty { null }
+
+        private const val MAX_FOLDER_DEPTH = 16
     }
 }

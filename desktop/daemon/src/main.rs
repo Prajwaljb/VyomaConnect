@@ -16,6 +16,7 @@ mod clipboard;
 mod commands;
 mod input;
 mod media;
+mod menus;
 mod notifications;
 mod notify;
 mod plugins;
@@ -212,10 +213,11 @@ impl Control {
         self.command(Command::Send(id, packet(plugins::FIND, json!({}))))
     }
 
-    /// Sends files to the device; it fetches them one by one. Fails at once if one can't be read.
+    /// Sends files and folders to the device; it fetches them one by one. Fails at once if one
+    /// can't be read.
     fn send_files(&self, id: String, paths: Vec<String>) -> fdo::Result<()> {
         let pinned = self.sharing(&id)?;
-        let files = paths.iter().map(|p| share::outgoing(p)).collect::<Result<Vec<_>>>().map_err(|e| fdo::Error::InvalidArgs(format!("{e:#}")))?;
+        let files = share::expand(&paths).map_err(|e| fdo::Error::InvalidArgs(format!("{e:#}")))?;
         if files.is_empty() {
             return Ok(());
         }
@@ -235,6 +237,67 @@ impl Control {
             }
         });
         Ok(())
+    }
+
+    /// [send_files] from the file manager's "Send to" menu, where no window shows how it went:
+    /// notifications say it's sending, then that it's sent, or what stopped it.
+    fn send(&self, id: String, paths: Vec<String>) {
+        let (name, problem) = match self.devices.lock().unwrap().get(&id) {
+            None => ("That phone".to_owned(), Some("It isn't paired with this PC anymore.".to_owned())),
+            Some(d) => {
+                let problem = if !d.paired {
+                    Some(format!("{} isn't paired with this PC anymore.", d.name))
+                } else if !d.linked {
+                    Some(format!("{} isn't connected. Open Vyoma on it, then try again.", d.name))
+                } else if via(d) == Some("bluetooth") {
+                    Some(format!("{} is only on Bluetooth, which can't carry files. Connect it by Wi-Fi or USB, then try again.", d.name))
+                } else if !plugins::takes(d, SHARE) {
+                    Some(format!("{} doesn't take files from this PC.", d.name))
+                } else {
+                    None
+                };
+                (d.name.clone(), problem)
+            }
+        };
+        let notifier = self.notifier.clone();
+        let failed = format!("Couldn't send to {name}");
+        let files = match (problem, self.sharing(&id), share::expand(&paths)) {
+            (Some(why), _, _) => Err(why),
+            (None, Err(e), _) => Err(e.to_string()),
+            (None, _, Err(e)) => Err(format!("{e:#}")),
+            (None, Ok(pinned), Ok(files)) => Ok((pinned, files)),
+        };
+        let (pinned, files) = match files {
+            Ok(f) if !f.1.is_empty() => f,
+            Ok(_) => {
+                tokio::spawn(async move { plugins::tell(&notifier, &failed, "That folder is empty.").await });
+                return;
+            }
+            Err(why) => {
+                tokio::spawn(async move { plugins::tell(&notifier, &failed, &why).await });
+                return;
+            }
+        };
+        let what = share::summary(&files);
+        let (me, commands, conn) = (self.me.clone(), self.commands.clone(), self.conn.clone());
+        let count = files.len() as u32;
+        tokio::spawn(async move {
+            let started = sending(&notifier, &format!("Sending to {name}"), &what, None).await;
+            let error = match share::send_files(&commands, &id, &me, &pinned, files).await {
+                Ok(()) => {
+                    sending(&notifier, &format!("Sent to {name}"), &what, started).await;
+                    String::new()
+                }
+                Err(e) => {
+                    tracing::warn!("{id}: {e:#}");
+                    sending(&notifier, &failed, &format!("{e:#}"), started).await;
+                    format!("{e:#}")
+                }
+            };
+            if let Ok(emitter) = zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
+                let _ = Control::files_sent(&emitter, &id, count, &error).await;
+            }
+        });
     }
 
     /// A [send_files] batch is over: [error] is empty when the device fetched all [count].
@@ -477,6 +540,11 @@ fn main() -> Result<()> {
         Some("--setup") => vyoma_companion::setup::run(std::env::args().nth(2).is_some_and(|a| a == "--dry-run")),
         Some("--import-kde") => import_kde(&dir),
         Some(phonefiles::RELAY_ARG) => phonefiles::relay(&std::env::args().nth(2).unwrap_or_default()),
+        Some(menus::SEND_ARG) => menus::send(&std::env::args().skip(2).collect::<Vec<_>>()),
+        Some("--remove-menus") => {
+            menus::remove_all();
+            Ok(())
+        }
         // Run by ssh with its prompt as the argument.
         Some(_) if std::env::var_os(phonefiles::ASKPASS_ENV).is_some() => phonefiles::askpass(),
         Some(other) => anyhow::bail!("unknown option {other}: try --import-kde, --check or --setup [--dry-run]"),
@@ -564,6 +632,23 @@ async fn daemon(dir: PathBuf) -> Result<()> {
                         let _ = Control::changed(&emitter).await;
                     }
                 }
+            }
+        });
+    }
+    // "Send to <phone>" in the file managers' menus, for every paired phone. Not from a test
+    // run in another folder: its phones aren't the user's.
+    if std::env::var_os("VYOMA_DIR").is_none() {
+        let devices = devices.clone();
+        tokio::spawn(async move {
+            let mut last = None;
+            loop {
+                let mut phones: Vec<menus::Phone> = devices.lock().unwrap().iter().filter(|(_, d)| d.paired).map(|(id, d)| menus::Phone { id: id.clone(), name: d.name.clone() }).collect();
+                phones.sort_by(|a, b| (&a.name, &a.id).cmp(&(&b.name, &b.id)));
+                if last.as_ref() != Some(&phones) {
+                    last = Some(phones.clone());
+                    let _ = tokio::task::spawn_blocking(move || menus::update(&phones)).await;
+                }
+                tokio::time::sleep(CHANGES_EVERY).await;
             }
         });
     }
@@ -1469,6 +1554,11 @@ fn firewall() -> serde_json::Value {
 fn capitalised(s: &str) -> String {
     let mut c = s.chars();
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+/// A [Control::send] notification; [replaces] the one before, so a send shows as one.
+async fn sending(notifier: &Notifier, title: &str, body: &str, replaces: Option<u32>) -> Option<u32> {
+    notifier.show(Notice { icon: "smartphone", title, body, actions: &[], sticky: false, replaces }).await.ok()
 }
 
 /// What the GUI shows of every device, to tell when it changed.

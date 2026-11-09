@@ -75,7 +75,9 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
 - Namespace `vyoma.<feature>[.<verb>]`, advertised in capabilities like any packet, so stock peers just don't load them.
 - Never change the meaning of a stock `kdeconnect.*` packet; extend with extra optional body fields only if stock
   peers ignore unknown fields (they do).
-  Ours so far: `kdeconnect.telephony` `appName` (an app's internet call, e.g. WhatsApp: no number; `contactName`
+  Ours so far: `kdeconnect.share.request` `folder` (PC → phone: a sent folder goes as its files, each with the
+  folder it's in, "Trip/day 1"; the phone rebuilds it under Downloads/Vyoma, `SharePlugin.safeFolder`; stock phones save them side by side);
+  `kdeconnect.telephony` `appName` (an app's internet call, e.g. WhatsApp: no number; `contactName`
   is the caller, or the app's name when it doesn't say, so stock desktops still read sensibly).
 - `vyoma.echo.request {n}` (PC → phone) → `vyoma.echo {n}`: the desktop app times one every 5 s and shows the median of the last 5 as the phone page's Response (Details `rtt`, with `since` = when it linked). The desktop app no longer asks for `kdeconnect.connectivity_report` (signal).
 - `vyoma.denied` (PC → phone, `feature`, `name`, `request`, `path`/`key`): that request's feature is off for this phone

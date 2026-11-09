@@ -154,17 +154,72 @@ pub struct Outgoing {
     name: String,
     size: u64,
     modified: u64,
+    /// The folder it's in when it goes as part of one ("Trip/day 1"), for the phone to rebuild.
+    folder: Option<String>,
 }
 
-pub fn outgoing(path: &str) -> Result<Outgoing> {
-    let path = PathBuf::from(path);
-    let meta = std::fs::metadata(&path).with_context(|| format!("can't read {}", path.display()))?;
-    if !meta.is_file() {
-        bail!("{} isn't a file", path.display());
+impl Outgoing {
+    fn new(path: PathBuf, name: String, meta: &std::fs::Metadata, folder: Option<String>) -> Self {
+        let modified = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64);
+        Self { path, name, size: meta.len(), modified, folder }
     }
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).context("no file name")?;
-    let modified = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64);
-    Ok(Outgoing { path, name, size: meta.len(), modified })
+}
+
+/// The most files one send takes: a folder bigger than that goes better as one zip.
+const MAX_FILES: usize = 10_000;
+
+/// What [paths] send: each file as it is, each folder as every file inside it, in order, each
+/// with the folder it's in. Fails at once if one can't be read.
+pub fn expand(paths: &[String]) -> Result<Vec<Outgoing>> {
+    let mut out = Vec::new();
+    for p in paths {
+        let path = PathBuf::from(p);
+        let meta = std::fs::metadata(&path).with_context(|| format!("can't read {}", path.display()))?;
+        if meta.is_dir() {
+            let top = path.file_name().map(|n| n.to_string_lossy().into_owned()).context("that folder has no name")?;
+            walk(&path, &top, &mut out)?;
+        } else if meta.is_file() {
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).context("no file name")?;
+            out.push(Outgoing::new(path, name, &meta, None));
+        } else {
+            bail!("{} isn't a file or a folder", path.display());
+        }
+    }
+    Ok(out)
+}
+
+/// Adds every file under [dir], which goes as [folder]. Folders linked from inside aren't
+/// followed (one could lead back up and never end); linked files are sent.
+fn walk(dir: &Path, folder: &str, out: &mut Vec<Outgoing>) -> Result<()> {
+    let mut entries: Vec<_> = std::fs::read_dir(dir).with_context(|| format!("can't read {}", dir.display()))?.filter_map(|e| e.ok()).collect();
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        let Ok(kind) = e.file_type() else { continue };
+        let name = e.file_name().to_string_lossy().into_owned();
+        let path = e.path();
+        if kind.is_dir() {
+            walk(&path, &format!("{folder}/{name}"), out)?;
+        } else if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.is_file() {
+                out.push(Outgoing::new(path, name, &meta, Some(folder.to_owned())));
+            }
+        }
+        if out.len() > MAX_FILES {
+            bail!("{folder} has more than {MAX_FILES} files: zip it and send that instead");
+        }
+    }
+    Ok(())
+}
+
+/// The send in a few words, for a notification: "photo.jpg", "Trip, 120 files" or "3 files".
+pub fn summary(files: &[Outgoing]) -> String {
+    let count = |n: usize| if n == 1 { "1 file".to_owned() } else { format!("{n} files") };
+    let top = |f: &Outgoing| f.folder.as_deref().map(|d| d.split('/').next().unwrap_or(d).to_owned());
+    match files {
+        [one] if one.folder.is_none() => one.name.clone(),
+        [first, ..] if files.iter().all(|f| f.folder.is_some() && top(f) == top(first)) => format!("{}, {}", top(first).unwrap_or_default(), count(files.len())),
+        _ => count(files.len()),
+    }
 }
 
 /// Sends [files] to [id], one after the other; each waits for the device to fetch it.
@@ -174,7 +229,11 @@ pub async fn send_files(commands: &mpsc::UnboundedSender<Command>, id: &str, me:
     let send = |p: Value| commands.send(Command::Send(id.to_owned(), p)).map_err(|_| anyhow::anyhow!("stopping"));
     send(packet(SHARE_UPDATE, json!({ "numberOfFiles": count, "totalPayloadSize": total })))?;
     for f in files {
-        let body = json!({ "filename": f.name, "lastModified": f.modified, "open": false, "numberOfFiles": count, "totalPayloadSize": total });
+        let mut body = json!({ "filename": f.name, "lastModified": f.modified, "open": false, "numberOfFiles": count, "totalPayloadSize": total });
+        // Ours, which stock phones ignore (they save the files side by side).
+        if let Some(folder) = &f.folder {
+            body["folder"] = json!(folder);
+        }
         if f.size == 0 {
             // As stock: an empty file is its name alone.
             send(packet(SHARE, body))?;
@@ -231,6 +290,30 @@ pub fn percent(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_goes_as_its_files_with_where_each_was() {
+        let root = std::env::temp_dir().join(format!("vyoma-expand-{}", std::process::id()));
+        let trip = root.join("Trip");
+        std::fs::create_dir_all(trip.join("day 1")).unwrap();
+        std::fs::create_dir_all(trip.join("empty")).unwrap();
+        std::fs::write(trip.join("notes.txt"), "hi").unwrap();
+        std::fs::write(trip.join("day 1/a.jpg"), "jpg").unwrap();
+        std::os::unix::fs::symlink(&root, trip.join("loop")).unwrap();
+        std::fs::write(root.join("single.pdf"), "pdf").unwrap();
+
+        let files = expand(&[trip.to_string_lossy().into_owned()]).unwrap();
+        let got: Vec<_> = files.iter().map(|f| (f.folder.clone().unwrap(), f.name.clone())).collect();
+        assert_eq!(got, [("Trip/day 1".to_owned(), "a.jpg".to_owned()), ("Trip".to_owned(), "notes.txt".to_owned())]);
+        assert_eq!(summary(&files), "Trip, 2 files");
+
+        let one = expand(&[root.join("single.pdf").to_string_lossy().into_owned()]).unwrap();
+        assert_eq!(summary(&one), "single.pdf");
+        let both = expand(&[root.join("single.pdf").to_string_lossy().into_owned(), trip.to_string_lossy().into_owned()]).unwrap();
+        assert_eq!(summary(&both), "3 files");
+        assert!(expand(&[root.join("missing").to_string_lossy().into_owned()]).is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn names_from_devices_stay_in_the_folder() {
