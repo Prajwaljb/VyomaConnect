@@ -747,6 +747,9 @@ private fun TuneDialog(vm: AppViewModel, value: Any, onDismiss: () -> Unit, onDo
                             commands.forEachIndexed { i, cmd ->
                                 ListRow(
                                     title = cmd.name,
+                                    // Set on the PC to ask on each run: a rule can't, so it can't be chosen.
+                                    subtitle = if (cmd.everyTime) "Asks for your fingerprint every time, so a rule can't run it" else null,
+                                    enabled = !cmd.everyTime,
                                     icon = Action.RunCommand("", "").look().icon,
                                     iconTint = SystemColor.GRAY.color,
                                     horizontalPadding = 0.dp,

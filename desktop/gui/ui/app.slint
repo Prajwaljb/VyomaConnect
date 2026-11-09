@@ -49,12 +49,14 @@ export struct Phone {
     permits: [Permission],
 }
 
-// A command phones can run here. [fingerprint]: Vyoma on the phone asks for it first.
+// A command phones can run here. [fingerprint]: Vyoma on the phone asks for it first; [every]:
+// on every run, not once for a while of using the phone app.
 export struct Command {
     key: string,
     name: string,
     command: string,
     fingerprint: bool,
+    every: bool,
 }
 
 // A feature that needs something on the PC; [detail]: "Ready" or what it needs.
@@ -1283,7 +1285,7 @@ component CommandsPage inherits Page {
             icon-color: Theme.green;
             title: c.name;
             subtitle: c.command;
-            value: c.fingerprint ? "Fingerprint" : "";
+            value: c.every ? "Fingerprint, every time" : c.fingerprint ? "Fingerprint" : "";
             tappable: true;
             first: i == 0;
             last: i == root.commands.length - 1;
@@ -1330,7 +1332,7 @@ component CommandsPage inherits Page {
             text: "A command runs as you, in a shell, the moment a phone asks. Add only what you'd let your phone do here.";
         }
         Tip {
-            text: "Ask for fingerprint has Vyoma on the phone check it's you before running it, for the ones that matter, like emptying the trash.";
+            text: "Ask for fingerprint has Vyoma on the phone check it's you before running it, for the ones that matter, like emptying the trash. One check covers it until the phone's screen goes off; Every time asks on each run, for the most sensitive ones.";
         }
     }
 }
@@ -1344,6 +1346,7 @@ component CommandSheet inherits Rectangle {
     in-out property <string> name;
     in-out property <string> command;
     in-out property <bool> fingerprint;
+    in-out property <bool> every;
     callback saved();
     callback removed();
     callback cancelled();
@@ -1408,6 +1411,8 @@ component CommandSheet inherits Rectangle {
                 Rectangle {
                     border-radius: 16px;
                     background: Theme.raised;
+                    clip: true;
+                    VerticalLayout {
                     HorizontalLayout {
                         padding: 14px;
                         padding-left: 14px;
@@ -1441,9 +1446,62 @@ component CommandSheet inherits Rectangle {
                             alignment: center;
                             Switch {
                                 on: root.fingerprint;
-                                toggled => { root.fingerprint = !root.fingerprint; }
+                                toggled => {
+                                    root.fingerprint = !root.fingerprint;
+                                    if !root.fingerprint { root.every = false; }
+                                }
                             }
                         }
+                    }
+                    // Only with the fingerprint on: it opens under it, as the phone's sub-settings do.
+                    Rectangle {
+                        height: root.fingerprint ? every-row.preferred-height : 0px;
+                        animate height { duration: 320ms; easing: cubic-bezier(0.32, 0.72, 0, 1); }
+                        clip: true;
+                        every-row := VerticalLayout {
+                            y: 0px;
+                            height: self.preferred-height;
+                            opacity: root.fingerprint ? 1 : 0;
+                            animate opacity { duration: 220ms; }
+                            HorizontalLayout {
+                                padding-left: 56px;
+                                padding-right: 14px;
+                                Rectangle {
+                                    height: 1px;
+                                    background: Theme.rim;
+                                }
+                            }
+                            HorizontalLayout {
+                                padding: 14px;
+                                padding-left: 56px;
+                                spacing: 12px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 2px;
+                                    horizontal-stretch: 1;
+                                    Text {
+                                        text: "Every time";
+                                        color: Theme.text;
+                                        font-size: 15px;
+                                        font-weight: 500;
+                                    }
+                                    Text {
+                                        text: "Asks on each run, even right after another check. Rules on the phone can't run it.";
+                                        color: Theme.muted;
+                                        font-size: 13px;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Switch {
+                                        on: root.every;
+                                        toggled => { root.every = !root.every; }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     }
                 }
                 HorizontalLayout {
@@ -1988,6 +2046,7 @@ export component MainWindow inherits Window {
     in-out property <string> edit-name;
     in-out property <string> edit-command;
     in-out property <bool> edit-fingerprint;
+    in-out property <bool> edit-every;
     // A short outcome, in the glass bubble at the top while [notice-on] (the words stay while it leaves).
     in property <string> notice;
     in property <bool> notice-on;
@@ -2017,8 +2076,8 @@ export component MainWindow inherits Window {
     callback show-pc();
     callback show-activity();
     callback show-commands();
-    // key ("" for new), name, command line, fingerprint.
-    callback save-command(string, string, string, bool);
+    // key ("" for new), name, command line, fingerprint, every time.
+    callback save-command(string, string, string, bool, bool);
     callback remove-command(string);
     callback clear-activity();
     callback install();
@@ -2220,6 +2279,7 @@ export component MainWindow inherits Window {
                 root.edit-name = "";
                 root.edit-command = "";
                 root.edit-fingerprint = false;
+                root.edit-every = false;
                 root.editing = true;
             }
             edit(c) => {
@@ -2227,6 +2287,7 @@ export component MainWindow inherits Window {
                 root.edit-name = c.name;
                 root.edit-command = c.command;
                 root.edit-fingerprint = c.fingerprint;
+                root.edit-every = c.every;
                 root.editing = true;
             }
         }
@@ -2303,6 +2364,7 @@ export component MainWindow inherits Window {
         name <=> root.edit-name;
         command <=> root.edit-command;
         fingerprint <=> root.edit-fingerprint;
+        every <=> root.edit-every;
         cancelled => {
             root.editing = false;
             keys.focus();
@@ -2310,7 +2372,7 @@ export component MainWindow inherits Window {
         saved => {
             root.editing = false;
             keys.focus();
-            root.save-command(root.edit-key, root.edit-name, root.edit-command, root.edit-fingerprint);
+            root.save-command(root.edit-key, root.edit-name, root.edit-command, root.edit-fingerprint, root.edit-every);
         }
         removed => {
             root.editing = false;

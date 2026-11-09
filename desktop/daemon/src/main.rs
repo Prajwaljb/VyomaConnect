@@ -273,8 +273,8 @@ impl Control {
 
     /// Changes a command, or adds one when [key] is empty ([fingerprint]: the phone asks for its
     /// owner's fingerprint before running it); its key.
-    async fn save_command(&self, key: String, name: String, command: String, fingerprint: bool, #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>) -> fdo::Result<String> {
-        let key = self.run.save_one(&key, &name, &command, fingerprint).map_err(|e| fdo::Error::Failed(format!("{e:#}")))?;
+    async fn save_command(&self, key: String, name: String, command: String, fingerprint: bool, every_time: bool, #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>) -> fdo::Result<String> {
+        let key = self.run.save_one(&key, &name, &command, fingerprint, every_time).map_err(|e| fdo::Error::Failed(format!("{e:#}")))?;
         self.commands_changed();
         let _ = Control::changed(&emitter).await;
         Ok(key)

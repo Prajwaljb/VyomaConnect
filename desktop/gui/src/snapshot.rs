@@ -60,14 +60,24 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str) -> Result<()> {
     if scene.starts_with("commands") {
         ui.set_selected(crate::COMMANDS.into());
         crate::apply(&ui, Some(phones(scene)));
-        let c = |key: &str, name: &str, command: &str, fingerprint: bool| crate::daemon::CommandData { key: key.into(), name: name.into(), command: command.into(), fingerprint };
-        let list = if scene == "commands-empty" { vec![] } else { vec![c("1", "Start the backup", "~/bin/backup --quiet", false), c("2", "Empty the trash", "gio trash --empty", true), c("3", "Turn the screens off", "kscreen-doctor --dpms off", false)] };
+        let c = |key: &str, name: &str, command: &str, fingerprint: bool, every_time: bool| crate::daemon::CommandData { key: key.into(), name: name.into(), command: command.into(), fingerprint, every_time };
+        let list = if scene == "commands-empty" {
+            vec![]
+        } else {
+            vec![
+                c("1", "Start the backup", "~/bin/backup --quiet", false, false),
+                c("2", "Empty the trash", "gio trash --empty", true, false),
+                c("4", "Wipe the browser history", "~/bin/wipe-history", true, true),
+                c("3", "Turn the screens off", "kscreen-doctor --dpms off", false, false),
+            ]
+        };
         crate::show_commands(&ui, &list);
         if scene == "commands-edit" {
             ui.set_edit_key("2".into());
             ui.set_edit_name("Empty the trash".into());
             ui.set_edit_command("gio trash --empty".into());
             ui.set_edit_fingerprint(true);
+            ui.set_edit_every(true);
             ui.set_editing(true);
         }
     }

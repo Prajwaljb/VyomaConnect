@@ -176,8 +176,11 @@ class LockPlugin(private val ctx: PluginContext) : Plugin {
 
 // ---- run commands on the PC -------------------------------------------------------------------
 
-/** [fingerprint]: the PC asks Vyoma to check it's the owner before running it (Vyoma's desktop app). */
-data class RemoteCommand(val key: String, val name: String, val command: String, val fingerprint: Boolean = false)
+/**
+ * [fingerprint]: the PC asks Vyoma to check it's the owner before running it (Vyoma's desktop app).
+ * [everyTime]: on every run, not once per go at using the app, and never from an unattended rule.
+ */
+data class RemoteCommand(val key: String, val name: String, val command: String, val fingerprint: Boolean = false, val everyTime: Boolean = false)
 
 class RunCommandPlugin(private val ctx: PluginContext) : Plugin {
     private val _commands = MutableStateFlow<List<RemoteCommand>>(emptyList())
@@ -198,10 +201,7 @@ class RunCommandPlugin(private val ctx: PluginContext) : Plugin {
             is JsonPrimitive -> list.contentOrNull?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() }
             else -> null
         } ?: return true
-        _commands.value = obj.mapNotNull { (key, value) ->
-            val o = value as? JsonObject ?: return@mapNotNull null
-            RemoteCommand(key, o.str("name") ?: key, o.str("command").orEmpty(), (o["fingerprint"] as? JsonPrimitive)?.booleanOrNull == true)
-        }.sortedBy { it.name.lowercase() }
+        _commands.value = parseCommands(obj)
         return true
     }
 
@@ -212,6 +212,13 @@ class RunCommandPlugin(private val ctx: PluginContext) : Plugin {
 
     companion object {
         const val ID = "runcommand"
+
+        /** The commandList object, by name. `everyTime` counts only with `fingerprint`. */
+        fun parseCommands(obj: JsonObject): List<RemoteCommand> = obj.mapNotNull { (key, value) ->
+            val o = value as? JsonObject ?: return@mapNotNull null
+            fun flag(name: String) = (o[name] as? JsonPrimitive)?.booleanOrNull == true
+            RemoteCommand(key, o.str("name") ?: key, o.str("command").orEmpty(), flag("fingerprint"), flag("fingerprint") && flag("everyTime"))
+        }.sortedBy { it.name.lowercase() }
         val spec = PluginSpec(
             ID,
             incoming = setOf(PacketTypes.RUNCOMMAND, PacketTypes.RUNCOMMAND_OUTPUT),
