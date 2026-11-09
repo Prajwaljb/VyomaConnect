@@ -296,6 +296,11 @@ keep sending while held, as KDE drops a dot it stops hearing about. `PresenterPl
   last body per PC (`PcSpecsStore`, forgotten on unpair) for the details page's "About this PC". sysinfo and sysfs only;
   GPUs come from sysfs PCI ids + pci.ids, never sysinfo's `Gpus` (it loads NVML/Vulkan, which wakes the NVIDIA dGPU).
   No serial number or machine id, ever.
+- `vyoma.desktop.switch {right}` (no answer): three fingers sideways, the next/previous virtual desktop: KWin's
+  "Switch One Desktop to the Right/Left" shortcut, GNOME's workspace via the extension (`SwitchWorkspace`). The phone
+  sends it only when the PC's identity lists it in incomingCapabilities, else it presses the picked desktop's shortcut.
+  Scrolls through the portal: GNOME takes them reversed and as finger scrolls, so there they're negated and a
+  150 ms pause sends `finish` (input.rs, pointer.rs).
 - `vyoma.desktop.step {up}` → `vyoma.desktop.stepped {view: desktop|windows|overview|grid}` or `{error}`: the
   touchpad's vertical three-finger swipe on Plasma, one rung of desktop ↔ windows ↔ Overview ↔ Grid (desktop.rs).
   It reads KWin first (`/Effects activeEffects` has "overview"; `/KWin showingDesktop`), then invokes kglobalaccel

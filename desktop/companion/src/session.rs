@@ -23,7 +23,7 @@ const STATS_EVERY: Duration = Duration::from_secs(2);
 
 /// What every session on this PC shares.
 /// The vyoma.* packets a session takes and sends.
-pub const INCOMING: &[&str] = &["vyoma.away", "vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.screen.input", "vyoma.screen.touch", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.specs.request", "vyoma.gamepad.state", "vyoma.gamepad.close", "vyoma.desktop.step", "vyoma.usb.accessory", "vyoma.webcam", "vyoma.webcam.mic", "vyoma.webcam.turn", "vyoma.mirror", "vyoma.mirror.audio", "vyoma.mirror.copy", "vyoma.mirror.volume", "vyoma.paste", "vyoma.pointer.request", "vyoma.pointer.close"];
+pub const INCOMING: &[&str] = &["vyoma.away", "vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.handoff.request", "vyoma.files.list", "vyoma.files.get", "vyoma.files.put", "vyoma.screen.request", "vyoma.screen.stop", "vyoma.screen.input", "vyoma.screen.touch", "vyoma.pc.request", "vyoma.pc.set", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.xfer.begin", "vyoma.xfer.data", "vyoma.xfer.end", "vyoma.wallpaper.request", "vyoma.specs.request", "vyoma.gamepad.state", "vyoma.gamepad.close", "vyoma.desktop.step", "vyoma.desktop.switch", "vyoma.usb.accessory", "vyoma.webcam", "vyoma.webcam.mic", "vyoma.webcam.turn", "vyoma.mirror", "vyoma.mirror.audio", "vyoma.mirror.copy", "vyoma.mirror.volume", "vyoma.paste", "vyoma.pointer.request", "vyoma.pointer.close"];
 pub const OUTGOING: &[&str] = &["vyoma.bluetooth", "vyoma.pointer.ready", "vyoma.paste.ready", "vyoma.stats", "vyoma.screenshot", "vyoma.camera", "vyoma.handoff", "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.screen", "vyoma.pc", "vyoma.pc.powered", "vyoma.xfer.ready", "vyoma.xfer.done", "vyoma.wallpaper", "vyoma.specs", "vyoma.gamepad.rumble", "vyoma.gamepad.udp", "vyoma.desktop.stepped", "vyoma.webcam.state", "vyoma.mirror.input", "vyoma.mirror.state", "vyoma.denied"];
 
 pub struct Host {
@@ -368,6 +368,14 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
                         }
                     };
                     let _ = sender.send(&packet("vyoma.desktop.stepped", reply)).await;
+                });
+            }
+            "vyoma.desktop.switch" => {
+                let (right, name) = (p["body"]["right"].as_bool().unwrap_or(true), name.clone());
+                tokio::spawn(async move {
+                    if let Err(e) = desktop::switch(right).await {
+                        warn!("{name}: desktop switch failed: {e:#}");
+                    }
                 });
             }
             "vyoma.pointer.request" => {

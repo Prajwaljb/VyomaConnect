@@ -69,7 +69,7 @@ impl Permit {
     pub fn of(packet_type: &str) -> Option<Permit> {
         Some(match packet_type {
             "vyoma.screen.request" | "vyoma.screen.touch" | "vyoma.screen.input" | "vyoma.screenshot.request" => Permit::Screen,
-            "vyoma.pointer.request" | "vyoma.gamepad.state" | "vyoma.usb.accessory" | "vyoma.desktop.step" | "vyoma.paste" | "kdeconnect.mousepad.request" => Permit::Control,
+            "vyoma.pointer.request" | "vyoma.gamepad.state" | "vyoma.usb.accessory" | "vyoma.desktop.step" | "vyoma.desktop.switch" | "vyoma.paste" | "kdeconnect.mousepad.request" => Permit::Control,
             "vyoma.files.list" | "vyoma.files.get" | "vyoma.files.put" | "vyoma.xfer.begin" | "vyoma.xfer.data" => Permit::Files,
             "vyoma.camera.request" => Permit::Camera,
             "vyoma.webcam" | "vyoma.webcam.mic" => Permit::Webcam,

@@ -5,7 +5,8 @@
 //! Overview as GNOME's own swipes do: windows → Overview → apps grid.
 //!
 //! `vyoma.desktop.step {up: bool}` → `vyoma.desktop.stepped {view: "desktop"|"windows"|"overview"|"grid"}`
-//! (where it ended up) or `{error}`.
+//! (where it ended up) or `{error}`. Sideways, `vyoma.desktop.switch {right: bool}` goes to the next
+//! or previous virtual desktop (workspace on GNOME), no answer: each desktop's own shortcut differs.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -17,6 +18,28 @@ use zbus::OwnedVariant;
 /// session gives its services.
 pub fn is_gnome() -> bool {
     std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|p| p.eq_ignore_ascii_case("gnome")))
+}
+
+/// Scrolls through the RemoteDesktop portal: GNOME reads them the other way round from Plasma
+/// (measured: the touchpad scrolled backwards there), so they're turned for it.
+pub fn scroll_sign() -> f64 {
+    if is_gnome() { -1.0 } else { 1.0 }
+}
+
+/// GNOME takes the portal's scrolls as fingers on a touchpad, which go on until told they lifted;
+/// Plasma takes each as a wheel turn.
+pub fn scroll_needs_finish() -> bool {
+    is_gnome()
+}
+
+/// The next virtual desktop to the right, or the left.
+pub async fn switch(right: bool) -> Result<()> {
+    if is_gnome() {
+        crate::shell::switch_workspace(right).await?;
+        return Ok(());
+    }
+    let conn = Connection::session().await.context("no session bus")?;
+    shortcut(&conn, if right { "Switch One Desktop to the Right" } else { "Switch One Desktop to the Left" }).await
 }
 
 /// Whether the open Overview is in its grid mode. KWin shows both as one effect, so this is

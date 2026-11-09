@@ -10,6 +10,7 @@
 //!   (the screen 2 across, dy scaled by its aspect); it shows in the middle and hides after a quiet second.
 //! - `Step(b up) → s`: the touchpad's three-finger swipe, windows ↔ Overview ↔ apps: "windows",
 //!   "overview" or "grid", the names Plasma's steps use.
+//! - `SwitchWorkspace(b right)`: the next workspace that way, with GNOME's own animation.
 //! - `AskReply(s heading, s message, s placeholder) → s`: GNOME's own dialog with a text field, for
 //!   replying to a phone's notification (GNOME's notifications have no reply field); "" if cancelled.
 //! - property `Version` (u).
@@ -28,6 +29,8 @@ const PATH: &str = "/dev/vyoma/Shell";
 const IFACE: &str = "dev.vyoma.Shell1";
 /// Calls into the shell are quick; a frozen shell mustn't hold anything up.
 const LIMIT: Duration = Duration::from_secs(2);
+/// The extension's `Version` this build expects; an older one runs until the next login.
+pub const VERSION: u32 = 2;
 
 /// The extension is running in this session.
 pub async fn available() -> bool {
@@ -36,6 +39,13 @@ pub async fn available() -> bool {
         Ok(reply) => reply.body().deserialize::<bool>().unwrap_or(false),
         Err(_) => false,
     }
+}
+
+/// The running extension's version, if it runs.
+pub async fn version() -> Option<u32> {
+    let conn = Connection::session().await.ok()?;
+    let reply = conn.call_method(Some(BUS), PATH, Some("org.freedesktop.DBus.Properties"), "Get", &(IFACE, "Version")).await.ok()?;
+    u32::try_from(reply.body().deserialize::<zbus::OwnedVariant>().ok()?).ok()
 }
 
 async fn call<B>(method: &str, body: &B) -> Result<zbus::Message>
@@ -94,6 +104,11 @@ pub async fn point(dx: f64, dy: f64) -> Result<()> {
 
 pub async fn hide_pointer() -> Result<()> {
     call("HidePointer", &()).await?;
+    Ok(())
+}
+
+pub async fn switch_workspace(right: bool) -> Result<()> {
+    call("SwitchWorkspace", &(right,)).await?;
     Ok(())
 }
 

@@ -236,7 +236,26 @@ pub async fn run(dir: PathBuf, mut requests: mpsc::UnboundedReceiver<(Instant, S
     let mut ready_at = Instant::now();
     // After a refusal, the dialog isn't put up again for every touch.
     let mut refused_at: Option<Instant> = None;
-    while let Some((at, id, p)) = requests.recv().await {
+    // A scroll under way, where the desktop needs telling when the fingers lift: the phone doesn't
+    // say, so a pause does.
+    let mut scrolling = false;
+    loop {
+        let next = if scrolling {
+            match tokio::time::timeout(SCROLL_LIFT, requests.recv()).await {
+                Ok(next) => next,
+                Err(_) => {
+                    scrolling = false;
+                    if let Some(s) = &session {
+                        let finish = HashMap::from([("finish", Variant::from(true))]);
+                        let _ = s.call("NotifyPointerAxis", &(&s.path, finish, 0.0f64, 0.0f64)).await;
+                    }
+                    continue;
+                }
+            }
+        } else {
+            requests.recv().await
+        };
+        let Some((at, id, p)) = next else { break };
         let body = &p["body"];
         if let Some(e) = echo(body) {
             let _ = out.send((id.clone(), e));
@@ -275,7 +294,11 @@ pub async fn run(dir: PathBuf, mut requests: mpsc::UnboundedReceiver<(Instant, S
                     moved = true;
                     s.fast("NotifyPointerMotion", &(&s.path, opts(), dx, dy)).await
                 }
-                Act::Scroll(dx, dy) => s.fast("NotifyPointerAxis", &(&s.path, opts(), dx, dy)).await,
+                Act::Scroll(dx, dy) => {
+                    scrolling = vyoma_companion::desktop::scroll_needs_finish();
+                    let sign = vyoma_companion::desktop::scroll_sign();
+                    s.fast("NotifyPointerAxis", &(&s.path, opts(), dx * sign, dy * sign)).await
+                }
                 Act::Button(b, down) => {
                     // The portal handles calls concurrently: a click mustn't land before its move.
                     if std::mem::take(&mut moved) {
@@ -295,6 +318,9 @@ pub async fn run(dir: PathBuf, mut requests: mpsc::UnboundedReceiver<(Instant, S
         }
     }
 }
+
+/// No scroll for this long: the fingers lifted. The phone sends every 8 ms while they move.
+const SCROLL_LIFT: std::time::Duration = std::time::Duration::from_millis(150);
 
 fn opts() -> HashMap<&'static str, Variant<'static>> {
     HashMap::new()

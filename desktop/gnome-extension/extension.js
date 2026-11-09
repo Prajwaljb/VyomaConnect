@@ -20,7 +20,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const BUS = 'dev.vyoma.Shell';
 const PATH = '/dev/vyoma/Shell';
-const VERSION = 1;
+const VERSION = 2;
 
 const IFACE = `<node>
   <interface name="dev.vyoma.Shell1">
@@ -30,6 +30,7 @@ const IFACE = `<node>
     <method name="Point"><arg type="d" direction="in"/><arg type="d" direction="in"/></method>
     <method name="HidePointer"/>
     <method name="Step"><arg type="b" direction="in"/><arg type="s" direction="out"/></method>
+    <method name="SwitchWorkspace"><arg type="b" direction="in"/></method>
     <method name="AskReply">
       <arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="s" direction="in"/>
       <arg type="s" direction="out"/>
@@ -193,6 +194,17 @@ export default class VyomaExtension extends Extension {
             dialog.setInitialKeyFocus(entry.clutter_text);
             if (!dialog.open())
                 finish('');
+        });
+    }
+
+    // Three fingers sideways: the next workspace that way, as GNOME's own swipe and shortcut go.
+    SwitchWorkspaceAsync([right], invocation) {
+        this._answer(invocation, async () => {
+            const current = global.workspace_manager.get_active_workspace();
+            const next = current.get_neighbor(right ? Meta.MotionDirection.RIGHT : Meta.MotionDirection.LEFT);
+            if (next !== current)
+                Main.wm.actionMoveWorkspace(next);
+            return null;
         });
     }
 

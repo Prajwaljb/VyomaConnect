@@ -1153,8 +1153,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     @Volatile private var pendingStep: CompletableDeferred<NetworkPacket>? = null
 
     /**
-     * One three-finger step on a Plasma desktop (up: desktop → windows → Overview → Grid, down back),
-     * decided by the companion from where KWin actually is. Returns where it ended up
+     * One three-finger step (up: desktop → windows → Overview → Grid, down back), decided by the PC
+     * from where its desktop actually is (KWin, or GNOME through Vyoma's extension). Returns where it ended up
      * ("desktop", "windows", "overview", "grid").
      */
     suspend fun desktopStep(up: Boolean): Result<String> {
@@ -1165,6 +1165,16 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         p.string("error")?.let { return Result.failure(IllegalStateException(it)) }
         return Result.success(p.string("view") ?: "windows")
     }
+
+    /** The PC switches desktops itself ([desktopSwitch]); older PC apps don't, and get the shortcut. */
+    val switchesDesktops: Boolean get() = DESKTOP_SWITCH in ctx.device.identity.incomingCapabilities
+
+    /**
+     * Three fingers sideways: the PC's next virtual desktop that way, whichever desktop it runs.
+     * False when the PC can't (see [switchesDesktops]) or isn't connected.
+     */
+    suspend fun desktopSwitch(right: Boolean): Boolean =
+        switchesDesktops && ctx.send(packet(DESKTOP_SWITCH) { put("right", right) })
 
     private var pendingPointer: CompletableDeferred<NetworkPacket>? = null
 
@@ -1377,6 +1387,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private const val GAMEPAD_DATAGRAM = 51
         const val DESKTOP_STEP = "vyoma.desktop.step"
         const val DESKTOP_STEPPED = "vyoma.desktop.stepped"
+        const val DESKTOP_SWITCH = "vyoma.desktop.switch"
         private const val STEP_TIMEOUT_MS = 3_000L
         /** The phone's walk-away rules, set by the app; every companion gets them on link and on change. */
         val away = kotlinx.coroutines.flow.MutableStateFlow(AwayRules())
@@ -1398,7 +1409,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
             incoming = setOf(POINTER_READY, BLUETOOTH, PASTE_READY, STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, SPECS, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED, WEBCAM_STATE, MIRROR_INPUT, MIRROR_STATE, DENIED, ECHO_REQUEST),
-            outgoing = setOf(POINTER_REQUEST, POINTER_CLOSE, PASTE, STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, SCREEN_INPUT, SCREEN_TOUCH, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, SPECS_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, USB_ACCESSORY, WEBCAM, WEBCAM_MIC, WEBCAM_TURN, MIRROR, MIRROR_AUDIO, MIRROR_COPY, MIRROR_VOLUME, ECHO),
+            outgoing = setOf(POINTER_REQUEST, POINTER_CLOSE, PASTE, STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, SCREEN_INPUT, SCREEN_TOUCH, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, SPECS_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, DESKTOP_SWITCH, USB_ACCESSORY, WEBCAM, WEBCAM_MIC, WEBCAM_TURN, MIRROR, MIRROR_AUDIO, MIRROR_COPY, MIRROR_VOLUME, ECHO),
         ) { CompanionPlugin(it, sink) }
     }
 }

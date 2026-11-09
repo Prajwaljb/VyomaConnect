@@ -483,9 +483,9 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                                             val up = swipe.y < 0f
                                             val companion = companionPlugin
                                             scope.launch {
-                                                val where = if (k == DesktopKind.PLASMA && companion != null) {
-                                                    // The companion asks KWin where it is, so it's right even after
-                                                    // something changed on the PC itself.
+                                                val where = if (companion != null) {
+                                                    // The PC asks its desktop where it is (KWin, or GNOME's shell), so
+                                                    // it's right even after something changed on the PC itself.
                                                     companion.desktopStep(up).getOrNull()?.let(DesktopView::of)
                                                 } else null
                                                 val view = where ?: pad?.let { k.step(it, up, desktopView) } ?: desktopView
@@ -495,7 +495,9 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                                         } else {
                                             // The desktops follow the fingers: swiping left brings the next one in from the right.
                                             val next = swipe.x < 0f
-                                            act { k.switchDesktop(this, right = next) }
+                                            // The PC's own switch where it has one (any desktop), else the shortcut.
+                                            val companion = companionPlugin
+                                            act { if (companion?.desktopSwitch(next) != true) k.switchDesktop(this, right = next) }
                                             note(if (next) "Next desktop" else "Previous desktop")
                                         }
                                     }
