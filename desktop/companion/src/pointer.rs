@@ -140,12 +140,14 @@ pub async fn serve(sender: Sender, name: String, tx: mpsc::Sender<Frame>, mut rx
     let mut moved = false;
     // As in the daemon's input.rs: a pause in scrolling tells the desktop the fingers lifted.
     let mut scrolling = false;
+    let mut lock = crate::scroll::ScrollLock::default();
     loop {
         let frame = if scrolling {
             match tokio::time::timeout(SCROLL_LIFT, rx.recv()).await {
                 Ok(f) => f,
                 Err(_) => {
                     scrolling = false;
+                    lock.reset();
                     let _ = session.axis_end().await;
                     continue;
                 }
@@ -162,7 +164,10 @@ pub async fn serve(sender: Sender, name: String, tx: mpsc::Sender<Frame>, mut rx
             }
             Frame::Scroll(dx, dy) => {
                 scrolling = crate::desktop::scroll_needs_finish();
-                session.axis(dx, dy).await
+                match if scrolling { lock.feed(dx, dy) } else { Some((dx, dy)) } {
+                    Some((dx, dy)) => session.axis(dx, dy).await,
+                    None => Ok(()),
+                }
             }
             Frame::Button(b, down) => {
                 // The portal handles calls concurrently: a click mustn't land before its move.
