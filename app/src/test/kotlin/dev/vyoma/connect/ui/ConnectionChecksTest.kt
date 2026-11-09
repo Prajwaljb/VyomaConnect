@@ -25,7 +25,7 @@ class ConnectionChecksTest {
         )
         val radio = facts.check(CheckKind.BLUETOOTH)
         assertEquals(CheckLevel.GOOD, radio.level)
-        assertTrue(radio.detail, radio.detail.startsWith("In use: PC link, companion, touchpad, controller."))
+        assertTrue(radio.detail, radio.detail.startsWith("In use: PC link, Vyoma on the PC, touchpad, controller."))
         assertEquals(CheckLevel.QUIET, facts.check(CheckKind.WIFI).level)
         assertEquals(CheckLevel.QUIET, facts.check(CheckKind.USB).level)
         assertEquals("Connected over Bluetooth", facts.check(CheckKind.COMPANION).detail)

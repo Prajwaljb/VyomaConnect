@@ -69,6 +69,8 @@ internal data class LinkFacts(
     val pc: Set<TransportKind>,
     val paired: Boolean,
     val companion: Set<TransportKind>?,
+    /** Vyoma's PC app is its own feature link, so it's the PC link itself, not a second one. */
+    val companionIsPc: Boolean = false,
     val bluetooth: BluetoothFallback.Readiness,
     val controllerRoute: GamepadRoute?,
     val controllerTrip: TripReport?,
@@ -80,7 +82,7 @@ internal data class LinkFacts(
 internal fun connectionChecks(f: LinkFacts): List<ConnectionCheck> {
     fun users(kind: TransportKind, route: GamepadRoute) = buildList {
         if (kind in f.pc) add("PC link")
-        if (f.companion?.contains(kind) == true) add("companion")
+        if (!f.companionIsPc && f.companion?.contains(kind) == true) add("Vyoma on the PC")
         if (kind == TransportKind.BLUETOOTH && f.touchpadOpen) add("touchpad")
         if (f.controllerRoute == route) add("controller")
     }
@@ -243,6 +245,7 @@ internal fun ConnectionChecksScreen(vm: AppViewModel, onBack: () -> Unit) {
                             pc = pc.transports,
                             paired = pc.isPaired,
                             companion = companion?.transports,
+                            companionIsPc = companion?.identity?.deviceId == id,
                             bluetooth = bluetooth,
                             controllerRoute = route,
                             controllerTrip = trip,
