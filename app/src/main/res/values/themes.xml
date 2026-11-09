@@ -10,6 +10,8 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowSplashScreenBackground">@color/canvas</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <!-- The icon's white orbs sit on its sky, as on the home screen. -->
+        <item name="android:windowSplashScreenIconBackgroundColor">#2A8CF2</item>
     </style>
     <style name="Theme.Vyoma.Invisible" parent="android:Theme.DeviceDefault.DayNight">
         <item name="android:windowActionBar">false</item>
@@ -22,5 +24,4 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
     <color name="canvas">#F3F4F6</color>
-    <color name="ic_bg">#0F1115</color>
 </resources>

@@ -7,5 +7,5 @@ Exec=@BIN@
 Icon=vyoma
 StartupWMClass=vyoma
 Terminal=false
-Categories=Network;Utility;
+Categories=Utility;
 Keywords=phone;android;kde connect;
