@@ -13,6 +13,11 @@ val releaseSigning = Properties().apply {
 }
 
 android {
+    // No Google-encrypted dependency list in the APK: only Google can read it, and F-Droid and IzzyOnDroid flag it.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
     namespace = "dev.vyoma.connect"
     compileSdk = 37
 
