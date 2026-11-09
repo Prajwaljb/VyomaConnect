@@ -20,6 +20,31 @@ pub fn is_gnome() -> bool {
     std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|p| p.eq_ignore_ascii_case("gnome")))
 }
 
+/// The desktop's first keyboard layout and its variant ("de", "nodeadkeys"), for pressing the
+/// keys that type each character: GNOME's input sources, or Plasma's kxkbrc; "us" when neither says.
+pub fn keyboard_layout() -> (String, String) {
+    let from_gnome = || {
+        let out = std::process::Command::new("gsettings").args(["get", "org.gnome.desktop.input-sources", "sources"]).output().ok()?;
+        parse_gnome_sources(&String::from_utf8_lossy(&out.stdout))
+    };
+    let from_plasma = || {
+        let home = std::env::var("HOME").ok()?;
+        let text = std::fs::read_to_string(format!("{home}/.config/kxkbrc")).ok()?;
+        let first = |key: &str| text.lines().find_map(|l| l.strip_prefix(key).map(|v| v.split(',').next().unwrap_or("").trim().to_owned()));
+        first("LayoutList=").filter(|l| !l.is_empty()).map(|l| (l, first("VariantList=").unwrap_or_default()))
+    };
+    let found = if is_gnome() { from_gnome() } else { from_plasma() };
+    found.unwrap_or_else(|| ("us".into(), String::new()))
+}
+
+/// `[('xkb', 'de+nodeadkeys'), ('ibus', 'mozc')]` → the first xkb one, split.
+fn parse_gnome_sources(text: &str) -> Option<(String, String)> {
+    let at = text.find("('xkb', '")? + "('xkb', '".len();
+    let name = &text[at..at + text[at..].find('\'')?];
+    let (layout, variant) = name.split_once('+').unwrap_or((name, ""));
+    (!layout.is_empty()).then(|| (layout.to_owned(), variant.to_owned()))
+}
+
 /// Scrolls through the RemoteDesktop portal: GNOME reads them the other way round from Plasma
 /// (measured: the touchpad scrolled backwards there), so they're turned for it.
 pub fn scroll_sign() -> f64 {
@@ -123,6 +148,13 @@ mod tests {
 
     /// Walks the whole ladder on the real desktop and back to the windows (it changes the screen
     /// for a few seconds). Starts from the windows.
+    #[test]
+    fn reads_gnomes_layout() {
+        assert_eq!(parse_gnome_sources("[('ibus', 'mozc'), ('xkb', 'de+nodeadkeys')]\n"), Some(("de".into(), "nodeadkeys".into())));
+        assert_eq!(parse_gnome_sources("[('xkb', 'us')]"), Some(("us".into(), String::new())));
+        assert_eq!(parse_gnome_sources("@a(ss) []"), None);
+    }
+
     #[tokio::test]
     #[ignore]
     async fn steps_up_and_down() {

@@ -11,6 +11,8 @@
 //! - `Step(b up) → s`: the touchpad's three-finger swipe, windows ↔ Overview ↔ apps: "windows",
 //!   "overview" or "grid", the names Plasma's steps use.
 //! - `SwitchWorkspace(b right)`: the next workspace that way, with GNOME's own animation.
+//! - `Screenshot() → ay`: the whole desktop as PNG, captured by the shell without asking.
+//! - `Screens() → a(ii)`: each screen's logical size.
 //! - `AskReply(s heading, s message, s placeholder) → s`: GNOME's own dialog with a text field, for
 //!   replying to a phone's notification (GNOME's notifications have no reply field); "" if cancelled.
 //! - property `Version` (u).
@@ -30,7 +32,7 @@ const IFACE: &str = "dev.vyoma.Shell1";
 /// Calls into the shell are quick; a frozen shell mustn't hold anything up.
 const LIMIT: Duration = Duration::from_secs(2);
 /// The extension's `Version` this build expects; an older one runs until the next login.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// The extension is running in this session.
 pub async fn available() -> bool {
@@ -110,6 +112,19 @@ pub async fn hide_pointer() -> Result<()> {
 pub async fn switch_workspace(right: bool) -> Result<()> {
     call("SwitchWorkspace", &(right,)).await?;
     Ok(())
+}
+
+pub async fn screenshot() -> Result<Vec<u8>> {
+    let conn = Connection::session().await.context("no session bus")?;
+    // A big desktop takes a moment to encode.
+    let reply = tokio::time::timeout(Duration::from_secs(15), conn.call_method(Some(BUS), PATH, Some(IFACE), "Screenshot", &()))
+        .await
+        .context("GNOME Shell didn't answer")?;
+    Ok(explain(reply, "Screenshot").await?.body().deserialize::<Vec<u8>>()?)
+}
+
+pub async fn screens() -> Result<Vec<(i32, i32)>> {
+    Ok(call("Screens", &()).await?.body().deserialize()?)
 }
 
 /// Asks for a reply to [message] in a dialog; `None` if it was cancelled or left for 10 minutes.

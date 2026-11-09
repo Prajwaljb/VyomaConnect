@@ -51,7 +51,9 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `desktop/gnome-extension` (uuid `vyoma@vyoma.dev`, ESM, GNOME 45+): what GNOME keeps from apps, on the session
   bus as `dev.vyoma.Shell1` (client: `companion/src/shell.rs`): the clipboard (GNOME has no data-control protocol;
   `companion/src/clip.rs` picks it or wl-clipboard), the presenter dot (Cairo, drawn as presenter.rs draws it), the
-  Overview steps, and the notification Reply dialog (GNOME has no inline reply; zenity on other such desktops). It
+  Overview steps and workspace switch, the screenshot (GNOME lets only its own parts capture silently; Spectacle on
+  Plasma), screen sizes, and the notification Reply dialog (GNOME has no inline reply; zenity on other such desktops).
+  Bump its `VERSION` with `shell::VERSION` on any change: a running older one stays until the next login. It
   answers only vyoma-desktop/vyoma-companion (the caller's /proc/<pid>/exe). `install.sh` copies it (packaged:
   /usr/share/gnome-shell/extensions), enables it with gsettings and turns GSConnect off (back on with `--undo`);
   GNOME Shell loads it at the next login; This PC shows a "GNOME extension" check. GNOME without the extension:
