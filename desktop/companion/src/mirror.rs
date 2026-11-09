@@ -170,29 +170,13 @@ const PASTE_MAX: usize = 20_000;
 
 /// The PC's clipboard as text (Wayland), if there is some.
 async fn clipboard() -> Option<String> {
-    let out = tokio::time::timeout(
-        Duration::from_secs(2),
-        tokio::process::Command::new("wl-paste").args(["--no-newline", "--type", "text/plain"]).kill_on_drop(true).output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    let text = String::from_utf8(out.stdout).ok()?;
-    if text.is_empty() {
-        return None;
-    }
+    let text = crate::clip::text().await?;
     Some(text.chars().take(PASTE_MAX).collect())
 }
 
 /// The phone copied text in the mirror (Ctrl+C / Ctrl+X in the window): onto the PC's clipboard.
 pub async fn copy(text: &str) {
-    use tokio::io::AsyncWriteExt;
-    let Ok(mut c) = tokio::process::Command::new("wl-copy").args(["--type", "text/plain"]).stdin(Stdio::piped()).spawn() else { return };
-    if let Some(mut stdin) = c.stdin.take() {
-        let _ = stdin.write_all(text.as_bytes()).await;
-    }
-    // wl-copy forks a server to hold the clipboard and its first process exits.
-    let _ = tokio::time::timeout(Duration::from_secs(2), c.wait()).await;
+    crate::clip::set(text).await;
 }
 
 /// The phone's volume keys while its sound plays here: the PC's output, 5% a press, up to 100%.

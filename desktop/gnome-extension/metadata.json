@@ -1,0 +1,8 @@
+{
+  "uuid": "vyoma@vyoma.dev",
+  "name": "Vyoma",
+  "description": "Lets Vyoma's PC app sync the clipboard with your phone, show the presenter's pointer and step the Overview from the phone's touchpad. It answers only Vyoma.",
+  "shell-version": ["45", "46", "47", "48", "49", "50", "51"],
+  "url": "https://github.com/Prajwaljb/VyomaConnect",
+  "version": 1
+}

@@ -48,6 +48,17 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   trait (D-Bus `dev.vyoma.Desktop1` today, a local socket on macOS later), rereading on the daemon's `Changed` signal.
   `vyoma --snapshot out.png [--dark] [--plain (no wallpaper)] [--size WxH (780x540 is the smallest window)] [--scroll PX] [--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|activity-empty|activity-late|commands|commands-empty|commands-edit|commands-warn|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|down]` renders it offscreen
   with made-up phones (after the enter animations settle; `cable` shows the clipboard Allow): check the look with that, never by capturing the screen.
+- `desktop/gnome-extension` (uuid `vyoma@vyoma.dev`, ESM, GNOME 45+): what GNOME keeps from apps, on the session
+  bus as `dev.vyoma.Shell1` (client: `companion/src/shell.rs`): the clipboard (GNOME has no data-control protocol;
+  `companion/src/clip.rs` picks it or wl-clipboard), the presenter dot (Cairo, drawn as presenter.rs draws it), the
+  Overview steps, and the notification Reply dialog (GNOME has no inline reply; zenity on other such desktops). It
+  answers only vyoma-desktop/vyoma-companion (the caller's /proc/<pid>/exe). `install.sh` copies it (packaged:
+  /usr/share/gnome-shell/extensions), enables it with gsettings and turns GSConnect off (back on with `--undo`);
+  GNOME Shell loads it at the next login; This PC shows a "GNOME extension" check. GNOME without the extension:
+  brightness via Mutter's DisplayConfig `Backlight`, monitors via ddcutil (`companion/src/ddc.rs`, never on
+  Plasma, which does DDC itself), power via org.gnome.SessionManager/logind, wake via Mutter `PowerSaveMode`,
+  wallpaper via gsettings. Test it headless: `dbus-run-session` + `gnome-shell --headless --wayland
+  --virtual-monitor 1280x720` with XDG_CONFIG_HOME/XDG_DATA_HOME on a scratch dir (never the real dconf).
 - `desktop/icon/gen.py`: Vyoma's icon ("Moon": the PC as a white glass orb, the phone as a small orb in a gap of one ring, on a sky tile) for every place from one geometry: Android adaptive layers, monochrome, notification glyph, splash; the desktop's `dist/vyoma.svg` (installed into hicolor) and the window's `ui/icons/vyoma.svg`. Run `python3 desktop/icon/gen.py .` from the repo root after changing it.
 - `desktop/companion`: lib + bin (the session loop is `session.rs`, shared with the desktop app); the bin is the Rust daemon beside stock kdeconnectd, built on `vyoma-core`. Dials only phones kdeconnectd trusts (mDNS), pairs with
   no prompt via `CompanionProof` (signed with kdeconnectd's key; phone verifies against the pinned PC cert), speaks

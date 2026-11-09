@@ -36,4 +36,4 @@
 
 <p><b>Private by design</b>: phone and PC talk directly and encrypted. Pairing needs a matching code on both screens, and the PC decides what each phone may do.</p>
 
-<p>The PC app runs on Linux with KDE Plasma; GNOME, other desktops and macOS are coming.</p>
+<p>The PC app runs on Linux with KDE Plasma or GNOME; other desktops and macOS are coming.</p>

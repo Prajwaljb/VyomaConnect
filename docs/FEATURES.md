@@ -112,6 +112,8 @@ When something happens, Vyoma does something for you.
 - **Commands:** add, edit and protect what phones can run.
 - **Updates itself** with one click, pairings kept.
 - **Takes over from KDE Connect** with your pairings, and gives it back with `install.sh --undo`.
+- **Runs on KDE Plasma and GNOME.** On GNOME a small Shell extension, installed with the app, brings clipboard
+  sync, the presenter's pointer, three-finger Overview swipes and a Reply dialog for the phone's notifications.
 
 ## With KDE Connect on the PC
 

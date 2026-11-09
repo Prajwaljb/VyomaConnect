@@ -223,7 +223,7 @@ fn on_path(name: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
 }
 
-fn data_home() -> PathBuf {
+pub fn data_home() -> PathBuf {
     std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/share"))
 }
 

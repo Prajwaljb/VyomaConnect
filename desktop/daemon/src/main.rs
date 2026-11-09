@@ -311,8 +311,9 @@ impl Control {
     /// info or warn, detail) and advice (`notes`).
     async fn health(&self) -> fdo::Result<String> {
         let (beside_kde, updates) = (self.beside_kde, self.updates.clone());
+        let shell = vyoma_companion::desktop::is_gnome().then_some(vyoma_companion::shell::available().await);
         let report = tokio::task::spawn_blocking(move || {
-            let mut report = health(beside_kde);
+            let mut report = health(beside_kde, shell);
             report["update"] = updates.status();
             report
         })
@@ -715,9 +716,18 @@ async fn daemon(dir: PathBuf) -> Result<()> {
     }
 
     let (copies_tx, mut copies) = mpsc::unbounded_channel();
+    // Again after a while if it stops: GNOME's extension can come after us, or come back after
+    // the shell restarts.
     tokio::spawn(async move {
-        if let Err(e) = clipboard::watch(copies_tx).await {
-            tracing::warn!("can't follow the clipboard: {e:#}");
+        let mut said = false;
+        loop {
+            if let Err(e) = clipboard::watch(copies_tx.clone()).await {
+                if !said {
+                    tracing::warn!("can't follow the clipboard: {e:#}");
+                    said = true;
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(10)).await;
         }
     });
     let (paste, mut pastes) = mpsc::unbounded_channel::<String>();
@@ -1024,6 +1034,26 @@ impl Desk {
     }
 
     async fn on_heard(&mut self, h: Heard) {
+        if let Heard::Pressed { notification, action } = &h
+            && action == notify::INLINE_REPLY
+        {
+            if let Some(ask) = self.mirror.take_reply(*notification) {
+                let (commands, notifier) = (self.commands.clone(), self.notifier.clone());
+                tokio::spawn(async move {
+                    match notifications::ask_reply(&ask).await {
+                        Ok(Some(text)) => {
+                            let _ = commands.send(Command::Send(ask.device.clone(), ask.packet(&text)));
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::warn!("couldn't ask for a reply: {e:#}");
+                            plugins::tell(&notifier, "Can't reply from this PC", &format!("{e:#}")).await;
+                        }
+                    }
+                });
+            }
+            return;
+        }
         if let Some((id, p)) = self.mirror.heard(&h) {
             self.send(&id, p);
         } else if let Heard::Pressed { notification, action } = h {
@@ -1539,7 +1569,8 @@ fn via(d: &DeviceView) -> Option<&'static str> {
 }
 
 /// [Control::health]'s report.
-fn health(beside_kde: bool) -> serde_json::Value {
+/// [shell]: on GNOME, whether Vyoma's extension is running.
+fn health(beside_kde: bool, shell: Option<bool>) -> serde_json::Value {
     let report = vyoma_companion::setup::report();
     let features: Vec<_> = report
         .features
@@ -1550,6 +1581,9 @@ fn health(beside_kde: bool) -> serde_json::Value {
     if beside_kde {
         checks.push(json!({ "name": "KDE Connect", "state": "warn",
             "detail": "Also running, so the USB cable, tethering and Bluetooth stay with it. Quit it to use them here." }));
+    }
+    if let Some(running) = shell {
+        checks.push(gnome_extension(running));
     }
     json!({
         "features": features,
@@ -1573,6 +1607,25 @@ fn firewall() -> serde_json::Value {
         Some(name) => ("info", format!("{name} is on. If phones don't show up on Wi-Fi, allow ports 1714 to 1764, TCP and UDP.")),
     };
     json!({ "name": "Firewall", "state": state, "detail": detail })
+}
+
+/// Vyoma's GNOME extension: clipboard sync, the presenter's pointer and the Overview need it.
+fn gnome_extension(running: bool) -> serde_json::Value {
+    const UUID: &str = "vyoma@vyoma.dev";
+    let detail = if running {
+        return json!({ "name": "GNOME extension", "state": "ok", "detail": "On" });
+    } else if ![menus::data_home(), PathBuf::from("/usr/share")].into_iter().map(|d| d.join("gnome-shell/extensions").join(UUID)).any(|d| d.join("extension.js").exists()) {
+        "Not installed. Run install.sh again to add it: clipboard sync and the presenter's pointer need it."
+    } else if std::process::Command::new("gsettings")
+        .args(["get", "org.gnome.shell", "enabled-extensions"])
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("'{UUID}'")))
+    {
+        "Log out and back in once to turn it on: clipboard sync and the presenter's pointer need it."
+    } else {
+        "Off. Turn on Vyoma in GNOME's Extensions app: clipboard sync and the presenter's pointer need it."
+    };
+    json!({ "name": "GNOME extension", "state": "warn", "detail": detail })
 }
 
 fn capitalised(s: &str) -> String {

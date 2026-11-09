@@ -26,6 +26,28 @@ as_root() {
     if command -v pkexec >/dev/null 2>&1; then pkexec "$@"; else sudo "$@"; fi
 }
 
+# GNOME: Vyoma's Shell extension does what GNOME keeps from apps (following the clipboard, the
+# presenter's dot, the Overview). GSConnect, GNOME's own KDE Connect, would hold the same port.
+extension=vyoma@vyoma.dev
+gsconnect=gsconnect@andyholmes.github.io
+has_gnome() { command -v gnome-shell >/dev/null 2>&1 && gsettings list-keys org.gnome.shell >/dev/null 2>&1; }
+shell_list() { gsettings get org.gnome.shell "$1" | sed 's/^@as //'; }
+shell_add() {
+    current=$(shell_list "$1")
+    case "$current" in
+        *"'$2'"*) return 0 ;;
+        "[]") gsettings set org.gnome.shell "$1" "['$2']" ;;
+        *) gsettings set org.gnome.shell "$1" "${current%]}, '$2']" ;;
+    esac
+}
+# Fails when it wasn't there.
+shell_remove() {
+    current=$(shell_list "$1")
+    case "$current" in *"'$2'"*) ;; *) return 1 ;; esac
+    item=$(printf '%s' "$2" | sed 's/[.]/\\./g')
+    gsettings set org.gnome.shell "$1" "$(printf '%s' "$current" | sed "s/'$item', //; s/, '$item'//; s/'$item'//")"
+}
+
 # An update from the window runs with no terminal: say so if it fails.
 updating=
 if [ "${1:-}" = "--update" ] || [ "${1:-}" = "--updating" ]; then
@@ -65,6 +87,14 @@ if [ "${1:-}" = "--undo" ]; then
     "$bin/vyoma-desktop" --remove-menus 2>/dev/null || true
     rm -f "$autostart" "$activation"
     [ -n "$packaged" ] || rm -f "$data/applications/vyoma.desktop" "$data/icons/hicolor/scalable/apps/vyoma.svg"
+    if has_gnome; then
+        shell_remove enabled-extensions "$extension" || true
+        [ -n "$packaged" ] || rm -rf "$data/gnome-shell/extensions/$extension"
+        if [ -e "$config/vyoma-desktop/gsconnect-was-on" ]; then
+            shell_add enabled-extensions "$gsconnect"
+            rm -f "$config/vyoma-desktop/gsconnect-was-on"
+        fi
+    fi
     [ -f "$config/systemd/user/vyoma-companion.service" ] && systemctl --user enable --now vyoma-companion
     (setsid kdeconnectd >/dev/null 2>&1 &)
     echo "KDE Connect is back. Vyoma's desktop app keeps its folder ($config/vyoma-desktop) until you remove it."
@@ -117,6 +147,28 @@ printf '[D-BUS Service]\nName=org.kde.kdeconnect\nExec=/bin/false\n' >"$activati
 systemctl --user disable --now vyoma-companion 2>/dev/null || true
 pkill -x kdeconnectd 2>/dev/null || true
 
+gnome_note=
+if has_gnome; then
+    if [ -z "$packaged" ]; then
+        rm -rf "$data/gnome-shell/extensions/$extension"
+        mkdir -p "$data/gnome-shell/extensions"
+        cp -r "$here/../gnome-extension" "$data/gnome-shell/extensions/$extension"
+    fi
+    shell_remove disabled-extensions "$extension" || true
+    shell_add enabled-extensions "$extension"
+    if shell_remove enabled-extensions "$gsconnect"; then
+        mkdir -p "$config/vyoma-desktop"
+        touch "$config/vyoma-desktop/gsconnect-was-on"
+        echo "GSConnect is off while Vyoma runs, as both use the same port; --undo turns it back on."
+    fi
+    # GNOME Shell picks up a new extension when it starts.
+    case "${XDG_CURRENT_DESKTOP:-}" in
+        *GNOME*) gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+            --method org.freedesktop.DBus.NameHasOwner dev.vyoma.Shell 2>/dev/null | grep -q true ||
+            gnome_note="Log out and back in once to turn on Vyoma's GNOME extension (clipboard sync and the presenter's pointer need it)." ;;
+    esac
+fi
+
 if [ -n "$packaged" ]; then
     # The package's unit, not one a source install left behind.
     rm -f "$config/systemd/user/vyoma-desktop.service"
@@ -127,6 +179,7 @@ systemctl --user daemon-reload
 systemctl --user enable vyoma-desktop
 systemctl --user restart vyoma-desktop
 echo "Done: Vyoma's desktop app is this PC's KDE Connect now. Logs: journalctl --user -u vyoma-desktop. Undo: $0 --undo"
+[ -z "$gnome_note" ] || echo "$gnome_note"
 # Its window, on its first-run setup: pairing with the phone, side by side with the phone's own steps.
 if [ -z "$updating" ] && [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then
     (setsid "$bin/vyoma" >/dev/null 2>&1 &)
