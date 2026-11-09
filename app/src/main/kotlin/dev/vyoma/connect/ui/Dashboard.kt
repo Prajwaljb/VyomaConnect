@@ -1148,13 +1148,20 @@ private fun Meter(label: String, value: String?, unit: String, fraction: Float, 
     }
 }
 
-/** Runs [cmd], first asking for the fingerprint if the owner marked it, here in [CommandsSheet] or on the PC. */
+/**
+ * Runs [cmd], first asking for the fingerprint if the owner marked it, here in [CommandsSheet] or on
+ * the PC. Marked "every time" on the PC, it asks even with the lock just passed.
+ */
 internal fun runGuarded(context: Context, vm: AppViewModel, id: String, cmd: RemoteCommand, status: StatusController) {
     val run = {
         vm.runCommand(id, cmd.key)
         status.show("Running ${cmd.name}", icon = Icons.Rounded.Terminal)
     }
-    if (cmd.fingerprint || AppLock.commandLocked(context, id, cmd.key)) AppLock.askForCommand(context, "To run ${cmd.name}", run) else run()
+    when {
+        cmd.everyTime -> AppLock.confirm(context, "To run ${cmd.name}", run)
+        cmd.fingerprint || AppLock.commandLocked(context, id, cmd.key) -> AppLock.askForCommand(context, "To run ${cmd.name}", run)
+        else -> run()
+    }
 }
 
 /** The PC's commands, run from where you are; set up (or edited) on the PC itself. */
@@ -1192,7 +1199,7 @@ internal fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) 
                         ListRow(
                             title = cmd.name,
                             // Says what the switch is for: alone, it could read as the command being on or off.
-                            subtitle = if (cmd.fingerprint) "Asks for your fingerprint, set on the PC" else if (locked) "Asks for your fingerprint" else "Runs straight away",
+                            subtitle = if (cmd.everyTime) "Asks every time, set on the PC" else if (cmd.fingerprint) "Asks for your fingerprint, set on the PC" else if (locked) "Asks for your fingerprint" else "Runs straight away",
                             subtitleMaxLines = 1,
                             icon = Icons.Rounded.Terminal,
                             iconTint = SystemColor.GRAY.color,

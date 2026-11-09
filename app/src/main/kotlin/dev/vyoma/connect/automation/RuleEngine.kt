@@ -257,7 +257,13 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
                 displays.forEach { companion.setBrightness(it.id, a.percent / 100f) }
                 Undo.Brightness(displays.associate { it.id to it.level })
             }
-            is Action.RunCommand -> { pc!!.plugin<RunCommandPlugin>(RunCommandPlugin.ID).need("commands").run(a.key); null }
+            is Action.RunCommand -> {
+                val commands = pc!!.plugin<RunCommandPlugin>(RunCommandPlugin.ID).need("commands")
+                // Marked on the PC, perhaps after the rule was made, to ask on each run: nobody's here to ask.
+                if (commands.commands.value.any { it.key == a.key && it.everyTime }) error("${a.name.ifEmpty { "this command" }} asks for your fingerprint every time")
+                commands.run(a.key)
+                null
+            }
             Action.SendClipboard -> {
                 val text = c.clipboard.current.value?.text ?: error("nothing copied yet")
                 pc!!.plugin<ClipboardPlugin>(ClipboardPlugin.ID).need("clipboard").push(text)

@@ -118,11 +118,11 @@ fn read_commands(ui: &slint::Weak<MainWindow>) {
 
 /// The commands, and the suggestions whose command line isn't among them yet.
 pub fn show_commands(ui: &MainWindow, list: &[CommandData]) {
-    let to = |c: &CommandData| Command { key: c.key.clone().into(), name: c.name.clone().into(), command: c.command.clone().into(), fingerprint: c.fingerprint };
+    let to = |c: &CommandData| Command { key: c.key.clone().into(), name: c.name.clone().into(), command: c.command.clone().into(), fingerprint: c.fingerprint, every: c.every_time };
     let suggestions: Vec<Command> = suggestions()
         .iter()
         .filter(|(_, line, _)| !list.iter().any(|c| c.command.trim() == line.as_str()))
-        .map(|(name, line, fingerprint)| Command { key: "".into(), name: (*name).into(), command: line.as_str().into(), fingerprint: *fingerprint })
+        .map(|(name, line, fingerprint)| Command { key: "".into(), name: (*name).into(), command: line.as_str().into(), fingerprint: *fingerprint, every: false })
         .collect();
     ui.set_commands(ModelRc::new(VecModel::from(list.iter().map(to).collect::<Vec<_>>())));
     ui.set_suggestions(ModelRc::new(VecModel::from(suggestions)));
@@ -256,9 +256,9 @@ fn wire(ui: &MainWindow) {
     });
     ui.on_save_command({
         let ui = ui.as_weak();
-        move |key, name, command, fingerprint| {
+        move |key, name, command, fingerprint, every| {
             let ui = ui.clone();
-            std::thread::spawn(move || match DbusDaemon::connect().and_then(|d| d.save_command(&key, &name, &command, fingerprint)) {
+            std::thread::spawn(move || match DbusDaemon::connect().and_then(|d| d.save_command(&key, &name, &command, fingerprint, every)) {
                 Ok(_) => {
                     notify(&ui, if key.is_empty() { format!("Added \u{201c}{}\u{201d}: it's on your phones now", name.trim()) } else { "Saved".into() });
                     read_commands(&ui);

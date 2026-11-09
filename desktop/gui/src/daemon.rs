@@ -38,16 +38,17 @@ pub struct CommandData {
     pub name: String,
     pub command: String,
     pub fingerprint: bool,
+    pub every_time: bool,
 }
 
 impl CommandData {
-    /// From the daemon's `Commands` JSON ({key: {name, command, fingerprint}}), by name.
+    /// From the daemon's `Commands` JSON ({key: {name, command, fingerprint, everyTime}}), by name.
     pub fn list(v: &Value) -> Vec<CommandData> {
         let mut out: Vec<CommandData> = v
             .as_object()
             .map(|o| {
                 o.iter()
-                    .map(|(k, c)| CommandData { key: k.clone(), name: c["name"].as_str().unwrap_or("").to_owned(), command: c["command"].as_str().unwrap_or("").to_owned(), fingerprint: c["fingerprint"].as_bool().unwrap_or(false) })
+                    .map(|(k, c)| CommandData { key: k.clone(), name: c["name"].as_str().unwrap_or("").to_owned(), command: c["command"].as_str().unwrap_or("").to_owned(), fingerprint: c["fingerprint"].as_bool().unwrap_or(false), every_time: c["everyTime"].as_bool().unwrap_or(false) })
                     .collect()
             })
             .unwrap_or_default();
@@ -219,7 +220,7 @@ pub trait Daemon: Send + Sync {
     fn allow_clipboard(&self, id: &str) -> Result<()>;
     fn commands(&self) -> Result<Vec<CommandData>>;
     /// Changes a command, or adds one when [key] is empty; its key.
-    fn save_command(&self, key: &str, name: &str, command: &str, fingerprint: bool) -> Result<String>;
+    fn save_command(&self, key: &str, name: &str, command: &str, fingerprint: bool, every_time: bool) -> Result<String>;
     fn remove_command(&self, key: &str) -> Result<()>;
     /// Installs what's missing; [Event::SetupDone] follows.
     fn install(&self) -> Result<()>;
@@ -313,8 +314,8 @@ impl Daemon for DbusDaemon {
         Ok(CommandData::list(&serde_json::from_str(&json)?))
     }
 
-    fn save_command(&self, key: &str, name: &str, command: &str, fingerprint: bool) -> Result<String> {
-        self.call("SaveCommand", &(key, name, command, fingerprint))
+    fn save_command(&self, key: &str, name: &str, command: &str, fingerprint: bool, every_time: bool) -> Result<String> {
+        self.call("SaveCommand", &(key, name, command, fingerprint, every_time))
     }
 
     fn remove_command(&self, key: &str) -> Result<()> {
