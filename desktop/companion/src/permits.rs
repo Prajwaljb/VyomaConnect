@@ -99,7 +99,12 @@ impl Permits {
     pub fn load(file: PathBuf) -> Permits {
         let off = std::fs::read_to_string(&file)
             .ok()
-            .and_then(|s| serde_json::from_str::<BTreeMap<String, Vec<String>>>(&s).ok())
+            .and_then(|s| {
+                serde_json::from_str::<BTreeMap<String, Vec<String>>>(&s)
+                    // Every feature is back on for every phone then: say so where it can be found.
+                    .map_err(|e| tracing::warn!("{} isn't valid ({e}): every feature is on until it's fixed", file.display()))
+                    .ok()
+            })
             .unwrap_or_default()
             .into_iter()
             .map(|(id, keys)| (id, keys.iter().filter_map(|k| Permit::from_key(k)).collect()))

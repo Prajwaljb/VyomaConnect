@@ -44,6 +44,20 @@ impl Commands {
         }
     }
 
+    /// For changing the list: a file the user broke by hand is refused rather than overwritten, as
+    /// saving over it would lose every command in it.
+    fn for_change(&self) -> Result<BTreeMap<String, Value>> {
+        match std::fs::read_to_string(&self.file) {
+            Ok(text) if !text.trim().is_empty() => {
+                serde_json::from_str::<BTreeMap<String, Value>>(&text).map_err(|e| {
+                    anyhow::anyhow!("{} has a mistake on line {}, so saving would lose your commands. Fix it, or move it away to start over", self.file.display(), e.line())
+                })?;
+                Ok(self.all())
+            }
+            _ => Ok(BTreeMap::new()),
+        }
+    }
+
     pub fn list_packet(&self) -> Value {
         let list = Value::Object(self.all().into_iter().collect());
         packet(RUNCOMMAND, json!({ "commandList": list.to_string(), "canAddCommand": true }))
@@ -57,7 +71,7 @@ impl Commands {
     /// Changes the command under [key], or adds one when [key] is empty; its key.
     pub fn save_one(&self, key: &str, name: &str, command: &str, fingerprint: bool, every_time: bool) -> Result<String> {
         anyhow::ensure!(!name.trim().is_empty() && !command.trim().is_empty(), "A command needs a name and a command line");
-        let mut all = self.all();
+        let mut all = self.for_change()?;
         let key = if key.is_empty() {
             loop {
                 let k = format!("{:016x}", unique_u64());
@@ -75,7 +89,7 @@ impl Commands {
     }
 
     pub fn remove(&self, key: &str) -> Result<bool> {
-        let mut all = self.all();
+        let mut all = self.for_change()?;
         let gone = all.remove(key).is_some();
         if gone {
             self.save(&all)?;
@@ -95,9 +109,27 @@ impl Commands {
         let all = self.all();
         let c = all.get(key)?;
         let (name, command) = (c["name"].as_str()?.to_owned(), c["command"].as_str()?);
-        match std::process::Command::new("sh").args(["-c", command]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        match std::process::Command::new("sh").args(["-c", command]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn() {
             // Reaped on its own thread; it may run for as long as it likes.
-            Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+            Ok(child) => {
+                let name = name.clone();
+                drop(std::thread::spawn(move || {
+                    let Ok(out) = child.wait_with_output() else { return };
+                    // 127: no such program, 126: it can't be run. The phone can't be told (stock
+                    // runcommand has no reply), so the PC says so. Other exit codes are left alone:
+                    // plenty of commands use them for ordinary outcomes.
+                    if let Some(code @ (126 | 127)) = out.status.code() {
+                        let said = String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or_default().trim().to_owned();
+                        tracing::warn!("{name} couldn't run ({code}): {said}");
+                        let why = if code == 127 { "Its program isn't on this PC" } else { "Its program can't be run (is it executable?)" };
+                        let _ = std::process::Command::new("notify-send")
+                            .args(["--app-name=Vyoma", "--hint=string:desktop-entry:vyoma", "--icon=dialog-warning", "--"])
+                            .arg(format!("\u{201c}{name}\u{201d} didn't run"))
+                            .arg(format!("{why}. Check it in Vyoma's Commands."))
+                            .status();
+                    }
+                }));
+            }
             Err(e) => tracing::warn!("can't run {name}: {e}"),
         }
         Some(name)
@@ -115,6 +147,21 @@ fn unique_u64() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_broken_file_is_kept_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("vyoma-commands-broken-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let broken = "{\"a\": {\"name\": \"Backup\", \"command\": \"backup\"},\n}";
+        std::fs::write(dir.join("commands.json"), broken).unwrap();
+        let c = Commands::new(&dir);
+        let e = c.add("New", "true").unwrap_err().to_string();
+        assert!(e.contains("line 2"), "{e}");
+        assert!(c.remove("a").is_err());
+        assert_eq!(std::fs::read_to_string(dir.join("commands.json")).unwrap(), broken);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn only_stored_commands_run() {
