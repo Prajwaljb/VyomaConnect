@@ -34,10 +34,14 @@ pub async fn colors() -> Result<Vec<[u8; 3]>> {
 /// last changed. Cheap (a config read and two stats), so it can be checked every few seconds.
 pub fn signature() -> Option<(PathBuf, Option<std::time::SystemTime>, Option<std::time::SystemTime>)> {
     let home = std::env::var_os("HOME")?;
-    // GNOME keeps its settings in dconf's one file.
-    let config = if crate::desktop::is_gnome() { Path::new(&home).join(".config/dconf/user") } else { Path::new(&home).join(".config/plasma-org.kde.plasma.desktop-appletsrc") };
     let path = current()?;
     let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    // GNOME's settings (read by [current], light or dark) name the picture, which says it all; its
+    // settings file changes with every setting, so its time says nothing.
+    if crate::desktop::is_gnome() {
+        return Some((path.clone(), mtime(&path), None));
+    }
+    let config = Path::new(&home).join(".config/plasma-org.kde.plasma.desktop-appletsrc");
     Some((path.clone(), mtime(&path), mtime(&config)))
 }
 
