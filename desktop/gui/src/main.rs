@@ -225,6 +225,41 @@ fn wire(ui: &MainWindow) {
             });
         }
     });
+    ui.on_update({
+        let ui = ui.as_weak();
+        move || {
+            if let Some(win) = ui.upgrade() {
+                win.set_updating(true);
+            }
+            let ui = ui.clone();
+            std::thread::spawn(move || match DbusDaemon::connect().and_then(|d| d.update()) {
+                Ok(()) => notify(&ui, "Updating: Vyoma restarts by itself when it's done".to_owned()),
+                Err(e) => {
+                    notify(&ui, format!("{e:#}"));
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(win) = ui.upgrade() {
+                            win.set_updating(false);
+                        }
+                    });
+                }
+            });
+        }
+    });
+    ui.on_update_checks_toggled({
+        let ui = ui.as_weak();
+        move |on| {
+            if let Some(win) = ui.upgrade() {
+                win.set_update_checks(on);
+            }
+            let ui = ui.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = DbusDaemon::connect().and_then(|d| d.set_update_checks(on)) {
+                    notify(&ui, format!("{e:#}"));
+                }
+                read_health(&ui);
+            });
+        }
+    });
     ui.on_install({
         let ui = ui.as_weak();
         move || {
@@ -594,6 +629,12 @@ pub fn show_health(ui: &MainWindow, h: &Health) {
     ui.set_installable(h.installable);
     ui.set_installing(h.installing);
     ui.set_attention(h.attention() as i32);
+    let u = &h.update;
+    ui.set_version(u.current.clone().into());
+    ui.set_update_latest(u.latest.clone().unwrap_or_default().into());
+    ui.set_update_checks(u.checks);
+    ui.set_updating(u.updating);
+    ui.set_can_update(u.can_update);
     ui.set_health_loaded(true);
 }
 

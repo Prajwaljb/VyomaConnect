@@ -3,8 +3,12 @@
 # it becomes this PC as kdeconnectd was (same id and pairings), kdeconnectd is kept from starting,
 # and the companion, whose work it now does, is stopped. `install.sh --undo` puts KDE Connect back.
 # It asks for your password only to install packages and open the firewall.
+# `install.sh --update` moves this copy to the newest release and installs that, pairings kept.
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+root=$(CDPATH= cd -- "$here/../.." && pwd)
+# Rust from rustup, which a systemd unit's PATH (the window's Update) doesn't have.
+if [ -d "$HOME/.cargo/bin" ]; then PATH="$HOME/.cargo/bin:$PATH"; fi
 config=${XDG_CONFIG_HOME:-$HOME/.config}
 data=${XDG_DATA_HOME:-$HOME/.local/share}
 # Keeps kdeconnectd from starting: Plasma's autostart and D-Bus activation both start it.
@@ -14,6 +18,34 @@ activation="$data/dbus-1/services/org.kde.kdeconnect.service"
 as_root() {
     if command -v pkexec >/dev/null 2>&1; then pkexec "$@"; else sudo "$@"; fi
 }
+
+# An update from the window runs with no terminal: say so if it fails.
+updating=
+if [ "${1:-}" = "--update" ] || [ "${1:-}" = "--updating" ]; then
+    updating=1
+    finish() {
+        [ "$1" -eq 0 ] || notify-send --app-name=Vyoma --icon=vyoma --hint=string:desktop-entry:vyoma \
+            "Vyoma's update didn't finish" "Run $here/install.sh --update in a terminal to see why." 2>/dev/null || true
+    }
+    trap 'finish $?' EXIT
+fi
+
+if [ "${1:-}" = "--update" ]; then
+    echo "Getting the newest release..."
+    git -C "$root" fetch --quiet --tags --force origin
+    tag=$(git -C "$root" tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)
+    [ -n "$tag" ] || { echo "No release found." >&2; exit 1; }
+    # Never back: a copy ahead of the release (built from main) stays as it is.
+    current=$(cat "$root/VERSION" 2>/dev/null || echo 0)
+    if [ "$(printf '%s\n%s\n' "$current" "${tag#v}" | sort -V | tail -n 1)" = "$current" ]; then
+        echo "Vyoma $current is already the newest."
+        exit 0
+    fi
+    git -C "$root" -c advice.detachedHead=false checkout --quiet "$tag"
+    # The release's own installer from here on.
+    trap - EXIT
+    exec sh "$here/install.sh" --updating
+fi
 
 if [ "${1:-}" = "--undo" ]; then
     systemctl --user disable --now vyoma-desktop 2>/dev/null || true
@@ -39,6 +71,9 @@ fi
 echo "Building (a few minutes the first time)..."
 (cd "$here" && cargo build --release)
 install -Dm755 "$here/target/release/vyoma-desktop" "$HOME/.local/bin/vyoma-desktop"
+# Where updates build from.
+mkdir -p "$config/vyoma-desktop"
+printf '%s\n' "$root" >"$config/vyoma-desktop/source"
 # The window (desktop/gui), beside it: the daemon opens it when a phone asks for the command editor.
 (cd "$here/../gui" && cargo build --release)
 install -Dm755 "$here/../gui/target/release/vyoma" "$HOME/.local/bin/vyoma"
@@ -72,6 +107,6 @@ systemctl --user enable vyoma-desktop
 systemctl --user restart vyoma-desktop
 echo "Done: Vyoma's desktop app is this PC's KDE Connect now. Logs: journalctl --user -u vyoma-desktop. Undo: $0 --undo"
 # Its window, on its first-run setup: pairing with the phone, side by side with the phone's own steps.
-if [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then
+if [ -z "$updating" ] && [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then
     (setsid "$HOME/.local/bin/vyoma" >/dev/null 2>&1 &)
 fi
