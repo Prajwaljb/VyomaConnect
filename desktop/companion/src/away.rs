@@ -181,8 +181,18 @@ impl Away {
 /// Never act on a link that was gone for less than this (on top of the ~30 s keepalive).
 const MIN_GONE_SECS: u64 = 10;
 
-/// Locks this session the way kdeconnectd's lock plugin does: through logind.
+/// Locks this session the way kdeconnectd's lock plugin does: through logind. GNOME through its
+/// own screensaver, as the phone's Lock button does there (its lock screen is GNOME Shell's).
 async fn lock() -> anyhow::Result<()> {
+    if crate::desktop::is_gnome() {
+        let conn = Connection::session().await?;
+        let call = conn.call_method(Some("org.gnome.ScreenSaver"), "/org/gnome/ScreenSaver", Some("org.gnome.ScreenSaver"), "Lock", &());
+        // It answers once the lock screen is up; without GDM GNOME has none and says so.
+        if let Ok(done) = tokio::time::timeout(Duration::from_secs(3), call).await {
+            done?;
+        }
+        return Ok(());
+    }
     let system = Connection::system().await?;
     system
         .call_method(Some("org.freedesktop.login1"), "/org/freedesktop/login1/session/auto", Some("org.freedesktop.login1.Session"), "Lock", &())

@@ -63,6 +63,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -150,7 +151,12 @@ class VyomaApp : Application() {
                     }
                     if (each.isEmpty()) emptyFlow() else merge(*each.toTypedArray())
                 }
-            }.collect { why -> android.widget.Toast.makeText(this@VyomaApp, why, android.widget.Toast.LENGTH_LONG).show() }
+            }.collect { why ->
+                // In the app's own status bubble while Home is on screen; a system toast otherwise.
+                if (container.refusals.subscriptionCount.value == 0 || !container.refusals.tryEmit(why)) {
+                    android.widget.Toast.makeText(this@VyomaApp, why, android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
         }
         // Whether any of our activities is started: background work scales down when it isn't.
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
@@ -181,6 +187,8 @@ class AppContainer(private val app: Application) {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     /** True while one of our activities is on screen. */
     val uiVisible = MutableStateFlow(false)
+    /** What the PC refused or couldn't do, for the main screen's status bubble while it's showing. */
+    val refusals = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val settings by lazy { SettingsRepository(app) }
     val network by lazy { AndroidNetwork(app) }
     val battery by lazy { BatteryMonitor(app) }

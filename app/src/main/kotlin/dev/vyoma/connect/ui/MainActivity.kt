@@ -41,6 +41,7 @@ import androidx.compose.material3.MaterialTheme
 import dev.vyoma.connect.designsystem.MenuHost
 import dev.vyoma.connect.platform.AppLock
 import dev.vyoma.connect.designsystem.StatusHost
+import dev.vyoma.connect.container
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import dev.vyoma.connect.BuildConfig
@@ -54,6 +55,12 @@ import androidx.compose.ui.graphics.luminance
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.withResumed
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalContext
+import android.app.Application
+import dev.vyoma.connect.designsystem.LocalStatus
 import dev.vyoma.connect.designsystem.VyomaMotion
 import dev.vyoma.connect.designsystem.DarkMode
 import dev.vyoma.connect.designsystem.Palette
@@ -107,7 +114,7 @@ class MainActivity : ComponentActivity() {
                     val style = if (darkUi) SystemBarStyle.dark(clear) else SystemBarStyle.light(clear, clear)
                     enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
                 }
-                StatusHost { MenuHost { Crossfade(onboarding, animationSpec = VyomaMotion.effects(), label = "onboarding") { show ->
+                StatusHost { PcRefusals(); MenuHost { Crossfade(onboarding, animationSpec = VyomaMotion.effects(), label = "onboarding") { show ->
                     when (show) {
                         true -> OnboardingScreen(vm, onDone = {
                             // Setup ends on Home, even replayed from Settings.
@@ -382,5 +389,18 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                 is Screen.RuleEditor -> RuleEditorScreen(vm, screen.ruleId, onBack = pop)
             }
         } }
+    }
+}
+
+/** Shows what the PC refused (VyomaApp passes it on) in the status bubble while this screen is started. */
+@Composable
+private fun PcRefusals() {
+    val status = LocalStatus.current
+    val app = LocalContext.current.applicationContext as Application
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(Unit) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            app.container.refusals.collect { status.show(it, failure = true) }
+        }
     }
 }

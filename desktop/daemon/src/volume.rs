@@ -129,7 +129,32 @@ async fn apply(known: &[Sink], id: &str, name: &str, body: &Value) {
     }
     if let Err(e) = done {
         tracing::warn!("{id}: {e:#}");
+        return;
     }
+    // GNOME shows no pop-up for a change it didn't make (Plasma does): ask its shell for one, for
+    // the output that's playing, as its volume keys show it.
+    let Some(sink) = known.iter().find(|s| s.name == name) else { return };
+    if vyoma_companion::desktop::is_gnome() && (sink.default || body["enabled"].as_bool() == Some(true)) && (body.get("volume").is_some() || body.get("muted").is_some()) {
+        let volume = body["volume"].as_i64().map_or(sink.volume, |v| v.clamp(0, MAX_VOLUME));
+        let muted = body["muted"].as_bool().unwrap_or(sink.muted);
+        let (icon, level, max) = osd(volume, muted);
+        let _ = vyoma_companion::shell::show_osd(icon, level, max, None).await;
+    }
+}
+
+/// GNOME's volume pop-up for [volume]: its icon, level and top, as GNOME's own picks them.
+fn osd(volume: i64, muted: bool) -> (&'static str, f64, f64) {
+    let level = volume as f64 / NORMAL as f64;
+    let icon = match level {
+        _ if muted || volume == 0 => "audio-volume-muted-symbolic",
+        l if l <= 1.0 / 3.0 => "audio-volume-low-symbolic",
+        l if l <= 2.0 / 3.0 => "audio-volume-medium-symbolic",
+        l if l <= 1.0 => "audio-volume-high-symbolic",
+        _ => "audio-volume-overamplified-symbolic",
+    };
+    // Above 100% the bar grows a boosted part, as with GNOME's own "over-amplification".
+    let max = if level > 1.0 { MAX_VOLUME as f64 / NORMAL as f64 } else { 1.0 };
+    (icon, if muted { 0.0 } else { level }, max)
 }
 
 #[cfg(test)]
@@ -140,6 +165,14 @@ mod tests {
         {"name": "hdmi", "description": "HDMI", "mute": false, "volume": {"front-left": {"value": 30000}, "front-right": {"value": 32000}}},
         {"name": "speakers", "description": "", "mute": true, "volume": {"mono": {"value": 65536}}}
     ]"#;
+
+    #[test]
+    fn picks_gnomes_volume_popup() {
+        assert_eq!(osd(NORMAL / 2, false), ("audio-volume-medium-symbolic", 0.5, 1.0));
+        assert_eq!(osd(NORMAL, true), ("audio-volume-muted-symbolic", 0.0, 1.0));
+        assert_eq!(osd(NORMAL / 4, false).0, "audio-volume-low-symbolic");
+        assert_eq!(osd(NORMAL * 5 / 4, false), ("audio-volume-overamplified-symbolic", 1.25, 1.5));
+    }
 
     #[test]
     fn sinks_and_their_changes() {
