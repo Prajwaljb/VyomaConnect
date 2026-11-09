@@ -20,8 +20,8 @@ android {
         applicationId = "dev.vyoma.connect"
         minSdk = 31
         targetSdk = 37
-        versionCode = 3
-        versionName = "0.2.1"
+        versionCode = 4
+        versionName = "0.3.0"
         buildConfigField("boolean", "DEMO", "false")
     }
 
