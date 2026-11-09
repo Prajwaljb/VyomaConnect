@@ -11,6 +11,8 @@ depends=('glib2' 'gstreamer' 'gst-plugins-base' 'gst-plugins-base-libs' 'gst-plu
          'pipewire' 'wireplumber' 'libpulse' 'wl-clipboard' 'libnotify' 'xdg-utils' 'android-tools' 'ffmpeg'
          'sshfs' 'gvfs' 'curl')
 makedepends=('cargo' 'pkgconf')
+# makepkg's LTO builds ring's C code in a form the Rust linker can't use.
+options=('!lto')
 optdepends=('v4l2loopback-dkms: the phone as a webcam (CachyOS kernels already have it)'
             'thunar: Send to your phone from Thunar'
             'firewalld: opened for phones automatically when it runs')
