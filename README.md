@@ -72,6 +72,13 @@ let phones through the firewall. Prefer KDE Connect after all? `install.sh --und
 When a new version is out, Vyoma tells you and updates itself with one click, your pairings kept
 (or run `install.sh --update`).
 
+**On Arch or CachyOS?** Build it as a package instead, so pacman keeps track of it:
+
+```sh
+git clone https://github.com/Prajwaljb/VyomaConnect && cd VyomaConnect/packaging/aur && makepkg -si
+/usr/share/vyoma/install.sh
+```
+
 ### 2. Your phone
 
 Download the APK from [Releases](https://github.com/Prajwaljb/VyomaConnect/releases/latest) and
