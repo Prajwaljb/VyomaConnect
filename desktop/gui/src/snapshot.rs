@@ -74,6 +74,16 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str, size: Option<(u32, 
             ]
         };
         crate::show_commands(&ui, &list);
+        ui.on_check_command(move |key, name, command| crate::command_warning(&key, &name, &command, &list, &|p| p != "backupp").into());
+        if scene == "commands-warn" {
+            ui.set_edit_key("".into());
+            ui.set_edit_name("Start the backup".into());
+            ui.set_edit_command("backupp --quiet".into());
+            ui.set_editing(true);
+            ui.set_notice("Deleted \u{201c}Turn the screens off\u{201d}".into());
+            ui.set_notice_action("Undo".into());
+            ui.set_notice_on(true);
+        }
         if scene == "commands-edit" {
             ui.set_edit_key("2".into());
             ui.set_edit_name("Empty the trash".into());

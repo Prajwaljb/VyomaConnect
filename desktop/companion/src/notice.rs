@@ -3,7 +3,7 @@
 pub async fn tell(icon: &str, title: &str, body: &str) {
     let sent = tokio::process::Command::new("notify-send")
         // --: a name starting with a dash isn't an option, which would lose the notice.
-        .args(["--app-name=Vyoma", &format!("--icon={icon}"), "--", title])
+        .args(["--app-name=Vyoma", "--hint=string:desktop-entry:vyoma", &format!("--icon={icon}"), "--", title])
         .arg(escape(body))
         .status()
         .await;

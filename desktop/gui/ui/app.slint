@@ -1507,6 +1507,9 @@ component CommandSheet inherits Rectangle {
     in-out property <string> command;
     in-out property <bool> fingerprint;
     in-out property <bool> every;
+    // What looks like a mistake (a program this PC doesn't have, sudo, a name used twice); saving
+    // still works, as the user may know better.
+    in property <string> warning;
     callback saved();
     callback removed();
     callback cancelled();
@@ -1566,6 +1569,28 @@ component CommandSheet inherits Rectangle {
                     text <=> root.command;
                     accepted => {
                         if root.ready { root.saved(); }
+                    }
+                }
+                if root.warning != "": HorizontalLayout {
+                    spacing: 8px;
+                    padding-top: -6px;
+                    VerticalLayout {
+                        alignment: start;
+                        padding-top: 3px;
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: Theme.orange;
+                        }
+                    }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.warning;
+                        color: Theme.muted;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                        min-height: self.preferred-height;
                     }
                 }
                 Rectangle {
@@ -1695,25 +1720,28 @@ component CommandSheet inherits Rectangle {
 component EmptyPage inherits Page {
     in property <bool> daemon-ok;
     callback search();
+    callback start();
     title: daemon-ok ? "No phones yet" : "Vyoma isn't running";
     glyph: @image-url("icons/phone.svg");
     Text {
         text: root.daemon-ok
             ? "Open Vyoma on your phone, on the same network as this PC. It shows up here."
-            : "The background service that talks to your phones has stopped. It starts again with your session.";
+            : "The part of Vyoma that talks to your phones has stopped. Start it, and your phones connect again.";
         color: Theme.muted;
         font-size: 15px;
         wrap: word-wrap;
         min-height: self.preferred-height;
         horizontal-alignment: center;
     }
-    if root.daemon-ok: HorizontalLayout {
+    HorizontalLayout {
         alignment: center;
         padding-top: 8px;
         PillButton {
-            text: "Search for phones";
+            text: root.daemon-ok ? "Search for phones" : "Start Vyoma";
             prominent: true;
-            clicked => { root.search(); }
+            clicked => {
+                if root.daemon-ok { root.search(); } else { root.start(); }
+            }
         }
     }
 }
@@ -2216,6 +2244,9 @@ export component MainWindow inherits Window {
     // A short outcome, in the glass bubble at the top while [notice-on] (the words stay while it leaves).
     in property <string> notice;
     in property <bool> notice-on;
+    // A button in the bubble ("Undo"), "" for none.
+    in property <string> notice-action;
+    callback notice-acted();
     in-out property <string> selected;
     in-out property <bool> confirm-unpair;
     in-out property <bool> confirm-clear;
@@ -2245,6 +2276,9 @@ export component MainWindow inherits Window {
     // key ("" for new), name, command line, fingerprint, every time.
     callback save-command(string, string, string, bool, bool);
     callback remove-command(string);
+    callback start-daemon();
+    // What looks wrong with a command being edited (key, name, command line), "" if nothing.
+    pure callback check-command(string, string, string) -> string;
     callback clear-activity();
     callback install();
     callback finish-setup();
@@ -2472,6 +2506,7 @@ export component MainWindow inherits Window {
         if ((root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands") || !root.daemon-ok) && !root.has-current: EmptyPage {
             daemon-ok: root.daemon-ok;
             search => { root.search(); }
+            start => { root.start-daemon(); }
         }
     }
 
@@ -2500,7 +2535,7 @@ export component MainWindow inherits Window {
     // The status bubble: glass that drops from the top with the outcome, as the phone's.
     Rectangle {
         property <length> area-x: root.setup ? 0px : root.side + 12px;
-        width: min(notice-text.preferred-width + 44px, root.width - self.area-x - 160px);
+        width: min(notice-text.preferred-width + 44px + (root.notice-action != "" ? 72px : 0px), root.width - self.area-x - 160px);
         height: max(44px, notice-text.preferred-height + 22px);
         x: self.area-x + (root.width - self.area-x - self.width) / 2;
         y: root.notice-on ? 18px : -self.height - 30px;
@@ -2513,15 +2548,37 @@ export component MainWindow inherits Window {
         drop-shadow-offset-x: Theme.fall-x * 8px;
         drop-shadow-offset-y: Theme.fall-y * 8px;
         drop-shadow-color: Theme.dark ? #00000080 : #1A2B4C26;
-        notice-text := Text {
-            width: parent.width - 44px;
-            text: root.notice;
-            color: Theme.text;
-            font-size: 14px;
-            font-weight: 500;
-            wrap: word-wrap;
-            min-height: self.preferred-height;
-            horizontal-alignment: center;
+        HorizontalLayout {
+            padding-left: 22px;
+            padding-right: root.notice-action != "" ? 8px : 22px;
+            spacing: 6px;
+            notice-text := Text {
+                text: root.notice;
+                color: Theme.text;
+                font-size: 14px;
+                font-weight: 500;
+                wrap: word-wrap;
+                min-height: self.preferred-height;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+            if root.notice-action != "": Rectangle {
+                width: act-text.preferred-width + 24px;
+                y: (parent.height - 32px) / 2;
+                height: 32px;
+                border-radius: 16px;
+                background: act.pressed ? Theme.accent.with-alpha(0.22) : act.has-hover ? Theme.accent.with-alpha(0.14) : transparent;
+                act-text := Text {
+                    text: root.notice-action;
+                    color: Theme.accent;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                act := TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.notice-acted(); }
+                }
+            }
         }
     }
 
@@ -2532,6 +2589,7 @@ export component MainWindow inherits Window {
         command <=> root.edit-command;
         fingerprint <=> root.edit-fingerprint;
         every <=> root.edit-every;
+        warning: root.check-command(root.edit-key, root.edit-name, root.edit-command);
         cancelled => {
             root.editing = false;
             keys.focus();

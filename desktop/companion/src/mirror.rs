@@ -782,15 +782,11 @@ pub fn window(args: &[String]) -> Result<()> {
         gst::PadProbeReturn::Drop
     });
 
-    // The window's title: the phone's name.
-    let mut tags = gst::TagList::new();
-    tags.get_mut().unwrap().add::<gst::tags::Title>(&title.as_str(), gst::TagMergeMode::Replace);
     let sink = pipeline.by_name("sink").context("no sink")?;
-    if let Some(sink_pad) = sink.static_pad("sink") {
-        let _ = sink_pad.send_event(gst::event::Tag::new(tags));
-    }
-
     pipeline.set_state(gst::State::Playing)?;
+    // GStreamer's window is "OpenGL renderer" with no app id: name it for Vyoma once it's up.
+    let named = format!("{title} · Vyoma");
+    std::thread::spawn(move || brand(&sink, &named));
     let bus = pipeline.bus().context("no bus")?;
     let mut result = Ok(());
     for msg in bus.iter_timed(gst::ClockTime::NONE) {
@@ -883,5 +879,60 @@ mod live {
     #[ignore]
     async fn reads_the_outputs_delay() {
         println!("output delay: {} ms", super::output_delay_ms().await);
+    }
+}
+
+/// Gives GStreamer's window Vyoma's identity: the title, and the app id (`WM_CLASS` "vyoma") that
+/// the desktop matches to vyoma.desktop, so the taskbar shows Vyoma's icon and groups it with
+/// Vyoma's own window. Waits for the window (it appears with the first frame), at most 15 s.
+fn brand(sink: &gst::Element, title: &str) {
+    use gstreamer_gl::prelude::*;
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, PropMode};
+    use x11rb::wrapper::ConnectionExt as _;
+    let started = Instant::now();
+    let xid = loop {
+        let handle = sink
+            .property::<Option<gstreamer_gl::GLContext>>("context")
+            .and_then(|c| c.window())
+            // SAFETY: a plain getter on a window we hold a reference to (no safe binding for it).
+            .map_or(0, |w| unsafe { gstreamer_gl::ffi::gst_gl_window_get_window_handle(w.as_ptr()) });
+        if handle != 0 {
+            break handle as u32;
+        }
+        if started.elapsed() > Duration::from_secs(15) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let set = || -> Result<()> {
+        let (conn, _) = x11rb::connect(None)?;
+        let atom = |name: &str| -> Result<u32> { Ok(conn.intern_atom(false, name.as_bytes())?.reply()?.atom) };
+        let (utf8, net_name, pid, desktop) = (atom("UTF8_STRING")?, atom("_NET_WM_NAME")?, atom("_NET_WM_PID")?, atom("_KDE_NET_WM_DESKTOP_FILE")?);
+        // GStreamer's own connection may not have sent the window to the server yet, and names it
+        // when it shows it: wait until it's on screen, then name it, and again if that was undone.
+        let mut named = 0;
+        while started.elapsed() < Duration::from_secs(15) && named < 3 {
+            std::thread::sleep(Duration::from_millis(100));
+            let Ok(Ok(attrs)) = conn.get_window_attributes(xid).map(|c| c.reply()) else { continue };
+            if attrs.map_state != x11rb::protocol::xproto::MapState::VIEWABLE {
+                continue;
+            }
+            let class = conn.get_property(false, xid, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 64)?.reply()?;
+            if class.value == b"vyoma\0vyoma\0" {
+                named += 1;
+                continue;
+            }
+            conn.change_property8(PropMode::REPLACE, xid, AtomEnum::WM_CLASS, AtomEnum::STRING, b"vyoma\0vyoma\0")?;
+            conn.change_property8(PropMode::REPLACE, xid, net_name, utf8, title.as_bytes())?;
+            conn.change_property8(PropMode::REPLACE, xid, AtomEnum::WM_NAME, utf8, title.as_bytes())?;
+            conn.change_property32(PropMode::REPLACE, xid, pid, AtomEnum::CARDINAL, &[std::process::id()])?;
+            conn.change_property8(PropMode::REPLACE, xid, desktop, utf8, b"vyoma")?;
+            conn.flush()?;
+        }
+        Ok(())
+    };
+    if let Err(e) = set() {
+        eprintln!("couldn't name the window: {e:#}");
     }
 }

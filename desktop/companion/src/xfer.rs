@@ -232,7 +232,7 @@ pub(crate) fn notify(phone_name: &str, path: &Path, count: Option<u64>) {
     let path = path.to_path_buf();
     tokio::spawn(async move {
         let out = tokio::process::Command::new("notify-send")
-            .args(["--app-name=Vyoma", "--icon=document-save", "--action=open=Open", "--action=folder=Show in folder", "--", "Received"])
+            .args(["--app-name=Vyoma", "--hint=string:desktop-entry:vyoma", "--icon=document-save", "--action=open=Open", "--action=folder=Show in folder", "--", "Received"])
             .arg(crate::notice::escape(&body))
             .output()
             .await;

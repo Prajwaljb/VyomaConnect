@@ -122,7 +122,11 @@ object Notifications {
                     )
                     addAction(0, "Stop camera", stop)
                 } else if (connected.isNotEmpty() && !mirror.on) {
-                    addAction(0, "Send clipboard", ClipboardActivity.pending(context))
+                    // Copies already go by themselves with background sync: no button needed for it.
+                    val clipSync = (context.applicationContext as? dev.vyoma.connect.VyomaApp)?.container?.clipboard?.syncState?.value
+                    if (clipSync != dev.vyoma.connect.platform.AndroidClipboard.SyncState.ON) {
+                        addAction(0, "Send clipboard", ClipboardActivity.pending(context))
+                    }
                     addAction(0, "Send files", ShareActivity.pickFilesIntent(context))
                 }
             }

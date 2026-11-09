@@ -389,7 +389,7 @@ pub async fn offer() {
         return;
     }
     let answer = tokio::process::Command::new("notify-send")
-        .args(["--app-name=Vyoma", "--icon=system-software-install", "--wait", "--action=install=Install", "--action=no=Not now", "--"])
+        .args(["--app-name=Vyoma", "--hint=string:desktop-entry:vyoma", "--icon=system-software-install", "--wait", "--action=install=Install", "--action=no=Not now", "--"])
         .arg("Vyoma needs a few things on this PC")
         .arg(crate::notice::escape(&format!("For: {}. Installing asks for your password once.", missing.summary())))
         .kill_on_drop(true)
