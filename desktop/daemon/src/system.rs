@@ -47,14 +47,36 @@ const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 /// The user's graphical session, as logind knows it: looked up on each use, never kept, as it
 /// changes under a running service (a new login while the last one is still closing; the service
 /// started before logind had moved the user's display over to the new one).
+///
+/// On GNOME the lock goes through GNOME's own screensaver interface instead: GNOME Shell picks its
+/// logind session once as it starts, and after a quick new login that can be the old one still
+/// closing, so logind's Lock to the current one went unheard (seen 2026-11-10).
 #[derive(Clone)]
 pub struct Session {
     conn: Connection,
+    gnome: Option<Connection>,
 }
+
+const SCREENSAVER: &str = "org.gnome.ScreenSaver";
+/// GNOME Shell's lock screen, which it makes only when GDM is the login screen (`canLock`).
+const SHIELD: &str = "org.gnome.Shell.ScreenShield";
+
+/// Why the PC can't lock, if it can't: GNOME without GDM (started from a text login, or another
+/// login screen) has no lock screen at all.
+pub async fn cannot_lock() -> Option<&'static str> {
+    if !vyoma_companion::desktop::is_gnome() {
+        return None;
+    }
+    let conn = Connection::session().await.ok()?;
+    let reply = conn.call_method(Some("org.freedesktop.DBus"), "/org/freedesktop/DBus", Some("org.freedesktop.DBus"), "NameHasOwner", &(SHIELD,)).await.ok()?;
+    (!reply.body().deserialize::<bool>().ok()?).then_some("GNOME locks the screen only when you sign in through its login screen (GDM), so locking from your phone waits for that.")
+}
+const SCREENSAVER_PATH: &str = "/org/gnome/ScreenSaver";
 
 impl Session {
     pub async fn find(system: Connection) -> Result<Self> {
-        let session = Self { conn: system };
+        let gnome = if vyoma_companion::desktop::is_gnome() { Connection::session().await.ok() } else { None };
+        let session = Self { conn: system, gnome };
         session.path().await?;
         Ok(session)
     }
@@ -71,10 +93,31 @@ impl Session {
     }
 
     pub async fn locked(&self) -> Result<bool> {
+        if let Some(conn) = &self.gnome {
+            if cannot_lock().await.is_some() {
+                return Ok(false);
+            }
+            return Ok(conn.call_method(Some(SCREENSAVER), SCREENSAVER_PATH, Some(SCREENSAVER), "GetActive", &()).await?.body().deserialize::<bool>()?);
+        }
         Ok(Self::get(&self.conn, self.path().await?.as_str(), "LockedHint").await?.try_into()?)
     }
 
     pub async fn set_locked(&self, lock: bool) -> Result<()> {
+        if let Some(conn) = &self.gnome {
+            if let Some(why) = cannot_lock().await {
+                anyhow::bail!("{why}");
+            }
+            if lock {
+                // It answers once the lock screen shows; the state goes out from the watch anyway.
+                let call = conn.call_method(Some(SCREENSAVER), SCREENSAVER_PATH, Some(SCREENSAVER), "Lock", &());
+                if let Ok(done) = tokio::time::timeout(Duration::from_secs(3), call).await {
+                    done.context("GNOME's Lock")?;
+                }
+            } else {
+                conn.call_method(Some(SCREENSAVER), SCREENSAVER_PATH, Some(SCREENSAVER), "SetActive", &(false,)).await.context("GNOME's unlock")?;
+            }
+            return Ok(());
+        }
         let method = if lock { "Lock" } else { "Unlock" };
         let path = self.path().await?;
         self.conn.call_method(Some(LOGIN), path.as_str(), Some(SESSION), method, &()).await.with_context(|| format!("logind {method}"))?;
@@ -83,6 +126,18 @@ impl Session {
 
     /// Each change of the lock, as it happens: any session's, kept if it's the display session now.
     pub async fn watch(&self, out: tokio::sync::mpsc::UnboundedSender<bool>) -> Result<()> {
+        if let Some(conn) = &self.gnome {
+            let rule = MatchRule::builder().msg_type(zbus::message::Type::Signal).interface(SCREENSAVER).member("ActiveChanged").path(SCREENSAVER_PATH).build()?;
+            let mut stream = MessageStream::for_match_rule(rule, conn, None).await?;
+            while let Some(Ok(msg)) = stream.next().await {
+                if let Ok(active) = msg.body().deserialize::<bool>()
+                    && out.send(active).is_err()
+                {
+                    break;
+                }
+            }
+            return Ok(());
+        }
         let rule = MatchRule::builder().msg_type(zbus::message::Type::Signal).sender(LOGIN).interface(PROPERTIES).member("PropertiesChanged").path_namespace("/org/freedesktop/login1/session").build()?;
         let mut stream = MessageStream::for_match_rule(rule, &self.conn, None).await?;
         while let Some(Ok(msg)) = stream.next().await {

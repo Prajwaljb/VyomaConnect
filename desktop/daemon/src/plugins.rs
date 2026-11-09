@@ -98,8 +98,14 @@ pub async fn on_packet(cx: Context<'_>, device: &mut DeviceView, p: &Value) -> V
             let Some(session) = cx.session else { return Vec::new() };
             if let Some(lock) = body["setLocked"].as_bool() {
                 // The new state goes out when logind reports it, to every device that follows it.
-                if let Err(e) = session.set_locked(lock).await {
-                    tracing::warn!("{}: {e:#}", device.name);
+                match session.set_locked(lock).await {
+                    Ok(()) => tracing::info!("{}: {} this PC", device.name, if lock { "locked" } else { "unlocked" }),
+                    Err(e) => {
+                        tracing::warn!("{}: {e:#}", device.name);
+                        // Said on the phone, where Lock was pressed (`reason`: the PC can't, not a switch).
+                        let why = format!("{e:#}");
+                        return vec![packet(vyoma_companion::permits::DENIED, json!({ "request": LOCK_REQUEST, "name": "Lock", "reason": why }))];
+                    }
                 }
             }
             if body["requestLocked"].as_bool() == Some(true)

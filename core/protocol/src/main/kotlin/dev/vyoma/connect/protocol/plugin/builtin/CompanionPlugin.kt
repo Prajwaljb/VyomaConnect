@@ -1232,12 +1232,14 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     val refused: SharedFlow<String> = _refused.asSharedFlow()
 
     /**
-     * The PC turned [DENIED]'s feature off for this phone: whatever was waiting on [request] gets
-     * the reason as its error; what has no waiter (a wake, a stopped stream) goes to [refused].
+     * The PC turned [DENIED]'s feature off for this phone, or can't do it (its own `reason`, e.g. a
+     * desktop that can't lock): whatever was waiting on [request] gets the reason as its error; what
+     * has no waiter (a wake, a stopped stream, a lock) goes to [refused].
      */
     private fun receiveDenied(packet: NetworkPacket) {
         val name = packet.string("name") ?: "That"
-        val why = "Turned off for this phone on the PC. Turn on \u201c$name\u201d on this phone's page in Vyoma's window there."
+        val why = packet.string("reason")
+            ?: "Turned off for this phone on the PC. Turn on \u201c$name\u201d on this phone's page in Vyoma's window there."
         val request = packet.string("request").orEmpty()
         val path = packet.string("path")
         val key = packet.string("key")
