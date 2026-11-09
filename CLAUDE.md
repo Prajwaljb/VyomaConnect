@@ -52,7 +52,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   bus as `dev.vyoma.Shell1` (client: `companion/src/shell.rs`): the clipboard (GNOME has no data-control protocol;
   `companion/src/clip.rs` picks it or wl-clipboard), the presenter dot (Cairo, drawn as presenter.rs draws it), the
   Overview steps and workspace switch, the screenshot (GNOME lets only its own parts capture silently; Spectacle on
-  Plasma), screen sizes, and the notification Reply dialog (GNOME has no inline reply; zenity on other such desktops).
+  Plasma), screen sizes, the notification Reply dialog (GNOME has no inline reply; zenity on other such desktops), and the volume/brightness pop-up for changes the phone makes (`ShowOsd`; GNOME shows it only for its own keys).
   Bump its `VERSION` with `shell::VERSION` on any change: a running older one stays until the next login. It
   answers only vyoma-desktop/vyoma-companion (the caller's /proc/<pid>/exe). `install.sh` copies it (packaged:
   /usr/share/gnome-shell/extensions), enables it with gsettings and turns GSConnect off (back on with `--undo`);

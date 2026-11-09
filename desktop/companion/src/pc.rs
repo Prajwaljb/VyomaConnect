@@ -237,7 +237,8 @@ async fn mutter_displays(conn: &Connection) -> Result<Vec<Value>> {
     Ok(out)
 }
 
-async fn set_mutter_brightness(conn: &Connection, id: &str, level: f64) -> Result<()> {
+/// Sets it and says which output it was ("eDP-1").
+async fn set_mutter_brightness(conn: &Connection, id: &str, level: f64) -> Result<String> {
     let (serial, lights) = mutter_backlights(conn).await?;
     for l in lights {
         let int = |k: &str| l.get(k).and_then(|v| i32::try_from(v).ok());
@@ -250,7 +251,7 @@ async fn set_mutter_brightness(conn: &Connection, id: &str, level: f64) -> Resul
         conn.call_method(Some(MUTTER), MUTTER_PATH, Some(MUTTER), "SetBacklight", &(serial, connector.as_str(), value.clamp(min, max)))
             .await
             .context("GNOME refused the brightness")?;
-        return Ok(());
+        return Ok(connector);
     }
     bail!("that display is gone")
 }
@@ -285,12 +286,18 @@ async fn set_brightness(display: &str, level: f64) -> Result<()> {
     if !display.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         bail!("bad display id");
     }
+    // GNOME shows no pop-up for these (Plasma's own service, below, does): ask its shell for one,
+    // on that monitor, so whoever is at the PC sees why it changed.
     if let Some(bus) = crate::ddc::bus_of(display) {
-        return crate::ddc::set_brightness(bus, level).await;
+        crate::ddc::set_brightness(bus, level).await?;
+        brightness_osd(level, crate::ddc::connector(bus).as_deref()).await;
+        return Ok(());
     }
     let conn = Connection::session().await.context("no session bus")?;
     if display.starts_with(MUTTER_ID) {
-        return set_mutter_brightness(&conn, display, level).await;
+        let connector = set_mutter_brightness(&conn, display, level).await?;
+        brightness_osd(level, Some(&connector)).await;
+        return Ok(());
     }
     let path = format!("{BRIGHTNESS_PATH}/{display}");
     let max: i32 = conn
@@ -306,6 +313,12 @@ async fn set_brightness(display: &str, level: f64) -> Result<()> {
         .await
         .context("Plasma refused the brightness")?;
     Ok(())
+}
+
+async fn brightness_osd(level: f64, connector: Option<&str>) {
+    if crate::desktop::is_gnome() {
+        let _ = crate::shell::show_osd("display-brightness-symbolic", level.clamp(0.0, 1.0), 1.0, connector).await;
+    }
 }
 
 async fn prop(conn: &Connection, path: &str, name: &str) -> Result<OwnedVariant> {

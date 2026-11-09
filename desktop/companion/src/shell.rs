@@ -32,7 +32,7 @@ const IFACE: &str = "dev.vyoma.Shell1";
 /// Calls into the shell are quick; a frozen shell mustn't hold anything up.
 const LIMIT: Duration = Duration::from_secs(2);
 /// The extension's `Version` this build expects; an older one runs until the next login.
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 /// The extension is running in this session.
 pub async fn available() -> bool {
@@ -106,6 +106,13 @@ pub async fn point(dx: f64, dy: f64) -> Result<()> {
 
 pub async fn hide_pointer() -> Result<()> {
     call("HidePointer", &()).await?;
+    Ok(())
+}
+
+/// GNOME's volume/brightness pop-up: `icon` a symbolic icon name, `level` of `max`, on the monitor
+/// at `connector` ("DP-1"), or every monitor when it's None.
+pub async fn show_osd(icon: &str, level: f64, max: f64, connector: Option<&str>) -> Result<()> {
+    call("ShowOsd", &(icon, level, max, connector.unwrap_or(""))).await?;
     Ok(())
 }
 

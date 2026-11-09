@@ -16,6 +16,8 @@ pub struct Monitor {
     pub bus: u32,
     /// Its model, as it names itself.
     pub label: String,
+    /// Its output as the desktop names it ("DP-2"), when ddcutil knows it.
+    pub connector: Option<String>,
 }
 
 const KEEP: Duration = Duration::from_secs(60);
@@ -49,6 +51,11 @@ pub async fn set_brightness(bus: u32, level: f64) -> Result<()> {
     Ok(())
 }
 
+/// The output the monitor on [bus] is plugged into, from the last look.
+pub fn connector(bus: u32) -> Option<String> {
+    FOUND.lock().unwrap().as_ref()?.1.iter().find(|m| m.bus == bus)?.connector.clone()
+}
+
 pub fn id(bus: u32) -> String {
     format!("ddc_{bus}")
 }
@@ -80,7 +87,9 @@ fn parse_detect(out: &str) -> Vec<Monitor> {
         let field = |name: &str| block.lines().find_map(|l| l.trim().strip_prefix(name).map(|v| v.trim().to_owned()));
         let Some(bus) = field("I2C bus:").and_then(|b| b.rsplit('-').next()?.parse().ok()) else { continue };
         let label = field("Monitor:").and_then(|m| m.split(':').nth(1).map(|s| s.trim().to_owned())).filter(|s| !s.is_empty()).unwrap_or_else(|| "Monitor".into());
-        found.push(Monitor { bus, label });
+        // "card1-DP-2": the card's part is the kernel's, the rest is what the desktop calls it.
+        let connector = field("DRM connector:").and_then(|c| c.split_once('-').map(|(_, rest)| rest.to_owned()));
+        found.push(Monitor { bus, label, connector });
     }
     found
 }
@@ -104,7 +113,10 @@ mod tests {
     #[test]
     fn reads_what_ddcutil_finds() {
         let out = "Invalid display\n   I2C bus:          /dev/i2c-10\n   DRM connector:    card1-eDP-1\n   Monitor:          AAA::\n\nDisplay 1\n   I2C bus:          /dev/i2c-12\n   DRM connector:    card1-DP-2\n   Monitor:          ACME:Big Screen 27:123\n\nDisplay 2\n   I2C bus:          /dev/i2c-13\n   Monitor:          ::\n";
-        assert_eq!(parse_detect(out), [Monitor { bus: 12, label: "Big Screen 27".into() }, Monitor { bus: 13, label: "Monitor".into() }]);
+        assert_eq!(parse_detect(out), [
+                Monitor { bus: 12, label: "Big Screen 27".into(), connector: Some("DP-2".into()) },
+                Monitor { bus: 13, label: "Monitor".into(), connector: None }
+            ]);
         assert_eq!(parse_vcp("VCP 10 C 50 100\n"), Some(0.5));
         assert_eq!(parse_vcp("VCP 10 ERR\n"), None);
         assert_eq!((bus_of(&id(12)), bus_of("ddc_x"), bus_of("mutter_eDP_1")), (Some(12), None, None));

@@ -21,7 +21,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const BUS = 'dev.vyoma.Shell';
 const PATH = '/dev/vyoma/Shell';
-const VERSION = 3;
+const VERSION = 4;
 
 const IFACE = `<node>
   <interface name="dev.vyoma.Shell1">
@@ -32,6 +32,9 @@ const IFACE = `<node>
     <method name="HidePointer"/>
     <method name="Step"><arg type="b" direction="in"/><arg type="s" direction="out"/></method>
     <method name="SwitchWorkspace"><arg type="b" direction="in"/></method>
+    <method name="ShowOsd">
+      <arg type="s" direction="in"/><arg type="d" direction="in"/><arg type="d" direction="in"/><arg type="s" direction="in"/>
+    </method>
     <method name="Screenshot"><arg type="ay" direction="out"/></method>
     <method name="Screens"><arg type="a(ii)" direction="out"/></method>
     <method name="AskReply">
@@ -201,6 +204,22 @@ export default class VyomaExtension extends Extension {
     }
 
     // Three fingers sideways: the next workspace that way, as GNOME's own swipe and shortcut go.
+    // GNOME's own volume/brightness pop-up for a change the phone made, as its keys show it: an icon
+    // name, the level and its top (above 1 for a boosted volume), on the monitor with that
+    // connector or on all of them when it's empty.
+    ShowOsdAsync([icon, level, maxLevel, connector], invocation) {
+        this._answer(invocation, async () => {
+            const gicon = Gio.Icon.new_for_string(icon);
+            const index = connector
+                ? global.backend.get_monitor_manager().get_monitor_for_connector(connector) : -1;
+            if (index >= 0)
+                Main.osdWindowManager.showOne(index, gicon, null, level, maxLevel);
+            else
+                Main.osdWindowManager.showAll(gicon, null, level, maxLevel);
+            return null;
+        });
+    }
+
     SwitchWorkspaceAsync([right], invocation) {
         this._answer(invocation, async () => {
             const current = global.workspace_manager.get_active_workspace();
