@@ -18,7 +18,7 @@ optdepends=('v4l2loopback-dkms: the phone as a webcam (CachyOS kernels already h
             'firewalld: opened for phones automatically when it runs')
 install=vyoma.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('f442872fc1250a9ca68ddeda2ccf1897cb25c582542e93914292c737ab2b91ee')
 
 prepare() {
     cd "VyomaConnect-$pkgver/desktop"
