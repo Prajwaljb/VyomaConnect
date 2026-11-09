@@ -40,9 +40,21 @@ pub fn update(phones: &[Phone]) {
     result("Dolphin", if installed("dolphin") && !phones.is_empty() { dolphin(&exe, &phones) } else { remove_file(&service_menu()) });
     result("Thunar", thunar(&exe, if installed("thunar") { &phones } else { &[] }));
     result("Nemo", nemo(&exe, if installed("nemo") { &phones } else { &[] }));
-    result("Nautilus", scripts(&data_home().join("nautilus/scripts"), &exe, if installed("nautilus") { &phones } else { &[] }));
+    // Nautilus: top-level items through its Python extension when that's installed, else a
+    // script each (in its Scripts submenu, which is all it offers apps without it).
+    let nautilus = installed("nautilus");
+    let python = nautilus && vyoma_companion::setup::nautilus_python();
+    result("Nautilus", nautilus_extension(&exe, if python { &phones } else { &[] }));
+    result("Nautilus", scripts(&data_home().join("nautilus/scripts"), &exe, if nautilus && !python { &phones } else { &[] }));
     result("Caja", scripts(&config_home().join("caja/scripts"), &exe, if installed("caja") { &phones } else { &[] }));
     tracing::info!("Send to menus: {} phone(s)", phones.len());
+}
+
+/// Which file managers (and Nautilus's Python extensions) there are, to rewrite the menus when it changes.
+pub fn installed() -> Vec<bool> {
+    let mut found: Vec<bool> = ["dolphin", "thunar", "nemo", "nautilus", "caja"].iter().map(|n| on_path(n)).collect();
+    found.push(vyoma_companion::setup::nautilus_python());
+    found
 }
 
 /// Takes every entry of ours out (`install.sh --undo`).
@@ -52,8 +64,62 @@ pub fn remove_all() {
     let _ = thunar(&exe, &[]);
     let _ = nemo(&exe, &[]);
     let _ = scripts(&data_home().join("nautilus/scripts"), &exe, &[]);
+    let _ = nautilus_extension(&exe, &[]);
     let _ = scripts(&config_home().join("caja/scripts"), &exe, &[]);
 }
+
+/// Nautilus's Python extension, and the phones it offers (read on each right-click, so a phone
+/// paired later shows without restarting Nautilus, which loads extensions only as it starts).
+fn nautilus_extension(exe: &Path, phones: &[&Phone]) -> Result<()> {
+    let dir = data_home().join("nautilus-python/extensions");
+    let list = dir.join("vyoma-phones.json");
+    let code = dir.join("vyoma_send.py");
+    if phones.is_empty() {
+        let _ = remove_file(&list);
+        let _ = remove_file(&code);
+        return Ok(());
+    }
+    let named: Vec<serde_json::Value> = phones.iter().map(|p| serde_json::json!({ "id": p.id, "name": p.name })).collect();
+    write_if_changed(&list, &serde_json::to_string(&named)?)?;
+    let exe = serde_json::to_string(&exe.to_string_lossy())?;
+    write_if_changed(&code, &NAUTILUS_PY.replace("@EXE@", &exe).replace("@SEND@", SEND_ARG))
+}
+
+const NAUTILUS_PY: &str = r#"# vyoma-send: "Send to <phone>" in Nautilus, written by Vyoma (vyoma-desktop); removed with it.
+import json
+import os
+import subprocess
+
+from gi.repository import GObject, Nautilus
+
+EXE = @EXE@
+PHONES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vyoma-phones.json")
+
+
+class VyomaSend(GObject.GObject, Nautilus.MenuProvider):
+    def get_file_items(self, *args):
+        files = args[-1]
+        paths = [f.get_location().get_path() for f in files]
+        if not paths or None in paths:
+            return []
+        try:
+            with open(PHONES) as f:
+                phones = json.load(f)
+        except (OSError, ValueError):
+            return []
+        items = []
+        for phone in phones:
+            item = Nautilus.MenuItem(name="Vyoma::send-" + phone["id"], label="Send to " + phone["name"], icon="vyoma")
+            item.connect("activate", self._send, phone["id"], paths)
+            items.append(item)
+        return items
+
+    def get_background_items(self, *args):
+        return []
+
+    def _send(self, _item, phone, paths):
+        subprocess.Popen([EXE, "@SEND@", phone, *paths], start_new_session=True)
+"#;
 
 /// The menus' side: `--send <id> [paths]`. Nautilus and Caja give their scripts the selection in
 /// the environment, as full paths, which beats the bare names they pass as arguments.

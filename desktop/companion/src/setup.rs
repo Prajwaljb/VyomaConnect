@@ -41,6 +41,8 @@ enum Probe {
     Module(&'static str),
     /// GVfs's SFTP, which GTK file managers browse the phone through (Dolphin uses the mount).
     GvfsSftp,
+    /// Nautilus's Python extensions, for "Send to" in its menu itself rather than its Scripts.
+    NautilusPython,
 }
 
 struct Need {
@@ -67,8 +69,16 @@ impl Need {
             Probe::Gst(plugin) => quiet("gst-inspect-1.0", &[plugin]),
             Probe::Module(module) => quiet("modinfo", &["-F", "filename", module]),
             Probe::GvfsSftp => !gtk_file_manager() || gvfs_sftp(),
+            Probe::NautilusPython => !on_path("nautilus") || nautilus_python(),
         }
     }
+}
+
+/// Nautilus can load Python extensions (python-nautilus), wherever the distro puts its libraries.
+pub fn nautilus_python() -> bool {
+    ["/usr/lib", "/usr/lib64", "/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu"]
+        .iter()
+        .any(|d| std::path::Path::new(d).join("nautilus/extensions-4/libnautilus-python.so").exists())
 }
 
 const fn need(feature: &'static str, probe: Probe, pacman: &'static str, apt: &'static str, dnf: &'static str) -> Need {
@@ -91,6 +101,7 @@ const NEEDS: &[Need] = &[
     need("wallpaper and camera", Probe::Tool("ffmpeg"), "ffmpeg", "ffmpeg", "ffmpeg-free"),
     need("phone files", Probe::Tool("sshfs"), "sshfs", "sshfs", "fuse-sshfs"),
     need("phone files", Probe::GvfsSftp, "gvfs", "gvfs-backends", "gvfs"),
+    need("Send to in Files", Probe::NautilusPython, "python-nautilus", "python3-nautilus", "nautilus-python"),
     need("PC screen on the phone", Probe::Tool("gst-launch-1.0"), "gstreamer", "gstreamer1.0-tools", "gstreamer1"),
     need("PC screen on the phone", Probe::Gst("pipewire"), "gst-plugin-pipewire", "gstreamer1.0-pipewire", "pipewire-gstreamer"),
     need("PC screen on the phone", Probe::Gst("coreelements"), "gstreamer", "gstreamer1.0-tools", "gstreamer1"),

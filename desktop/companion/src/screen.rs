@@ -652,8 +652,10 @@ fn opts<const N: usize>(entries: [(&'static str, Variant<'static>); N]) -> HashM
     entries.into_iter().collect()
 }
 
+/// Its own: the daemon's touchpad (input.rs) keeps "remotedesktop-token" for a session with no
+/// screen, and GNOME restoring that one here shared none.
 fn remote_token_path() -> std::path::PathBuf {
-    crate::identity::dir().join("remotedesktop-token")
+    crate::identity::dir().join("screen-control-token")
 }
 
 fn pointer_token_path() -> std::path::PathBuf {
