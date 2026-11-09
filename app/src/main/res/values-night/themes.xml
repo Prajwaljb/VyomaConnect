@@ -6,6 +6,8 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowSplashScreenBackground">@color/canvas</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <!-- The icon's white orbs sit on its sky, as on the home screen. -->
+        <item name="android:windowSplashScreenIconBackgroundColor">#2A8CF2</item>
     </style>
     <color name="canvas">#0E0F11</color>
 </resources>

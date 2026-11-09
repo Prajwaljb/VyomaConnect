@@ -17,7 +17,7 @@ as_root() {
 
 if [ "${1:-}" = "--undo" ]; then
     systemctl --user disable --now vyoma-desktop 2>/dev/null || true
-    rm -f "$autostart" "$activation" "$data/applications/vyoma.desktop"
+    rm -f "$autostart" "$activation" "$data/applications/vyoma.desktop" "$data/icons/hicolor/scalable/apps/vyoma.svg"
     [ -f "$config/systemd/user/vyoma-companion.service" ] && systemctl --user enable --now vyoma-companion
     (setsid kdeconnectd >/dev/null 2>&1 &)
     echo "KDE Connect is back. Vyoma's desktop app keeps its folder ($config/vyoma-desktop) until you remove it."
@@ -43,6 +43,7 @@ install -Dm755 "$here/target/release/vyoma-desktop" "$HOME/.local/bin/vyoma-desk
 install -Dm755 "$here/../gui/target/release/vyoma" "$HOME/.local/bin/vyoma"
 mkdir -p "$data/applications"
 sed "s|@BIN@|$HOME/.local/bin/vyoma|" "$here/dist/vyoma.desktop" >"$data/applications/vyoma.desktop"
+install -Dm644 "$here/dist/vyoma.svg" "$data/icons/hicolor/scalable/apps/vyoma.svg"
 "$HOME/.local/bin/vyoma-desktop" --setup
 
 # KDE Connect's ports, as its own packages open them.

@@ -2206,6 +2206,7 @@ component Dialog inherits Rectangle {
 
 export component MainWindow inherits Window {
     title: "Vyoma";
+    icon: @image-url("icons/vyoma.svg");
     preferred-width: 1040px;
     preferred-height: 720px;
     min-width: 780px;
@@ -2347,13 +2348,25 @@ export component MainWindow inherits Window {
             padding: 10px;
             padding-top: 22px;
             spacing: 2px;
-            Text {
-                text: "Vyoma";
-                color: Theme.text;
-                font-size: 22px;
-                font-weight: 700;
-                letter-spacing: -0.5px;
-                x: 12px;
+            // The app's mark beside its name, as on the phone's home screen.
+            HorizontalLayout {
+                padding-left: 12px;
+                spacing: 10px;
+                alignment: start;
+                Image {
+                    source: @image-url("icons/vyoma.svg");
+                    width: 28px;
+                    height: 28px;
+                    y: (parent.height - self.height) / 2;
+                }
+                Text {
+                    text: "Vyoma";
+                    color: Theme.text;
+                    font-size: 22px;
+                    font-weight: 700;
+                    letter-spacing: -0.5px;
+                    vertical-alignment: center;
+                }
             }
             Rectangle { height: 12px; }
             if root.phones.length > 0: SectionLabel {

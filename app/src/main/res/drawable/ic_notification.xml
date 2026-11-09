@@ -1,7 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Vyoma's icon (desktop/icon/gen.py makes every size from one geometry). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp"
     android:viewportWidth="24" android:viewportHeight="24">
-    <path android:pathData="M12,12m-9,0a9,3.6 0,1 1,18 0a9,3.6 0,1 1,-18 0"
-        android:strokeWidth="1.6" android:fillColor="#00000000" android:strokeColor="#FFFFFF" />
-    <path android:pathData="M12,12m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" android:fillColor="#FFFFFF" />
+    <path android:pathData="M21.56,8.205 A10.286,10.286 0 1 1 16.773,2.889" android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="2.057"/>
+    <path android:pathData="M5.829,12 a6.171,6.171 0 1 0 12.343,0 a6.171,6.171 0 1 0 -12.343,0 Z" android:fillColor="#FFFFFFFF"/>
+    <path android:pathData="M17.175,5.118 a2.469,2.469 0 1 0 4.937,0 a2.469,2.469 0 1 0 -4.937,0 Z" android:fillColor="#FFFFFFFF"/>
 </vector>
