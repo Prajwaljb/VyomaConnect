@@ -71,6 +71,8 @@
     const ZOOM = 1.12, DPR = Math.min(window.devicePixelRatio || 1, 2);
     let W = 0, H = 0, D = 0, x = 0, y = 0, vx = 0, vy = 0, tx = 0, ty = 0;
     let held = false, gx = 0, gy = 0, running = false, placed = false, moved = false;
+    // It floats in: a small drop rising from the sand that swells to full size over the word.
+    let restX = 0, restY = 0, entering = !reduced, sc = reduced ? 1 : 0.22, vs = 0;
     let src = null, sw = 0, sh = 0, table = null, L = 0, out = null, build = 0;
 
     // Where each lens pixel looks, in device px from the lens centre, and how much of it is inside.
@@ -168,13 +170,17 @@
 
     function measure() {
       W = hero.clientWidth; H = hero.clientHeight; D = lens.offsetWidth;
-      if (!placed) {
+      if (!placed || entering) {
         const range = document.createRange();
         range.selectNodeContents($(".word", scene));
         const r = range.getBoundingClientRect(), h = hero.getBoundingClientRect();
-        x = r.left - h.left - D * 0.12;
-        y = r.top - h.top + r.height / 2 - D / 2;
-        placed = true;
+        restX = Math.min(Math.max(r.left - h.left - D * 0.12, 0), W - D);
+        restY = Math.min(Math.max(r.top - h.top + r.height / 2 - D / 2, 0), H - D);
+        if (!placed) {
+          x = restX; y = restY;
+          if (entering) { x = restX + Math.min(W * 0.22, D * 1.4); y = Math.min(restY + H * 0.34, H - D); }
+          placed = true;
+        }
       }
       x = Math.min(Math.max(x, 0), W - D);
       y = Math.min(Math.max(y, 0), H - D);
@@ -185,17 +191,29 @@
 
     function draw() {
       const s = Math.hypot(vx, vy), k = Math.min(s / 45, 1) * 0.1, a = Math.atan2(vy, vx);
-      lens.style.transform = `translate(${x}px, ${y}px) rotate(${a}rad) scale(${1 + k}, ${1 - k * 0.7}) rotate(${-a}rad)`;
+      lens.style.transform = `translate(${x}px, ${y}px) rotate(${a}rad) scale(${sc * (1 + k)}, ${sc * (1 - k * 0.7)}) rotate(${-a}rad)`;
+      lens.style.opacity = Math.min(Math.max((sc - 0.22) / 0.4, 0), 1);
       // The sun is the light: the rim is brightest where it faces it.
-      const sc = Math.max(W / 1600, H / 1000);
-      const sx = (W - 1600 * sc) / 2 + 930 * sc, sy = (H - 1000 * sc) / 2 + 500 * sc;
+      const fit = Math.max(W / 1600, H / 1000);
+      const sx = (W - 1600 * fit) / 2 + 930 * fit, sy = (H - 1000 * fit) / 2 + 500 * fit;
       const deg = Math.atan2(sx - (x + D / 2), -(sy - (y + D / 2))) * 180 / Math.PI;
       lens.style.setProperty("--la", deg + "deg");
       paint();
     }
 
     function step() {
-      if (held) {
+      // Swelling to full size wobbles out like a drop (underdamped), held or not.
+      vs = (vs + (1 - sc) * 0.035) * 0.8;
+      sc += vs;
+      if (entering && !held) {
+        vx = (vx + (restX - x) * 0.014) * 0.85;
+        vy = (vy + (restY - y) * 0.014) * 0.85;
+        x += vx; y += vy;
+        if (Math.hypot(restX - x, restY - y) < 0.3 && Math.hypot(vx, vy) < 0.05 && Math.abs(1 - sc) < 0.002) {
+          entering = false;
+          if (!moved) hint.classList.remove("gone");
+        }
+      } else if (held) {
         const nx = x + (tx - x) * 0.32, ny = y + (ty - y) * 0.32;
         vx = nx - x; vy = ny - y; x = nx; y = ny;
       } else {
@@ -206,13 +224,15 @@
         if (y < 0) { y = 0; vy = -vy * 0.6; }
         if (y > H - D) { y = H - D; vy = -vy * 0.6; }
       }
-      if (held || Math.hypot(vx, vy) > 0.04) { draw(); requestAnimationFrame(step); }
-      else { vx = vy = 0; draw(); running = false; }
+      const settling = Math.abs(1 - sc) > 0.002 || Math.abs(vs) > 0.001;
+      if (held || entering || settling || Math.hypot(vx, vy) > 0.04) { draw(); requestAnimationFrame(step); }
+      else { vx = vy = 0; sc = 1; vs = 0; draw(); running = false; }
     }
     const run = () => { if (!running) { running = true; requestAnimationFrame(step); } };
 
     lens.addEventListener("pointerdown", e => {
       held = true;
+      entering = false;
       lens.classList.add("held");
       lens.setPointerCapture(e.pointerId);
       const h = hero.getBoundingClientRect();
@@ -244,7 +264,9 @@
       resizeTimer = setTimeout(() => { lastW = hero.clientWidth; measure(); }, 150);
     });
     lastW = hero.clientWidth;
+    if (entering) hint.classList.add("gone");
     measure();
+    if (entering) setTimeout(run, 450);
   }
 
   // ---------- Nav: clear over the dunes, refracting where the browser can ----------
