@@ -171,7 +171,11 @@ async fn has_owner(conn: &Connection, name: &str) -> bool {
  */
 pub async fn wake() -> Result<()> {
     let session = Connection::session().await.context("no session bus")?;
-    if has_owner(&session, MUTTER).await {
+    if crate::x11::active() {
+        if let Err(e) = crate::x11::wake_screens() {
+            warn!("couldn't turn the displays on (X11): {e:#}");
+        }
+    } else if has_owner(&session, MUTTER).await {
         // GNOME: power-save mode 0 is "on".
         let on = zbus::Variant::from(0i32);
         if let Err(e) = session.call_method(Some(MUTTER), MUTTER_PATH, Some("org.freedesktop.DBus.Properties"), "Set", &(MUTTER, "PowerSaveMode", on)).await {

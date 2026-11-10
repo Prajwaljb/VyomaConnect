@@ -38,29 +38,74 @@ pub fn signature() -> Option<(PathBuf, Option<std::time::SystemTime>, Option<std
     let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
     // GNOME's settings (read by [current], light or dark) name the picture, which says it all; its
     // settings file changes with every setting, so its time says nothing.
-    if crate::desktop::is_gnome() {
+    if crate::desktop::is_gnome() || other_desktop().is_some() {
         return Some((path.clone(), mtime(&path), None));
     }
     let config = Path::new(&home).join(".config/plasma-org.kde.plasma.desktop-appletsrc");
     Some((path.clone(), mtime(&path), mtime(&config)))
 }
 
-/// The image the desktop shows: GNOME's background (its dark one in dark mode), else Plasma's.
+/// The desktops beside GNOME and Plasma that keep their own wallpaper setting.
+#[derive(Clone, Copy)]
+enum Other {
+    Cinnamon,
+    Mate,
+    Xfce,
+}
+
+fn other_desktop() -> Option<Other> {
+    let desk = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_lowercase();
+    if desk.contains("cinnamon") {
+        Some(Other::Cinnamon)
+    } else if desk.contains("mate") {
+        Some(Other::Mate)
+    } else if desk.contains("xfce") {
+        Some(Other::Xfce)
+    } else {
+        None
+    }
+}
+
+/// The image the desktop shows: GNOME's background (its dark one in dark mode), Cinnamon's, MATE's
+/// or Xfce's, else Plasma's.
 fn current() -> Option<PathBuf> {
+    match other_desktop() {
+        Some(Other::Cinnamon) => return from_uri(&gsetting("org.cinnamon.desktop.background", "picture-uri")?),
+        Some(Other::Mate) => return resolve(Path::new(&gsetting("org.mate.background", "picture-filename")?)),
+        Some(Other::Xfce) => return xfce(),
+        None => {}
+    }
     if crate::desktop::is_gnome() {
         return gnome();
     }
     plasma()
 }
 
+fn gsetting(schema: &str, key: &str) -> Option<String> {
+    let out = std::process::Command::new("gsettings").args(["get", schema, key]).output().ok()?;
+    let v = String::from_utf8_lossy(&out.stdout).trim().trim_matches('\'').to_owned();
+    (out.status.success() && !v.is_empty()).then_some(v)
+}
+
+/// A `file://` URI (or a plain path) as an image file.
+fn from_uri(uri: &str) -> Option<PathBuf> {
+    resolve(&PathBuf::from(unescape(uri.strip_prefix("file://").unwrap_or(uri))))
+}
+
+/// Xfce's: the first monitor's first workspace's `last-image` in xfconf.
+fn xfce() -> Option<PathBuf> {
+    let list = std::process::Command::new("xfconf-query").args(["-c", "xfce4-desktop", "-l"]).output().ok()?;
+    let mut props: Vec<String> = String::from_utf8_lossy(&list.stdout).lines().filter(|l| l.ends_with("/last-image")).map(str::to_owned).collect();
+    props.sort_by_key(|p| (!p.contains("workspace0"), p.clone()));
+    let prop = props.first()?;
+    let out = std::process::Command::new("xfconf-query").args(["-c", "xfce4-desktop", "-p", prop]).output().ok()?;
+    resolve(Path::new(String::from_utf8_lossy(&out.stdout).trim()))
+}
+
 /// GNOME's background from its settings. A slideshow (an XML file of images, which GNOME's own
 /// day-and-night ones are) gives its first image.
 fn gnome() -> Option<PathBuf> {
-    let get = |schema: &str, key: &str| {
-        let out = std::process::Command::new("gsettings").args(["get", schema, key]).output().ok()?;
-        let v = String::from_utf8_lossy(&out.stdout).trim().trim_matches('\'').to_owned();
-        (out.status.success() && !v.is_empty()).then_some(v)
-    };
+    let get = gsetting;
     let dark = get("org.gnome.desktop.interface", "color-scheme").is_some_and(|v| v == "prefer-dark");
     let uri = (if dark { get("org.gnome.desktop.background", "picture-uri-dark") } else { None }).or_else(|| get("org.gnome.desktop.background", "picture-uri"))?;
     let path = PathBuf::from(unescape(uri.strip_prefix("file://").unwrap_or(&uri)));

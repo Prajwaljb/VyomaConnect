@@ -26,6 +26,7 @@ mod hfp;
 mod phonefiles;
 mod places;
 mod presenter;
+mod presenter_x11;
 mod share;
 mod system;
 mod telephony;

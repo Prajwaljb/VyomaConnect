@@ -31,7 +31,7 @@ zbus = { version = "6", default-features = false, features = ["tokio", "service"
 gstreamer = { version = "0.25", features = ["v1_22"] }
 gstreamer-video = { version = "0.25", features = ["v1_22"] }
 gstreamer-gl = { version = "0.25", features = ["v1_22"] }
-x11rb = "0.13"
+x11rb = { version = "0.13", features = ["xtest", "xfixes", "randr", "shape", "dpms"] }
 
 [profile.release]
 lto = "thin"

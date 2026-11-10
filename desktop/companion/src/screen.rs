@@ -60,18 +60,32 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, f
     // VYOMA_SCREEN_TEST=1 casts a moving test pattern instead, with no portal: for checking the
     // phone's viewer (and screenshotting it) without anything private on the screen.
     let test = std::env::var_os("VYOMA_SCREEN_TEST").is_some();
-    let cast = match if test { Ok(None) } else { Cast::start().await.map(Some) } {
-        Ok(c) => c,
+    // X11 sessions have no ScreenCast portal: the X server's picture of the primary monitor instead,
+    // with the pointer driven through XTEST (no dialog: X11 lets any app do both).
+    let x11 = !test && crate::x11::active();
+    let prepared = if x11 {
+        x11_cast().map(|(source, control, size)| (None, Some(source), control, Some(size)))
+    } else if test {
+        Ok((None, None, None, None))
+    } else {
+        Cast::start().await.map(|c| {
+            let control = c.control.clone().zip(c.size).map(|(session, size)| Pointer { via: Via::Portal { conn: c.conn.clone(), session, node: c.node }, size });
+            let size = c.size;
+            (Some(c), None, control, size)
+        })
+    };
+    let (cast, x11_source, control, size) = match prepared {
+        Ok(p) => p,
         Err(e) => {
             sender.send(&link::packet("vyoma.screen", json!({ "error": format!("{e:#}") }))).await?;
             return Err(e);
         }
     };
-    let (w, h) = cast.as_ref().and_then(|c| c.size).map(fit).unwrap_or((MAX_WIDTH, MAX_WIDTH * 9 / 16));
-    let control = cast.as_ref().and_then(|c| Some(Pointer { conn: c.conn.clone(), session: c.control.clone()?, node: c.node, size: c.size? }));
-    let started = match cast {
-        Some(Cast { conn, node, fd, .. }) => encoder(&format!("pipewiresrc fd=0 path={node} do-timestamp=true keepalive-time=1000"), Some(fd), w, h, fps).map(|g| (Some(conn), g)),
-        None => encoder(&format!("videotestsrc is-live=true pattern=smpte horizontal-speed=4 ! capsfilter caps=video/x-raw,width={w},height={h},framerate={fps}/1"), None, w, h, fps).map(|g| (None, g)),
+    let (w, h) = size.map(fit).unwrap_or((MAX_WIDTH, MAX_WIDTH * 9 / 16));
+    let started = match (cast, x11_source) {
+        (Some(Cast { conn, node, fd, .. }), _) => encoder(&format!("pipewiresrc fd=0 path={node} do-timestamp=true keepalive-time=1000"), Some(fd), w, h, fps).map(|g| (Some(conn), g)),
+        (None, Some(source)) => encoder(&format!("{source} ! capsfilter caps=video/x-raw,framerate={fps}/1"), None, w, h, fps).map(|g| (None, g)),
+        (None, None) => encoder(&format!("videotestsrc is-live=true pattern=smpte horizontal-speed=4 ! capsfilter caps=video/x-raw,width={w},height={h},framerate={fps}/1"), None, w, h, fps).map(|g| (None, g)),
     };
     // The viewer is waiting: say why, or it only finds out when it gives up.
     let (conn, mut gst) = match started {
@@ -163,6 +177,18 @@ async fn stamp(mut encoded: impl AsyncRead + Unpin, mut out: impl AsyncWrite + U
 }
 
 /// Scales to fit [MAX_WIDTH] keeping the shape; even sizes, as H.264 wants.
+/// On X11: the primary monitor as a GStreamer source, the pointer on it, and its size.
+fn x11_cast() -> Result<(String, Option<Pointer>, (i32, i32))> {
+    let (x, y, w, h) = crate::x11::primary_monitor()?;
+    // ximagesrc's end corner is inclusive; damage tracking costs more than it saves at these rates.
+    let source = format!("ximagesrc use-damage=false show-pointer=true startx={x} starty={y} endx={} endy={}", x + w - 1, y + h - 1);
+    let control = crate::x11::Input::open().map(|input| Pointer { via: Via::X11 { input, origin: (x, y) }, size: (w, h) });
+    if let Err(e) = &control {
+        warn!("no remote control on X11 ({e:#}); watching only");
+    }
+    Ok((source, control.ok(), (w, h)))
+}
+
 fn fit((w, h): (i32, i32)) -> (i32, i32) {
     let (w, h) = if w > MAX_WIDTH { (MAX_WIDTH, (h as i64 * MAX_WIDTH as i64 / w as i64) as i32) } else { (w, h) };
     (w & !1, h & !1)
@@ -203,10 +229,15 @@ fn encoder(source: &str, fd: Option<OwnedFd>, w: i32, h: i32, fps: u32) -> Resul
 /// a long press), "down" / "move" / "up" (a drag with the left button), "scroll" (dx, dy in
 /// pixels of smooth scrolling) and "scrollend".
 pub struct Pointer {
-    conn: Connection,
-    session: OwnedObjectPath,
-    node: u32,
+    via: Via,
     size: (i32, i32),
+}
+
+/// The portal's remote-desktop session, or the X server (X11 sessions), with where the cast
+/// monitor's top-left sits on the X screen.
+enum Via {
+    Portal { conn: Connection, session: OwnedObjectPath, node: u32 },
+    X11 { input: crate::x11::Input, origin: (i32, i32) },
 }
 
 impl Pointer {
@@ -248,8 +279,17 @@ impl Pointer {
     /// concurrently, so a release sent straight after its press could overtake it, be dropped, and
     /// leave the key held and repeating (letters repeated, 2026-11-04).
     async fn call<B: serde::Serialize + DynamicType>(&self, method: &str, body: &B) -> Result<()> {
-        self.conn.call_method(Some(PORTAL), PORTAL_PATH, Some(REMOTE), method, body).await?;
+        let Via::Portal { conn, .. } = &self.via else { bail!("not a portal session") };
+        conn.call_method(Some(PORTAL), PORTAL_PATH, Some(REMOTE), method, body).await?;
         Ok(())
+    }
+
+    /// The portal's session, for its calls.
+    fn session(&self) -> Result<&OwnedObjectPath> {
+        match &self.via {
+            Via::Portal { session, .. } => Ok(session),
+            Via::X11 { .. } => bail!("not a portal session"),
+        }
     }
 
     /// Moves and scrolls don't wait (each would cost a round trip through the portal and KWin):
@@ -260,7 +300,8 @@ impl Pointer {
             .interface(REMOTE)
             .with_flags(zbus::message::Flags::NO_REPLY_EXPECTED)
             .build(body)?;
-        self.conn.send(&msg).await?;
+        let Via::Portal { conn, .. } = &self.via else { bail!("not a portal session") };
+        conn.send(&msg).await?;
         Ok(())
     }
 
@@ -268,13 +309,21 @@ impl Pointer {
     async fn to(&self, i: &serde_json::Value, wait: bool) -> Result<()> {
         let x = i["x"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0) * self.size.0 as f64;
         let y = i["y"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0) * self.size.1 as f64;
-        let body = (&self.session, opts([]), self.node, x, y);
-        if wait { self.call("NotifyPointerMotionAbsolute", &body).await } else { self.call_fast("NotifyPointerMotionAbsolute", &body).await }
+        match &self.via {
+            Via::X11 { input, origin } => input.absolute(origin.0 as f64 + x, origin.1 as f64 + y),
+            Via::Portal { session, node, .. } => {
+                let body = (session, opts([]), *node, x, y);
+                if wait { self.call("NotifyPointerMotionAbsolute", &body).await } else { self.call_fast("NotifyPointerMotionAbsolute", &body).await }
+            }
+        }
     }
 
     /// One key, by its evdev code: real key presses, which the desktop handles like a keyboard's.
     async fn key(&self, code: i32, down: bool) -> Result<()> {
-        self.call("NotifyKeyboardKeycode", &(&self.session, opts([]), code, down as u32)).await
+        if let Via::X11 { input, .. } = &self.via {
+            return input.key(code, down);
+        }
+        self.call("NotifyKeyboardKeycode", &(self.session()?, opts([]), code, down as u32)).await
     }
 
     async fn tap(&self, code: i32) -> Result<()> {
@@ -328,27 +377,44 @@ impl Pointer {
     }
 
     pub async fn button(&self, button: i32, down: bool) -> Result<()> {
-        self.call("NotifyPointerButton", &(&self.session, opts([]), button, down as u32)).await
+        if let Via::X11 { input, .. } = &self.via {
+            return input.button(button, down);
+        }
+        self.call("NotifyPointerButton", &(self.session()?, opts([]), button, down as u32)).await
     }
 
     /// The touchpad's moves (pointer.rs): by a distance, not to a place.
     pub async fn relative(&self, dx: f64, dy: f64) -> Result<()> {
-        self.call_fast("NotifyPointerMotion", &(&self.session, opts([]), dx, dy)).await
+        if let Via::X11 { input, .. } = &self.via {
+            return input.relative(dx, dy);
+        }
+        self.call_fast("NotifyPointerMotion", &(self.session()?, opts([]), dx, dy)).await
     }
 
+    /// Smooth scrolling (positive: down, right); X11 always reads it that way, the portal per desktop.
     pub async fn axis(&self, dx: f64, dy: f64) -> Result<()> {
+        if let Via::X11 { input, .. } = &self.via {
+            return input.scroll(dx, dy);
+        }
         let sign = crate::desktop::scroll_sign();
-        self.call_fast("NotifyPointerAxis", &(&self.session, opts([]), dx * sign, dy * sign)).await
+        self.call_fast("NotifyPointerAxis", &(self.session()?, opts([]), dx * sign, dy * sign)).await
     }
 
     /// The fingers lifted after a scroll (see [crate::desktop::scroll_needs_finish]).
     pub async fn axis_end(&self) -> Result<()> {
-        self.call("NotifyPointerAxis", &(&self.session, opts([("finish", Variant::Bool(true))]), 0.0f64, 0.0f64)).await
+        if let Via::X11 { input, .. } = &self.via {
+            input.scroll_end();
+            return Ok(());
+        }
+        self.call("NotifyPointerAxis", &(self.session()?, opts([("finish", Variant::Bool(true))]), 0.0f64, 0.0f64)).await
     }
 
-    /// Returns once the portal has dealt with the moves before it.
+    /// Returns once the portal has dealt with the moves before it (X11's are done when sent).
     pub async fn settle(&self) -> Result<()> {
-        self.call("NotifyPointerMotion", &(&self.session, opts([]), 0.0f64, 0.0f64)).await
+        if let Via::X11 { .. } = &self.via {
+            return Ok(());
+        }
+        self.call("NotifyPointerMotion", &(self.session()?, opts([]), 0.0f64, 0.0f64)).await
     }
 
     async fn perform(&self, i: &serde_json::Value) -> Result<()> {
@@ -370,9 +436,7 @@ impl Pointer {
             }
             "scroll" => {
                 self.to(i, true).await?;
-                let sign = crate::desktop::scroll_sign();
-                let (dx, dy) = (i["dx"].as_f64().unwrap_or(0.0) * sign, i["dy"].as_f64().unwrap_or(0.0) * sign);
-                self.call_fast("NotifyPointerAxis", &(&self.session, opts([]), dx, dy)).await
+                self.axis(i["dx"].as_f64().unwrap_or(0.0), i["dy"].as_f64().unwrap_or(0.0)).await
             }
             "text" => {
                 let text: String = i["text"].as_str().unwrap_or("").chars().take(4096).collect();
@@ -395,7 +459,7 @@ impl Pointer {
                     .collect();
                 self.tap_with(&mods, code).await
             }
-            "scrollend" => self.call("NotifyPointerAxis", &(&self.session, opts([("finish", Variant::Bool(true))]), 0.0f64, 0.0f64)).await,
+            "scrollend" => self.axis_end().await,
             _ => Ok(()),
         }
     }
@@ -486,6 +550,9 @@ struct Cast {
 
 /// A session for the pointer alone, no screen: Plasma asks once, then its own token reopens it.
 pub async fn pointer_session() -> Result<Pointer> {
+    if crate::x11::active() {
+        return Ok(Pointer { via: Via::X11 { input: crate::x11::Input::open()?, origin: (0, 0) }, size: (0, 0) });
+    }
     let conn = crate::portal::connection().await?;
     let portal = Portal::new(&conn)?;
     let created = portal
@@ -518,7 +585,7 @@ pub async fn pointer_session() -> Result<Pointer> {
     }
     let devices: u32 = started.get("devices").and_then(|v| u32::try_from(v.try_clone().ok()?).ok()).unwrap_or(0);
     anyhow::ensure!(devices & 2 != 0, "the PC didn't allow pointer control");
-    Ok(Pointer { conn, session, node: 0, size: (0, 0) })
+    Ok(Pointer { via: Via::Portal { conn, session, node: 0 }, size: (0, 0) })
 }
 
 impl Cast {
@@ -737,7 +804,7 @@ mod tests {
         let focus = std::env::var("VYOMA_FOCUS").expect("VYOMA_FOCUS");
         std::fs::write(&file, "").unwrap();
         let cast = Cast::remote().await.expect("remote desktop session");
-        let p = Pointer { conn: cast.conn.clone(), session: cast.control.clone().expect("keyboard allowed"), node: cast.node, size: cast.size.unwrap() };
+        let p = Pointer { via: Via::Portal { conn: cast.conn.clone(), session: cast.control.clone().expect("keyboard allowed"), node: cast.node }, size: cast.size.unwrap() };
         let (w, h) = fit(cast.size.unwrap());
         let mut editor = std::process::Command::new("kwrite").arg(&file).spawn().unwrap();
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -854,7 +921,7 @@ mod live {
         let focus = std::env::var("VYOMA_FOCUS").expect("VYOMA_FOCUS");
         std::fs::write(&file, "").unwrap();
         let cast = Cast::remote().await.expect("remote desktop session");
-        let p = Pointer { conn: cast.conn.clone(), session: cast.control.clone().expect("keyboard allowed"), node: cast.node, size: cast.size.unwrap() };
+        let p = Pointer { via: Via::Portal { conn: cast.conn.clone(), session: cast.control.clone().expect("keyboard allowed"), node: cast.node }, size: cast.size.unwrap() };
         let mut editor = std::process::Command::new("kwrite").arg(&file).spawn().unwrap();
         tokio::time::sleep(Duration::from_secs(3)).await;
         let said = String::from_utf8_lossy(&std::process::Command::new(&focus).output().unwrap().stdout).to_string();

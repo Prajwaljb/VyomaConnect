@@ -1,6 +1,7 @@
 //! PC screenshot to phone. Spectacle (always on Plasma) captures in the background with no
 //! prompt or notification of its own, so we show one; the image travels as a payload (see payload.rs).
 //! On GNOME, which lets only its own parts capture without asking, Vyoma's extension does (PNG).
+//! X11 sessions (Cinnamon, MATE, Xfce) let any app read the screen: GStreamer grabs it (PNG).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -15,8 +16,17 @@ use crate::payload;
 /// Captures the whole desktop and offers it to the phone. On failure the phone gets an error
 /// packet instead, so it never waits on a spinner.
 pub async fn capture_and_send(sender: &Sender, me: &Identity, pinned: &[u8], phone_name: &str) -> Result<()> {
-    let gnome = crate::desktop::is_gnome();
-    let image = match if gnome { crate::shell::screenshot().await } else { capture().await } {
+    let x11 = crate::x11::active();
+    let gnome = crate::desktop::is_gnome() && !x11;
+    let png = gnome || x11;
+    let shot = if x11 {
+        capture_x11().await
+    } else if gnome {
+        crate::shell::screenshot().await
+    } else {
+        capture().await
+    };
+    let image = match shot {
         Ok(bytes) => bytes,
         Err(e) => {
             sender.send(&link::packet("vyoma.screenshot", json!({ "error": format!("{e:#}") }))).await?;
@@ -24,8 +34,26 @@ pub async fn capture_and_send(sender: &Sender, me: &Identity, pinned: &[u8], pho
         }
     };
     crate::notice::tell("camera-photo", "Screenshot taken from your phone", &format!("{phone_name} took a screenshot of this PC.")).await;
-    let announce: Value = link::packet("vyoma.screenshot", json!({ "format": if gnome { "png" } else { "webp" } }));
+    let announce: Value = link::packet("vyoma.screenshot", json!({ "format": if png { "png" } else { "webp" } }));
     payload::offer(sender, me, pinned, announce, image.len() as u64, image.as_slice()).await
+}
+
+/// The whole X screen, every monitor, as PNG.
+async fn capture_x11() -> Result<Vec<u8>> {
+    let out = tokio::time::timeout(
+        Duration::from_secs(15),
+        tokio::process::Command::new("gst-launch-1.0")
+            .args(["-q", "ximagesrc", "use-damage=false", "num-buffers=1", "!", "videoconvert", "!", "pngenc", "!", "fdsink", "fd=1"])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .context("the screenshot took too long")?
+    .context("GStreamer (gst-launch-1.0) isn't installed")?;
+    if !out.status.success() || !out.stdout.starts_with(b"\x89PNG") {
+        bail!("couldn't capture the screen");
+    }
+    Ok(out.stdout)
 }
 
 async fn capture() -> Result<Vec<u8>> {

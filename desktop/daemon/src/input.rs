@@ -1,6 +1,7 @@
 //! The phone as this PC's touchpad and keyboard (`kdeconnect.mousepad.request`), through the
 //! RemoteDesktop portal, as kdeconnectd does on Wayland: every desktop has it (KDE, GNOME, COSMIC),
-//! and the desktop asks the user once; a restore token reopens it after that.
+//! and the desktop asks the user once; a restore token reopens it after that. X11 sessions
+//! (Cinnamon, MATE, Xfce) have no such portal, so there it's XTEST (`vyoma_companion::x11`).
 //!
 //! Characters are pressed as the real key that types them in the desktop's layout, with Shift when
 //! that key needs it: sending keysyms through the portal doubled letters and then lost keys (seen
@@ -223,10 +224,47 @@ struct Session {
     path: OwnedObjectPath,
 }
 
+/// Where the input goes: the portal's session, or the X server.
+enum Sink {
+    Portal(Session),
+    X11(vyoma_companion::x11::Input),
+}
+
+impl Sink {
+    async fn open(token: &std::path::Path) -> Result<Self> {
+        if vyoma_companion::x11::active() {
+            return Ok(Sink::X11(vyoma_companion::x11::Input::open()?));
+        }
+        Ok(Sink::Portal(Session::open(token).await?))
+    }
+
+    /// The fingers lifted after a scroll.
+    async fn scroll_end(&self) {
+        match self {
+            Sink::Portal(s) => {
+                let finish = HashMap::from([("finish", Variant::from(true))]);
+                let _ = s.call("NotifyPointerAxis", &(&s.path, finish, 0.0f64, 0.0f64)).await;
+            }
+            Sink::X11(x) => x.scroll_end(),
+        }
+    }
+}
+
+/// One act on the X server.
+fn on_x11(x: &vyoma_companion::x11::Input, a: Act) -> Result<()> {
+    match a {
+        Act::Move(dx, dy) => x.relative(dx, dy),
+        Act::Scroll(dx, dy) => x.scroll(dx, dy),
+        Act::Button(b, down) => x.button(b, down),
+        Act::Key(code, down) => x.key(code, down),
+        Act::Keysym(sym, down) => x.keysym(sym as u32, down),
+    }
+}
+
 /// Does what [requests] (when it came, device id, packet) ask, one after another. [out]: echoes.
 pub async fn run(dir: PathBuf, mut requests: mpsc::UnboundedReceiver<(Instant, String, Value)>, out: mpsc::UnboundedSender<(String, Value)>) {
     let token = dir.join("remotedesktop-token");
-    let mut session: Option<Session> = None;
+    let mut session: Option<Sink> = None;
     // Everything asked while the desktop's dialog was up: the user wasn't watching it happen.
     let mut ready_at = Instant::now();
     // After a refusal, the dialog isn't put up again for every touch.
@@ -243,8 +281,7 @@ pub async fn run(dir: PathBuf, mut requests: mpsc::UnboundedReceiver<(Instant, S
                     scrolling = false;
                     lock.reset();
                     if let Some(s) = &session {
-                        let finish = HashMap::from([("finish", Variant::from(true))]);
-                        let _ = s.call("NotifyPointerAxis", &(&s.path, finish, 0.0f64, 0.0f64)).await;
+                        s.scroll_end().await;
                     }
                     continue;
                 }
@@ -265,7 +302,7 @@ pub async fn run(dir: PathBuf, mut requests: mpsc::UnboundedReceiver<(Instant, S
             if refused_at.is_some_and(|r| r.elapsed().as_secs() < 30) {
                 continue;
             }
-            match Session::open(&token).await {
+            match Sink::open(&token).await {
                 Ok(s) => {
                     tracing::info!("input from devices allowed");
                     session = Some(s);
@@ -282,8 +319,21 @@ pub async fn run(dir: PathBuf, mut requests: mpsc::UnboundedReceiver<(Instant, S
         if at < ready_at {
             continue;
         }
-        let s = session.as_ref().unwrap();
         tracing::debug!("{id}: {} input call(s), {} ms after arriving", acts.len(), at.elapsed().as_millis());
+        if let Some(Sink::X11(x)) = &session {
+            for a in acts {
+                if let Act::Scroll(..) = a {
+                    scrolling = true;
+                }
+                if let Err(e) = on_x11(x, a) {
+                    tracing::info!("input to the X server failed: {e:#}");
+                    session = None;
+                    break;
+                }
+            }
+            continue;
+        }
+        let Some(Sink::Portal(s)) = session.as_ref() else { continue };
         let mut moved = false;
         for a in acts {
             let done = match a {

@@ -361,6 +361,12 @@ screen, files both ways, shares, power and wake, webcam, touchpad and controller
 `ClearActivity()`, signal `ActivityChanged`.
 Next: the macOS socket behind the same `Daemon` trait.
 
+X11 (2026-11-11, phase 3 started early): one X11 backend for every X11 desktop rather than Cinnamon alone
+(`companion/src/x11.rs`, daemon `presenter_x11.rs`): clipboard, touchpad and keyboard (XTEST), screen view and
+screenshots (ximagesrc), the presenter's dot, wake, workspace switch and keyboard layout; wallpaper from Cinnamon's,
+MATE's and Xfce's settings; a login autostart where systemd's graphical session isn't reached. Checked against
+Xvfb only; next is a real Cinnamon or Xfce session (a VM).
+
 ### Open
 Packaging (AUR, Flatpak, Homebrew), the app's desktop name, and whether KDE users keep the option of
 running beside kdeconnectd.

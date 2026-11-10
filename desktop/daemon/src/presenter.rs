@@ -6,7 +6,7 @@
 //! It's a wlr-layer-shell surface on the overlay layer (KWin, wlroots and COSMIC have it): a small
 //! square that takes no input, moved with its margins, so a move redraws nothing. Its own thread and
 //! Wayland connection, made on first use. GNOME has no layer shell, so there Vyoma's GNOME extension
-//! draws the same dot (`vyoma_companion::shell::point`).
+//! draws the same dot (`vyoma_companion::shell::point`); X11 has none either (`presenter_x11.rs`).
 
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -31,11 +31,11 @@ use smithay_client_toolkit::{delegate_registry, registry_handlers};
 pub const PRESENTER: &str = "kdeconnect.presenter";
 
 /// The dot's square, in logical pixels: a 9 px core in a soft glow.
-const SIZE: i32 = 48;
+pub(crate) const SIZE: i32 = 48;
 /// Gone this long without a packet: the phone stopped pointing.
-const QUIET: Duration = Duration::from_secs(1);
+pub(crate) const QUIET: Duration = Duration::from_secs(1);
 
-enum Order {
+pub(crate) enum Order {
     Move(f64, f64),
     Stop,
 }
@@ -48,6 +48,8 @@ pub struct Presenter {
     failed: bool,
     /// On GNOME: the moves, in order, to the extension.
     gnome: Option<tokio::sync::mpsc::UnboundedSender<Order>>,
+    /// On X11: the dot's own window.
+    x11: Option<mpsc::Sender<Order>>,
 }
 
 impl Presenter {
@@ -58,6 +60,23 @@ impl Presenter {
             let (Some(dx), Some(dy)) = (number(&body["dx"]), number(&body["dy"])) else { return };
             Order::Move(dx.clamp(-2.0, 2.0), dy.clamp(-2.0, 2.0))
         };
+        if vyoma_companion::x11::active() {
+            if self.x11.is_none() && !self.failed && matches!(order, Order::Move(..)) {
+                match crate::presenter_x11::start() {
+                    Ok(tx) => self.x11 = Some(tx),
+                    Err(e) => {
+                        tracing::warn!("no presenter pointer: {e:#}");
+                        self.failed = true;
+                    }
+                }
+            }
+            if let Some(tx) = &self.x11
+                && tx.send(order).is_err()
+            {
+                self.x11 = None;
+            }
+            return;
+        }
         if vyoma_companion::desktop::is_gnome() {
             let tx = self.gnome.get_or_insert_with(through_shell);
             let _ = tx.send(order);
@@ -108,21 +127,21 @@ fn number(v: &Value) -> Option<f64> {
 
 /// The dot's position, -1..1 each way, as kdeconnectd keeps it.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Spot {
+pub(crate) struct Spot {
     x: f64,
     y: f64,
 }
 
 impl Spot {
-    const CENTRE: Spot = Spot { x: 0.0, y: 0.0 };
+    pub(crate) const CENTRE: Spot = Spot { x: 0.0, y: 0.0 };
 
-    fn moved(self, dx: f64, dy: f64, (w, h): (i32, i32)) -> Spot {
+    pub(crate) fn moved(self, dx: f64, dy: f64, (w, h): (i32, i32)) -> Spot {
         let aspect = if h > 0 { w as f64 / h as f64 } else { 1.0 };
         Spot { x: (self.x + dx).clamp(-1.0, 1.0), y: (self.y + dy * aspect).clamp(-1.0, 1.0) }
     }
 
     /// The square's top-left, in the output's logical pixels, kept on screen.
-    fn corner(self, (w, h): (i32, i32)) -> (i32, i32) {
+    pub(crate) fn corner(self, (w, h): (i32, i32)) -> (i32, i32) {
         let at = |f: f64, span: i32| (((f + 1.0) / 2.0 * span as f64).round() as i32 - SIZE / 2).clamp(0, (span - SIZE).max(0));
         (at(self.x, w), at(self.y, h))
     }
@@ -267,7 +286,7 @@ impl Overlay {
 }
 
 /// A red dot with a white rim in a soft red glow, premultiplied ARGB, [px] square.
-fn paint_dot(canvas: &mut [u8], px: usize) {
+pub(crate) fn paint_dot(canvas: &mut [u8], px: usize) {
     let c = px as f32 / 2.0;
     let unit = px as f32 / SIZE as f32;
     let (core, rim, glow) = (4.5 * unit, 6.0 * unit, c);

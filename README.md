@@ -95,8 +95,8 @@ Set up the PC first, then the phone.
 
 ### 1. Your PC
 
-Vyoma runs on Linux with KDE Plasma or GNOME. Support for other desktops and macOS is coming in
-future releases.
+Vyoma runs on Linux with KDE Plasma or GNOME. X11 desktops (Cinnamon, MATE, Xfce) have early support, not yet
+tested much on those desktops. macOS is coming in future releases.
 
 Paste this into a terminal:
 

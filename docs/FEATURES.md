@@ -138,6 +138,8 @@ When something happens, Vyoma does something for you.
 - **Runs on KDE Plasma and GNOME.** On GNOME a small Shell extension, installed with the app, brings clipboard
   sync, the presenter's pointer, three-finger Overview swipes, silent screenshots, GNOME's own volume and
   brightness pop-ups, and a Reply dialog for the phone's notifications. Locking needs GNOME's login screen (GDM).
+- **Early support for X11 desktops** (Cinnamon, MATE, Xfce, Plasma on X11, i3): clipboard, touchpad and keyboard,
+  screen view, screenshots and the presenter's pointer through X11 itself. Not yet tried on those desktops day to day.
 
 ## With KDE Connect on the PC
 
