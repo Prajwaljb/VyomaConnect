@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import dev.vyoma.connect.protocol.link.TransportKind
 import androidx.compose.material.icons.rounded.Bluetooth
+import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.Usb
 import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material.icons.rounded.Terminal
@@ -170,6 +171,7 @@ fun DeviceScreen(
                     showDivider = state.isPaired,
                 )
                 if (state.isPaired) {
+                    CallsFromPcRow(deviceId)
                     ListRow(
                         title = "Unpair",
                         subtitle = "Forget this device and its key",
@@ -259,4 +261,32 @@ internal fun diskSize(bytes: Long): String {
         gb >= 10 -> "${gb.roundToInt()} GB"
         else -> "%.1f GB".format(java.util.Locale.ROOT, gb)
     }
+}
+
+/** Whether this PC may answer, decline and hang up the phone's calls; letting it again asks for the owner. */
+@Composable
+private fun CallsFromPcRow(deviceId: String) {
+    val context = LocalContext.current
+    var on by remember(deviceId) { mutableStateOf(dev.vyoma.connect.platform.CallsFromPc.allowed(deviceId)) }
+    fun toggle(want: Boolean) {
+        if (!want) {
+            dev.vyoma.connect.platform.CallsFromPc.set(deviceId, false)
+            on = false
+        } else {
+            dev.vyoma.connect.platform.AppLock.confirm(context, "To let this PC answer your calls") {
+                dev.vyoma.connect.platform.CallsFromPc.set(deviceId, true)
+                on = true
+            }
+        }
+    }
+    ListRow(
+        title = "Answer calls from this PC",
+        subtitle = "Answer, decline and hang up there",
+        icon = Icons.Rounded.Call,
+        iconTint = SystemColor.GREEN.color,
+        showDivider = true,
+        haptic = if (on) dev.vyoma.connect.designsystem.Haptic.ToggleOff else dev.vyoma.connect.designsystem.Haptic.ToggleOn,
+        onClick = { toggle(!on) },
+        trailing = { dev.vyoma.connect.designsystem.VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Answer calls from this PC") },
+    )
 }

@@ -33,7 +33,8 @@ when the phone is paired with KDE Connect or GSConnect.</p>
 - **Phone notifications on the PC**, with their buttons, and inline replies where the desktop supports them.
 - **Pick which apps** may notify the PC.
 - **Incoming calls on the PC**, including WhatsApp and other internet calls, with **Answer**, **Decline** and
-  **Silence**. Music on the PC pauses for the call and resumes after. *PC app*
+  **Silence**. Music on the PC pauses for the call and resumes after. A PC's page on the phone has **Answer calls
+  from this PC**, to keep one from answering (it then shows the call without Answer). *PC app*
 - **Talk from the PC:** answered there, the PC becomes the phone's Bluetooth headset for the call, so its speakers
   and microphone (or headphones plugged into it) carry the call; **Use phone** hands it back, **Hang up** ends it.
   Needs the phone paired with the PC over Bluetooth; a headset already on the phone keeps the call. *PC app*

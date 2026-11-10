@@ -293,7 +293,8 @@ object CallAction {
  */
 data class CallFacts(val canAct: Boolean = false, val headset: Boolean = false, val bluetoothName: String? = null)
 
-class TelephonyPlugin(private val ctx: PluginContext, private val source: CallSource) : Plugin {
+/** [allowed]: whether this PC may answer, decline and hang up, the owner's choice per PC (on unless turned off). */
+class TelephonyPlugin(private val ctx: PluginContext, private val source: CallSource, private val allowed: (String) -> Boolean = { true }) : Plugin {
     override suspend fun onStart() {
         ctx.scope.launch {
             source.events.collect { event ->
@@ -318,7 +319,7 @@ class TelephonyPlugin(private val ctx: PluginContext, private val source: CallSo
                     // Vyoma's PC answers and takes the sound; stock desktops ignore these.
                     if (!cancel && event !is CallEvent.Missed) {
                         val facts = runCatching { source.facts() }.getOrDefault(CallFacts())
-                        put("vyomaAnswer", facts.canAct)
+                        put("vyomaAnswer", facts.canAct && allowed(ctx.device.id))
                         put("vyomaHeadset", facts.headset)
                         facts.bluetoothName?.let { put("vyomaBluetooth", it) }
                     }
@@ -333,7 +334,8 @@ class TelephonyPlugin(private val ctx: PluginContext, private val source: CallSo
             PacketTypes.CALL_REQUEST -> {
                 val action = packet.string("action")?.takeIf { it in CallAction.all } ?: return true
                 ctx.scope.launch(Dispatchers.IO) {
-                    val error = runCatching { source.act(action) }.getOrElse { it.message ?: "Didn't work" }
+                    val error = if (!allowed(ctx.device.id)) "Answering calls from this PC is off on the phone"
+                    else runCatching { source.act(action) }.getOrElse { it.message ?: "Didn't work" }
                     VLog.i(TAG, "PC asked to $action: ${error ?: "done"}")
                     ctx.send(packet(PacketTypes.CALL_DONE) {
                         put("action", action)
@@ -349,11 +351,11 @@ class TelephonyPlugin(private val ctx: PluginContext, private val source: CallSo
         const val ID = "telephony"
         private const val TAG = "Calls"
 
-        fun spec(source: CallSource) = PluginSpec(
+        fun spec(source: CallSource, allowed: (String) -> Boolean = { true }) = PluginSpec(
             ID,
             incoming = setOf(PacketTypes.TELEPHONY_REQUEST_MUTE, PacketTypes.CALL_REQUEST),
             outgoing = setOf(PacketTypes.TELEPHONY, PacketTypes.CALL_DONE),
-        ) { TelephonyPlugin(it, source) }
+        ) { TelephonyPlugin(it, source, allowed) }
     }
 }
 
