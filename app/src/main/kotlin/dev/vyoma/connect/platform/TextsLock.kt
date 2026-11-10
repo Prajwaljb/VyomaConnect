@@ -5,6 +5,7 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
+import android.os.SystemClock
 import dev.vyoma.connect.BuildConfig
 import dev.vyoma.connect.R
 import dev.vyoma.connect.protocol.VLog
@@ -24,11 +25,18 @@ object TextsLock : TextsGuard {
     private const val TAG = "TextsLock"
     private const val PREFS = "texts_lock"
     private const val KEY_ON = "on"
+    private const val KEY_HELD = "held"
     private const val ASK_FOR_MS = 120_000L
+    /** A yes lasts at most this long on the phone's own clock, whatever the PC says (it locks it sooner). */
+    private const val GRANT_MS = 60 * 60_000L
+    /** Asks closer together than this are one: anything on the PC could otherwise flood the phone with them. */
+    private const val ASK_GAP_MS = 3_000L
 
     private lateinit var app: Context
-    private val grants: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /** PC → when its owner said yes (elapsed realtime). */
+    private val grants = ConcurrentHashMap<String, Long>()
     private val waiting = ConcurrentHashMap<String, (Boolean) -> Unit>()
+    private val askedAt = ConcurrentHashMap<String, Long>()
 
     fun install(context: Context) {
         app = context.applicationContext
@@ -44,16 +52,37 @@ object TextsLock : TextsGuard {
         if (on) grants.clear()
     }
 
-    override fun open(peerId: String) = !enabled(app) || peerId in grants
+    override fun open(peerId: String): Boolean {
+        if (!enabled(app)) return true
+        val at = grants[peerId] ?: return false
+        if (SystemClock.elapsedRealtime() - at < GRANT_MS) return true
+        grants.remove(peerId)
+        return false
+    }
+
+    override fun holds(peerId: String, claims: Boolean): Boolean {
+        val prefs = prefs(app)
+        val held = prefs.getStringSet(KEY_HELD, emptySet()).orEmpty()
+        if (claims && peerId !in held) prefs.edit().putStringSet(KEY_HELD, held + peerId).apply()
+        return claims || peerId in held
+    }
 
     override fun ask(peerId: String, peerName: String, answer: (Boolean) -> Unit) {
         if (!enabled(app)) {
             answer(true)
             return
         }
+        val now = SystemClock.elapsedRealtime()
+        val last = askedAt.put(peerId, now)
+        if (last != null && now - last < ASK_GAP_MS && waiting.containsKey(peerId)) {
+            waiting[peerId] = answer
+            return
+        }
         waiting[peerId] = answer
         VLog.i(TAG, "a PC asks for the texts")
-        if (inFront()) {
+        // Straight to the prompt only when there's a fingerprint or PIN to ask for: with no screen lock, the
+        // prompt would let it through untouched, so then it's the notification's Allow that says yes.
+        if (inFront() && AppLock.canAsk(app)) {
             runCatching { app.startActivity(TextsUnlockActivity.intent(app, peerId, peerName)) }
                 .onFailure { notifyAsk(peerId, peerName) }
         } else {
@@ -71,7 +100,7 @@ object TextsLock : TextsGuard {
     fun answered(peerId: String, ok: Boolean) {
         app.getSystemService(NotificationManager::class.java).cancel(notificationId(peerId))
         val answer = waiting.remove(peerId) ?: return
-        if (ok) grants += peerId
+        if (ok) grants[peerId] = SystemClock.elapsedRealtime()
         VLog.i(TAG, if (ok) "texts allowed" else "texts not allowed")
         answer(ok)
     }
@@ -101,7 +130,8 @@ object TextsLock : TextsGuard {
             .setTimeoutAfter(ASK_FOR_MS)
             .setCategory(Notification.CATEGORY_RECOMMENDATION)
             .addAction(0, "Don't allow", refuse)
-            .addAction(0, "Allow", open)
+            // Not from the lock screen: whoever holds the locked phone can't let texts out.
+            .addAction(androidx.core.app.NotificationCompat.Action.Builder(0, "Allow", open).setAuthenticationRequired(true).build())
             .setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PRIVATE)
             .setPublicVersion(
                 androidx.core.app.NotificationCompat.Builder(app, Notifications.CH_PAIRING)

@@ -253,7 +253,7 @@ class AppContainer(private val app: Application) {
         PresenterPlugin.spec,
         SmsPlugin.spec(sms, dev.vyoma.connect.platform.TextsLock),
         TelephonyPlugin.spec(calls),
-        ContactsPlugin.spec(contacts),
+        ContactsPlugin.spec(contacts, dev.vyoma.connect.platform.TextsLock),
         dev.vyoma.connect.protocol.plugin.builtin.SftpPlugin.spec(phoneFiles),
         ConnectivityReportPlugin.spec(signal.states),
         CompanionPlugin.spec(shareSink),
