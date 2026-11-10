@@ -216,7 +216,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                     subtitle = when {
                         clipOn -> "Copies sync even when Vyoma is closed"
                         clipWaiting -> "Tap, then Allow one-time access when Android asks"
-                        else -> "One-time setup from your PC"
+                        else -> "Optional: set up once over a USB cable"
                     },
                     icon = Icons.Rounded.ContentPaste,
                     iconTint = SystemColor.ORANGE.color,

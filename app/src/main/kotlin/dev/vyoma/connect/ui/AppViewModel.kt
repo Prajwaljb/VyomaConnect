@@ -106,18 +106,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val clipHistory: StateFlow<List<ClipEntry>> get() = container.clipboard.history
 
     /**
-     * Whether to show first-run setup; null until known. People who already paired a PC (before
-     * setup existed, or after reinstalling with data kept) skip it. Not the demo: its made-up PC
-     * is paired from the start, which closed setup the moment the hub came up.
+     * Whether to show first-run setup; null until known. Shown until it's finished, even with a PC
+     * paired already: scanning a PC's code can come first (a `vyoma://pair` link, or the scanner
+     * from setup itself), and the rest of setup still matters then. A PC paired before shows as
+     * done, with only what's left open.
      */
     val showOnboarding: StateFlow<Boolean?> = settings.onboarded.map { !it }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-
-    init {
-        viewModelScope.launch {
-            if (!BuildConfig.DEMO && !settings.onboarded.first() && container.obtainHub().trustStore.all().isNotEmpty()) settings.setOnboarded()
-        }
-    }
 
     fun finishOnboarding() = viewModelScope.launch { settings.setOnboarded() }
     fun replayOnboarding() = viewModelScope.launch { settings.setOnboarded(false) }

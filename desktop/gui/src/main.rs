@@ -667,12 +667,12 @@ fn apply(ui: &MainWindow, phones: Option<Vec<PhoneData>>) {
     if let Some(p) = asking {
         ui.set_selected(p.id.clone().into());
     }
-    // Paired just now, while setting up: its moment.
+    // Paired just now (its code scanned, or accepted here): its moment, wherever the window is.
     let fresh = phones.iter().find(|p| p.paired && before.iter().any(|b| b.id == p.id && !b.paired));
-    if let (Some(p), true) = (fresh, ui.get_setup()) {
+    if let Some(p) = fresh {
         moment(ui, p.name.clone());
     }
-    // Paired from the Add page (its code scanned): on to that phone.
+    // Paired from the Add page: on to that phone, under the moment.
     if let (Some(p), true) = (fresh, ui.get_selected() == ADD) {
         ui.set_selected(p.id.clone().into());
     }
