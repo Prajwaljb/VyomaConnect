@@ -89,6 +89,7 @@ import androidx.compose.material.icons.Icons
 import dev.vyoma.connect.BuildConfig
 import dev.vyoma.connect.demo.DemoDiagnostics
 import dev.vyoma.connect.demo.DemoPc
+import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Laptop
 import androidx.compose.runtime.rememberCoroutineScope
@@ -391,6 +392,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                 FingerprintLockRow(resumeTick)
                 RowDivider()
                 TextsLockRow()
+                RowDivider()
+                StockTextsRow()
             }
         }
 
@@ -982,6 +985,33 @@ private fun TextsLockRow() {
         haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
         onClick = { toggle(!on) },
         trailing = { VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Ask before PCs show texts") },
+    )
+}
+
+/** Keeps texts from PCs that can't ask for them (stock KDE Connect, GSConnect); letting them back asks for the owner. */
+@Composable
+private fun StockTextsRow() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var on by remember { mutableStateOf(dev.vyoma.connect.platform.TextsLock.stockCutOff(context)) }
+    fun toggle(want: Boolean) {
+        if (want) {
+            dev.vyoma.connect.platform.TextsLock.setStockCutOff(context, true)
+            on = true
+        } else {
+            AppLock.confirm(context, "To let KDE Connect and GSConnect read your texts") {
+                dev.vyoma.connect.platform.TextsLock.setStockCutOff(context, false)
+                on = false
+            }
+        }
+    }
+    ListRow(
+        title = "Texts only on Vyoma PCs",
+        subtitle = "KDE Connect and GSConnect can't ask first",
+        icon = Icons.Rounded.Block,
+        iconTint = SystemColor.RED.color,
+        haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
+        onClick = { toggle(!on) },
+        trailing = { VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Texts only on Vyoma PCs") },
     )
 }
 

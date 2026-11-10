@@ -81,7 +81,7 @@ interface SmsStore {
 
 /**
  * Who may have the texts. Only PCs that can ask for them (Vyoma's, which send [PacketTypes.TEXTS_UNLOCK]) are
- * held to it: stock desktops can't unlock, so they keep reading texts as before.
+ * held to it: stock desktops can't unlock, so they keep reading texts as before, unless the owner [cutOff]s them.
  */
 interface TextsGuard {
     /** Whether texts may go to [peerId] now. */
@@ -99,6 +99,12 @@ interface TextsGuard {
      */
     fun holds(peerId: String, claims: Boolean): Boolean = claims
 
+    /** Whether [peerId], a PC that can't ask (stock KDE Connect, GSConnect), gets no texts at all: the owner's choice. */
+    fun cutOff(peerId: String, claims: Boolean): Boolean = false
+
+    /** Whether texts (and what the texting app's notifications say) may go to [peerId] now. */
+    fun lets(peerId: String, claims: Boolean): Boolean = !cutOff(peerId, claims) && (!holds(peerId, claims) || open(peerId))
+
     /** No lock: every PC may. */
     object None : TextsGuard {
         override fun open(peerId: String) = true
@@ -107,11 +113,12 @@ interface TextsGuard {
     }
 }
 
+/** The PC says it can ask for the texts (Vyoma's Messages page): it is held to the texts lock. */
+val dev.vyoma.connect.protocol.device.Device.canAskForTexts: Boolean get() = PacketTypes.TEXTS_UNLOCK in identity.outgoingCapabilities
+
 class SmsPlugin(private val ctx: PluginContext, private val store: SmsStore, private val guard: TextsGuard = TextsGuard.None) : Plugin {
     private val peerId get() = ctx.device.id
-    /** A PC that can ask for the texts (or once could), so it's held to the lock. */
-    private val guarded get() = guard.holds(peerId, PacketTypes.TEXTS_UNLOCK in ctx.device.identity.outgoingCapabilities)
-    private fun allowed() = !guarded || guard.open(peerId)
+    private fun allowed() = guard.lets(peerId, ctx.device.canAskForTexts)
     /** The PC was told the texts locked (on this phone's own clock), so it isn't told again for each text. */
     @Volatile private var toldLocked = false
 
@@ -367,8 +374,7 @@ class ContactsPlugin(private val ctx: PluginContext, private val store: ContactS
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         if (!store.available()) return true
         // Behind the texts lock too: names and numbers are who you talk to.
-        val peer = ctx.device.id
-        if (guard.holds(peer, PacketTypes.TEXTS_UNLOCK in ctx.device.identity.outgoingCapabilities) && !guard.open(peer)) {
+        if (!guard.lets(ctx.device.id, ctx.device.canAskForTexts)) {
             VLog.i("Contacts", "${packet.type} refused: Messages is locked for this PC")
             return true
         }

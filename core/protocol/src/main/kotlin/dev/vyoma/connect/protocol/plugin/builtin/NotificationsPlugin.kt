@@ -32,6 +32,8 @@ data class PhoneNotification(
     val iconHash: String? = null,
     /** True for updates to a notification the user already saw: the PC shouldn't pop it again. */
     val silent: Boolean = false,
+    /** From the phone's texting app: what it says reaches a PC only while its texts are open to it ([TextsGuard.lets]). */
+    val texts: Boolean = false,
 )
 
 sealed interface NotificationEvent {
@@ -48,16 +50,24 @@ interface NotificationSource {
     fun action(id: String, action: String)
 }
 
-class NotificationsPlugin(private val ctx: PluginContext, private val source: NotificationSource) : Plugin {
+class NotificationsPlugin(private val ctx: PluginContext, private val source: NotificationSource, private val guard: TextsGuard = TextsGuard.None) : Plugin {
+    /** The texting app's notifications (id → reply id, "" for none): answered only while this PC may have the texts. */
+    private val textIds = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private fun isText(id: String) = textIds.containsKey(id) || textIds.containsValue(id)
+    private fun textsLocked() = !guard.lets(ctx.device.id, ctx.device.canAskForTexts)
+
     override suspend fun onStart() {
         ctx.scope.launch {
             source.events.collect { event ->
                 when (event) {
                     is NotificationEvent.Posted -> send(event.notification)
-                    is NotificationEvent.Removed -> ctx.send(packet(PacketTypes.NOTIFICATION) {
-                        put("id", event.id)
-                        put("isCancel", true)
-                    })
+                    is NotificationEvent.Removed -> {
+                        textIds.remove(event.id)
+                        ctx.send(packet(PacketTypes.NOTIFICATION) {
+                            put("id", event.id)
+                            put("isCancel", true)
+                        })
+                    }
                 }
             }
         }
@@ -72,10 +82,12 @@ class NotificationsPlugin(private val ctx: PluginContext, private val source: No
             }
             PacketTypes.NOTIFICATION_REPLY -> {
                 val id = packet.string("requestReplyId") ?: return true
+                if (isText(id) && textsLocked()) return refused(packet)
                 source.reply(id, packet.string("message").orEmpty())
             }
             PacketTypes.NOTIFICATION_ACTION -> {
                 val id = packet.string("key") ?: return true
+                if (isText(id) && textsLocked()) return refused(packet)
                 source.action(id, packet.string("action") ?: return true)
             }
         }
@@ -85,7 +97,20 @@ class NotificationsPlugin(private val ctx: PluginContext, private val source: No
     /** Icons a PC already has hold a port for the whole wait: a burst mustn't take them all from file transfers. */
     private val iconPorts = Semaphore(MAX_ICONS_AT_ONCE)
 
-    private fun send(n: PhoneNotification) {
+    private fun refused(packet: NetworkPacket): Boolean {
+        dev.vyoma.connect.protocol.VLog.i("Notifications", "${packet.type} refused: texts are locked for this PC")
+        return true
+    }
+
+    private fun send(original: PhoneNotification) {
+        if (original.texts) textIds[original.id] = original.replyId.orEmpty()
+        // Texts locked for this PC: who wrote, not what (no reply or actions either, which would send or reveal it).
+        val n = if (original.texts && textsLocked()) original.copy(
+            title = original.appName,
+            text = if (original.title.isBlank()) "New text" else "New text from ${original.title}",
+            actions = emptyList(),
+            replyId = null,
+        ) else original
         fun body(withIcon: Boolean) = packet(PacketTypes.NOTIFICATION) {
             put("id", n.id)
             put("appName", n.appName)
@@ -125,10 +150,10 @@ class NotificationsPlugin(private val ctx: PluginContext, private val source: No
         private const val MAX_ICONS_AT_ONCE = 8
         private const val ICON_PORT_WAIT_MS = 1_000L
 
-        fun spec(source: NotificationSource) = PluginSpec(
+        fun spec(source: NotificationSource, guard: TextsGuard = TextsGuard.None) = PluginSpec(
             ID,
             incoming = setOf(PacketTypes.NOTIFICATION_REQUEST, PacketTypes.NOTIFICATION_REPLY, PacketTypes.NOTIFICATION_ACTION),
             outgoing = setOf(PacketTypes.NOTIFICATION),
-        ) { NotificationsPlugin(it, source) }
+        ) { NotificationsPlugin(it, source, guard) }
     }
 }

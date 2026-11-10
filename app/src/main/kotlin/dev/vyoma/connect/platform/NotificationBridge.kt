@@ -257,8 +257,15 @@ object NotificationBridge : NotificationSource {
             icon = icon?.first,
             iconHash = icon?.second,
             silent = update,
+            texts = isTextingApp(context, sbn.packageName),
         )
     }
+
+    /** The phone's texting app (the default SMS app, or a known one): its notifications follow the texts lock. */
+    fun isTextingApp(context: Context, pkg: String): Boolean =
+        pkg in TEXTING_APPS || runCatching { android.provider.Telephony.Sms.getDefaultSmsPackage(context) }.getOrNull() == pkg
+
+    private val TEXTING_APPS = setOf("com.samsung.android.messaging", "com.google.android.apps.messaging", "com.android.messaging")
 
     private fun lastMessage(extras: Bundle): CharSequence? {
         @Suppress("DEPRECATION")
