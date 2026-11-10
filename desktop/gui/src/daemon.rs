@@ -229,6 +229,10 @@ pub trait Daemon: Send + Sync {
     fn act(&self, method: &str, id: &str) -> Result<()>;
     fn send_files(&self, id: &str, paths: Vec<String>) -> Result<()>;
     fn search(&self) -> Result<()>;
+    /// A fresh pairing QR code's text; it replaces any before (see the daemon's PairingCode).
+    fn pairing_code(&self) -> Result<String>;
+    /// Nothing shows the code now: it can't pair anyone.
+    fn end_pairing_code(&self) -> Result<()>;
     fn health(&self) -> Result<Health>;
     /// Turns one of a phone's [Permission]s on or off; [Event::Changed] follows.
     fn set_permission(&self, id: &str, key: &str, on: bool) -> Result<()>;
@@ -309,6 +313,14 @@ impl Daemon for DbusDaemon {
 
     fn send_files(&self, id: &str, paths: Vec<String>) -> Result<()> {
         self.call("SendFiles", &(id, paths))
+    }
+
+    fn pairing_code(&self) -> Result<String> {
+        self.call("PairingCode", &())
+    }
+
+    fn end_pairing_code(&self) -> Result<()> {
+        self.call("EndPairingCode", &())
     }
 
     fn search(&self) -> Result<()> {

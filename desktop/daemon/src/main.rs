@@ -42,6 +42,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use vyoma_core::device::{Command, Event, Hub};
 use vyoma_core::identity::Identity;
+use vyoma_core::invite::Invite;
 use vyoma_core::lan::{Lan, Ports, Rules, UDP_PORT};
 use vyoma_core::link::packet;
 use vyoma_core::trust::TrustStore;
@@ -140,6 +141,32 @@ fn note_routes(routes: &[IpAddr]) {
 
 #[zbus::interface(name = "dev.vyoma.Desktop1")]
 impl Control {
+    /// A fresh QR pairing code for the window to show, see vyoma_core::invite: this PC's id, name,
+    /// certificate fingerprint, addresses and port, and a new one-time secret, after the `#` of the
+    /// release page's link. A phone camera without Vyoma opens that page, to get the app; the part
+    /// after `#` never leaves the phone (browsers don't send it), and Vyoma's own scanner reads it.
+    /// It replaces any code shown before, and lasts ten minutes or until a phone pairs with it.
+    fn pairing_code(&self) -> fdo::Result<String> {
+        let invite = Invite::new(std::time::Instant::now()).ok_or_else(|| fdo::Error::Failed("no randomness".into()))?;
+        let secret = vyoma_core::invite::hex(invite.secret());
+        self.command(Command::Invite(Some(invite)))?;
+        let addresses: Vec<String> = vyoma_core::invite::local_addresses().iter().map(|a| a.to_string()).collect();
+        Ok(format!(
+            "https://github.com/{}/releases/latest#pair?v=1&id={}&name={}&fp={}&s={secret}&a={}&p={}",
+            update::REPO,
+            self.me.device_id,
+            url_encode(&host_name()),
+            vyoma_core::invite::fingerprint(&self.me.cert),
+            addresses.join(","),
+            self.lan.tcp_port()
+        ))
+    }
+
+    /// The window stopped showing the code: it can't pair anyone now.
+    fn end_pairing_code(&self) -> fdo::Result<()> {
+        self.command(Command::Invite(None))
+    }
+
     fn pair(&self, id: String) -> fdo::Result<()> {
         self.command(Command::Pair(id))
     }
@@ -1713,6 +1740,11 @@ fn identity(me: &Identity) -> Value {
             "outgoingCapabilities": ([plugins::OUTGOING, features::OUTGOING, &[ECHO_REQUEST]].concat()),
         }),
     )
+}
+
+/// Percent-encodes everything but letters, digits and -._~ (RFC 3986's unreserved).
+fn url_encode(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
 fn host_name() -> String {

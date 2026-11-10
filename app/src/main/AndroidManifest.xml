@@ -133,6 +133,19 @@
             <meta-data android:name="android.accessibilityservice" android:resource="@xml/mirror_control" />
         </service>
 
+        <!-- Pairing by the code Vyoma's PC window shows. vyoma://pair?... opens it too, asking first
+             (not BROWSABLE: a web page must never start a pairing). -->
+        <activity
+            android:name=".ui.PairScanActivity"
+            android:exported="true"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="vyoma" android:host="pair" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".ui.WebcamActivity"
             android:exported="false"

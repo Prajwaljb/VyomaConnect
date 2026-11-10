@@ -1,6 +1,7 @@
 package dev.vyoma.connect.protocol.device
 
 import dev.vyoma.connect.protocol.crypto.CompanionProof
+import dev.vyoma.connect.protocol.crypto.QrInvite
 import dev.vyoma.connect.protocol.DeviceIdentity
 import dev.vyoma.connect.protocol.NetworkPacket
 import dev.vyoma.connect.protocol.PacketTypes
@@ -300,6 +301,25 @@ class Device internal constructor(
             setPairState(PairState.REQUESTED_BY_US)
             armPairTimeout()
         }
+    }
+
+    /**
+     * Pairs with the PC whose QR code was scanned: only over a link showing the certificate the code
+     * names, with the proof the PC pairs on without a prompt (see [QrInvite]). False when no link
+     * here shows that certificate, so nothing was sent.
+     */
+    suspend fun requestPairingByCode(invite: QrInvite): Boolean = withContext(serial) {
+        if (_state.value.pairState == PairState.PAIRED) return@withContext true
+        val link = links.firstOrNull { !it.isClosed && invite.matches(it.peerCertificate) } ?: return@withContext false
+        // Every link of one device shows one certificate, so the proof holds on whichever carries it.
+        if (links.any { !it.isClosed && !invite.matches(it.peerCertificate) }) return@withContext false
+        val ts = System.currentTimeMillis() / 1000
+        pairingTimestamp = ts
+        val proof = QrInvite.proof(invite.secret, ts, env.localCertificate.encoded, link.peerCertificate.encoded)
+        if (!send(packet(PacketTypes.PAIR) { put("pair", true); put("timestamp", ts); put(QrInvite.FIELD, proof) })) return@withContext false
+        setPairState(PairState.REQUESTED_BY_US)
+        armPairTimeout()
+        true
     }
 
     suspend fun acceptPairing() = withContext(serial) {

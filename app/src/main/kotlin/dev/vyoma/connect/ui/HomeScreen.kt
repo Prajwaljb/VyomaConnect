@@ -411,6 +411,7 @@ private fun PairingCode(key: String?) {
  */
 @Composable
 internal fun SearchingCard(vm: AppViewModel, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
     var adding by rememberSaveable { mutableStateOf(false) }
     var usb by rememberSaveable { mutableStateOf(false) }
     var others by rememberSaveable { mutableStateOf(false) }
@@ -446,7 +447,7 @@ internal fun SearchingCard(vm: AppViewModel, modifier: Modifier = Modifier) {
         listOf(
             "Open Vyoma on your PC",
             "Put both on the same Wi-Fi",
-            "Tap your PC when it shows up here",
+            "Scan the code in its window, or tap your PC when it shows up here",
         ).forEachIndexed { i, step ->
             Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(28.dp).glassRaised(CircleShape), contentAlignment = Alignment.Center) {
@@ -458,7 +459,7 @@ internal fun SearchingCard(vm: AppViewModel, modifier: Modifier = Modifier) {
         }
         Spacer(Modifier.height(16.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
-            PillButton("Search again", onClick = { vm.refresh(); round++ })
+            PillButton("Scan code", onClick = { PairScanActivity.open(context) })
             PillButton("Other ways", onClick = { others = true }, prominent = false)
         }
     }
@@ -467,6 +468,11 @@ internal fun SearchingCard(vm: AppViewModel, modifier: Modifier = Modifier) {
         title = { Text("Other ways to connect") },
         text = {
             Column {
+                ListRow(
+                    title = "Search again", subtitle = "Look on this Wi-Fi once more",
+                    icon = Icons.Rounded.Refresh, iconTint = SystemColor.BLUE.color, horizontalPadding = 0.dp, showDivider = true,
+                    onClick = { others = false; vm.refresh(); round++ },
+                )
                 ListRow(
                     title = "Get Vyoma for your PC", subtitle = "Not on it yet? Send it the link",
                     icon = Icons.Rounded.Computer, iconTint = SystemColor.GREEN.color, horizontalPadding = 0.dp, showDivider = true,

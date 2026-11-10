@@ -104,6 +104,42 @@ async fn a_phone_asks_the_pc_accepts_and_packets_flow() {
 }
 
 #[tokio::test]
+async fn a_phone_that_scanned_the_code_pairs_without_a_prompt() {
+    use vyoma_core::invite::{FIELD, Invite, proof};
+    let mut pc = Pc::start("pc-qr").await;
+    let invite = Invite::new(std::time::Instant::now()).unwrap();
+    let secret = *invite.secret();
+    pc.commands.send(Command::Invite(Some(invite))).unwrap();
+
+    // A wrong proof (another code's secret) is prompted for as any request is.
+    let stranger = phone("ph-qr-stranger");
+    let mut link = pc.dial(&stranger).await;
+    pc.event().await;
+    let ts = link::now_ms() / 1000;
+    let wrong = proof(&[1u8; 16], ts, &stranger.cert, &pc.me.cert);
+    link.sender.send(&packet("kdeconnect.pair", json!({ "pair": true, "timestamp": ts, FIELD: wrong }))).await.unwrap();
+    assert!(matches!(pc.event().await, Event::Prompt { .. }));
+
+    // The phone that scanned it: paired straight away, and told so.
+    let ph = phone("ph-qr");
+    let mut link = pc.dial(&ph).await;
+    while !matches!(pc.event().await, Event::Linked { .. }) {}
+    let good = proof(&secret, ts, &ph.cert, &pc.me.cert);
+    link.sender.send(&packet("kdeconnect.pair", json!({ "pair": true, "timestamp": ts, FIELD: good.clone() }))).await.unwrap();
+    assert_eq!(next(&mut link).await["body"], json!({ "pair": true }));
+    assert!(matches!(pc.event().await, Event::Paired { .. }));
+    assert!(TrustStore::open(&pc.dir).unwrap().get(&ph.device_id).is_some());
+
+    // One phone per code: the same proof from another phone now gets a prompt.
+    let late = phone("ph-qr-late");
+    let mut link = pc.dial(&late).await;
+    while !matches!(pc.event().await, Event::Linked { .. }) {}
+    let again = proof(&secret, ts, &late.cert, &pc.me.cert);
+    link.sender.send(&packet("kdeconnect.pair", json!({ "pair": true, "timestamp": ts, FIELD: again }))).await.unwrap();
+    assert!(matches!(pc.event().await, Event::Prompt { .. }));
+}
+
+#[tokio::test]
 async fn the_pc_asks_and_the_phone_says_yes() {
     let mut pc = Pc::start("pc2").await;
     let ph = phone("ph2");

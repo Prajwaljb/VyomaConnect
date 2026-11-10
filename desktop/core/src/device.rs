@@ -21,6 +21,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::link::{self, Link, MAX_PACKET_BYTES, UNPAIRED_PACKET_BYTES, packet};
+use crate::invite::Invite;
 use crate::pairing::{Change, Outcome, PAIR, Pairing, State};
 use crate::trust::{TrustStore, Trusted};
 
@@ -38,6 +39,8 @@ pub enum Command {
     Reject(String),
     Unpair(String),
     Send(String, Value),
+    /// A QR code on screen now (its secret), replacing any before; None takes it down.
+    Invite(Option<Invite>),
 }
 
 /// What the desktop is told.
@@ -125,13 +128,15 @@ pub struct Hub {
     events: mpsc::UnboundedSender<Event>,
     incoming_tx: mpsc::UnboundedSender<Incoming>,
     incoming: mpsc::UnboundedReceiver<Incoming>,
+    /// The QR code on screen, if one is: a request proving it was scanned pairs without a prompt.
+    invite: Option<Invite>,
 }
 
 impl Hub {
     /// [ours]: our certificate (DER), for the codes.
     pub fn new(ours: Vec<u8>, trust: TrustStore, events: mpsc::UnboundedSender<Event>) -> Self {
         let (incoming_tx, incoming) = mpsc::unbounded_channel();
-        Self { ours, trust, devices: HashMap::new(), linked: Arc::default(), links_made: 0, events, incoming_tx, incoming }
+        Self { ours, trust, devices: HashMap::new(), linked: Arc::default(), links_made: 0, events, incoming_tx, incoming, invite: None }
     }
 
     /// The ids with a live link, for [crate::lan::Rules::linked].
@@ -278,7 +283,14 @@ impl Hub {
         match packet["type"].as_str() {
             Some(PAIR) => {
                 let cert = device.links.iter().find(|l| l.no == i.link).map(|l| l.cert.clone()).unwrap_or_default();
-                let out = device.pairing.on_packet(&packet["body"], &cert, device.protocol, link::now_ms() / 1000, Instant::now());
+                let now = Instant::now();
+                let mut out = device.pairing.on_packet(&packet["body"], &cert, device.protocol, link::now_ms() / 1000, now);
+                // It scanned the code on this PC's screen: that was the consent, so no prompt. One phone per code.
+                if matches!(out.change, Some(Change::Prompt { .. })) && self.invite.as_ref().is_some_and(|inv| inv.proves(&packet["body"], &cert, &self.ours, now)) {
+                    self.invite = None;
+                    tracing::info!("{}: pairs from the QR code", i.id);
+                    out = device.pairing.accept();
+                }
                 self.apply(&i.id, out);
             }
             // v8 peers may resend it; what counts came during the handshake.
@@ -322,6 +334,10 @@ impl Hub {
                     None => self.trust.get(&id).is_some().then(|| Outcome { reply: None, change: Some(Change::Unpaired) }),
                 };
                 (id, out)
+            }
+            Command::Invite(invite) => {
+                self.invite = invite;
+                return;
             }
             Command::Send(id, packet) => {
                 if let Some(d) = self.devices.get(&id).filter(|d| d.pairing.is_paired()) {
