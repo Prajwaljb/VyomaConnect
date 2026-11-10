@@ -87,7 +87,7 @@ async fn a_phone_asks_the_pc_accepts_and_packets_flow() {
     assert_eq!(Some(key), verification_key(&ph.cert, &pc.me.cert, Some(ts)));
     pc.commands.send(Command::Accept(id.clone())).unwrap();
     assert_eq!(next(&mut link).await["body"], json!({ "pair": true }));
-    assert!(matches!(pc.event().await, Event::Paired { .. }));
+    assert!(matches!(pc.event().await, Event::Paired { by_code: false, .. }));
     assert!(TrustStore::open(&pc.dir).unwrap().get(&id).is_some(), "the pin is saved");
 
     link.sender.send(&packet("kdeconnect.ping", json!({}))).await.unwrap();
@@ -127,7 +127,7 @@ async fn a_phone_that_scanned_the_code_pairs_without_a_prompt() {
     let good = proof(&secret, ts, &ph.cert, &pc.me.cert);
     link.sender.send(&packet("kdeconnect.pair", json!({ "pair": true, "timestamp": ts, FIELD: good.clone() }))).await.unwrap();
     assert_eq!(next(&mut link).await["body"], json!({ "pair": true }));
-    assert!(matches!(pc.event().await, Event::Paired { .. }));
+    assert!(matches!(pc.event().await, Event::Paired { by_code: true, .. }));
     assert!(TrustStore::open(&pc.dir).unwrap().get(&ph.device_id).is_some());
 
     // One phone per code: the same proof from another phone now gets a prompt.
@@ -150,7 +150,7 @@ async fn the_pc_asks_and_the_phone_says_yes() {
     let Event::Asked { key, .. } = pc.event().await else { panic!("not asked") };
     assert_eq!(Some(key), verification_key(&ph.cert, &pc.me.cert, asked["body"]["timestamp"].as_i64()));
     link.sender.send(&packet("kdeconnect.pair", json!({ "pair": true }))).await.unwrap();
-    assert!(matches!(pc.event().await, Event::Paired { .. }));
+    assert!(matches!(pc.event().await, Event::Paired { by_code: false, .. }));
 }
 
 #[tokio::test]
@@ -194,5 +194,5 @@ async fn a_second_link_carries_on_the_pairing() {
     assert!(matches!(pc.event().await, Event::Routes { remotes, .. } if remotes.len() == 1));
     pc.commands.send(Command::Accept(ph.device_id.clone())).unwrap();
     assert_eq!(next(&mut second).await["body"], json!({ "pair": true }));
-    assert!(matches!(pc.event().await, Event::Paired { .. }));
+    assert!(matches!(pc.event().await, Event::Paired { by_code: false, .. }));
 }

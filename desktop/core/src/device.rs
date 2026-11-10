@@ -60,7 +60,8 @@ pub enum Event {
     Asked { id: String, name: String, key: String },
     /// A pending pairing ended without pairing (refused, ran out, link lost): take the prompt down.
     PairingOver { id: String },
-    Paired { id: String, name: String },
+    /// [by_code]: it scanned the code on this PC's screen, so nobody here said yes to it.
+    Paired { id: String, name: String, by_code: bool },
     Unpaired { id: String, name: String },
     /// A packet from a paired device, for the plugins. [from]: the address of the link it came
     /// over, where a payload it announces is fetched.
@@ -130,13 +131,15 @@ pub struct Hub {
     incoming: mpsc::UnboundedReceiver<Incoming>,
     /// The QR code on screen, if one is: a request proving it was scanned pairs without a prompt.
     invite: Option<Invite>,
+    /// The device pairing on the code right now, for its Paired event.
+    paired_by_code: Option<String>,
 }
 
 impl Hub {
     /// [ours]: our certificate (DER), for the codes.
     pub fn new(ours: Vec<u8>, trust: TrustStore, events: mpsc::UnboundedSender<Event>) -> Self {
         let (incoming_tx, incoming) = mpsc::unbounded_channel();
-        Self { ours, trust, devices: HashMap::new(), linked: Arc::default(), links_made: 0, events, incoming_tx, incoming, invite: None }
+        Self { ours, trust, devices: HashMap::new(), linked: Arc::default(), links_made: 0, events, incoming_tx, incoming, invite: None, paired_by_code: None }
     }
 
     /// The ids with a live link, for [crate::lan::Rules::linked].
@@ -288,10 +291,13 @@ impl Hub {
                 // It scanned the code on this PC's screen: that was the consent, so no prompt. One phone per code.
                 if matches!(out.change, Some(Change::Prompt { .. })) && self.invite.as_ref().is_some_and(|inv| inv.proves(&packet["body"], &cert, &self.ours, now)) {
                     self.invite = None;
+                    self.paired_by_code = Some(i.id.clone());
                     tracing::info!("{}: pairs from the QR code", i.id);
                     out = device.pairing.accept();
                 }
                 self.apply(&i.id, out);
+                // Its Paired event (if any) came out of apply: never leave the mark for a later pairing.
+                self.paired_by_code = None;
             }
             // v8 peers may resend it; what counts came during the handshake.
             Some("kdeconnect.identity") => {}
@@ -335,8 +341,15 @@ impl Hub {
                 };
                 (id, out)
             }
-            Command::Invite(invite) => {
-                self.invite = invite;
+            Command::Invite(Some(invite)) => {
+                self.invite = Some(invite);
+                return;
+            }
+            // Off the screen: a phone that was mid-scan still gets a moment.
+            Command::Invite(None) => {
+                if let Some(invite) = self.invite.as_mut() {
+                    invite.hide(Instant::now());
+                }
                 return;
             }
             Command::Send(id, packet) => {
@@ -398,7 +411,8 @@ impl Hub {
                     });
                 }
                 tracing::info!("{id}: paired");
-                self.emit(Event::Paired { id: id.to_owned(), name });
+                let by_code = self.paired_by_code.take().is_some_and(|c| c == id);
+                self.emit(Event::Paired { id: id.to_owned(), name, by_code });
             }
             Some(Change::Unpaired) => {
                 if let Some(d) = self.devices.get_mut(id) {

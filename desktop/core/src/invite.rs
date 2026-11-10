@@ -18,6 +18,8 @@ pub const FIELD: &str = "vyomaInvite";
 /// How long a code on screen can be used.
 pub const LIFETIME: Duration = Duration::from_secs(10 * 60);
 pub const SECRET_LEN: usize = 16;
+/** How long a code still works once it's off the screen: a phone may be mid-scan. */
+pub const AFTER_SHOWN: Duration = Duration::from_secs(20);
 
 /// One code's secret, while it lasts.
 pub struct Invite {
@@ -36,6 +38,11 @@ impl Invite {
         let mut secret = [0u8; SECRET_LEN];
         SystemRandom::new().fill(&mut secret).ok()?;
         Some(Self { secret, until: now + LIFETIME })
+    }
+
+    /// Off the screen: it works [AFTER_SHOWN] longer, for a phone that was already scanning.
+    pub fn hide(&mut self, now: Instant) {
+        self.until = self.until.min(now + AFTER_SHOWN);
     }
 
     pub fn secret(&self) -> &[u8; SECRET_LEN] {
@@ -137,6 +144,12 @@ mod tests {
         assert!(!invite.proves(&json!({ "timestamp": 1_800_000_000, FIELD: good }), phone, b"relay", now));
         let other = Invite::new(now).unwrap();
         assert!(!other.proves(&json!({ "timestamp": 1_800_000_000, FIELD: good }), phone, pc, now));
+        // Taken off the screen: a little longer, then no.
+        let mut hidden = Invite::new(now).unwrap();
+        let late = proof(hidden.secret(), 1_800_000_000, phone, pc);
+        hidden.hide(now);
+        assert!(hidden.proves(&json!({ "timestamp": 1_800_000_000, FIELD: late }), phone, pc, now + AFTER_SHOWN / 2));
+        assert!(!hidden.proves(&json!({ "timestamp": 1_800_000_000, FIELD: late }), phone, pc, now + AFTER_SHOWN));
         // Run out, or missing and malformed proofs: no.
         assert!(!invite.proves(&json!({ "timestamp": 1_800_000_000, FIELD: good }), phone, pc, now + LIFETIME));
         assert!(!invite.proves(&json!({ "timestamp": 1_800_000_000 }), phone, pc, now));

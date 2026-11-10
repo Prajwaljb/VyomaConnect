@@ -46,17 +46,40 @@ fn fetch(ui: slint::Weak<MainWindow>) {
     std::thread::spawn(move || {
         let text = DbusDaemon::connect().and_then(|d| d.pairing_code());
         let _ = slint::invoke_from_event_loop(move || {
-            let Some(ui) = ui.upgrade() else { return };
-            match text.ok().as_deref().and_then(image) {
-                Some(code) => {
-                    ui.set_pair_code(code);
-                    ui.set_pair_code_ready(true);
+            let Some(win) = ui.upgrade() else { return };
+            match text {
+                Ok(text) => match image(&text) {
+                    Some(code) => {
+                        win.set_pair_code(code);
+                        win.set_pair_code_note("".into());
+                        win.set_pair_code_ready(true);
+                    }
+                    None => {
+                        win.set_pair_code_note("Couldn't draw the code. Pair from the list of nearby phones instead.".into());
+                        win.set_pair_code_ready(false);
+                    }
+                },
+                Err(e) => {
+                    // Say why there's no code, and try again shortly (the daemon restarting, the
+                    // network coming back) rather than waiting for the next renewal.
+                    let offline = format!("{e:#}").contains("offline");
+                    win.set_pair_code_note(
+                        if offline { "This PC isn't on a network. Connect it to the same Wi-Fi as your phone." } else { "Couldn't make a code. Trying again…" }.into(),
+                    );
+                    win.set_pair_code_ready(false);
+                    slint::Timer::single_shot(RETRY, move || {
+                        if ui.upgrade().is_some_and(|w| w.get_wants_code()) {
+                            fetch(ui.clone());
+                        }
+                    });
                 }
-                None => ui.set_pair_code_ready(false),
             }
         });
     });
 }
+
+/// How soon a code that couldn't be made is tried again.
+const RETRY: Duration = Duration::from_secs(4);
 
 /// Pixels per module: a ~60-module code comes out near 520 px, drawn at a third of that.
 const SCALE: usize = 8;
@@ -66,7 +89,8 @@ const DARK: Rgba8Pixel = Rgba8Pixel { r: 0x1c, g: 0x1c, b: 0x1e, a: 0xff };
 const LIGHT: Rgba8Pixel = Rgba8Pixel { r: 0xff, g: 0xff, b: 0xff, a: 0xff };
 
 pub fn image(text: &str) -> Option<Image> {
-    let code = qrcode::QrCode::with_error_correction_level(text.as_bytes(), qrcode::EcLevel::M).ok()?;
+    // Low error correction: a screen doesn't smudge, and fewer, bigger squares read from farther away.
+    let code = qrcode::QrCode::with_error_correction_level(text.as_bytes(), qrcode::EcLevel::L).ok()?;
     let modules = code.width();
     let colors = code.to_colors();
     let side = (modules + 2 * QUIET) * SCALE;

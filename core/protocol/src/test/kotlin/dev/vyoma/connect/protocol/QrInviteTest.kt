@@ -32,6 +32,11 @@ class QrInviteTest {
         // Only IP literals: a name would need a lookup someone could answer falsely.
         assertNull(QrInvite.parse(code.replace("a=192.168.1.20,10.0.0.5", "a=evil.example")))
         assertEquals(listOf("10.0.0.5"), QrInvite.parse(code.replace("a=192.168.1.20,", "a=999.1.1.1,"))?.addresses)
+        // Not this phone, not everyone, and only KDE Connect's ports.
+        assertEquals(listOf("10.0.0.5"), QrInvite.parse(code.replace("a=192.168.1.20,", "a=127.0.0.1,0.0.0.0,224.0.0.1,255.255.255.255,::1,"))?.addresses)
+        assertNull(QrInvite.parse(code.replace("&p=1717", "&p=22")))
+        assertNull(QrInvite.parse(code.replace("&p=1717", "")))
+        assertEquals("Desk PC", QrInvite.parse(code.replace("name=Desk%20PC", "name=%E2%80%AEDesk%20PC%07"))?.name)
     }
 
     @Test

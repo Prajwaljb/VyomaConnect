@@ -1755,14 +1755,17 @@ component CommandSheet inherits Rectangle {
 component PairCode inherits VerticalLayout {
     in property <image> code;
     in property <bool> ready;
+    /// Why there's no code (offline, the daemon not answering); empty while one is being made.
+    in property <string> note;
     spacing: 10px;
     HorizontalLayout {
         alignment: center;
         padding-bottom: 6px;
+        // Big enough for a phone to read from arm's length (212 px read as ~1 px a square at 640x480).
         Rectangle {
-            width: 212px;
-            height: 212px;
-            border-radius: 22px;
+            width: 248px;
+            height: 248px;
+            border-radius: 24px;
             background: white;
             border-width: Theme.dark ? 0px : 1px;
             border-color: Theme.rim;
@@ -1774,9 +1777,10 @@ component PairCode inherits VerticalLayout {
                     image-rendering: pixelated;
                 }
                 if !root.ready: Text {
-                    text: "Making a code…";
-                    color: #8e8e93;
+                    text: root.note != "" ? root.note : "Making a code…";
+                    color: #6e6e73;
                     font-size: 13px;
+                    wrap: word-wrap;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -1805,6 +1809,7 @@ component EmptyPage inherits Page {
     in property <bool> daemon-ok;
     in property <image> code;
     in property <bool> code-ready;
+    in property <string> code-note;
     callback search();
     callback start();
     title: daemon-ok ? "No phones yet" : "Vyoma isn't running";
@@ -1815,6 +1820,7 @@ component EmptyPage inherits Page {
             PairCode {
                 code: root.code;
                 ready: root.code-ready;
+                note: root.code-note;
             }
         }
     }
@@ -2036,6 +2042,7 @@ component SetupPage inherits Page {
     in property <[Phone]> nearby;
     in property <image> code;
     in property <bool> code-ready;
+    in property <string> code-note;
     in property <bool> daemon-ok;
     in property <[Feature]> missing;
     in property <bool> installable;
@@ -2075,6 +2082,7 @@ component SetupPage inherits Page {
         if root.daemon-ok && !root.paired: PairCode {
             code: root.code;
             ready: root.code-ready;
+            note: root.code-note;
         }
         if !root.paired && root.nearby.length > 0: SectionLabel {
             text: "Or pair one nearby";
@@ -2326,6 +2334,7 @@ component AddPhonePage inherits Page {
     in property <[Phone]> nearby;
     in property <image> code;
     in property <bool> code-ready;
+    in property <string> code-note;
     callback pair(string);
     callback accept(string);
     callback reject(string);
@@ -2337,6 +2346,7 @@ component AddPhonePage inherits Page {
             PairCode {
                 code: root.code;
                 ready: root.code-ready;
+                note: root.code-note;
             }
         }
     }
@@ -2424,6 +2434,7 @@ export component MainWindow inherits Window {
     // The pairing QR code, while a page shows it ([wants-code]: Rust keeps a fresh one, and takes it down after).
     in property <image> pair-code;
     in property <bool> pair-code-ready;
+    in property <string> pair-code-note;
     out property <bool> wants-code: root.daemon-ok && (root.setup ? root.phones.length == 0
         : root.selected == "add" || (!root.has-current && root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands"));
     callback wants-code-changed(bool);
@@ -2697,6 +2708,7 @@ export component MainWindow inherits Window {
             nearby: root.nearby;
             code: root.pair-code;
             code-ready: root.pair-code-ready;
+            code-note: root.pair-code-note;
             pair(id) => { root.pair(id); }
             accept(id) => { root.accept(id); }
             reject(id) => { root.reject(id); }
@@ -2717,6 +2729,7 @@ export component MainWindow inherits Window {
             daemon-ok: root.daemon-ok;
             code: root.pair-code;
             code-ready: root.pair-code-ready;
+            code-note: root.pair-code-note;
             search => { root.search(); }
             start => { root.start-daemon(); }
         }
@@ -2729,6 +2742,7 @@ export component MainWindow inherits Window {
         nearby: root.nearby;
         code: root.pair-code;
         code-ready: root.pair-code-ready;
+        code-note: root.pair-code-note;
         daemon-ok: root.daemon-ok;
         missing: root.missing;
         installable: root.installable;
