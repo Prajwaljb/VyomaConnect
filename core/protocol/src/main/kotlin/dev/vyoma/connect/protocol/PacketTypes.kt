@@ -43,6 +43,12 @@ object PacketTypes {
     const val CONTACTS_REQUEST_VCARDS_BY_UIDS = "kdeconnect.contacts.request_vcards_by_uid"
     const val CONTACTS_RESPONSE_UIDS_TIMESTAMPS = "kdeconnect.contacts.response_uids_timestamps"
     const val CONTACTS_RESPONSE_VCARDS = "kdeconnect.contacts.response_vcards"
+
+    /** PC → phone: `{action: answer|decline|hangup}` for the current call. */
+    const val CALL_REQUEST = "vyoma.call.request"
+
+    /** Phone → PC: `{action, error?}`, how that went. */
+    const val CALL_DONE = "vyoma.call.done"
     const val CONNECTIVITY_REPORT = "kdeconnect.connectivity_report"
     const val CONNECTIVITY_REPORT_REQUEST = "kdeconnect.connectivity_report.request"
     const val SFTP = "kdeconnect.sftp"

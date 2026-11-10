@@ -195,7 +195,27 @@ sealed interface CallEvent {
 interface CallSource {
     val events: Flow<CallEvent>
     fun muteRinger()
+
+    /** Answers, declines or hangs up the current call ([CallAction]); why it couldn't, or null when done. Blocks. */
+    fun act(action: String): String? = "This phone can't do that"
+
+    /** What the PC needs to know with each call, read when it's sent. */
+    fun facts(): CallFacts = CallFacts()
 }
+
+object CallAction {
+    const val ANSWER = "answer"
+    const val DECLINE = "decline"
+    const val HANG_UP = "hangup"
+    val all = setOf(ANSWER, DECLINE, HANG_UP)
+}
+
+/**
+ * [canAct]: the PC may answer, decline and hang up. [headset]: a Bluetooth headset (not a
+ * computer) is connected, so the call's sound already has somewhere to go and the PC shouldn't take
+ * it. [bluetoothName]: this phone's Bluetooth name, so the PC finds it among its paired devices.
+ */
+data class CallFacts(val canAct: Boolean = false, val headset: Boolean = false, val bluetoothName: String? = null)
 
 class TelephonyPlugin(private val ctx: PluginContext, private val source: CallSource) : Plugin {
     override suspend fun onStart() {
@@ -219,23 +239,44 @@ class TelephonyPlugin(private val ctx: PluginContext, private val source: CallSo
                     event.app?.let { put("appName", it) }
                     if (!cancel) event.photo?.let { put("phoneThumbnail", it) }
                     if (cancel) put("isCancel", true)
+                    // Vyoma's PC answers and takes the sound; stock desktops ignore these.
+                    if (!cancel && event !is CallEvent.Missed) {
+                        val facts = runCatching { source.facts() }.getOrDefault(CallFacts())
+                        put("vyomaAnswer", facts.canAct)
+                        put("vyomaHeadset", facts.headset)
+                        facts.bluetoothName?.let { put("vyomaBluetooth", it) }
+                    }
                 })
             }
         }
     }
 
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
-        if (packet.type == PacketTypes.TELEPHONY_REQUEST_MUTE) source.muteRinger()
+        when (packet.type) {
+            PacketTypes.TELEPHONY_REQUEST_MUTE -> source.muteRinger()
+            PacketTypes.CALL_REQUEST -> {
+                val action = packet.string("action")?.takeIf { it in CallAction.all } ?: return true
+                ctx.scope.launch(Dispatchers.IO) {
+                    val error = runCatching { source.act(action) }.getOrElse { it.message ?: "Didn't work" }
+                    VLog.i(TAG, "PC asked to $action: ${error ?: "done"}")
+                    ctx.send(packet(PacketTypes.CALL_DONE) {
+                        put("action", action)
+                        error?.let { put("error", it) }
+                    })
+                }
+            }
+        }
         return true
     }
 
     companion object {
         const val ID = "telephony"
+        private const val TAG = "Calls"
 
         fun spec(source: CallSource) = PluginSpec(
             ID,
-            incoming = setOf(PacketTypes.TELEPHONY_REQUEST_MUTE),
-            outgoing = setOf(PacketTypes.TELEPHONY),
+            incoming = setOf(PacketTypes.TELEPHONY_REQUEST_MUTE, PacketTypes.CALL_REQUEST),
+            outgoing = setOf(PacketTypes.TELEPHONY, PacketTypes.CALL_DONE),
         ) { TelephonyPlugin(it, source) }
     }
 }

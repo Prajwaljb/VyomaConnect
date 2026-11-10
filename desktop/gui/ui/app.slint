@@ -35,6 +35,8 @@ export struct Phone {
     can-ring: bool,
     can-browse: bool,
     can-share: bool,
+    // Its texts can be read and sent here (Messages).
+    can-text: bool,
     // How fast it answers, in ms (-1 until timed), and how long it's been connected, as up to two
     // number-and-unit pairs ("2" "h" "14" "min").
     rtt: int,
@@ -87,6 +89,28 @@ export struct Happening {
 export struct Day {
     label: string,
     items: [Happening],
+}
+
+// A text conversation in the Messages list. [thread]: the phone's id for it; [initial]: the
+// avatar's letter ("" for a number); [hue]: the avatar's colour, 0..5; [meta]: when ("14:32", "Mon").
+export struct Chat {
+    thread: string,
+    name: string,
+    initial: string,
+    hue: int,
+    snippet: string,
+    meta: string,
+    unread: bool,
+}
+
+// One text. [day]: a day label above it where a day starts ("Today"); [meta]: under it, at the end
+// of a run ("14:32", "Sending…", "Not sent").
+export struct Bubble {
+    text: string,
+    mine: bool,
+    day: string,
+    meta: string,
+    failed: bool,
 }
 
 // Snapshots only: how far each page starts scrolled (past the end means to the end).
@@ -150,6 +174,7 @@ export global Theme {
     out property <color> tile-blue: #0A62D2;
     out property <color> tile-teal: #148A99;
     out property <color> tile-orange: #C2700A;
+    out property <color> tile-green: #1E8A3C;
 }
 
 export global Words {
@@ -870,7 +895,14 @@ component Page inherits Rectangle {
     in property <bool> has-glyph: true;
     in property <string> action;
     callback act();
-    property <length> column: min(620px, root.width - 64px);
+    // A glass capsule at the top left that goes back ("Messages"), "" for none.
+    in property <string> back;
+    callback go-back();
+    // Opens scrolled to its end, and stays there as content grows (a conversation).
+    in property <bool> stick-end;
+    // Room under the content (for something floating over the page's foot).
+    in property <length> bottom-room: 48px;
+    out property <length> column: min(620px, root.width - 64px);
     property <length> hero: max(200px, min(290px, root.height * 0.34));
     property <bool> entered;
     init => { root.entered = true; }
@@ -901,7 +933,7 @@ component Page inherits Rectangle {
         VerticalLayout {
             padding-left: (root.width - root.column) / 2;
             padding-right: (root.width - root.column) / 2;
-            padding-bottom: 48px;
+            padding-bottom: root.bottom-room;
             spacing: 14px;
             alignment: start;
             VerticalLayout {
@@ -937,6 +969,10 @@ component Page inherits Rectangle {
     }
     }
     }
+    property <length> grown: scroll.content-height;
+    changed grown => {
+        if root.stick-end { scroll.content-y = -max(0px, scroll.content-height - scroll.visible-height); }
+    }
     // Past the hero, the title docks in a bubble at the top.
     property <bool> docked: -scroll.content-y > root.hero - 64px;
     Capsule {
@@ -954,6 +990,13 @@ component Page inherits Rectangle {
         x: root.width - self.width - 20px;
         y: 16px;
         clicked => { root.act(); }
+    }
+    if root.back != "": Capsule {
+        text: "‹  " + root.back;
+        tappable: true;
+        x: 20px;
+        y: 16px;
+        clicked => { root.go-back(); }
     }
 }
 
@@ -1034,6 +1077,7 @@ component PhonePage inherits Page {
     callback send-files(string);
     callback set-permission(string, string, bool);
     callback allow-clipboard(string);
+    callback messages(string);
     in property <bool> firewall-fix;
     callback open-firewall();
     title: phone.name;
@@ -1189,6 +1233,12 @@ component PhonePage inherits Page {
             fill: Theme.tile-orange;
             enabled: root.phone.linked && root.phone.can-ring;
             clicked => { root.ring(root.phone.id); }
+        }
+        if root.phone.can-text: Tile {
+            icon: @image-url("icons/chat.svg");
+            text: "Messages";
+            fill: Theme.tile-green;
+            clicked => { root.messages(root.phone.id); }
         }
     }
     if root.phone.paired && root.phone.via == "bluetooth": Text {
@@ -1431,6 +1481,298 @@ component ActivityPage inherits Page {
             item: e;
             first: i == 0;
             last: i == d.items.length - 1;
+        }
+    }
+}
+
+// A person as a coloured circle with their initial (a phone glyph for a bare number).
+component Avatar inherits Rectangle {
+    in property <string> letter;
+    in property <int> hue;
+    in property <length> size: 38px;
+    width: size;
+    height: size;
+    border-radius: size / 2;
+    background: hue == 0 ? Theme.blue : hue == 1 ? Theme.teal : hue == 2 ? Theme.orange : hue == 3 ? Theme.green : hue == 4 ? Theme.red : Theme.gray;
+    border-width: 1px;
+    border-color: @linear-gradient(Theme.rim-angle, #FFFFFFB0 0%, #FFFFFF24 35%, #FFFFFF24 65%, #FFFFFF8A 100%);
+    if root.letter != "": Text {
+        text: root.letter;
+        color: white;
+        font-size: root.size * 0.42;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if root.letter == "": Glyph {
+        source: @image-url("icons/phone.svg");
+        tint: white;
+        width: root.size * 0.5;
+        height: root.size * 0.5;
+    }
+}
+
+// A conversation in the list: who, when, the newest text on one line; unread ones in bold with a dot.
+component ChatRow inherits Rectangle {
+    in property <Chat> chat;
+    in property <bool> first;
+    in property <bool> last;
+    callback clicked;
+    border-top-left-radius: first ? 26px : 0px;
+    border-top-right-radius: first ? 26px : 0px;
+    border-bottom-left-radius: last ? 26px : 0px;
+    border-bottom-right-radius: last ? 26px : 0px;
+    background: touch.pressed ? Theme.pressed : touch.has-hover ? Theme.hover : transparent;
+    animate background { duration: 120ms; }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 11px;
+        padding-bottom: 11px;
+        spacing: 13px;
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                letter: root.chat.initial;
+                hue: root.chat.hue;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: root.chat.name;
+                    color: Theme.text;
+                    font-size: 15px;
+                    font-weight: root.chat.unread ? 700 : 500;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: root.chat.meta;
+                    color: root.chat.unread ? Theme.accent : Theme.muted;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: root.chat.snippet;
+                    color: root.chat.unread ? Theme.text : Theme.muted;
+                    font-size: 13px;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if root.chat.unread: VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 9px;
+                        height: 9px;
+                        border-radius: 4.5px;
+                        background: Theme.accent;
+                    }
+                }
+            }
+        }
+    }
+    Rectangle {
+        x: 67px;
+        y: parent.height - 1px;
+        width: parent.width - self.x;
+        height: 1px;
+        background: Theme.divider;
+        visible: !root.last;
+    }
+}
+
+// A phone's text conversations, newest first.
+component MessagesPage inherits Page {
+    in property <string> phone-name;
+    // "loading", "ready", "silent" (nothing came back) or "away".
+    in property <string> state;
+    in property <[Chat]> chats;
+    callback open(string);
+    title: "Messages";
+    subtitle: root.phone-name;
+    glyph: @image-url("icons/chat.svg");
+
+    if root.state == "loading" && root.chats.length == 0: Text {
+        text: "Getting the texts from your phone…";
+        color: Theme.muted;
+        font-size: 15px;
+        horizontal-alignment: center;
+    }
+    if root.state == "silent" && root.chats.length == 0: AskCard {
+        title: "No texts came from the phone";
+        body: "If it has texts, open Vyoma on the phone, go to Settings and turn on Calls & messages on PC.";
+    }
+    if root.state == "away" && root.chats.length == 0: AskCard {
+        title: "The phone's away";
+        body: "Its texts show here once it's connected.";
+    }
+    if root.chats.length > 0: Glass {
+        for c[i] in root.chats: ChatRow {
+            chat: c;
+            first: i == 0;
+            last: i == root.chats.length - 1;
+            clicked => { root.open(c.thread); }
+        }
+    }
+    if root.chats.length > 0: Text {
+        text: "Texts (SMS) only. RCS chats and other apps' messages stay on the phone.";
+        color: Theme.muted;
+        font-size: 12px;
+        wrap: word-wrap;
+        min-height: self.preferred-height;
+        horizontal-alignment: center;
+    }
+}
+
+// One text: the accent's fill with white words when it's yours (on the right), clear glass when it's theirs.
+component TextBubble inherits HorizontalLayout {
+    in property <Bubble> bubble;
+    in property <length> widest;
+    alignment: root.bubble.mine ? end : start;
+    Rectangle {
+        width: min(words.preferred-width, root.widest - 30px) + 30px;
+        height: box.preferred-height;
+        border-radius: 19px;
+        background: root.bubble.failed ? Theme.error.transparentize(25%) : root.bubble.mine ? Theme.accent-fill : Theme.card;
+        border-width: 1px;
+        border-color: root.bubble.mine || root.bubble.failed ? #FFFFFF2E : Theme.rim;
+        box := VerticalLayout {
+            padding-left: 15px;
+            padding-right: 15px;
+            padding-top: 9px;
+            padding-bottom: 9px;
+            words := Text {
+                text: root.bubble.text;
+                color: root.bubble.mine || root.bubble.failed ? white : Theme.text;
+                font-size: 14.5px;
+                wrap: word-wrap;
+                min-height: self.preferred-height;
+            }
+        }
+    }
+}
+
+// One conversation: its texts, oldest first, opening at the newest; the reply box floats under it.
+component ThreadPage inherits Page {
+    in property <string> name;
+    in property <string> number;
+    in property <[Bubble]> bubbles;
+    title: root.name;
+    subtitle: root.number != root.name ? root.number : "";
+    has-glyph: false;
+    back: "Messages";
+    stick-end: true;
+    bottom-room: 100px;
+
+    for b in root.bubbles: VerticalLayout {
+        spacing: 5px;
+        if b.day != "": Text {
+            text: b.day;
+            color: Theme.muted;
+            font-size: 12px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            height: self.preferred-height + 14px;
+            vertical-alignment: bottom;
+        }
+        TextBubble {
+            bubble: b;
+            widest: root.column * 0.74;
+        }
+        if b.meta != "": Text {
+            text: b.meta;
+            color: b.failed ? Theme.error : Theme.muted;
+            font-size: 11px;
+            horizontal-alignment: b.mine ? right : left;
+        }
+    }
+}
+
+// The reply box: glass, a line that grows to four, and the send circle. Return sends; Shift+Return
+// starts a new line; Escape goes back to the list.
+component Composer inherits Rectangle {
+    in-out property <string> text;
+    in property <bool> enabled: true;
+    callback send();
+    callback escape();
+    public function take-focus() { input.focus(); }
+    property <bool> ready: root.enabled && root.text != "";
+    height: min(input.preferred-height, 4 * 21px) + 26px;
+    border-radius: min(self.height / 2, 26px);
+    background: Theme.chrome;
+    border-width: 1px;
+    border-color: Theme.rim;
+    drop-shadow-blur: Theme.dark ? 0px : 18px;
+    drop-shadow-offset-x: Theme.fall-x * 5px;
+    drop-shadow-offset-y: Theme.fall-y * 5px;
+    drop-shadow-color: Theme.shadow;
+    TouchArea {
+        mouse-cursor: MouseCursor.text;
+        clicked => { input.focus(); }
+    }
+    if root.text == "": Text {
+        x: 22px;
+        width: parent.width - 80px;
+        height: parent.height;
+        text: root.enabled ? "Text message" : "The phone isn't connected";
+        color: Theme.muted.transparentize(30%);
+        font-size: 15px;
+        vertical-alignment: center;
+    }
+    FocusScope {
+        x: 22px;
+        y: 13px;
+        width: parent.width - 80px;
+        height: parent.height - 26px;
+        capture-key-pressed(event) => {
+            if event.text == Key.Return && !event.modifiers.shift {
+                if root.ready { root.send(); }
+                return EventResult.accept;
+            }
+            if event.text == Key.Escape { root.escape(); return EventResult.accept; }
+            EventResult.reject
+        }
+        input := TextInput {
+            text <=> root.text;
+            enabled: root.enabled;
+            color: Theme.text;
+            font-size: 15px;
+            single-line: false;
+            wrap: word-wrap;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent.with-alpha(0.3);
+        }
+    }
+    Rectangle {
+        x: parent.width - self.width - 8px;
+        y: parent.height - self.height - 8px;
+        width: 36px;
+        height: 36px;
+        border-radius: 18px;
+        background: root.ready ? (send-touch.pressed ? Theme.accent-fill.darker(0.15) : Theme.accent-fill) : Theme.raised;
+        animate background { duration: 160ms; }
+        Glyph {
+            source: @image-url("icons/arrow-up.svg");
+            tint: root.ready ? white : Theme.muted;
+            width: 18px;
+            height: 18px;
+        }
+        send-touch := TouchArea {
+            enabled: root.ready;
+            mouse-cursor: root.ready ? pointer : default;
+            clicked => { root.send(); }
         }
     }
 }
@@ -2490,6 +2832,17 @@ export component MainWindow inherits Window {
     in property <[Day]> days;
     in property <bool> activity-loaded;
     in property <string> activity-summary: "Nothing yet";
+    // A phone's texts (selected: "messages"): its conversations while no [thread] is open, else
+    // that one's texts and the reply box ([draft]).
+    in property <string> texts-phone;
+    in property <bool> texts-linked;
+    in property <string> texts-state;
+    in property <[Chat]> chats;
+    in-out property <string> thread;
+    in property <string> thread-name;
+    in property <string> thread-number;
+    in property <[Bubble]> bubbles;
+    in-out property <string> draft;
     // Commands phones can run (selected: "commands"), and ready-made ones not added yet.
     in property <[Command]> commands;
     in property <[Command]> suggestions;
@@ -2522,7 +2875,7 @@ export component MainWindow inherits Window {
     // A phone that just paired while the code was up (its name): the code turns into a tick.
     in property <string> pair-code-done;
     out property <bool> wants-code: root.daemon-ok && (root.setup ? root.phones.length == 0
-        : root.selected == "add" || (!root.has-current && root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands"));
+        : root.selected == "add" || (!root.has-current && root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands" && root.selected != "messages"));
     callback wants-code-changed(bool);
     changed wants-code => { root.wants-code-changed(root.wants-code); }
     // A phone paired with the code shown: that code is used up, so a page still showing one gets a new one.
@@ -2547,6 +2900,10 @@ export component MainWindow inherits Window {
     callback show-pc();
     callback show-activity();
     callback show-commands();
+    // A phone's Messages (its id), one of its conversations (thread), and a text sent to it.
+    callback show-messages(string);
+    callback open-thread(string);
+    callback send-text(string, string);
     // key ("" for new), name, command line, fingerprint, every time.
     callback save-command(string, string, string, bool, bool);
     callback remove-command(string);
@@ -2578,6 +2935,7 @@ export component MainWindow inherits Window {
                 return EventResult.reject;
             }
             if root.setup || root.confirm-unpair || root.confirm-clear || root.editing { return EventResult.reject; }
+            if event.text == Key.Escape && root.selected == "messages" && root.thread != "" { root.thread = ""; return EventResult.accept; }
             if event.text == Key.UpArrow { root.step(-1); return EventResult.accept; }
             if event.text == Key.DownArrow { root.step(1); return EventResult.accept; }
             EventResult.reject
@@ -2660,7 +3018,7 @@ export component MainWindow inherits Window {
                 subtitle: Words.short(p);
                 subtitle-color: p.code != "" ? Theme.pending : Theme.muted;
                 dot: Words.dot(p);
-                selected: p.id == root.selected;
+                selected: p.id == root.selected || (root.selected == "messages" && p.id == root.current.id);
                 clicked => { root.select(p.id); }
             }
             if root.nearby.length > 0: SectionLabel {
@@ -2794,6 +3152,27 @@ export component MainWindow inherits Window {
                 root.editing = true;
             }
         }
+        if root.selected == "messages" && root.daemon-ok && root.thread == "": MessagesPage {
+            phone-name: root.texts-phone;
+            state: root.texts-state;
+            chats: root.chats;
+            open(t) => { root.open-thread(t); }
+        }
+        if root.selected == "messages" && root.daemon-ok && root.thread != "": ThreadPage {
+            name: root.thread-name;
+            number: root.thread-number;
+            bubbles: root.bubbles;
+            go-back => { root.thread = ""; }
+        }
+        if root.selected == "messages" && root.daemon-ok && root.thread != "": Composer {
+            x: (parent.width - self.width) / 2;
+            y: parent.height - self.height - 22px;
+            width: min(620px, parent.width - 64px);
+            text <=> root.draft;
+            enabled: root.texts-linked;
+            send => { root.send-text(root.thread, root.draft); }
+            escape => { root.thread = ""; }
+        }
         if root.selected == "add" && root.daemon-ok: AddPhonePage {
             nearby: root.nearby;
             code: root.pair-code;
@@ -2804,7 +3183,7 @@ export component MainWindow inherits Window {
             accept(id) => { root.accept(id); }
             reject(id) => { root.reject(id); }
         }
-        if root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands" && root.selected != "add" && root.has-current: PhonePage {
+        if root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands" && root.selected != "add" && root.selected != "messages" && root.has-current: PhonePage {
             phone: root.current;
             confirm-unpair <=> root.confirm-unpair;
             pair(id) => { root.pair(id); }
@@ -2815,10 +3194,11 @@ export component MainWindow inherits Window {
             send-files(id) => { root.send-files(id); }
             set-permission(id, key, on) => { root.set-permission(id, key, on); }
             allow-clipboard(id) => { root.allow-clipboard(id); }
+            messages(id) => { root.show-messages(id); }
             firewall-fix: root.firewall-fix;
             open-firewall => { root.open-firewall(); }
         }
-        if ((root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands" && root.selected != "add") || !root.daemon-ok) && !root.has-current: EmptyPage {
+        if ((root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands" && root.selected != "add" && root.selected != "messages") || !root.daemon-ok) && !root.has-current: EmptyPage {
             daemon-ok: root.daemon-ok;
             code: root.pair-code;
             code-ready: root.pair-code-ready;

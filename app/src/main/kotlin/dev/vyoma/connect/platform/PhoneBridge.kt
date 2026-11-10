@@ -2,6 +2,10 @@ package dev.vyoma.connect.platform
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothClass
+import android.bluetooth.BluetoothHeadset
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -14,6 +18,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.ContactsContract
 import android.provider.Telephony
+import android.telecom.TelecomManager
 import android.telephony.ServiceState
 import android.telephony.SignalStrength
 import android.telephony.SmsManager
@@ -24,7 +29,9 @@ import android.telephony.TelephonyManager
 import android.util.Base64
 import androidx.core.content.ContextCompat
 import dev.vyoma.connect.protocol.VLog
+import dev.vyoma.connect.protocol.plugin.builtin.CallAction
 import dev.vyoma.connect.protocol.plugin.builtin.CallEvent
+import dev.vyoma.connect.protocol.plugin.builtin.CallFacts
 import dev.vyoma.connect.protocol.plugin.builtin.CallSource
 import dev.vyoma.connect.protocol.plugin.builtin.ContactStore
 import dev.vyoma.connect.protocol.plugin.builtin.SignalState
@@ -49,7 +56,12 @@ object PhonePermissions {
         Manifest.permission.READ_PHONE_STATE,
         Manifest.permission.READ_CALL_LOG,
         Manifest.permission.READ_CONTACTS,
+        // Answer, decline and hang up from the PC.
+        Manifest.permission.ANSWER_PHONE_CALLS,
     )
+
+    /** Asked together with [all], but optional: it tells the PC whether headphones already take the call, and finds this phone among the PC's Bluetooth devices. */
+    val ask = all + Manifest.permission.BLUETOOTH_CONNECT
 
     fun granted(context: Context, permission: String) =
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
@@ -265,6 +277,7 @@ class CallMonitor(private val context: Context, private val contacts: AndroidCon
         if (!PhonePermissions.granted(context, Manifest.permission.READ_PHONE_STATE)) return
         ContextCompat.registerReceiver(context, receiver, IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED), ContextCompat.RECEIVER_EXPORTED)
         registered = true
+        watchHeadsets()
     }
 
     fun stop() {
@@ -272,6 +285,68 @@ class CallMonitor(private val context: Context, private val contacts: AndroidCon
         runCatching { context.unregisterReceiver(receiver) }
         registered = false
         restoreRinger()
+        headsets?.let { h -> runCatching { bluetooth()?.closeProfileProxy(BluetoothProfile.HEADSET, h) } }
+        headsets = null
+    }
+
+    // ---- what the PC may do with a call ----------------------------------------------------------
+
+    @Volatile private var headsets: BluetoothHeadset? = null
+
+    private fun bluetooth() = context.getSystemService(BluetoothManager::class.java)?.adapter
+
+    private fun watchHeadsets() {
+        if (headsets != null || !PhonePermissions.granted(context, Manifest.permission.BLUETOOTH_CONNECT)) return
+        runCatching {
+            bluetooth()?.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
+                override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+                    headsets = proxy as? BluetoothHeadset
+                }
+
+                override fun onServiceDisconnected(profile: Int) {
+                    headsets = null
+                }
+            }, BluetoothProfile.HEADSET)
+        }.onFailure { VLog.w("Calls", "can't see Bluetooth headsets: ${it.message}") }
+    }
+
+    @SuppressLint("MissingPermission")
+    override fun facts(): CallFacts {
+        watchHeadsets()
+        val bt = PhonePermissions.granted(context, Manifest.permission.BLUETOOTH_CONNECT)
+        // A PC connected as this phone's headset (Vyoma's own, for calls) doesn't count: it's the PC.
+        val headset = bt && runCatching {
+            headsets?.connectedDevices.orEmpty().any { it.bluetoothClass?.majorDeviceClass != BluetoothClass.Device.Major.COMPUTER }
+        }.getOrDefault(false)
+        val canAct = PhonePermissions.granted(context, Manifest.permission.ANSWER_PHONE_CALLS) || NotificationBridge.isEnabled(context)
+        val name = if (bt) runCatching { bluetooth()?.name }.getOrNull()?.takeIf { it.isNotBlank() } else null
+        return CallFacts(canAct = canAct, headset = headset, bluetoothName = name)
+    }
+
+    /** Phone calls through Telecom; an app's call (WhatsApp...), or Telecom saying no, by its notification's button. */
+    @SuppressLint("MissingPermission")
+    override fun act(action: String): String? {
+        val call = synchronized(this) { last }
+        val appCall = call?.app != null
+        if (!appCall && PhonePermissions.granted(context, Manifest.permission.ANSWER_PHONE_CALLS)) {
+            val telecom = context.getSystemService(TelecomManager::class.java)
+            val done = runCatching {
+                @Suppress("DEPRECATION")
+                if (action == CallAction.ANSWER) {
+                    telecom.acceptRingingCall()
+                    true
+                } else telecom.endCall()
+            }.onFailure { VLog.w("Calls", "Telecom refused to $action: ${it.message}") }.getOrDefault(false)
+            if (done) return null
+        }
+        if (NotificationBridge.pressCall(context, action, appOnly = appCall)) return null
+        return when {
+            call == null -> "There's no call on the phone"
+            !PhonePermissions.granted(context, Manifest.permission.ANSWER_PHONE_CALLS) && !NotificationBridge.isEnabled(context) ->
+                "On the phone, open Vyoma's Settings and turn on Calls & messages on PC"
+            action == CallAction.ANSWER -> "The phone didn't let Vyoma answer"
+            else -> "The phone didn't let Vyoma end the call"
+        }
     }
 
     override fun muteRinger() {

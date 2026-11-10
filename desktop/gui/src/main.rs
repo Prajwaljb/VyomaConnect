@@ -1,6 +1,6 @@
 //! Vyoma's desktop window. It only shows and asks: the daemon (`vyoma-desktop`) owns the links,
 //! so closing or crashing this never drops a phone. `--snapshot <png>` renders it offscreen with
-//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|away|unpair|add-done|notice|cable|pc|pc-setup|activity|commands|commands-empty|commands-edit|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|add|down`, `--setup` to open on setup). `--page commands|this-pc|activity|<phone id>` opens on that page;
+//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|away|unpair|add-done|notice|cable|pc|pc-setup|activity|commands|commands-empty|commands-edit|messages|messages-thread|messages-silent|messages-loading|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|add|down`, `--setup` to open on setup). `--page commands|this-pc|activity|<phone id>` opens on that page;
 //! a window already open shows it instead (`instance.rs`).
 
 mod daemon;
@@ -8,6 +8,7 @@ mod instance;
 mod look;
 mod qr;
 mod snapshot;
+mod texts;
 
 use std::cell::RefCell;
 use std::sync::mpsc;
@@ -97,6 +98,7 @@ fn main() -> anyhow::Result<()> {
     ui.set_setup(args.iter().any(|a| a == "--setup") || !setup_done());
     wire(&ui);
     qr::wire(&ui);
+    texts::wire(&ui);
     watch(ui.as_weak());
     if !page.is_empty() {
         open_page(&ui, &page);
@@ -464,6 +466,7 @@ fn watch(ui: slint::Weak<MainWindow>) {
                         }
                         Event::Sent { id, count, error } => sent(&told, id, count, error),
                         Event::Activity => read_activity(&told),
+                        Event::Messages => texts::read(&told),
                         Event::SetupDone { ok } => {
                             notify(&told, if ok { "Installed. This PC is set up".into() } else { "The install didn't finish".into() });
                             read_health(&told);
@@ -728,7 +731,23 @@ fn show(ui: &MainWindow, phones: &[PhoneData]) {
     paired.sort_by_key(|p| (!p.linked, p.name.to_lowercase()));
     nearby.retain(|p| p.linked || !p.code.is_empty());
     nearby.sort_by_key(|p| p.name.to_lowercase());
-    let selected = ui.get_selected().to_string();
+    let mut selected = ui.get_selected().to_string();
+    // A phone's Messages follow that phone; gone (unpaired), its page instead.
+    if selected == texts::MESSAGES {
+        let id = ui.get_current().id.to_string();
+        if let Some(p) = paired.iter().find(|p| p.id == id) {
+            ui.set_phones(ModelRc::new(VecModel::from(paired.iter().map(|p| to_ui(p)).collect::<Vec<_>>())));
+            ui.set_nearby(ModelRc::new(VecModel::from(nearby.iter().map(|p| to_ui(p)).collect::<Vec<_>>())));
+            let was = ui.get_texts_linked();
+            ui.set_current(to_ui(p));
+            ui.set_texts_linked(p.linked);
+            if p.linked && !was {
+                texts::read(&ui.as_weak());
+            }
+            return;
+        }
+        selected = id;
+    }
     // A nearby phone only takes the page when it asks to pair: one that has just linked (its owner
     // scanning the code, say) must not replace the page showing the code.
     let current = paired.iter().chain(&nearby).find(|p| p.id == selected).or(paired.first()).or(nearby.iter().find(|p| !p.code.is_empty())).copied();
@@ -764,6 +783,7 @@ fn to_ui(p: &PhoneData) -> Phone {
         can_ring: p.can_ring,
         can_browse: p.can_browse,
         can_share: p.can_share,
+        can_text: p.can_text,
         clip: p.clip.clone().into(),
         rtt: p.rtt.map_or(-1, |ms| ms.clamp(0, 99_999) as i32),
         up_value: up.0.into(),

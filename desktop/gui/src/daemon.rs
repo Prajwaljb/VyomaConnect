@@ -23,6 +23,8 @@ pub struct PhoneData {
     pub can_ring: bool,
     pub can_browse: bool,
     pub can_share: bool,
+    /// Its texts can be read and sent here (the Messages page).
+    pub can_text: bool,
     /// How fast it answers (ms), once timed.
     pub rtt: Option<i64>,
     /// When it connected (unix ms), while connected.
@@ -93,6 +95,7 @@ impl PhoneData {
             can_ring: can("ring"),
             can_browse: can("browse"),
             can_share: can("share"),
+            can_text: can("text"),
             rtt: v["rtt"].as_i64(),
             since: v["since"].as_i64(),
             clip: v["clipboardSync"].as_str().unwrap_or("plug").to_owned(),
@@ -212,6 +215,79 @@ impl ActivityEntry {
     }
 }
 
+/// A phone's text conversation, as the Messages page lists it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Conversation {
+    pub thread: i64,
+    /// Who it's with, by contact name where there is one.
+    pub name: String,
+    /// Its newest text.
+    pub snippet: String,
+    /// When (unix ms).
+    pub date: i64,
+    /// The newest text was sent from the phone.
+    pub mine: bool,
+    pub unread: bool,
+}
+
+/// The phone's conversations: [state] is "loading" (asked, nothing back yet), "ready" or "silent"
+/// (no answer: the phone doesn't share its texts, or has none).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Inbox {
+    pub state: String,
+    pub list: Vec<Conversation>,
+}
+
+impl Inbox {
+    /// From the daemon's `Conversations` JSON.
+    pub fn from_json(v: &Value) -> Self {
+        let text = |e: &Value, k: &str| e[k].as_str().unwrap_or("").to_owned();
+        let list = v["list"].as_array().into_iter().flatten().map(|c| Conversation {
+            thread: c["thread"].as_i64().unwrap_or(0),
+            name: text(c, "name"),
+            snippet: text(c, "snippet"),
+            date: c["date"].as_i64().unwrap_or(0),
+            mine: c["mine"].as_bool().unwrap_or(false),
+            unread: c["unread"].as_bool().unwrap_or(false),
+        });
+        Inbox { state: v["state"].as_str().unwrap_or("loading").to_owned(), list: list.collect() }
+    }
+}
+
+/// One text in a conversation.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TextData {
+    pub body: String,
+    pub date: i64,
+    pub mine: bool,
+    pub failed: bool,
+    /// Sent from here, not yet back from the phone.
+    pub sending: bool,
+}
+
+/// A conversation's texts, oldest first.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ThreadData {
+    pub name: String,
+    pub number: String,
+    pub texts: Vec<TextData>,
+}
+
+impl ThreadData {
+    /// From the daemon's `Thread` JSON.
+    pub fn from_json(v: &Value) -> Self {
+        let flag = |e: &Value, k: &str| e[k].as_bool().unwrap_or(false);
+        let texts = v["texts"].as_array().into_iter().flatten().map(|t| TextData {
+            body: t["body"].as_str().unwrap_or("").to_owned(),
+            date: t["date"].as_i64().unwrap_or(0),
+            mine: flag(t, "mine"),
+            failed: flag(t, "failed"),
+            sending: flag(t, "sending"),
+        });
+        ThreadData { name: v["name"].as_str().unwrap_or("").to_owned(), number: v["number"].as_str().unwrap_or("").to_owned(), texts: texts.collect() }
+    }
+}
+
 /// What the daemon says without being asked.
 #[derive(Debug, PartialEq)]
 pub enum Event {
@@ -225,6 +301,8 @@ pub enum Event {
     FirewallDone { ok: bool },
     /// The activity has something new.
     Activity,
+    /// A phone's texts have something new.
+    Messages,
 }
 
 /// What the window asks of the daemon.
@@ -259,6 +337,12 @@ pub trait Daemon: Send + Sync {
     fn clear_activity(&self) -> Result<()>;
     /// The PC's wallpaper as a colour grid, for the window's accent and canvas.
     fn wallpaper(&self) -> Result<crate::look::Wallpaper>;
+    /// The phone's conversations, newest first; the first look on each connection asks the phone,
+    /// and [Event::Messages] follows as they come.
+    fn conversations(&self, id: &str) -> Result<Inbox>;
+    fn thread(&self, id: &str, thread: i64) -> Result<ThreadData>;
+    /// Texts [text] to the conversation's people, from the phone.
+    fn send_text(&self, id: &str, thread: i64, text: &str) -> Result<()>;
     /// Blocks until the daemon says something (an error once it's gone away).
     fn next_event(&self) -> Result<Event>;
 }
@@ -395,6 +479,20 @@ impl Daemon for DbusDaemon {
         Ok(crate::look::Wallpaper { cols: v["cols"].as_u64().unwrap_or(0) as usize, rows: v["rows"].as_u64().unwrap_or(0) as usize, colors: colors.collect() })
     }
 
+    fn conversations(&self, id: &str) -> Result<Inbox> {
+        let json: String = self.call("Conversations", &(id,))?;
+        Ok(Inbox::from_json(&serde_json::from_str(&json)?))
+    }
+
+    fn thread(&self, id: &str, thread: i64) -> Result<ThreadData> {
+        let json: String = self.call("Thread", &(id, thread))?;
+        Ok(ThreadData::from_json(&serde_json::from_str(&json)?))
+    }
+
+    fn send_text(&self, id: &str, thread: i64, text: &str) -> Result<()> {
+        self.call("TextThread", &(id, thread, text))
+    }
+
     fn next_event(&self) -> Result<Event> {
         let mut signals = self.signals.lock().unwrap();
         runtime().block_on(async {
@@ -411,6 +509,7 @@ impl Daemon for DbusDaemon {
                         return Ok(Event::Sent { id, count, error });
                     }
                     Some("ActivityChanged") => return Ok(Event::Activity),
+                    Some("MessagesChanged") => return Ok(Event::Messages),
                     Some("SetupDone") => {
                         let (ok,): (bool,) = message.body().deserialize()?;
                         return Ok(Event::SetupDone { ok });
