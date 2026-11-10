@@ -70,7 +70,6 @@ import kotlinx.coroutines.launch
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material.icons.rounded.Wifi
@@ -162,7 +161,11 @@ fun OnboardingScreen(vm: AppViewModel, onDone: () -> Unit) {
 // Each rests near a whole scene: halfway from night to morning the colours mix to a grey mauve.
 private val DAY_AT_STEP = floatArrayOf(5f, 5.82f, 6f, 6.6f)
 
-/** One step at a time; nothing but the first two matters for using the app, and all of it is in Settings later. */
+/**
+ * One step at a time; nothing but the first three matters for using the app, and all of it is in
+ * Settings later. Nothing here needs a cable or developer options: copying with Vyoma closed (a
+ * one-time grant over USB debugging) is offered on the Clipboard page, for whoever wants it.
+ */
 @Composable
 private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onStep: (Float) -> Unit, onDone: () -> Unit) {
     val context = LocalContext.current
@@ -172,13 +175,11 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
         tick++
         onPauseOrDispose { }
     }
-    var showClipboard by rememberSaveable { mutableStateOf(false) }
 
     val coreOn = remember(tick) { corePermissions.all(context::granted) }
     val notifOn = remember(tick) { NotificationBridge.isEnabled(context) }
     val phoneOn = remember(tick) { PhonePermissions.allGranted(context) }
     val batteryOn = remember(tick) { context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName) }
-    val clipOn = remember(tick, showClipboard) { vm.backgroundClipboardSync() }
 
     // The link service starts as soon as it can find PCs; discovery then fills the list below.
     LaunchedEffect(coreOn) { if (coreOn) vm.startService() }
@@ -291,6 +292,12 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
                 when {
                     !coreOn -> Tip("Do step 1 first, then this starts looking.")
                     paired.isNotEmpty() || available.isNotEmpty() -> {
+                        // Scanning is the easy way: nothing to compare, nothing to accept on the PC.
+                        if (paired.isEmpty()) {
+                            Tip("Vyoma's window on your PC shows a code. Scan it and you're paired.")
+                            PillButton("Scan code", onClick = { PairScanActivity.open(context) })
+                            Text("Or pair one found nearby", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+                        }
                         val rows = paired + available
                         rows.forEach { state ->
                             ListRow(
@@ -301,14 +308,11 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
                                 horizontalPadding = 0.dp,
                                 trailing = {
                                     if (state in paired) Icon(Icons.Rounded.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
-                                    else PillButton("Pair", onClick = { if (demoPaired) vm.requestPair(state.identity.deviceId) else demoPaired = true })
+                                    else PillButton("Pair", onClick = { if (demoPaired) vm.requestPair(state.identity.deviceId) else demoPaired = true }, prominent = false)
                                 },
                             )
                         }
-                        if (paired.isEmpty()) {
-                            Tip("Tap Pair and check that a code matches on both screens, then accept on the PC. Or scan the code in Vyoma's window on the PC, and there's nothing to check.")
-                            PillButton("Scan code", onClick = { PairScanActivity.open(context) }, prominent = false)
-                        }
+                        if (paired.isEmpty()) Tip("Pairing from this list, check that a code matches on both screens, then accept on the PC.")
                     }
                     pairing.isEmpty() -> {
                         SearchingCard(vm)
@@ -318,7 +322,7 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
             }
         }
         item(key = "extras") {
-            SetupCard(backdrop, 4, "A few things that help", "Each one is optional", notifOn && phoneOn && batteryOn && clipOn, opened == 3, { opened = 3 }) {
+            SetupCard(backdrop, 4, "A few things that help", "Each one is optional", notifOn && phoneOn && batteryOn, opened == 3, { opened = 3 }) {
                 Step(Icons.Rounded.BatteryChargingFull, SystemColor.GREEN, "Stay connected", "Otherwise Android puts Vyoma to sleep, and the PC loses the phone", batteryOn) {
                     requestUnrestricted(context)
                 }
@@ -327,9 +331,6 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
                 }
                 Step(Icons.Rounded.Sms, SystemColor.GREEN, "Calls & messages", "Text from your PC and see who's calling", phoneOn) {
                     askPhone.launch(PhonePermissions.all)
-                }
-                Step(Icons.Rounded.ContentPaste, SystemColor.ORANGE, "Sync when closed", "Copy here, paste on your PC, even with Vyoma closed", clipOn, action = "Set up") {
-                    showClipboard = true
                 }
             }
         }
@@ -357,7 +358,6 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
         }
     } } }
 
-    if (showClipboard) ClipboardSetupDialog(vm) { showClipboard = false }
     moment?.let { PairedMoment(backdrop, ripple, it) { moment = null } }
 }
 

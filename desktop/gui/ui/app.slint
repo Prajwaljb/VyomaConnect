@@ -1166,16 +1166,17 @@ component PhonePage inherits Page {
     }
 
     // Copying on the phone with Vyoma closed: Android lets only the app in front read the
-    // clipboard, and a computer can lift that once, over the cable.
-    if root.phone.paired: Section {
+    // clipboard, and a computer can lift that once, over the cable. Shown once there's something
+    // to do or see (plugged in with USB debugging, or on): how to get there is the phone's to
+    // explain, on its Clipboard page, for whoever wants it. A new phone's page stays plain.
+    if root.phone.paired && root.phone.clip != "plug": Section {
         label: "Clipboard";
         Row {
             icon: @image-url("icons/clipboard.svg");
             icon-color: Theme.orange;
             title: "Sync when Vyoma's closed";
             subtitle: root.phone.clip == "on" ? "Anything you copy on the phone reaches this PC, even with Vyoma closed."
-                : root.phone.clip == "ask" ? "Your phone's plugged in. Allow this once and it stays until you uninstall."
-                : "Plug the phone in once with a USB cable, with USB debugging on, then allow it here.";
+                : "Your phone's plugged in. Allow this once and copies on it reach this PC, even with Vyoma closed.";
             value: root.phone.clip == "on" ? "On" : "";
             value-color: Theme.connected;
             action: root.phone.clip == "ask" ? "Allow" : "";
@@ -2177,7 +2178,7 @@ component SetupPage inherits Page {
             text: "Choose what each phone may do here on its page, under Allow this phone to.";
         }
         Tip {
-            text: "For copying on the phone with Vyoma closed, plug it in once and click Allow on its page.";
+            text: "To send a file to your phone, right-click it in your file manager and choose " + (root.paired ? "Send to " + root.phones[0].name : "Send to and your phone's name") + ".";
         }
     }
 

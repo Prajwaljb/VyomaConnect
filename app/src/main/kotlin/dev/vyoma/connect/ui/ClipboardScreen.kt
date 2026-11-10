@@ -138,7 +138,7 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                         onClick = { vm.retryClipboardSync() },
                     ) else ListRow(
                         title = "Sync when closed",
-                        subtitle = "One-time setup from your PC",
+                        subtitle = "Optional: set up once over a USB cable",
                         icon = Icons.Rounded.Sync,
                         iconTint = SystemColor.ORANGE.color,
                         trailing = { RowChevron("Set up") },
