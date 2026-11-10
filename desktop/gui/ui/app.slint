@@ -2150,7 +2150,7 @@ component SetupPage inherits Page {
     SetupCard {
         number: 1;
         title: "Pair with your phone";
-        status: root.paired ? root.phones[0].name : "Both need to agree once";
+        status: root.paired ? root.phones[0].name : "One scan with your phone";
         done: root.paired;
         open: root.open == 0;
         clicked => { root.chosen = 0; }
