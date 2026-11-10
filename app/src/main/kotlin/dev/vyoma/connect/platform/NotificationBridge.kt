@@ -190,7 +190,12 @@ object NotificationBridge : NotificationSource {
             else -> Regex("decline|reject|hang ?up|end|dismiss", RegexOption.IGNORE_CASE)
         }
         val target = intent ?: n.actions.orEmpty().firstOrNull { words.containsMatchIn(it.title?.toString().orEmpty()) }?.actionIntent ?: return false
-        return runCatching { target.send(); true }.getOrElse { VLog.d(TAG, "call button gone"); false }
+        // Answering opens the app's call screen: let it come up from the background, as a tap would.
+        val options = if (Build.VERSION.SDK_INT >= 34) {
+            android.app.ActivityOptions.makeBasic()
+                .setPendingIntentBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED).toBundle()
+        } else null
+        return runCatching { target.send(context, 0, null, null, null, null, options); true }.getOrElse { VLog.d(TAG, "call button gone"); false }
     }
 
     private const val CALL_STYLE = "android.app.Notification\$CallStyle"
