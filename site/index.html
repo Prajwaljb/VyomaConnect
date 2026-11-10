@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Vyoma: your Android phone and Linux PC, working as one</title>
+<meta name="description" content="Vyoma links your Android phone and Linux PC: files, clipboard, notifications, touchpad, webcam and screen control. One scan to pair. No account, no cloud.">
+<link rel="canonical" href="https://prajwaljb.github.io/VyomaConnect/">
+<meta name="theme-color" content="#2a5d9a">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="author" content="Prajwal JB">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Vyoma">
+<meta property="og:title" content="Vyoma: your Android phone and Linux PC, working as one">
+<meta property="og:description" content="Set it up once with one scan, then it just works. Files, clipboard, notifications, touchpad, webcam and your PC's screen. No account, no cloud, open source.">
+<meta property="og:url" content="https://prajwaljb.github.io/VyomaConnect/">
+<meta property="og:image" content="https://prajwaljb.github.io/VyomaConnect/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Vyoma: your phone and your PC, working as one">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Vyoma: your Android phone and Linux PC, working as one">
+<meta name="twitter:description" content="Set it up once with one scan, then it just works. No account, no cloud, open source.">
+<meta name="twitter:image" content="https://prajwaljb.github.io/VyomaConnect/og.jpg">
+
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="site.webmanifest">
+<link rel="preload" href="assets/inter.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/site.css">
+<script>document.documentElement.className = "js";</script>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Vyoma",
+  "alternateName": "VyomaConnect",
+  "description": "Links your Android phone and Linux PC: files both ways, one clipboard, calls and notifications on the PC, the PC's screen on the phone, touchpad, presenter, webcam and game controller. Pair with one scan, no account, no cloud.",
+  "applicationCategory": "UtilitiesApplication",
+  "operatingSystem": "Android 12+, Linux (KDE Plasma, GNOME)",
+  "softwareVersion": "@VERSION@",
+  "url": "https://prajwaljb.github.io/VyomaConnect/",
+  "downloadUrl": "https://github.com/Prajwaljb/VyomaConnect/releases/latest",
+  "installUrl": "https://github.com/Prajwaljb/VyomaConnect/releases/latest",
+  "image": "https://prajwaljb.github.io/VyomaConnect/img/icon-512.png",
+  "screenshot": [
+    "https://prajwaljb.github.io/VyomaConnect/img/phone-home.webp",
+    "https://prajwaljb.github.io/VyomaConnect/img/desktop-phone.webp"
+  ],
+  "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "author": { "@type": "Person", "name": "Prajwal JB", "url": "https://github.com/Prajwaljb" },
+  "codeRepository": "https://github.com/Prajwaljb/VyomaConnect"
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    { "@type": "Question", "name": "Is Vyoma free?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Yes. It's free and open source under the GNU GPL, with no account, no ads and no tracking." } },
+    { "@type": "Question", "name": "Does Vyoma work with KDE Connect or GSConnect?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Yes. The phone app pairs with either and covers the essentials: files, clipboard, notifications, media, commands, touchpad and presenter. Vyoma's own PC app unlocks the rest, and takes over from KDE Connect with your pairings intact." } },
+    { "@type": "Question", "name": "Do I need root, Shizuku or USB debugging?",
+      "acceptedAnswer": { "@type": "Answer", "text": "No. Everything works over Wi-Fi without them. Only reading the clipboard while Vyoma is closed needs a one-time grant from your PC over a USB cable, after which USB debugging can go off again." } },
+    { "@type": "Question", "name": "Which PCs and phones does Vyoma run on?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Android 12 or newer, and Linux with KDE Plasma or GNOME on x86_64 or ARM64. Other desktops and macOS are on the way." } },
+    { "@type": "Question", "name": "Does anything go through the cloud?",
+      "acceptedAnswer": { "@type": "Answer", "text": "No. Phone and PC talk directly and encrypted, on your network or over a cable. The only thing that goes online is the PC app's daily check for a new version on GitHub, which you can turn off." } }
+  ]
+}
+</script>
+</head>
+<body>
+<a class="skip" href="#why">Skip to content</a>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <filter id="nav-fx" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+    <feImage id="nav-map" x="0" y="0" width="1" height="1" preserveAspectRatio="none" result="map"/>
+    <feDisplacementMap in="SourceGraphic" in2="map" scale="0" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+</svg>
+
+<header class="nav over-hero" id="nav">
+  <a class="brand" href="#top" aria-label="Vyoma, back to the top"><img src="favicon.svg" alt="" width="34" height="34">Vyoma</a>
+  <ul class="nav-links">
+    <li><a href="#why">Why Vyoma</a></li>
+    <li><a href="#features">Features</a></li>
+    <li><a href="#get">Get started</a></li>
+    <li><a href="#faq">Questions</a></li>
+  </ul>
+  <a class="gh" href="https://github.com/Prajwaljb/VyomaConnect" aria-label="Vyoma on GitHub" data-press>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.74.5 12.02c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.68.8.56A11.53 11.53 0 0 0 23.5 12.02C23.5 5.74 18.27.5 12 .5Z"/></svg>
+  </a>
+  <a class="pill prominent" href="#get" data-press>Download</a>
+</header>
+
+<section class="hero" id="top" aria-label="Vyoma">
+  <div class="scene" id="scene">
+    <svg viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#173f78"/>
+          <stop offset=".28" stop-color="#2b62a3"/>
+          <stop offset=".46" stop-color="#6593c1"/>
+          <stop offset=".56" stop-color="#b3c3d0"/>
+          <stop offset=".63" stop-color="#efcf9f"/>
+          <stop offset=".7" stop-color="#f3b273"/>
+        </linearGradient>
+        <radialGradient id="sunGlow" cx="930" cy="500" r="560" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#fff6e2" stop-opacity=".85"/>
+          <stop offset=".18" stop-color="#ffe9c4" stop-opacity=".45"/>
+          <stop offset=".5" stop-color="#ffd9a8" stop-opacity=".12"/>
+          <stop offset="1" stop-color="#ffd9a8" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="sunCore" cx="930" cy="500" r="62" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#fff"/>
+          <stop offset=".55" stop-color="#fffdf6"/>
+          <stop offset="1" stop-color="#fff4dc" stop-opacity="0"/>
+        </radialGradient>
+        <linearGradient id="far" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#f1bd85"/><stop offset=".25" stop-color="#e7a062"/>
+        </linearGradient>
+        <linearGradient id="mid1" x1="0" y1="0" x2="0" y2="1">
+          <stop offset=".62" stop-color="#f7aa5c"/><stop offset=".9" stop-color="#e98638"/>
+        </linearGradient>
+        <linearGradient id="mid2" x1="0" y1="0" x2="0" y2="1">
+          <stop offset=".72" stop-color="#f49a46"/><stop offset="1" stop-color="#d9702c"/>
+        </linearGradient>
+        <linearGradient id="near" x1="0" y1="0" x2="0" y2="1">
+          <stop offset=".86" stop-color="#cf6a31"/><stop offset="1" stop-color="#8e3a2b"/>
+        </linearGradient>
+        <linearGradient id="haze" x1="0" y1="0" x2="0" y2="1">
+          <stop offset=".5" stop-color="#ffe3c0" stop-opacity="0"/><stop offset=".61" stop-color="#ffe3c0" stop-opacity=".5"/><stop offset=".72" stop-color="#ffe3c0" stop-opacity="0"/>
+        </linearGradient>
+        <filter id="soft" x="-10%" y="-20%" width="120%" height="140%"><feGaussianBlur stdDeviation="9"/></filter>
+        <filter id="softer" x="-10%" y="-30%" width="120%" height="160%"><feGaussianBlur stdDeviation="22"/></filter>
+      </defs>
+      <rect width="1600" height="1000" fill="url(#sky)"/>
+      <rect width="1600" height="1000" fill="url(#sunGlow)"/>
+      <circle cx="930" cy="500" r="62" fill="url(#sunCore)"/>
+
+      <path d="M0 640C180 612 340 604 520 620S820 642 980 618 1300 598 1600 630V1000H0Z" fill="url(#far)"/>
+      <rect width="1600" height="1000" fill="url(#haze)"/>
+
+      <path d="M0 706C240 654 420 652 620 676S960 696 1120 664 1440 644 1600 668V1000H0Z" fill="url(#mid1)"/>
+      <path d="M620 676C820 700 960 696 1120 664 1060 722 900 768 720 786 560 804 470 742 620 676Z" fill="#a9492c" opacity=".3" filter="url(#soft)"/>
+      <path d="M1120 664C1280 634 1440 646 1600 668V760C1460 740 1300 760 1150 800 1180 750 1170 700 1120 664Z" fill="#a9492c" opacity=".32" filter="url(#soft)"/>
+
+      <path d="M0 806C200 764 380 746 560 762S980 822 1200 798 1500 762 1600 772V1000H0Z" fill="url(#mid2)"/>
+      <path d="M0 826C160 806 300 812 460 846S700 944 770 1000H0Z" fill="#8a3329" opacity=".6" filter="url(#softer)"/>
+      <path d="M1200 798C1380 778 1500 762 1600 772V1000H960C1050 924 1110 842 1200 798Z" fill="#7a2a2a" opacity=".62" filter="url(#softer)"/>
+
+      <path d="M0 930C240 888 520 896 760 936S1300 948 1600 906V1000H0Z" fill="url(#near)"/>
+      <path d="M760 936C1000 976 1300 948 1600 906V1000H700C730 980 745 955 760 936Z" fill="#5e2026" opacity=".55" filter="url(#soft)"/>
+    </svg>
+    <p class="word" aria-hidden="true">Vyoma</p>
+  </div>
+
+  <div class="lens" id="lens" role="presentation"><div class="lens-view" id="lens-view"></div></div>
+  <p class="hint" id="hint" aria-hidden="true">Go on, drag the glass</p>
+
+  <div class="hero-copy">
+    <h1 class="tagline"><span class="sr">Vyoma: </span>Your phone and your PC, <span>working as one.</span></h1>
+    <div class="hero-cta">
+      <a class="pill glass-btn warm" href="#get" data-press>Get Vyoma</a>
+      <a class="pill glass-btn" href="#why" data-press>See what it does</a>
+    </div>
+    <ul class="facts">
+      <li>Android 12+</li><li>Linux with KDE Plasma or GNOME</li><li>Free and open source</li>
+    </ul>
+  </div>
+</section>
+
+<main class="canvas">
+
+<section class="section" id="why">
+  <span class="kicker rise">Why Vyoma</span>
+  <h2 class="rise">Set it up once. Then it just works.</h2>
+  <p class="lede rise">A phone app and a PC app made as one product. Scan a code once and they belong together: from then on they find each other, pick the best way to connect and keep going, while your PC stays yours, behind your fingerprint.</p>
+
+  <div class="grid3">
+    <article class="glass pillar rise">
+      <span class="badge blue"><svg class="icon"><use href="assets/icons.svg#qr_code_scanner"/></svg></span>
+      <h3>One scan, then forget about it</h3>
+      <p>Pair by scanning the code in the PC's window: nothing to type, nothing to compare. After that they connect by themselves, every time, over Wi-Fi, a USB cable or Bluetooth.</p>
+    </article>
+    <article class="glass pillar rise">
+      <span class="badge green"><svg class="icon"><use href="assets/icons.svg#android"/></svg></span>
+      <h3>No developer switches left on</h3>
+      <p>No root, no Shizuku, and USB debugging doesn't stay on. Everything works over Wi-Fi without them. Clipboard sync with the app closed is a one-time grant from your PC.</p>
+    </article>
+    <article class="glass pillar rise">
+      <span class="badge red"><svg class="icon"><use href="assets/icons.svg#fingerprint"/></svg></span>
+      <h3>Your fingerprint guards your PC</h3>
+      <p>An unlocked phone in someone else's hand isn't a way in. Unlocking the PC, its files, its screen and camera, the touchpad and your clipboard history ask for your fingerprint first.</p>
+    </article>
+    <article class="glass pillar rise">
+      <span class="badge teal"><svg class="icon"><use href="assets/icons.svg#shield"/></svg></span>
+      <h3>Secure without thinking about it</h3>
+      <p>Phone and PC talk directly and encrypted. The pairing code works once, for one phone, for ten minutes, and names the PC's certificate. The PC decides what each phone may do and keeps a log.</p>
+    </article>
+    <article class="glass pillar rise">
+      <span class="badge orange"><svg class="icon"><use href="assets/icons.svg#palette"/></svg></span>
+      <h3>Made with care</h3>
+      <p>One design across phone and PC, in your wallpaper's colours, with motion and haptics that answer every touch. On the PC it fits the desktop you already have.</p>
+    </article>
+    <article class="glass pillar rise">
+      <span class="badge gray"><svg class="icon"><use href="assets/icons.svg#visibility_off"/></svg></span>
+      <h3>Private by design</h3>
+      <p>No account, no server, no tracking. The only thing that goes online is the PC app's daily look for a new version, and you can turn that off.</p>
+    </article>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="show-title">
+  <span class="kicker rise">Phone and PC</span>
+  <h2 class="rise" id="show-title">Each one at home on the other.</h2>
+  <p class="lede rise">The phone becomes your PC's remote and dashboard. The PC gets a real app that knows your phone.</p>
+
+  <div class="show">
+    <div class="show-art rise">
+      <div class="phone"><img src="img/phone-home.webp" width="540" height="1116" loading="lazy" decoding="async" alt="Vyoma's Home screen on the phone: the PC's battery, CPU, memory and temperature, the music playing on the PC, its volume and display brightness"></div>
+    </div>
+    <div class="show-copy rise">
+      <span class="kicker" style="text-align:inherit">On the phone</span>
+      <h3>Your PC in your pocket</h3>
+      <p>Battery and stats at a glance, the music it's playing, its volume and brightness. One tap sends files, shows its screen, takes a photo with its camera or locks it.</p>
+      <ul class="chips">
+        <li class="raised"><svg class="icon" style="color:var(--blue)"><use href="assets/icons.svg#folder"/></svg>Send files</li>
+        <li class="raised"><svg class="icon" style="color:var(--cyan)"><use href="assets/icons.svg#screen_share"/></svg>Screen</li>
+        <li class="raised"><svg class="icon" style="color:var(--teal)"><use href="assets/icons.svg#touch_app"/></svg>Touchpad</li>
+        <li class="raised"><svg class="icon" style="color:var(--red)"><use href="assets/icons.svg#lock"/></svg>Lock</li>
+        <li class="raised"><svg class="icon" style="color:var(--green)"><use href="assets/icons.svg#terminal"/></svg>Commands</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="show flip">
+    <div class="show-art rise">
+      <img class="shot-pc" src="img/desktop-phone.webp" width="1200" height="809" loading="lazy" decoding="async" alt="Vyoma's window on the PC: a connected phone's battery, connection and response time, with Send files, Phone files and Ring">
+    </div>
+    <div class="show-copy rise">
+      <span class="kicker" style="text-align:inherit">On the PC</span>
+      <h3>A real app on your desktop</h3>
+      <p>Right-click any file in Dolphin, Nautilus or Thunar and choose Send to your phone. Find the phone in your file manager's sidebar. Calls and notifications arrive in your desktop's own pop-ups.</p>
+      <ul class="chips">
+        <li class="raised"><svg class="icon" style="color:var(--blue)"><use href="assets/icons.svg#download"/></svg>Send to</li>
+        <li class="raised"><svg class="icon" style="color:var(--teal)"><use href="assets/icons.svg#devices"/></svg>Phone files</li>
+        <li class="raised"><svg class="icon" style="color:var(--orange)"><use href="assets/icons.svg#notifications"/></svg>Notifications</li>
+        <li class="raised"><svg class="icon" style="color:var(--green)"><use href="assets/icons.svg#task_alt"/></svg>Per-phone permissions</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="features" aria-labelledby="features-title">
+  <span class="kicker rise">Features</span>
+  <h2 class="rise" id="features-title">Everything you'd want, in one place.</h2>
+  <p class="lede rise">Built on the KDE Connect protocol, with a lot more on top.</p>
+
+  <div class="tiles">
+    <article class="tile blue rise"><svg class="icon"><use href="assets/icons.svg#folder"/></svg><h3>Files, both ways</h3><p>Files and whole folders either way. A dropped transfer picks up where it left off.</p></article>
+    <article class="tile orange rise"><svg class="icon"><use href="assets/icons.svg#content_paste"/></svg><h3>One clipboard</h3><p>Copy on one, paste on the other. Private copies stay on the phone.</p></article>
+    <article class="tile red rise"><svg class="icon"><use href="assets/icons.svg#notifications"/></svg><h3>Calls and notifications</h3><p>See who's calling and mute the ringer from your desk. Reply from the PC.</p></article>
+    <article class="tile cyan rise"><svg class="icon"><use href="assets/icons.svg#screen_share"/></svg><h3>Your PC's screen</h3><p>Watch and control it from the phone, or grab a screenshot.</p></article>
+    <article class="tile teal rise"><svg class="icon"><use href="assets/icons.svg#touch_app"/></svg><h3>Touchpad and keyboard</h3><p>With swipes for windows and desktops, like a laptop's.</p></article>
+    <article class="tile yellow rise"><svg class="icon"><use href="assets/icons.svg#co_present"/></svg><h3>Presenter remote</h3><p>Next slide with a tap or the volume keys, and a pointer on screen.</p></article>
+    <article class="tile pink rise"><svg class="icon"><use href="assets/icons.svg#videocam"/></svg><h3>Phone as webcam</h3><p>Camera and microphone for any video call on the PC.</p></article>
+    <article class="tile mint rise"><svg class="icon"><use href="assets/icons.svg#sports_esports"/></svg><h3>Game controller</h3><p>Xbox or DualSense layout, analog triggers and gyro aiming.</p></article>
+    <article class="tile green rise"><svg class="icon"><use href="assets/icons.svg#terminal"/></svg><h3>Commands and rules</h3><p>Run your own commands. Lock the PC when you walk away.</p></article>
+    <article class="tile brown rise"><svg class="icon"><use href="assets/icons.svg#widgets"/></svg><h3>Widgets and tiles</h3><p>Home screen widgets, Quick Settings tiles and lock-screen controls.</p></article>
+    <article class="tile blue rise"><svg class="icon"><use href="assets/icons.svg#speed"/></svg><h3>PC at a glance</h3><p>Battery, CPU, memory, temperature, music, volume and brightness.</p></article>
+    <article class="tile teal rise"><svg class="icon"><use href="assets/icons.svg#wifi"/></svg><h3>Always connected</h3><p>Wi-Fi, a USB cable, Bluetooth or a VPN address. It picks the best.</p></article>
+  </div>
+  <p class="more rise"><a class="pill tinted" href="https://github.com/Prajwaljb/VyomaConnect/blob/main/docs/FEATURES.md" data-press>Everything Vyoma does <svg class="icon"><use href="assets/icons.svg#arrow_forward"/></svg></a></p>
+</section>
+
+<section class="section" id="doctor" aria-labelledby="doctor-title">
+  <div class="doctor">
+    <div class="doctor-copy">
+      <span class="kicker rise">When something's wrong</span>
+      <h2 class="rise" id="doctor-title">It tells you why, and how to fix it.</h2>
+      <p class="lede rise">If the phone and the PC ever can't reach each other, Vyoma doesn't just spin. It checks, then says what's in the way in plain words, with the button that fixes it.</p>
+      <ul class="rise">
+        <li><svg class="icon"><use href="assets/icons.svg#check"/></svg><span><b>Not on Wi-Fi, a VPN, another network:</b> found on the phone, with the setting that sorts it.</span></li>
+        <li><svg class="icon"><use href="assets/icons.svg#check"/></svg><span><b>The PC's firewall:</b> Vyoma's window offers Open ports, one password and done.</span></li>
+        <li><svg class="icon"><use href="assets/icons.svg#check"/></svg><span><b>Wi-Fi that keeps devices apart:</b> plug in a USB cable and it just carries on.</span></li>
+      </ul>
+    </div>
+    <div class="glass away rise" aria-label="An example of what the phone shows when the PC is away">
+      <div class="away-head"><i class="dot"></i><strong>Laptop</strong><span>Away · seen 4 min. ago</span></div>
+      <div class="finding">
+        <span class="badge blue"><svg class="icon"><use href="assets/icons.svg#wifi"/></svg></span>
+        <div><b>Your phone and Laptop are on different networks</b><small>Put both on the same Wi-Fi. A PC plugged into the router counts as the same network.</small>
+          <span class="pill tinted">Wi-Fi settings</span></div>
+      </div>
+      <div class="finding">
+        <span class="badge orange"><svg class="icon"><use href="assets/icons.svg#lock"/></svg></span>
+        <div><b>A VPN on this phone may be hiding Laptop</b><small>Some VPNs block the local network. Turn it off for a moment, or allow local network access in its settings.</small></div>
+      </div>
+      <div class="finding">
+        <span class="badge gray"><svg class="icon"><use href="assets/icons.svg#usb"/></svg></span>
+        <div><b>Or use a USB cable</b><small>It works whatever the Wi-Fi does.</small></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="get" aria-labelledby="get-title">
+  <span class="kicker rise">Get started</span>
+  <h2 class="rise" id="get-title">Three steps, five minutes.</h2>
+  <p class="lede rise">Set up the PC first, then the phone, then scan.</p>
+
+  <div class="steps">
+    <article class="glass step rise">
+      <span class="step-n">1</span>
+      <div class="step-body">
+        <h3>Your PC</h3>
+        <p>Paste this into a terminal. It downloads the ready-made build for your PC (x86_64 or ARM64), checks it against the release's checksums, adds Vyoma to your app menu and takes over from KDE Connect with your pairings intact. Nothing is compiled.</p>
+        <div class="seg" role="tablist" aria-label="Download tool" data-at="0" id="seg">
+          <span class="thumb" aria-hidden="true"></span>
+          <button role="tab" aria-selected="true" data-cmd="curl -fsSL https://github.com/Prajwaljb/VyomaConnect/releases/latest/download/install.sh | sh">curl</button>
+          <button role="tab" aria-selected="false" data-cmd="wget -qO- https://github.com/Prajwaljb/VyomaConnect/releases/latest/download/install.sh | sh">wget</button>
+        </div>
+        <div class="code">
+          <pre id="cmd"><span>$ </span><code>curl -fsSL https://github.com/Prajwaljb/VyomaConnect/releases/latest/download/install.sh | sh</code></pre>
+          <button class="copy" type="button" data-copy="#cmd code" aria-label="Copy the install command" data-press><svg class="icon"><use href="assets/icons.svg#content_copy"/></svg></button>
+        </div>
+        <p>KDE Plasma or GNOME, on Arch, Debian, Ubuntu, Fedora and others. It updates itself with one click later. On Arch, you can <a href="https://github.com/Prajwaljb/VyomaConnect#get-started">build the package</a> instead. Changed your mind? Run it with <code>sh -s -- --undo</code> to put KDE Connect back.</p>
+      </div>
+    </article>
+
+    <article class="glass step rise">
+      <span class="step-n">2</span>
+      <div class="step-body">
+        <h3>Your phone</h3>
+        <p>Download the app and open it. Android 12 or newer. To get every update by itself, add this repository to <a href="https://github.com/ImranR98/Obtainium">Obtainium</a>.</p>
+        <div class="row">
+          <a class="pill prominent" href="https://github.com/Prajwaljb/VyomaConnect/releases/latest" data-press><svg class="icon"><use href="assets/icons.svg#download"/></svg>Download for Android</a>
+          <a class="pill tinted" href="https://github.com/Prajwaljb/VyomaConnect/releases" data-press>All releases</a>
+        </div>
+        <details class="fp">
+          <summary><svg class="icon"><use href="assets/icons.svg#task_alt"/></svg>Signing certificate, for anyone who checks</summary>
+          <code>SHA-256 7F:EB:FF:09:7C:EF:AA:F1:2C:CF:3A:C6:ED:2E:C8:EA:A0:C0:9A:7A:0A:77:83:8B:B8:2E:E5:3E:00:04:84:B1</code>
+        </details>
+      </div>
+    </article>
+
+    <article class="glass step rise">
+      <span class="step-n">3</span>
+      <div class="step-body">
+        <h3>Scan the code</h3>
+        <p>Open Vyoma on both. The PC's window shows a QR code: in the phone app, tap Scan code and point the camera at it. That's it, with nothing to compare or accept, and it works even on Wi-Fi that hides devices from each other.</p>
+        <div class="pair-art"><img src="img/desktop-setup.webp" width="1200" height="809" loading="lazy" decoding="async" alt="Vyoma's setup on the PC: a QR code to scan with the phone app"></div>
+      </div>
+    </article>
+  </div>
+</section>
+
+<section class="section" id="faq" aria-labelledby="faq-title">
+  <span class="kicker rise">Questions</span>
+  <h2 class="rise" id="faq-title">Good to know.</h2>
+  <p class="lede rise">Something else? <a href="https://github.com/Prajwaljb/VyomaConnect/issues">Ask on GitHub</a>.</p>
+  <div class="glass faq rise">
+    <details>
+      <summary>Is Vyoma free?<svg class="icon chev"><use href="assets/icons.svg#arrow_forward"/></svg></summary>
+      <p>Yes. It's free and open source under the GNU GPL, with no account, no ads and no tracking.</p>
+    </details>
+    <details>
+      <summary>Does it work with KDE Connect or GSConnect?<svg class="icon chev"><use href="assets/icons.svg#arrow_forward"/></svg></summary>
+      <p>Yes. The phone app pairs with either and covers the essentials: files, clipboard, notifications, media, commands, touchpad and presenter. Vyoma's own PC app unlocks the rest, and takes over from KDE Connect with your pairings intact. One command puts KDE Connect back.</p>
+    </details>
+    <details>
+      <summary>Do I need root, Shizuku or USB debugging?<svg class="icon chev"><use href="assets/icons.svg#arrow_forward"/></svg></summary>
+      <p>No. Everything works over Wi-Fi without them. Only reading the clipboard while Vyoma is closed needs a one-time grant from your PC over a USB cable, after which USB debugging can go off again. Controlling the phone from the PC uses Android's accessibility service, asked for only when you first use it.</p>
+    </details>
+    <details>
+      <summary>Which PCs and phones does it run on?<svg class="icon chev"><use href="assets/icons.svg#arrow_forward"/></svg></summary>
+      <p>Android 12 or newer, and Linux with KDE Plasma or GNOME on x86_64 or ARM64. Other desktops and macOS are on the way.</p>
+    </details>
+    <details>
+      <summary>Does anything go through the cloud?<svg class="icon chev"><use href="assets/icons.svg#arrow_forward"/></svg></summary>
+      <p>No. Phone and PC talk directly and encrypted, on your network or over a cable. The only thing that goes online is the PC app's daily check for a new version on GitHub, which you can turn off.</p>
+    </details>
+    <details>
+      <summary>What if they can't find each other?<svg class="icon chev"><use href="assets/icons.svg#arrow_forward"/></svg></summary>
+      <p>The phone says why in plain words, with the button that fixes it. A USB cable always works, and you can connect by IP address too, for Tailscale and other VPNs.</p>
+    </details>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="glass end rise">
+    <img src="favicon.svg" alt="" width="72" height="72">
+    <h2>Set it up once.</h2>
+    <p>Then your phone and your PC just work together.</p>
+    <a class="pill prominent" href="#get" data-press>Get Vyoma</a>
+  </div>
+  <nav aria-label="More">
+    <a href="https://github.com/Prajwaljb/VyomaConnect">Source code</a>
+    <a href="https://github.com/Prajwaljb/VyomaConnect/releases">Releases</a>
+    <a href="https://github.com/Prajwaljb/VyomaConnect/blob/main/docs/FEATURES.md">All features</a>
+    <a href="https://github.com/Prajwaljb/VyomaConnect/issues">Report an issue</a>
+    <a href="https://github.com/Prajwaljb/VyomaConnect/blob/main/LICENSE">Licence</a>
+  </nav>
+  <small>Vyoma is free software under the GNU GPL v3 or later. It speaks the KDE Connect protocol and isn't affiliated with KDE. This page has no trackers and loads nothing from anywhere else.</small>
+</footer>
+
+<div class="bubble" id="bubble" role="status" aria-live="polite"><svg class="icon"><use href="assets/icons.svg#check"/></svg><span></span></div>
+
+<script src="assets/site.js" defer></script>
+</body>
+</html>

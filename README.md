@@ -7,6 +7,7 @@ Set it up once. After that it just works: no fiddling, no developer switches lef
 Open source. No account. No cloud.</p>
 
 <p align="center"><a href="https://github.com/Prajwaljb/VyomaConnect/releases/latest"><b>Download</b></a> ·
+<a href="https://prajwaljb.github.io/VyomaConnect/">Website</a> ·
 <a href="#get-started">Get started</a> ·
 <a href="docs/FEATURES.md">All features</a> ·
 <a href="https://github.com/Prajwaljb/VyomaConnect/issues">Report an issue</a></p>

@@ -73,6 +73,10 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `packaging/aur`: the AUR package `vyoma` (PKGBUILD + `.SRCINFO`, from the release tarball; binaries in /usr/bin, the
   KDE handoff left to `/usr/share/vyoma/install.sh`, which builds nothing when packaged; the update check then only
   says a release is out). `fastlane/metadata/android/en-US`: store listing for IzzyOnDroid/F-Droid (changelogs/<versionCode>.txt).
+- `site/`: the website, https://prajwaljb.github.io/VyomaConnect/ (static, no build; `.github/workflows/pages.yml` publishes it on
+  each push to main touching it, filling `@VERSION@`). The phone app's look: the first run's dunes with the draggable glass
+  lens (`assets/site.js` paints the scene into a bitmap and bends it through the rim), glass cards, the Home tiles. Icons are
+  Material Symbols Rounded (Apache-2.0) in `assets/icons.svg`; Inter subset in `assets/inter.woff2`. No third-party requests.
 - Ready-made PC builds: `packaging/bundle-desktop.sh OUT` (both binaries + installer, extension, dist, VERSION, LICENSE in
   `vyoma-desktop-<arch>.tar.gz`), built on Debian 12 (oldest glibc) by `.github/workflows/desktop-release.yml` for x86_64
   and aarch64 on each `v*` tag, which also uploads `SHA256SUMS` and `packaging/get.sh` as the release's `install.sh`
