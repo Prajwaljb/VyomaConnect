@@ -202,13 +202,17 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                 )
                 ListRow(
                     title = "Calls & messages on PC",
-                    subtitle = if (phoneOn) "Texts, calls and contacts on your PC"
+                    subtitle = if (phoneOn) "Tap to change in Android settings"
                     else "Text and answer calls from your PC",
                     icon = Icons.Rounded.Sms,
                     iconTint = SystemColor.GREEN.color,
                     showDivider = true,
                     trailing = { RowChevron(if (phoneOn) "On" else "Off") },
-                    onClick = { if (!phoneOn) askPhone.launch(PhonePermissions.ask) },
+                    // On: Android's own page for Vyoma, the one place texts, calls and contacts can be turned off.
+                    onClick = {
+                        if (!phoneOn) askPhone.launch(PhonePermissions.ask)
+                        else runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) }
+                    },
                 )
                 PhoneFilesRow(resumeTick)
                 ListRow(
