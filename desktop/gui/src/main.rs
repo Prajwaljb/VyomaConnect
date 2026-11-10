@@ -25,8 +25,8 @@ const REREAD_EVERY: Duration = Duration::from_secs(5);
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 /// How long "You're connected" stays.
 const MOMENT_FOR: Duration = Duration::from_millis(2600);
-/// How long the code shows its tick before the moment: the tick lands at about 0.8 s.
-const CODE_DONE_FOR: Duration = Duration::from_millis(1300);
+/// How long the code shows its tick before moving on: it lands at about 0.8 s, then time to read it.
+const CODE_DONE_FOR: Duration = Duration::from_millis(2200);
 /// How often the wallpaper's colours are reread (a new wallpaper says nothing).
 const WALLPAPER_EVERY: Duration = Duration::from_secs(60);
 /// The sidebar's id for This PC's page.
@@ -689,26 +689,19 @@ fn apply(ui: &MainWindow, phones: Option<Vec<PhoneData>>) {
     // Paired just now (its code scanned, or accepted here): its moment, wherever the window is.
     let fresh = phones.iter().find(|p| p.paired && before.iter().any(|b| b.id == p.id && !b.paired));
     if let Some(p) = fresh {
-        // With the code on screen (Add a phone, or setup before any phone) it's what was scanned:
-        // the code turns into a tick first, then the moment, then (from Add) that phone's page.
+        // With the code on screen (Add a phone, or setup before any phone) it's what was scanned: the
+        // code turns into a tick, which says it all (no moment after it), then (from Add) that phone's page.
         let code_up = ui.get_selected() == ADD || (ui.get_setup() && !before.iter().any(|b| b.paired));
         if code_up {
             ui.set_pair_code_done(p.name.clone().into());
-            let (weak, name, id) = (ui.as_weak(), p.name.clone(), p.id.clone());
+            let (weak, id) = (ui.as_weak(), p.id.clone());
             slint::Timer::single_shot(CODE_DONE_FOR, move || {
                 let Some(win) = weak.upgrade() else { return };
-                moment(&win, name);
                 if win.get_selected() == ADD {
                     win.set_selected(id.into());
                     SHOWN.with(|s| show(&win, &s.borrow()));
                 }
-                // Back to a code while the moment still covers the window.
-                let weak = win.as_weak();
-                slint::Timer::single_shot(MOMENT_FOR - Duration::from_millis(400), move || {
-                    if let Some(win) = weak.upgrade() {
-                        win.set_pair_code_done("".into());
-                    }
-                });
+                win.set_pair_code_done("".into());
             });
         } else {
             moment(ui, p.name.clone());

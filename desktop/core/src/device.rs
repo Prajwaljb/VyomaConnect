@@ -61,7 +61,8 @@ pub enum Event {
     /// A pending pairing ended without pairing (refused, ran out, link lost): take the prompt down.
     PairingOver { id: String },
     /// [by_code]: it scanned the code on this PC's screen, so nobody here said yes to it.
-    Paired { id: String, name: String, by_code: bool },
+    /// [watched]: the code was still on the screen then, so the window showed it happen.
+    Paired { id: String, name: String, by_code: bool, watched: bool },
     Unpaired { id: String, name: String },
     /// A packet from a paired device, for the plugins. [from]: the address of the link it came
     /// over, where a payload it announces is fetched.
@@ -132,7 +133,8 @@ pub struct Hub {
     /// The QR code on screen, if one is: a request proving it was scanned pairs without a prompt.
     invite: Option<Invite>,
     /// The device pairing on the code right now, for its Paired event.
-    paired_by_code: Option<String>,
+    /// The phone that just proved the code, and whether the code was still on the screen.
+    paired_by_code: Option<(String, bool)>,
 }
 
 impl Hub {
@@ -290,8 +292,8 @@ impl Hub {
                 let mut out = device.pairing.on_packet(&packet["body"], &cert, device.protocol, link::now_ms() / 1000, now);
                 // It scanned the code on this PC's screen: that was the consent, so no prompt. One phone per code.
                 if matches!(out.change, Some(Change::Prompt { .. })) && self.invite.as_ref().is_some_and(|inv| inv.proves(&packet["body"], &cert, &self.ours, now)) {
-                    self.invite = None;
-                    self.paired_by_code = Some(i.id.clone());
+                    let watched = self.invite.take().is_some_and(|inv| inv.on_screen());
+                    self.paired_by_code = Some((i.id.clone(), watched));
                     tracing::info!("{}: pairs from the QR code", i.id);
                     out = device.pairing.accept();
                 }
@@ -411,8 +413,11 @@ impl Hub {
                     });
                 }
                 tracing::info!("{id}: paired");
-                let by_code = self.paired_by_code.take().is_some_and(|c| c == id);
-                self.emit(Event::Paired { id: id.to_owned(), name, by_code });
+                let (by_code, watched) = match self.paired_by_code.take() {
+                    Some((c, watched)) if c == id => (true, watched),
+                    _ => (false, false),
+                };
+                self.emit(Event::Paired { id: id.to_owned(), name, by_code, watched });
             }
             Some(Change::Unpaired) => {
                 if let Some(d) = self.devices.get_mut(id) {

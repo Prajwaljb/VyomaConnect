@@ -1259,16 +1259,19 @@ impl Desk {
                     self.notifier.close(n).await;
                 }
             }
-            Event::Paired { id, name, by_code } => {
+            Event::Paired { id, name, by_code, watched } => {
                 if let Some(d) = self.devices.lock().unwrap().get_mut(&id) {
                     (d.paired, d.key) = (true, String::new());
                 }
                 if let Some(n) = self.prompts.remove(&id) {
                     self.notifier.close(n).await;
                 }
-                // Nobody here said yes to a code pairing: say how to undo one that wasn't wanted.
-                let body = if by_code { "It scanned the code in Vyoma's window. Not you? Unpair it there." } else { "" };
-                plugins::tell(&self.notifier, &format!("Paired with {name}"), body).await;
+                // Nobody here said yes to a code pairing: say how to undo one that wasn't wanted. With the
+                // code still on screen the window showed it happen, its tick saying the same thing.
+                if !(by_code && watched) {
+                    let body = if by_code { "It scanned the code in Vyoma's window. Not you? Unpair it there." } else { "" };
+                    plugins::tell(&self.notifier, &format!("Paired with {name}"), body).await;
+                }
                 self.start(&id);
             }
             Event::Unpaired { id, name } => {

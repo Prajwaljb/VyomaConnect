@@ -25,6 +25,7 @@ pub const AFTER_SHOWN: Duration = Duration::from_secs(20);
 pub struct Invite {
     secret: [u8; SECRET_LEN],
     until: Instant,
+    hidden: bool,
 }
 
 impl std::fmt::Debug for Invite {
@@ -37,12 +38,18 @@ impl Invite {
     pub fn new(now: Instant) -> Option<Self> {
         let mut secret = [0u8; SECRET_LEN];
         SystemRandom::new().fill(&mut secret).ok()?;
-        Some(Self { secret, until: now + LIFETIME })
+        Some(Self { secret, until: now + LIFETIME, hidden: false })
     }
 
     /// Off the screen: it works [AFTER_SHOWN] longer, for a phone that was already scanning.
     pub fn hide(&mut self, now: Instant) {
         self.until = self.until.min(now + AFTER_SHOWN);
+        self.hidden = true;
+    }
+
+    /// Still on the screen (not [hide]n): whoever's at the PC sees what a scan does.
+    pub fn on_screen(&self) -> bool {
+        !self.hidden
     }
 
     pub fn secret(&self) -> &[u8; SECRET_LEN] {
@@ -147,7 +154,9 @@ mod tests {
         // Taken off the screen: a little longer, then no.
         let mut hidden = Invite::new(now).unwrap();
         let late = proof(hidden.secret(), 1_800_000_000, phone, pc);
+        assert!(hidden.on_screen());
         hidden.hide(now);
+        assert!(!hidden.on_screen());
         assert!(hidden.proves(&json!({ "timestamp": 1_800_000_000, FIELD: late }), phone, pc, now + AFTER_SHOWN / 2));
         assert!(!hidden.proves(&json!({ "timestamp": 1_800_000_000, FIELD: late }), phone, pc, now + AFTER_SHOWN));
         // Run out, or missing and malformed proofs: no.
