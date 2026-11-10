@@ -183,6 +183,10 @@ per-frame blur except on chrome that content scrolls under, and measure with `du
   z = stack depth (`targetContentZIndex = order(target)`), both ways: AnimatedContent keeps the z a page entered with, so a
   fixed -1 on pop left a page you'd come back to level with its parent, and swiping from it drew the parent over it, cut at 3/4 width
   (hidden on long drags: test a SHORT hold, right after coming back). TabsRoot composes Home when a swipe starts, else it's black for 800 ms.
+- Air mouse (touchpad header, first of the round buttons, `AdsClick` glyph): a switch, so filled `Glass.accent` with a white
+  glyph while on, ToggleOn/Off haptics, the header subtitle says what changed, the pad's hint changes to aiming. Gyro via
+  `PointerGyro(ctx, AirMouseMath::step)` (px, faster turns gain more) into the same motion pump as finger moves; only while
+  the page is STARTED. Hidden without a gyroscope or a PC.
 - Presenter (`PresenterScreen`, from the touchpad header and the touchpad button's long-press menu): Next is the biggest
   target but CLEAR glass with a coloured arrow: a filled panel that size lights up the speaker in a dark room. Keeps the
   screen on; volume keys change slides (`HardwareKeys`).
