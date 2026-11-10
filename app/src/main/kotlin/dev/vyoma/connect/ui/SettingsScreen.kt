@@ -202,12 +202,12 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                 ListRow(
                     title = "Calls & messages on PC",
                     subtitle = if (phoneOn) "Texts, calls and contacts on your PC"
-                    else "Text and see calls from your PC",
+                    else "Text and answer calls from your PC",
                     icon = Icons.Rounded.Sms,
                     iconTint = SystemColor.GREEN.color,
                     showDivider = true,
                     trailing = { RowChevron(if (phoneOn) "On" else "Off") },
-                    onClick = { if (!phoneOn) askPhone.launch(PhonePermissions.all) },
+                    onClick = { if (!phoneOn) askPhone.launch(PhonePermissions.ask) },
                 )
                 PhoneFilesRow(resumeTick)
                 ListRow(

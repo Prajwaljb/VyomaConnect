@@ -330,7 +330,7 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
                     runCatching { context.startActivity(NotificationBridge.settingsIntent(context)) }
                 }
                 Step(Icons.Rounded.Sms, SystemColor.GREEN, "Calls & messages", "Text from your PC and see who's calling", phoneOn) {
-                    askPhone.launch(PhonePermissions.all)
+                    askPhone.launch(PhonePermissions.ask)
                 }
             }
         }

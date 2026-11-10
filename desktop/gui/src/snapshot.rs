@@ -142,6 +142,9 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str, size: Option<(u32, 
         vec![]
     };
     crate::show_activity(&ui, if late { &[] } else { &list }, noon);
+    if scene.starts_with("messages") {
+        messages(&ui, scene, noon);
+    }
     if scene == "notice" {
         ui.set_notice("Opening the phone's files…".into());
         ui.set_notice_on(true);
@@ -217,8 +220,50 @@ fn health(missing: bool) -> Health {
     Health { features, installable: missing, installing: false, checks, notes, update }
 }
 
+/// Made-up texts: messages (the list), messages-thread, messages-silent, messages-loading.
+fn messages(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>) {
+    use crate::daemon::{Conversation, Inbox, TextData, ThreadData};
+    crate::texts::MADE_UP.store(true, std::sync::atomic::Ordering::Relaxed);
+    crate::texts::wire(ui);
+    ui.invoke_show_messages("a".into());
+    let ms = |mins_ago: i64| (noon - chrono::Duration::minutes(mins_ago)).timestamp_millis();
+    let chat = |thread: i64, name: &str, snippet: &str, mins: i64, mine: bool, unread: bool| Conversation { thread, name: name.into(), snippet: snippet.into(), date: ms(mins), mine, unread };
+    let inbox = match scene {
+        "messages-silent" => Inbox { state: "silent".into(), list: vec![] },
+        "messages-loading" => Inbox { state: "loading".into(), list: vec![] },
+        _ => Inbox {
+            state: "ready".into(),
+            list: vec![
+                chat(1, "Maya Fernandes", "Running 10 minutes late, save me a seat!", 3, false, true),
+                chat(2, "Dad", "Call me when you're free", 52, false, true),
+                chat(3, "Arjun", "Sounds good, see you Saturday", 60 * 3, true, false),
+                chat(4, "+1 415 555 0134", "Your verification code is 482913. It expires in 10 minutes.", 60 * 20, false, false),
+                chat(5, "Priya Raman", "Thanks for the photos \u{1f60a}", 60 * 30, false, false),
+                chat(6, "Bank", "Your card ending 4421 was used for a payment of 1,250.00 at a merchant.", 60 * 24 * 3, false, false),
+                chat(7, "Leo", "ok", 60 * 24 * 12, true, false),
+            ],
+        },
+    };
+    crate::texts::show_inbox(ui, &inbox, true, noon);
+    if scene == "messages-thread" {
+        ui.invoke_open_thread("1".into());
+        let text = |mins: i64, mine: bool, body: &str| TextData { body: body.into(), date: ms(mins), mine, failed: false, sending: false };
+        let mut texts = vec![
+            text(60 * 24 + 40, false, "Are we still on for dinner tomorrow?"),
+            text(60 * 24 + 38, true, "Yes! 8 at the usual place?"),
+            text(60 * 24 + 37, false, "Perfect"),
+            text(25, true, "Leaving the office now"),
+            text(24, true, "Want me to book a table? It gets busy on Fridays and I'd rather not wait outside again like last time."),
+            text(3, false, "Running 10 minutes late, save me a seat!"),
+        ];
+        texts.push(TextData { body: "No rush, I'm here".into(), date: ms(0), mine: true, failed: false, sending: true });
+        crate::texts::show_thread(ui, &ThreadData { name: "Maya Fernandes".into(), number: "+1 415 555 0101".into(), texts }, noon);
+        ui.set_draft("".into());
+    }
+}
+
 fn phones(scene: &str) -> Vec<PhoneData> {
-    let phone = |id: &str, name: &str| PhoneData { id: id.into(), name: name.into(), can_ring: true, can_browse: true, can_share: true, ..Default::default() };
+    let phone = |id: &str, name: &str| PhoneData { id: id.into(), name: name.into(), can_ring: true, can_browse: true, can_share: true, can_text: true, ..Default::default() };
     let mut main = PhoneData { paired: true, linked: true, via: "wifi".into(), battery: Some(82), charging: true, ..phone("a", "Pixel 9 Pro") };
     let permit = |key: &str, name: &str, detail: &str, on: bool| Permission { key: key.into(), name: name.into(), detail: detail.into(), on };
     main.permits = vec![

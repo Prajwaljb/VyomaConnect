@@ -161,6 +161,38 @@ object NotificationBridge : NotificationSource {
         return AppCall(app, caller)
     }
 
+    /**
+     * Presses Answer, Decline or Hang up ([action], a `CallAction`) on the newest call notification,
+     * an app's ([appOnly]) or any. CallStyle notifications carry those as intents; older ones as buttons,
+     * found by their words. False when there's no such call or button.
+     */
+    fun pressCall(context: Context, action: String, appOnly: Boolean): Boolean {
+        val l = listener ?: return false
+        val calls = runCatching { l.activeNotifications }.getOrNull().orEmpty().filter { sbn ->
+            val n = sbn.notification
+            sbn.packageName != context.packageName && (!appOnly || sbn.packageName !in PHONE_APPS) &&
+                (n.category == Notification.CATEGORY_CALL || n.extras.getString(Notification.EXTRA_TEMPLATE) == CALL_STYLE)
+        }
+        val n = calls.maxByOrNull { it.postTime }?.notification ?: return false
+        val key = when (action) {
+            "answer" -> Notification.EXTRA_ANSWER_INTENT
+            "decline" -> Notification.EXTRA_DECLINE_INTENT
+            else -> Notification.EXTRA_HANG_UP_INTENT
+        }
+        @Suppress("DEPRECATION")
+        val intent = n.extras.getParcelable<PendingIntent>(key)
+            // Declining a call that's on, or hanging up one that rings, is the same button there.
+            ?: if (action != "answer") @Suppress("DEPRECATION") n.extras.getParcelable<PendingIntent>(
+                if (action == "decline") Notification.EXTRA_HANG_UP_INTENT else Notification.EXTRA_DECLINE_INTENT,
+            ) else null
+        val words = when (action) {
+            "answer" -> Regex("answer|accept|pick up", RegexOption.IGNORE_CASE)
+            else -> Regex("decline|reject|hang ?up|end|dismiss", RegexOption.IGNORE_CASE)
+        }
+        val target = intent ?: n.actions.orEmpty().firstOrNull { words.containsMatchIn(it.title?.toString().orEmpty()) }?.actionIntent ?: return false
+        return runCatching { target.send(); true }.getOrElse { VLog.d(TAG, "call button gone"); false }
+    }
+
     private const val CALL_STYLE = "android.app.Notification\$CallStyle"
     /** The phone's own call screens, which show phone calls (those come with their number). */
     private val PHONE_APPS = setOf("com.android.server.telecom", "com.samsung.android.incallui", "com.android.incallui", "com.google.android.dialer", "com.samsung.android.dialer", "com.android.dialer")

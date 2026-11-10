@@ -17,10 +17,12 @@ mod commands;
 mod input;
 mod media;
 mod menus;
+mod messages;
 mod notifications;
 mod notify;
 mod plugins;
 mod gvfs;
+mod hfp;
 mod phonefiles;
 mod places;
 mod presenter;
@@ -126,6 +128,7 @@ struct Control {
     permits: Arc<Permits>,
     activity: Arc<Activity>,
     updates: Arc<update::Updates>,
+    texts: Arc<messages::Store>,
 }
 
 /// A phone has reached this PC over the network since start: a firewall lets it through.
@@ -213,6 +216,7 @@ impl Control {
             "ring": plugins::takes(d, plugins::FIND),
             "browse": moves && plugins::takes(d, phonefiles::SFTP_REQUEST),
             "share": moves && plugins::takes(d, share::SHARE),
+            "text": plugins::takes(d, messages::REQUEST),
         });
         let linked_paired = all.values().filter(|d| d.paired && d.linked).count();
         let clip = clipboard_sync(&id, d, linked_paired);
@@ -470,6 +474,44 @@ impl Control {
         Value::Array(self.activity.recent()).to_string()
     }
 
+    /// The phone's text conversations as JSON (`messages.rs`), newest first; asks the phone the
+    /// first time on each link, and [messages_changed] follows as they come.
+    fn conversations(&self, id: String) -> fdo::Result<String> {
+        let takes = self.devices.lock().unwrap().get(&id).is_some_and(|d| plugins::takes(d, messages::REQUEST));
+        if !takes {
+            return Err(fdo::Error::NotSupported("This phone doesn't share its texts".into()));
+        }
+        let (json, ask) = self.texts.conversations(&id);
+        for p in ask {
+            self.command(Command::Send(id.clone(), p))?;
+        }
+        Ok(json)
+    }
+
+    /// One conversation's texts as JSON, oldest first.
+    fn thread(&self, id: String, thread: i64) -> fdo::Result<String> {
+        let (json, ask) = self.texts.thread(&id, thread);
+        for p in ask {
+            self.command(Command::Send(id.clone(), p))?;
+        }
+        Ok(json)
+    }
+
+    /// Texts [text] to [thread]'s people from the phone (D-Bus `TextThread`).
+    fn text_thread(&self, id: String, thread: i64, text: String) -> fdo::Result<()> {
+        let linked = self.devices.lock().unwrap().get(&id).is_some_and(|d| d.linked && plugins::takes(d, messages::REQUEST));
+        if !linked {
+            return Err(fdo::Error::Failed("The phone isn't connected".into()));
+        }
+        let p = self.texts.send(&id, thread, &text).map_err(fdo::Error::Failed)?;
+        tracing::info!("{id}: sending a text");
+        self.command(Command::Send(id, p))
+    }
+
+    /// The texts have something new.
+    #[zbus(signal)]
+    async fn messages_changed(emitter: &zbus::object_server::SignalEmitter<'_>) -> zbus::Result<()>;
+
     fn clear_activity(&self) {
         self.activity.clear();
     }
@@ -530,6 +572,8 @@ impl Control {
 /// The main loop's own state.
 struct Desk {
     devices: Devices,
+    /// The phones' texts, for the window's Messages page.
+    texts: Arc<messages::Store>,
     commands: mpsc::UnboundedSender<Command>,
     notifier: Notifier,
     session: Option<Session>,
@@ -693,12 +737,13 @@ async fn daemon(dir: PathBuf) -> Result<()> {
     let run = commands::Commands::new(&dir);
     let permits = Arc::new(Permits::load(dir.join("permissions.json")));
     let activity = Arc::new(Activity::load(dir.join("activity.json")));
+    let texts = Arc::new(messages::Store::default());
     clip_load(&dir);
     let updates = Arc::new(update::Updates::load(&dir));
     if std::env::var_os("VYOMA_DIR").is_none() {
         tokio::spawn(updates.clone().run());
     }
-    let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone(), conn: conn.clone(), beside_kde, permits: permits.clone(), activity: activity.clone(), updates: updates.clone() };
+    let control = Control { me: me.clone(), run: run.clone(), notifier: notifier.clone(), commands: commands.clone(), asks: asks_tx, devices: devices.clone(), lan: lan.clone(), targets: targets.clone(), conn: conn.clone(), beside_kde, permits: permits.clone(), activity: activity.clone(), updates: updates.clone(), texts: texts.clone() };
     conn.object_server().at(OBJECT_PATH, control).await?;
     conn.request_name(BUS_NAME).await.context("another Vyoma desktop app is running")?;
     // Tells the GUI when what it shows changed (checked, as many places change devices).
@@ -734,6 +779,17 @@ async fn daemon(dir: PathBuf) -> Result<()> {
                     let _ = tokio::task::spawn_blocking(move || menus::update(&phones)).await;
                 }
                 tokio::time::sleep(CHANGES_EVERY).await;
+            }
+        });
+    }
+    // And when the texts did.
+    {
+        let (conn, mut ticks) = (conn.clone(), texts.subscribe());
+        tokio::spawn(async move {
+            while ticks.changed().await.is_ok() {
+                if let Ok(emitter) = zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
+                    let _ = Control::messages_changed(&emitter).await;
+                }
             }
         });
     }
@@ -827,6 +883,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
 
     let mut desk = Desk {
         host,
+        texts,
         refused_input: HashMap::new(),
         sessions: HashMap::new(),
         echoes: HashMap::new(),
@@ -1164,12 +1221,8 @@ impl Desk {
             plugins::stop_ringing(&self.notifier, &mut self.ringer, &mut self.ring_notice).await;
             return;
         }
-        if action == "mute"
-            && let Some(id) = telephony::muting(&self.calls, notification)
-        {
-            tracing::info!("{id}: muting the ringer");
-            self.send(&id, packet(telephony::MUTE, json!({})));
-            return;
+        if let Some(id) = telephony::line_of(&self.calls, notification) {
+            return self.on_call_pressed(id, action).await;
         }
         if let Some(open) = self.opens.get(&notification) {
             match (open, action) {
@@ -1223,6 +1276,7 @@ impl Desk {
             Event::Gone { id } => {
                 // Dropping its packets' channel ends the session, and the screen, camera and controller with it.
                 self.sessions.remove(&id);
+                self.texts.gone(&id);
                 // Its mount stays: sshfs has a connection of its own, which a blip of the link (the
                 // cable pulled with Wi-Fi to take over) needn't end, and remounting at the same path
                 // left an open file manager window looking at the old, empty one. A phone that's
@@ -1276,6 +1330,7 @@ impl Desk {
             }
             Event::Unpaired { id, name } => {
                 self.sessions.remove(&id);
+                self.texts.forget(&id);
                 self.host.permits.forget(&id);
                 self.kept.remove(&id);
                 if let Some(m) = self.mounts.remove(&id) {
@@ -1296,6 +1351,9 @@ impl Desk {
                 let Some(mut device) = self.devices.lock().unwrap().get(&id).cloned() else { return };
                 if packet["type"] == ECHO {
                     return self.on_echo(&id, &packet);
+                }
+                if packet["type"] == telephony::DONE {
+                    return self.on_call_done(&id, &packet).await;
                 }
                 if packet["type"].as_str().is_some_and(|t| t.starts_with("vyoma.")) {
                     if let Some(session) = self.sessions.get(&id) {
@@ -1373,6 +1431,12 @@ impl Desk {
                                 plugins::tell(&self.notifier, &format!("Can't open {}'s files", device.name), &why).await;
                             }
                             phonefiles::Reply::Nothing => {}
+                        }
+                        return;
+                    }
+                    messages::MESSAGES | messages::CONTACTS_UIDS_REPLY | messages::CONTACTS_VCARDS_REPLY => {
+                        for p in self.texts.on_packet(&id, &packet) {
+                            self.send(&id, p);
                         }
                         return;
                     }
@@ -1519,11 +1583,21 @@ impl Desk {
                 }
             }
         }
+        if steps.release
+            && let Some(audio) = line.audio.take()
+        {
+            give_back(audio);
+        }
         let Some(call) = call else { return };
         let body = call.body(phone);
+        if steps.show_talking {
+            line.talking_title = call.talking_title();
+            self.show_talking(id, phone, line).await;
+        }
         if steps.show_ringing {
             let title = call.ringing_title();
-            let notice = Notice { icon: "call-start", title: &title, body: &body, actions: &[("mute", "Mute")], sticky: true, replaces: line.ringing };
+            let actions = telephony::ringing_actions(call.answerable);
+            let notice = Notice { icon: "call-start", title: &title, body: &body, actions, sticky: true, replaces: line.ringing };
             match self.notifier.show(notice).await {
                 Ok(n) => line.ringing = Some(n),
                 Err(e) => tracing::warn!("{id}: couldn't show the call: {e:#}"),
@@ -1534,6 +1608,88 @@ impl Desk {
             let notice = Notice { icon: "call-stop", title: &title, body: &body, actions: &[], sticky: false, replaces: line.missed };
             line.missed = self.notifier.show(notice).await.ok();
         }
+    }
+
+    /// A button on [id]'s ringing or talking notification.
+    async fn on_call_pressed(&mut self, id: String, action: &str) {
+        let Some(mut line) = self.calls.remove(&id) else { return };
+        let phone = self.devices.lock().unwrap().get(&id).map(|d| d.name.clone()).unwrap_or_default();
+        match action {
+            "mute" => {
+                tracing::info!("{id}: muting the ringer");
+                self.send(&id, packet(telephony::MUTE, json!({})));
+            }
+            "answer" | "decline" | "hangup" => {
+                tracing::info!("{id}: asking the phone to {action}");
+                self.send(&id, packet(telephony::REQUEST, json!({ "action": action })));
+                match action {
+                    "answer" => {
+                        line.answered = true;
+                        // Its own headset keeps the sound; else it comes here, connecting while it's answered.
+                        if !line.headset {
+                            self.take_audio(&mut line);
+                        }
+                    }
+                    "decline" => line.declined = true,
+                    _ => {}
+                }
+            }
+            "phone-audio" | "pc-audio" => {
+                match line.audio.take() {
+                    Some(audio) => give_back(audio),
+                    None => self.take_audio(&mut line),
+                }
+                tracing::info!("{id}: call sound on {}", if line.audio.is_some() { "this PC" } else { "the phone" });
+                self.show_talking(&id, &phone, &mut line).await;
+            }
+            _ => {}
+        }
+        self.calls.insert(id, line);
+    }
+
+    /// Connects this PC as the phone's headset for the call, in the background.
+    fn take_audio(&self, line: &mut telephony::Line) {
+        if line.audio.is_some() {
+            return;
+        }
+        let (notifier, name) = (self.notifier.clone(), line.bluetooth.clone());
+        line.audio = Some(tokio::spawn(async move {
+            match hfp::take(name.as_deref()).await {
+                Ok(audio) => Some(audio),
+                Err(e) => {
+                    tracing::warn!("call audio: {e:#}");
+                    plugins::tell(&notifier, "The call's sound stays on the phone", &format!("{e:#}")).await;
+                    None
+                }
+            }
+        }));
+    }
+
+    /// A call answered here: who, where its sound is, Hang up.
+    async fn show_talking(&self, id: &str, phone: &str, line: &mut telephony::Line) {
+        let (body, actions) = telephony::talking_notice(line.audio.is_some(), phone);
+        let notice = Notice { icon: "call-start", title: &line.talking_title, body: &body, actions, sticky: true, replaces: line.talking };
+        match self.notifier.show(notice).await {
+            Ok(n) => line.talking = Some(n),
+            Err(e) => tracing::warn!("{id}: couldn't show the call: {e:#}"),
+        }
+    }
+
+    /// The phone did (or couldn't do) what a call button asked.
+    async fn on_call_done(&mut self, id: &str, packet: &Value) {
+        let b = &packet["body"];
+        let action = b["action"].as_str().unwrap_or("");
+        let Some(error) = b["error"].as_str() else { return };
+        tracing::info!("{id}: the phone couldn't {action} the call");
+        if action == "answer"
+            && let Some(line) = self.calls.get_mut(id)
+        {
+            line.answered = false;
+            if let Some(audio) = line.audio.take() {
+                give_back(audio);
+            }
+        }
+        plugins::tell(&self.notifier, telephony::failed_title(action), error).await;
     }
 
     fn set_key(&self, id: &str, key: &str, asking: bool) {
@@ -1551,6 +1707,15 @@ impl Desk {
             Err(e) => tracing::warn!("couldn't show the pairing prompt: {e:#}"),
         }
     }
+}
+
+/// Gives a call's sound back to the phone once it's been taken (or failed to be).
+fn give_back(audio: tokio::task::JoinHandle<Option<hfp::Audio>>) {
+    tokio::spawn(async move {
+        if let Ok(Some(audio)) = audio.await {
+            hfp::release(audio).await;
+        }
+    });
 }
 
 async fn kde_running(conn: &zbus::Connection) -> bool {
