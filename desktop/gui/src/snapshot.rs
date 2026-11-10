@@ -220,7 +220,8 @@ fn health(missing: bool) -> Health {
     Health { features, installable: missing, installing: false, checks, notes, update }
 }
 
-/// Made-up texts: messages (the list), messages-thread, messages-silent, messages-loading.
+/// Made-up texts: messages (the list), messages-thread, messages-silent, messages-loading, and the phone's texts
+/// lock: messages-asking, messages-declined, messages-locked.
 fn messages(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>) {
     use crate::daemon::{Conversation, Inbox, TextData, ThreadData};
     crate::texts::MADE_UP.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -231,6 +232,9 @@ fn messages(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>)
     let inbox = match scene {
         "messages-silent" => Inbox { state: "silent".into(), list: vec![] },
         "messages-loading" => Inbox { state: "loading".into(), list: vec![] },
+        "messages-asking" => Inbox { state: "asking".into(), list: vec![] },
+        "messages-declined" => Inbox { state: "declined".into(), list: vec![] },
+        "messages-locked" => Inbox { state: "locked".into(), list: vec![] },
         _ => Inbox {
             state: "ready".into(),
             list: vec![

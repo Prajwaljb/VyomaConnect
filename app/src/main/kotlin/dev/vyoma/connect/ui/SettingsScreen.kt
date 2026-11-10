@@ -3,6 +3,7 @@ package dev.vyoma.connect.ui
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.automirrored.rounded.Message
 import dev.vyoma.connect.container
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.NetworkCheck
@@ -375,7 +376,13 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
         }
 
         item(key = "security-label") { SectionLabel("Security") }
-        item(key = "security") { SectionCard { FingerprintLockRow(resumeTick) } }
+        item(key = "security") {
+            SectionCard {
+                FingerprintLockRow(resumeTick)
+                RowDivider()
+                TextsLockRow()
+            }
+        }
 
         if (BuildConfig.DEMO) {
             item(key = "demo-label") { SectionLabel("Demo") }
@@ -939,6 +946,33 @@ private fun FingerprintLockRow(resumeTick: Int) {
             UnlockCountsRow()
         }
     }
+}
+
+/** Texts reach a PC's Messages page only after a fingerprint here ([dev.vyoma.connect.platform.TextsLock]). */
+@Composable
+private fun TextsLockRow() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var on by remember { mutableStateOf(dev.vyoma.connect.platform.TextsLock.enabled(context)) }
+    fun toggle(want: Boolean) {
+        if (want) {
+            dev.vyoma.connect.platform.TextsLock.setEnabled(context, true)
+            on = true
+        } else {
+            AppLock.confirm(context, "To let PCs show your texts without asking") {
+                dev.vyoma.connect.platform.TextsLock.setEnabled(context, false)
+                on = false
+            }
+        }
+    }
+    ListRow(
+        title = "Ask before PCs show texts",
+        subtitle = "Each time Messages opens on a PC",
+        icon = Icons.AutoMirrored.Rounded.Message,
+        iconTint = SystemColor.GREEN.color,
+        haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
+        onClick = { toggle(!on) },
+        trailing = { VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Ask before PCs show texts") },
+    )
 }
 
 @Composable

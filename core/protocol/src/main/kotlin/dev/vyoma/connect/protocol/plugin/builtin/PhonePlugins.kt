@@ -79,7 +79,34 @@ interface SmsStore {
     val changes: Flow<Unit>
 }
 
-class SmsPlugin(private val ctx: PluginContext, private val store: SmsStore) : Plugin {
+/**
+ * Who may have the texts. Only PCs that can ask for them (Vyoma's, which send [PacketTypes.TEXTS_UNLOCK]) are
+ * held to it: stock desktops can't unlock, so they keep reading texts as before.
+ */
+interface TextsGuard {
+    /** Whether texts may go to [peerId] now. */
+    fun open(peerId: String): Boolean
+
+    /** Asks the owner on this phone to let [peerName]'s Messages in; [answer] gets the outcome, from any thread. */
+    fun ask(peerId: String, peerName: String, answer: (Boolean) -> Unit)
+
+    /** [peerId] locked again (or went). */
+    fun close(peerId: String)
+
+    /** No lock: every PC may. */
+    object None : TextsGuard {
+        override fun open(peerId: String) = true
+        override fun ask(peerId: String, peerName: String, answer: (Boolean) -> Unit) = answer(true)
+        override fun close(peerId: String) = Unit
+    }
+}
+
+class SmsPlugin(private val ctx: PluginContext, private val store: SmsStore, private val guard: TextsGuard = TextsGuard.None) : Plugin {
+    private val peerId get() = ctx.device.id
+    /** A PC that can ask for the texts, so it's held to the lock. */
+    private val guarded get() = PacketTypes.TEXTS_UNLOCK in ctx.device.identity.outgoingCapabilities
+    private fun allowed() = !guarded || guard.open(peerId)
+
     // Only push live updates once this peer has shown interest, like upstream.
     @Volatile private var requested = false
     private val newestLock = Mutex()
@@ -89,13 +116,36 @@ class SmsPlugin(private val ctx: PluginContext, private val store: SmsStore) : P
     override suspend fun onStart() {
         ctx.scope.launch(Dispatchers.IO) {
             newestLock.withLock { newest = runCatching { store.newestTimestamp() }.getOrDefault(Long.MIN_VALUE) }
-            store.changes.debounce(300).collect { if (requested) pushNew() }
+            store.changes.debounce(300).collect { if (requested && allowed()) pushNew() }
         }
     }
 
+    override fun onStop() {
+        guard.close(peerId)
+    }
+
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
+        when (packet.type) {
+            PacketTypes.TEXTS_UNLOCK -> {
+                // Asked afresh each time: whoever is at the PC can't ride on an earlier yes.
+                guard.close(peerId)
+                guard.ask(peerId, ctx.device.name) { ok ->
+                    ctx.scope.launch { ctx.send(packet(PacketTypes.TEXTS_UNLOCKED) { put("ok", ok) }) }
+                }
+                return true
+            }
+            PacketTypes.TEXTS_LOCK -> {
+                guard.close(peerId)
+                return true
+            }
+        }
         if (!store.available()) {
             VLog.d(TAG, "${packet.type} ignored: no SMS permission")
+            return true
+        }
+        if (!allowed()) {
+            VLog.i(TAG, "${packet.type} refused: Messages is locked for this PC")
+            ctx.send(packet(PacketTypes.TEXTS_LOCKED) {})
             return true
         }
         when (packet.type) {
@@ -156,14 +206,15 @@ class SmsPlugin(private val ctx: PluginContext, private val store: SmsStore) : P
         const val ID = "sms"
         private const val TAG = "Sms"
 
-        fun spec(store: SmsStore) = PluginSpec(
+        fun spec(store: SmsStore, guard: TextsGuard = TextsGuard.None) = PluginSpec(
             ID,
             incoming = setOf(
                 PacketTypes.SMS_REQUEST, PacketTypes.SMS_REQUEST_CONVERSATIONS,
                 PacketTypes.SMS_REQUEST_CONVERSATION, PacketTypes.SMS_REQUEST_ATTACHMENT,
+                PacketTypes.TEXTS_UNLOCK, PacketTypes.TEXTS_LOCK,
             ),
-            outgoing = setOf(PacketTypes.SMS_MESSAGES, PacketTypes.SMS_ATTACHMENT_FILE),
-        ) { SmsPlugin(it, store) }
+            outgoing = setOf(PacketTypes.SMS_MESSAGES, PacketTypes.SMS_ATTACHMENT_FILE, PacketTypes.TEXTS_UNLOCKED, PacketTypes.TEXTS_LOCKED),
+        ) { SmsPlugin(it, store, guard) }
     }
 }
 

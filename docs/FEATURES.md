@@ -38,7 +38,9 @@ when the phone is paired with KDE Connect or GSConnect.</p>
   and microphone (or headphones plugged into it) carry the call; **Use phone** hands it back, **Hang up** ends it.
   Needs the phone paired with the PC over Bluetooth; a headset already on the phone keeps the call. *PC app*
 - **Messages:** read your texts on the PC and reply, from the phone's number, with contact names. Texts (SMS) only:
-  Android keeps RCS chats to the Messages app. *PC app*
+  Android keeps RCS chats to the Messages app. Opening Messages on the PC asks for your fingerprint on the phone,
+  and it locks again when the PC locks, the phone goes, or after 10 minutes unused (Settings > Ask before PCs show
+  texts). *PC app*
 - **PC notifications** for what the phone does there: screenshots, photos, files received.
 
 ## Your PC, from the phone

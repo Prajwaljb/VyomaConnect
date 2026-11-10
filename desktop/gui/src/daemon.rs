@@ -343,6 +343,8 @@ pub trait Daemon: Send + Sync {
     fn thread(&self, id: &str, thread: i64) -> Result<ThreadData>;
     /// Texts [text] to the conversation's people, from the phone.
     fn send_text(&self, id: &str, thread: i64, text: &str) -> Result<()>;
+    /// Asks the phone to let its texts in (its owner confirms there), or keeps them open if they are.
+    fn unlock_texts(&self, id: &str) -> Result<()>;
     /// Blocks until the daemon says something (an error once it's gone away).
     fn next_event(&self) -> Result<Event>;
 }
@@ -491,6 +493,10 @@ impl Daemon for DbusDaemon {
 
     fn send_text(&self, id: &str, thread: i64, text: &str) -> Result<()> {
         self.call("TextThread", &(id, thread, text))
+    }
+
+    fn unlock_texts(&self, id: &str) -> Result<()> {
+        self.call("UnlockTexts", &(id,))
     }
 
     fn next_event(&self) -> Result<Event> {

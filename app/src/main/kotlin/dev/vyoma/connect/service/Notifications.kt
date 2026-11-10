@@ -30,7 +30,7 @@ object Notifications {
     private const val CH_SERVICE = "service"
     /** The service notification while the screen or camera is shared: a Live Update (MIN can't be one). */
     private const val CH_LIVE = "sharing"
-    private const val CH_PAIRING = "pairing"
+    const val CH_PAIRING = "pairing"
     private const val CH_EVENTS = "events"
     private const val CH_RULES = "rules"
     const val CH_MEDIA = "media"

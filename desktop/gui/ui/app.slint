@@ -1596,10 +1596,12 @@ component ChatRow inherits Rectangle {
 // A phone's text conversations, newest first.
 component MessagesPage inherits Page {
     in property <string> phone-name;
-    // "loading", "ready", "silent" (nothing came back) or "away".
+    // "loading", "ready", "silent" (nothing came back), "away", or the phone's texts lock: "locked",
+    // "asking" (waiting for the fingerprint on the phone) or "declined".
     in property <string> state;
     in property <[Chat]> chats;
     callback open(string);
+    callback unlock();
     title: "Messages";
     subtitle: root.phone-name;
     glyph: @image-url("icons/chat.svg");
@@ -1617,6 +1619,44 @@ component MessagesPage inherits Page {
     if root.state == "away" && root.chats.length == 0: AskCard {
         title: "The phone's away";
         body: "Its texts show here once it's connected.";
+    }
+    if root.state == "asking": AskCard {
+        title: "Confirm on your phone";
+        body: "Your texts show here once you confirm it's you on the phone: use your fingerprint when it asks, or tap its notification.";
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 4px;
+            PillButton {
+                text: "Ask again";
+                clicked => { root.unlock(); }
+            }
+        }
+    }
+    if root.state == "declined": AskCard {
+        title: "Not allowed on the phone";
+        body: "Your texts stayed on the phone.";
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 4px;
+            PillButton {
+                text: "Ask again";
+                prominent: true;
+                clicked => { root.unlock(); }
+            }
+        }
+    }
+    if root.state == "locked": AskCard {
+        title: "Messages is locked";
+        body: "It locks when this PC locks, when the phone goes, or after 10 minutes unused. Your fingerprint on the phone opens it again.";
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 4px;
+            PillButton {
+                text: "Unlock";
+                prominent: true;
+                clicked => { root.unlock(); }
+            }
+        }
     }
     if root.chats.length > 0: Glass {
         for c[i] in root.chats: ChatRow {
@@ -2906,6 +2946,7 @@ export component MainWindow inherits Window {
     callback show-messages(string);
     callback open-thread(string);
     callback send-text(string, string);
+    callback unlock-texts();
     // key ("" for new), name, command line, fingerprint, every time.
     callback save-command(string, string, string, bool, bool);
     callback remove-command(string);
@@ -3159,6 +3200,7 @@ export component MainWindow inherits Window {
             state: root.texts-state;
             chats: root.chats;
             open(t) => { root.open-thread(t); }
+            unlock => { root.unlock-texts(); }
         }
         if root.selected == "messages" && root.daemon-ok && root.thread != "": ThreadPage {
             name: root.thread-name;

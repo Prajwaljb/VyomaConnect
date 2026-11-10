@@ -49,6 +49,18 @@ object PacketTypes {
 
     /** Phone → PC: `{action, error?}`, how that went. */
     const val CALL_DONE = "vyoma.call.done"
+
+    /** PC → phone: someone opened Messages on the PC; ask the owner (fingerprint) before texts go there. */
+    const val TEXTS_UNLOCK = "vyoma.texts.unlock"
+
+    /** PC → phone: the PC locked, or Messages sat unused: no more texts until asked again. */
+    const val TEXTS_LOCK = "vyoma.texts.lock"
+
+    /** Phone → PC: `{ok}`, the owner's answer to [TEXTS_UNLOCK]. */
+    const val TEXTS_UNLOCKED = "vyoma.texts.unlocked"
+
+    /** Phone → PC: a request for texts was refused, as Messages is locked for this PC. */
+    const val TEXTS_LOCKED = "vyoma.texts.locked"
     const val CONNECTIVITY_REPORT = "kdeconnect.connectivity_report"
     const val CONNECTIVITY_REPORT_REQUEST = "kdeconnect.connectivity_report.request"
     const val SFTP = "kdeconnect.sftp"

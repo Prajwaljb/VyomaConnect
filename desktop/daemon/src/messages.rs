@@ -3,6 +3,10 @@
 //! Kept in memory only, per phone: asked for when the page first opens on each link, then kept
 //! current by the phone, which sends each new text once it's been asked. Plain SMS only (Android
 //! doesn't let other apps read RCS chats). What texts say and who they're with never go to the log.
+//!
+//! Vyoma's phone app holds them behind its texts lock (`vyoma.texts.*`): opening the page asks the phone, the owner
+//! confirms with a fingerprint there, and the phone refuses texts until then. Locked again (and everything dropped
+//! from memory) when this PC's screen locks, after [IDLE_FOR] unused, or when the phone goes.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
@@ -19,6 +23,14 @@ pub const CONTACTS_UIDS: &str = "kdeconnect.contacts.request_all_uids_timestamps
 pub const CONTACTS_VCARDS: &str = "kdeconnect.contacts.request_vcards_by_uid";
 pub const CONTACTS_UIDS_REPLY: &str = "kdeconnect.contacts.response_uids_timestamps";
 pub const CONTACTS_VCARDS_REPLY: &str = "kdeconnect.contacts.response_vcards";
+/// PC → phone: ask the owner to let the texts in.
+pub const UNLOCK: &str = "vyoma.texts.unlock";
+/// PC → phone: locked again.
+pub const LOCK: &str = "vyoma.texts.lock";
+/// Phone → PC: `{ok}`, the owner's answer.
+pub const UNLOCKED: &str = "vyoma.texts.unlocked";
+/// Phone → PC: a request was refused, as it's locked for us.
+pub const LOCKED: &str = "vyoma.texts.locked";
 
 /// How many of a thread's newest texts are asked for.
 const THREAD_TEXTS: u64 = 200;
@@ -26,6 +38,20 @@ const THREAD_TEXTS: u64 = 200;
 const SILENT_AFTER: Duration = Duration::from_secs(8);
 /// A text sent from here shows as sending until the phone has it, or this long.
 const PENDING_FOR: Duration = Duration::from_secs(90);
+/// Unlocked Messages left unused this long locks again.
+pub const IDLE_FOR: Duration = Duration::from_secs(10 * 60);
+
+/// Where a phone with the texts lock stands.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum Gate {
+    #[default]
+    Locked,
+    /// Asked; the owner hasn't answered on the phone yet.
+    Asking,
+    /// The owner said no (or the prompt was dismissed).
+    Declined,
+    Open,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 struct Text {
@@ -58,6 +84,11 @@ struct Inbox {
     asked: Option<Instant>,
     /// Anything came back since.
     heard: bool,
+    gate: Gate,
+    /// When Messages was last used, while open.
+    used: Option<Instant>,
+    /// The phone has the texts lock (it was asked once): it's held to [gate].
+    guarded: bool,
 }
 
 /// What the phones' texts are, shared by the D-Bus side and the main loop.
@@ -82,11 +113,20 @@ impl Store {
         self.tick.send_modify(|n| *n += 1);
     }
 
-    /// The conversations as JSON, newest first: `{state: loading|ready|silent, list: [...]}`, and
-    /// the packets to send the phone first if this link hasn't asked yet.
-    pub fn conversations(&self, id: &str) -> (String, Vec<Value>) {
+    /// The conversations as JSON, newest first: `{state: loading|ready|silent|locked|asking|declined, list: [...]}`,
+    /// and the packets to send the phone first if this link hasn't asked yet. [guarded]: the phone has the texts lock.
+    pub fn conversations(&self, id: &str, guarded: bool) -> (String, Vec<Value>) {
         let mut all = self.inboxes.lock().unwrap();
         let inbox = all.entry(id.to_owned()).or_default();
+        inbox.guarded |= guarded;
+        if inbox.guarded && inbox.gate != Gate::Open {
+            let state = match inbox.gate {
+                Gate::Asking => "asking",
+                Gate::Declined => "declined",
+                _ => "locked",
+            };
+            return (json!({ "state": state, "list": [] }).to_string(), Vec::new());
+        }
         let mut ask = Vec::new();
         if inbox.asked.is_none() {
             inbox.asked = Some(Instant::now());
@@ -121,9 +161,13 @@ impl Store {
 
     /// One thread as JSON, oldest first: `{name, number, texts: [{body, date, mine, failed, sending}]}`,
     /// and the packet asking the phone for it the first time.
-    pub fn thread(&self, id: &str, thread: i64) -> (String, Vec<Value>) {
+    pub fn thread(&self, id: &str, thread: i64, guarded: bool) -> (String, Vec<Value>) {
         let mut all = self.inboxes.lock().unwrap();
         let inbox = all.entry(id.to_owned()).or_default();
+        inbox.guarded |= guarded;
+        if inbox.guarded && inbox.gate != Gate::Open {
+            return (json!({ "name": "", "number": "", "texts": [] }).to_string(), Vec::new());
+        }
         let t = inbox.threads.entry(thread).or_default();
         let mut ask = Vec::new();
         if !t.asked {
@@ -139,13 +183,21 @@ impl Store {
     }
 
     /// Sends [body] to [thread]'s people: the packet for the phone, or why it can't.
-    pub fn send(&self, id: &str, thread: i64, body: &str) -> Result<Value, String> {
+    pub fn send(&self, id: &str, thread: i64, body: &str, guarded: bool) -> Result<Value, String> {
         let body = body.trim();
         if body.is_empty() {
             return Err("Nothing to send".into());
         }
         let mut all = self.inboxes.lock().unwrap();
-        let t = all.get_mut(id).and_then(|i| i.threads.get_mut(&thread)).ok_or("That conversation isn't loaded")?;
+        let inbox = all.get_mut(id).ok_or("That conversation isn't loaded")?;
+        inbox.guarded |= guarded;
+        if inbox.guarded {
+            if inbox.gate != Gate::Open {
+                return Err("Messages is locked: confirm on your phone first".into());
+            }
+            inbox.used = Some(Instant::now());
+        }
+        let t = inbox.threads.get_mut(&thread).ok_or("That conversation isn't loaded")?;
         let to = addresses(t);
         if to.is_empty() {
             return Err("That conversation has no number to text".into());
@@ -164,6 +216,17 @@ impl Store {
         let inbox = all.entry(id.to_owned()).or_default();
         let mut out = Vec::new();
         match p["type"].as_str().unwrap_or("") {
+            UNLOCKED => {
+                if b["ok"].as_bool() == Some(true) {
+                    inbox.gate = Gate::Open;
+                    inbox.used = Some(Instant::now());
+                } else if inbox.gate == Gate::Asking {
+                    inbox.gate = Gate::Declined;
+                }
+            }
+            LOCKED => inbox.lock(),
+            // Whatever comes while locked (a request that crossed the lock) isn't kept.
+            _ if inbox.gate != Gate::Open && inbox.guarded => return out,
             MESSAGES => {
                 inbox.heard = true;
                 for m in b["messages"].as_array().into_iter().flatten() {
@@ -200,14 +263,63 @@ impl Store {
         out
     }
 
-    /// [id]'s link is gone: the next look asks again (what came meanwhile is news).
-    pub fn gone(&self, id: &str) {
-        if let Some(inbox) = self.inboxes.lock().unwrap().get_mut(id) {
-            inbox.asked = None;
-            inbox.heard = false;
-            for t in inbox.threads.values_mut() {
-                t.asked = false;
+    /// The page was opened, a conversation picked or a text sent: for a locked phone, the packet asking its owner
+    /// (the window shows "Confirm on your phone"); for an open one, it stays open [IDLE_FOR] more.
+    pub fn unlock(&self, id: &str) -> Option<Value> {
+        let mut all = self.inboxes.lock().unwrap();
+        let inbox = all.entry(id.to_owned()).or_default();
+        inbox.guarded = true;
+        if inbox.gate == Gate::Open {
+            inbox.used = Some(Instant::now());
+            return None;
+        }
+        inbox.gate = Gate::Asking;
+        drop(all);
+        self.changed();
+        Some(packet(UNLOCK, json!({})))
+    }
+
+    /// Locks every phone's texts (this PC's screen locked): the phones to tell.
+    pub fn lock_all(&self) -> Vec<String> {
+        self.lock_where(|_| true)
+    }
+
+    /// Locks the ones left unused for [IDLE_FOR]: the phones to tell.
+    pub fn expire(&self) -> Vec<String> {
+        self.lock_where(|i| i.used.is_some_and(|at| at.elapsed() >= IDLE_FOR))
+    }
+
+    fn lock_where(&self, pick: impl Fn(&Inbox) -> bool) -> Vec<String> {
+        let mut all = self.inboxes.lock().unwrap();
+        let mut told = Vec::new();
+        for (id, inbox) in all.iter_mut() {
+            if inbox.guarded && matches!(inbox.gate, Gate::Open | Gate::Asking) && pick(inbox) {
+                inbox.lock();
+                told.push(id.clone());
             }
+        }
+        drop(all);
+        if !told.is_empty() {
+            self.changed();
+        }
+        told
+    }
+
+    /// [id]'s link is gone: the next look asks again (what came meanwhile is news). A locked phone's texts go
+    /// from memory and it locks: it forgets the owner's yes as the link ends too.
+    pub fn gone(&self, id: &str) {
+        let mut all = self.inboxes.lock().unwrap();
+        let Some(inbox) = all.get_mut(id) else { return };
+        if inbox.guarded {
+            inbox.lock();
+            drop(all);
+            self.changed();
+            return;
+        }
+        inbox.asked = None;
+        inbox.heard = false;
+        for t in inbox.threads.values_mut() {
+            t.asked = false;
         }
     }
 
@@ -219,6 +331,11 @@ impl Store {
 }
 
 impl Inbox {
+    /// Locked: nothing of the texts or the contacts stays.
+    fn lock(&mut self) {
+        *self = Inbox { guarded: self.guarded, ..Inbox::default() };
+    }
+
     /// The thread's people by name where they're contacts: "Sam, 555 0100".
     fn name_of(&self, t: &Thread) -> String {
         let names: Vec<String> = addresses(t).iter().map(|a| self.contacts.get(&key(a)).cloned().unwrap_or_else(|| a.clone())).collect();
@@ -351,18 +468,18 @@ mod tests {
     #[test]
     fn asks_once_per_link_and_lists_newest_first() {
         let s = Store::default();
-        let (json, ask) = s.conversations("p");
+        let (json, ask) = s.conversations("p", false);
         assert_eq!(ask.len(), 2);
         assert_eq!(serde_json::from_str::<Value>(&json).unwrap()["state"], "loading");
-        assert!(s.conversations("p").1.is_empty());
+        assert!(s.conversations("p", false).1.is_empty());
         s.on_packet("p", &texts(json!([sms(1, 10, 100, 1, "hi", "+1 555 0100")])));
         s.on_packet("p", &texts(json!([sms(2, 11, 200, 2, "yo", "555 0199")])));
-        let v: Value = serde_json::from_str(&s.conversations("p").0).unwrap();
+        let v: Value = serde_json::from_str(&s.conversations("p", false).0).unwrap();
         assert_eq!(v["state"], "ready");
         assert_eq!(v["list"][0]["thread"], 2);
         assert_eq!((v["list"][0]["mine"].as_bool(), v["list"][1]["unread"].as_bool()), (Some(true), Some(true)));
         s.gone("p");
-        assert_eq!(s.conversations("p").1.len(), 2);
+        assert_eq!(s.conversations("p", false).1.len(), 2);
     }
 
     #[test]
@@ -373,7 +490,7 @@ mod tests {
         let card = "BEGIN:VCARD\nVERSION:2.1\nN:Lee;Sam;;;\nFN:Sam Lee\nTEL;CELL:+91 98450 12345\nEND:VCARD";
         s.on_packet("p", &json!({ "type": CONTACTS_VCARDS_REPLY, "body": { "uids": ["a"], "a": card } }));
         s.on_packet("p", &texts(json!([sms(1, 1, 1, 1, "hi", "09845012345")])));
-        let v: Value = serde_json::from_str(&s.conversations("p").0).unwrap();
+        let v: Value = serde_json::from_str(&s.conversations("p", false).0).unwrap();
         assert_eq!(v["list"][0]["name"], "Sam Lee");
     }
 
@@ -390,23 +507,57 @@ mod tests {
     #[test]
     fn a_sent_text_shows_as_sending_until_the_phone_has_it() {
         let s = Store::default();
-        assert!(s.send("p", 1, "hi").is_err());
+        assert!(s.send("p", 1, "hi", false).is_err());
         s.on_packet("p", &texts(json!([sms(1, 1, 1, 1, "hello", "555")])));
-        assert_eq!(s.send("p", 1, "  ").unwrap_err(), "Nothing to send");
-        let p = s.send("p", 1, " see you ").unwrap();
+        assert_eq!(s.send("p", 1, "  ", false).unwrap_err(), "Nothing to send");
+        let p = s.send("p", 1, " see you ", false).unwrap();
         assert_eq!((p["type"].as_str(), p["body"]["messageBody"].as_str(), p["body"]["addresses"][0]["address"].as_str()), (Some(REQUEST), Some("see you"), Some("555")));
-        let v: Value = serde_json::from_str(&s.thread("p", 1).0).unwrap();
+        let v: Value = serde_json::from_str(&s.thread("p", 1, false).0).unwrap();
         assert_eq!(v["texts"][1]["sending"], true);
         s.on_packet("p", &texts(json!([sms(1, 2, 2, 2, "see you", "555")])));
-        let v: Value = serde_json::from_str(&s.thread("p", 1).0).unwrap();
+        let v: Value = serde_json::from_str(&s.thread("p", 1, false).0).unwrap();
         assert_eq!((v["texts"].as_array().unwrap().len(), v["texts"][1]["sending"].as_bool()), (2, Some(false)));
     }
 
     #[test]
     fn asks_for_a_thread_once() {
         let s = Store::default();
-        let ask = s.thread("p", 7).1;
+        let ask = s.thread("p", 7, false).1;
         assert_eq!((ask[0]["type"].as_str(), ask[0]["body"]["threadID"].as_i64()), (Some(REQUEST_CONVERSATION), Some(7)));
-        assert!(s.thread("p", 7).1.is_empty());
+        assert!(s.thread("p", 7, false).1.is_empty());
+    }
+
+    #[test]
+    fn a_locked_phone_shows_nothing_until_its_owner_says_yes() {
+        let s = Store::default();
+        let state = |s: &Store| serde_json::from_str::<Value>(&s.conversations("p", true).0).unwrap()["state"].clone();
+        assert_eq!(state(&s), "locked");
+        assert!(s.conversations("p", true).1.is_empty(), "nothing asked of a locked phone");
+        assert!(s.send("p", 1, "hi", true).is_err());
+        assert_eq!(s.unlock("p").unwrap()["type"], UNLOCK);
+        assert_eq!(state(&s), "asking");
+        s.on_packet("p", &json!({ "type": UNLOCKED, "body": { "ok": false } }));
+        assert_eq!(state(&s), "declined");
+        s.unlock("p");
+        s.on_packet("p", &json!({ "type": UNLOCKED, "body": { "ok": true } }));
+        assert_eq!(s.conversations("p", true).1.len(), 2, "open: asks the phone");
+        s.on_packet("p", &texts(json!([sms(1, 10, 100, 1, "hi", "555")])));
+        assert_eq!(state(&s), "ready");
+        assert!(s.unlock("p").is_none(), "already open");
+        assert_eq!(s.lock_all(), vec!["p".to_owned()]);
+        assert_eq!(state(&s), "locked");
+        assert!(s.lock_all().is_empty());
+        // Texts that crossed the lock aren't kept.
+        s.on_packet("p", &texts(json!([sms(1, 11, 200, 1, "late", "555")])));
+        s.unlock("p");
+        s.on_packet("p", &json!({ "type": UNLOCKED, "body": { "ok": true } }));
+        let v: Value = serde_json::from_str(&s.conversations("p", true).0).unwrap();
+        assert_eq!(v["list"].as_array().unwrap().len(), 0);
+        s.on_packet("p", &json!({ "type": LOCKED, "body": {} }));
+        assert_eq!(state(&s), "locked");
+        s.unlock("p");
+        s.on_packet("p", &json!({ "type": UNLOCKED, "body": { "ok": true } }));
+        s.gone("p");
+        assert_eq!(state(&s), "locked");
     }
 }
