@@ -1794,12 +1794,15 @@ component PairCode inherits VerticalLayout {
     in property <bool> ready;
     /// Why there's no code (offline, the daemon not answering); empty while one is being made.
     in property <string> note;
+    /// The phone that just paired while the code was up: the code gives way to its tick.
+    in property <string> done;
+    property <bool> is-done: root.done != "";
     spacing: 10px;
     HorizontalLayout {
         alignment: center;
         padding-bottom: 6px;
         // Big enough for a phone to read from arm's length (212 px read as ~1 px a square at 640x480).
-        Rectangle {
+        tile := Rectangle {
             width: 248px;
             height: 248px;
             border-radius: 24px;
@@ -1809,6 +1812,8 @@ component PairCode inherits VerticalLayout {
             // Padded, not clipped: the code's corners stay clear of the rounded ones.
             HorizontalLayout {
                 padding: 12px;
+                opacity: root.is-done ? 0 : 1;
+                animate opacity { duration: 260ms; easing: ease-out; }
                 if root.ready: Image {
                     source: root.code;
                     image-rendering: pixelated;
@@ -1822,17 +1827,54 @@ component PairCode inherits VerticalLayout {
                     vertical-alignment: center;
                 }
             }
+            // Read: a green drop wells up from the middle of the code and opens into the tile's own
+            // shape (a circle while small, the tile's rounded square once full), as the phone's tick does.
+            Rectangle {
+                property <length> d: root.is-done ? tile.width : 0px;
+                property <float> t: self.d / tile.width;
+                animate d { duration: 620ms; easing: cubic-bezier(0.2, 0.9, 0.25, 1); }
+                x: (tile.width - self.d) / 2;
+                y: (tile.height - self.d) / 2;
+                width: self.d;
+                height: self.d;
+                border-radius: (1 - self.t) * self.d / 2 + self.t * tile.border-radius;
+                background: Theme.green;
+            }
+            // One ring runs out past the edge as it lands.
+            Rectangle {
+                property <length> d: root.is-done ? 360px : 60px;
+                animate d { duration: 900ms; delay: 120ms; easing: ease-out; }
+                x: (tile.width - self.d) / 2;
+                y: (tile.height - self.d) / 2;
+                width: self.d;
+                height: self.d;
+                border-radius: self.d / 2;
+                border-width: 3px;
+                border-color: Theme.green;
+                // Fades as it grows, so it follows the size's own easing.
+                opacity: root.is-done ? max(0, 1 - (self.d - 60px) / 300px) * 0.7 : 0;
+            }
+            Glyph {
+                property <length> s: root.is-done ? 104px : 0px;
+                animate s { duration: 560ms; delay: 260ms; easing: ease-out-back; }
+                source: @image-url("icons/check.svg");
+                tint: white;
+                x: (tile.width - self.s) / 2;
+                y: (tile.height - self.s) / 2;
+                width: self.s;
+                height: self.s;
+            }
         }
     }
     Text {
-        text: "Scan with Vyoma on your phone";
-        color: Theme.text;
+        text: root.is-done ? "Paired with " + root.done : "Scan with Vyoma on your phone";
+        color: root.is-done ? Theme.connected : Theme.text;
         font-size: 17px;
         font-weight: 600;
         horizontal-alignment: center;
     }
     Text {
-        text: "In the app, tap Scan code. No app yet? Point your phone's camera here to download it.";
+        text: root.is-done ? "It's connected. Nothing to accept here." : "In the app, tap Scan code. No app yet? Point your phone's camera here to download it.";
         color: Theme.muted;
         font-size: 14px;
         wrap: word-wrap;
@@ -2091,7 +2133,9 @@ component SetupPage inherits Page {
     callback search();
     callback install();
     callback finish();
-    property <bool> paired: root.phones.length > 0;
+    // A phone that just paired by the code: step one stays open on its tick for a moment.
+    in property <string> code-done;
+    property <bool> paired: root.phones.length > 0 && root.code-done == "";
     // The first thing left to do is the open one; a click can open another.
     property <int> current: !root.paired ? 0 : root.installable ? 1 : 2;
     property <int> chosen: -1;
@@ -2120,6 +2164,7 @@ component SetupPage inherits Page {
             code: root.code;
             ready: root.code-ready;
             note: root.code-note;
+            done: root.code-done;
         }
         if !root.paired && root.nearby.length > 0: SectionLabel {
             text: "Or pair one nearby";
@@ -2372,6 +2417,7 @@ component AddPhonePage inherits Page {
     in property <image> code;
     in property <bool> code-ready;
     in property <string> code-note;
+    in property <string> code-done;
     callback pair(string);
     callback accept(string);
     callback reject(string);
@@ -2384,6 +2430,7 @@ component AddPhonePage inherits Page {
                 code: root.code;
                 ready: root.code-ready;
                 note: root.code-note;
+                done: root.code-done;
             }
         }
     }
@@ -2472,6 +2519,8 @@ export component MainWindow inherits Window {
     in property <image> pair-code;
     in property <bool> pair-code-ready;
     in property <string> pair-code-note;
+    // A phone that just paired while the code was up (its name): the code turns into a tick.
+    in property <string> pair-code-done;
     out property <bool> wants-code: root.daemon-ok && (root.setup ? root.phones.length == 0
         : root.selected == "add" || (!root.has-current && root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands"));
     callback wants-code-changed(bool);
@@ -2750,6 +2799,7 @@ export component MainWindow inherits Window {
             code: root.pair-code;
             code-ready: root.pair-code-ready;
             code-note: root.pair-code-note;
+            code-done: root.pair-code-done;
             pair(id) => { root.pair(id); }
             accept(id) => { root.accept(id); }
             reject(id) => { root.reject(id); }
@@ -2786,6 +2836,7 @@ export component MainWindow inherits Window {
         code: root.pair-code;
         code-ready: root.pair-code-ready;
         code-note: root.pair-code-note;
+        code-done: root.pair-code-done;
         daemon-ok: root.daemon-ok;
         missing: root.missing;
         installable: root.installable;
