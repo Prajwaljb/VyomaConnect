@@ -1,0 +1,4 @@
+• Pair by scanning the code in the PC's window: nothing to type or compare, and it works on Wi-Fi that hides devices
+• Can't connect? Vyoma now says why (no Wi-Fi, a VPN, another network, the PC's firewall) with the button that fixes it
+• Setup carries on after scanning, and never asks for USB debugging
+• The PC app installs with one line, nothing to compile
