@@ -32,7 +32,7 @@ class QrInvite(
     companion object {
         /** The pair request's field that carries the proof. */
         const val FIELD = "vyomaInvite"
-        private const val DEFAULT_PORT = 1716
+        private val PORTS = 1716..1764
         private val HEX64 = Regex("[0-9a-f]{64}")
         private val HEX32 = Regex("[0-9a-f]{32}")
         private val ID = Regex("[A-Za-z0-9_-]{16,64}")
@@ -52,11 +52,22 @@ class QrInvite(
             val fp = params["fp"]?.takeIf { HEX64.matches(it) } ?: return null
             val secret = params["s"]?.takeIf { HEX32.matches(it) }?.chunked(2)?.map { it.toInt(16).toByte() }?.toByteArray() ?: return null
             val addresses = params["a"].orEmpty().split(',').map { it.trim() }
-                .filter { IPV4.matches(it) || (it.contains(':') && IPV6.matches(it)) }.take(4)
+                .filter { (IPV4.matches(it) || (it.contains(':') && IPV6.matches(it))) && dialable(it) }.take(4)
             if (addresses.isEmpty()) return null
-            val port = params["p"]?.toIntOrNull()?.takeIf { it in 1..65535 } ?: DEFAULT_PORT
-            val name = params["name"].orEmpty().filter { !it.isISOControl() }.take(64).ifBlank { "your PC" }
+            // KDE Connect's own ports only: a code can't point the phone at some other service.
+            val port = params["p"]?.toIntOrNull()?.takeIf { it in PORTS } ?: return null
+            // Shown on screen: no control or invisible format characters (a right-to-left override could
+            // make a name read as something else).
+            val name = params["name"].orEmpty().filter { !it.isISOControl() && Character.getType(it) != Character.FORMAT.toInt() }
+                .take(64).trim().ifBlank { "your PC" }
             return QrInvite(id, name, fp, secret, addresses, port)
+        }
+
+        /** A PC's address: not this phone, nor every device on the network at once. */
+        private fun dialable(literal: String): Boolean {
+            // A literal: getByName parses it without looking anything up.
+            val ip = runCatching { java.net.InetAddress.getByName(literal) }.getOrNull() ?: return false
+            return !(ip.isLoopbackAddress || ip.isAnyLocalAddress || ip.isMulticastAddress || literal == "255.255.255.255")
         }
 
         fun fingerprint(der: ByteArray): String = hex(MessageDigest.getInstance("SHA-256").digest(der))

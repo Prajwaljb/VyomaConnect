@@ -33,6 +33,8 @@ pub const THIS_PC: &str = "this-pc";
 pub const ACTIVITY: &str = "activity";
 /// And the commands'.
 pub const COMMANDS: &str = "commands";
+/// The Add a phone page, with the pairing code.
+pub const ADD: &str = "add";
 
 /// Ready-made commands for the Commands page: only what the phone can't already do itself (it
 /// locks, mutes, sleeps and shuts the PC down on its own), and only what this PC has the tools for.
@@ -670,6 +672,10 @@ fn apply(ui: &MainWindow, phones: Option<Vec<PhoneData>>) {
     if let (Some(p), true) = (fresh, ui.get_setup()) {
         moment(ui, p.name.clone());
     }
+    // Paired from the Add page (its code scanned): on to that phone.
+    if let (Some(p), true) = (fresh, ui.get_selected() == ADD) {
+        ui.set_selected(p.id.clone().into());
+    }
     show(ui, &phones);
 }
 
@@ -692,11 +698,14 @@ fn show(ui: &MainWindow, phones: &[PhoneData]) {
     nearby.retain(|p| p.linked || !p.code.is_empty());
     nearby.sort_by_key(|p| p.name.to_lowercase());
     let selected = ui.get_selected().to_string();
-    let current = paired.iter().chain(&nearby).find(|p| p.id == selected).or(paired.first()).or(nearby.first()).copied();
+    // A nearby phone only takes the page when it asks to pair: one that has just linked (its owner
+    // scanning the code, say) must not replace the page showing the code.
+    let current = paired.iter().chain(&nearby).find(|p| p.id == selected).or(paired.first()).or(nearby.iter().find(|p| !p.code.is_empty())).copied();
     ui.set_phones(ModelRc::new(VecModel::from(paired.iter().map(|p| to_ui(p)).collect::<Vec<_>>())));
     ui.set_nearby(ModelRc::new(VecModel::from(nearby.iter().map(|p| to_ui(p)).collect::<Vec<_>>())));
-    // This PC's page and the activity stay put however the phones change.
-    if selected == THIS_PC || selected == ACTIVITY || selected == COMMANDS {
+    // This PC's page, the activity, commands and Add a phone stay put however the phones change: the
+    // Add page leaving took its code down while a phone that had just linked was about to use it.
+    if selected == THIS_PC || selected == ACTIVITY || selected == COMMANDS || selected == ADD {
         return;
     }
     ui.set_has_current(current.is_some());

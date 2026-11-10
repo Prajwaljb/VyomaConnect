@@ -147,10 +147,14 @@ impl Control {
     /// after `#` never leaves the phone (browsers don't send it), and Vyoma's own scanner reads it.
     /// It replaces any code shown before, and lasts ten minutes or until a phone pairs with it.
     fn pairing_code(&self) -> fdo::Result<String> {
+        // No address, no code: a phone couldn't reach this PC. The window says so (the error's name).
+        let addresses: Vec<String> = vyoma_core::invite::local_addresses().iter().map(|a| a.to_string()).collect();
+        if addresses.is_empty() {
+            return Err(fdo::Error::Failed("offline".into()));
+        }
         let invite = Invite::new(std::time::Instant::now()).ok_or_else(|| fdo::Error::Failed("no randomness".into()))?;
         let secret = vyoma_core::invite::hex(invite.secret());
         self.command(Command::Invite(Some(invite)))?;
-        let addresses: Vec<String> = vyoma_core::invite::local_addresses().iter().map(|a| a.to_string()).collect();
         Ok(format!(
             "https://github.com/{}/releases/latest#pair?v=1&id={}&name={}&fp={}&s={secret}&a={}&p={}",
             update::REPO,
@@ -1232,14 +1236,16 @@ impl Desk {
                     self.notifier.close(n).await;
                 }
             }
-            Event::Paired { id, name } => {
+            Event::Paired { id, name, by_code } => {
                 if let Some(d) = self.devices.lock().unwrap().get_mut(&id) {
                     (d.paired, d.key) = (true, String::new());
                 }
                 if let Some(n) = self.prompts.remove(&id) {
                     self.notifier.close(n).await;
                 }
-                plugins::tell(&self.notifier, &format!("Paired with {name}"), "").await;
+                // Nobody here said yes to a code pairing: say how to undo one that wasn't wanted.
+                let body = if by_code { "It scanned the code in Vyoma's window. Not you? Unpair it there." } else { "" };
+                plugins::tell(&self.notifier, &format!("Paired with {name}"), body).await;
                 self.start(&id);
             }
             Event::Unpaired { id, name } => {

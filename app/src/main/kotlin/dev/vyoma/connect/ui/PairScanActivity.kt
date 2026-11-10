@@ -16,6 +16,8 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedContent
@@ -71,13 +73,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.BinaryBitmap
-import com.google.zxing.DecodeHintType
-import com.google.zxing.MultiFormatReader
-import com.google.zxing.NotFoundException
-import com.google.zxing.PlanarYUVLuminanceSource
-import com.google.zxing.common.HybridBinarizer
 import dev.vyoma.connect.container
 import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.Haptic
@@ -132,10 +127,23 @@ private fun PairScan(linked: QrInvite?, onClose: () -> Unit, onPaired: () -> Uni
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<ScanState>(ScanState.Looking) }
     var cameraOn by remember { mutableStateOf(context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
-    var asked by remember { mutableStateOf(false) }
+    // Denied for good (Android won't ask again): the button opens the app's settings instead.
+    var blocked by remember { mutableStateOf(false) }
+    var cameraBroken by remember { mutableStateOf(false) }
+    var cameraTry by remember { mutableStateOf(0) }
     // A link brings its own code: the camera only if that fails and they scan instead.
+    var otherCode by remember { mutableStateOf(false) }
     var fromLink by remember { mutableStateOf(linked != null) }
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { cameraOn = it; asked = true }
+    val activity = context as? android.app.Activity
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        cameraOn = granted
+        blocked = !granted && activity?.shouldShowRequestPermissionRationale(Manifest.permission.CAMERA) == false
+    }
+    // Back from the app's settings, where the camera may have just been allowed.
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
+        cameraOn = context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        onPauseOrDispose { }
+    }
 
     fun start(invite: QrInvite) {
         if (state != ScanState.Looking && state !is ScanState.Confirm) return
@@ -158,8 +166,10 @@ private fun PairScan(linked: QrInvite?, onClose: () -> Unit, onPaired: () -> Uni
     LaunchedEffect(Unit) { if (!cameraOn && linked == null) ask.launch(Manifest.permission.CAMERA) }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        if (cameraOn && !fromLink) {
-            CameraFeed(scanning = state == ScanState.Looking, onCode = ::start)
+        if (cameraOn && !fromLink && !cameraBroken) {
+            androidx.compose.runtime.key(cameraTry) {
+                CameraFeed(scanning = state == ScanState.Looking, onCode = ::start, onOther = { otherCode = true }, onError = { cameraBroken = true })
+            }
         }
         Viewfinder(Modifier.fillMaxSize())
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(16.dp)) {
@@ -180,14 +190,24 @@ private fun PairScan(linked: QrInvite?, onClose: () -> Unit, onPaired: () -> Uni
                             Heading("Vyoma needs the camera")
                             Body("Only to read the code on your PC's screen. Nothing is recorded.")
                             Spacer(Modifier.height(8.dp))
-                            PillButton("Allow camera", onClick = {
-                                if (asked) runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) }
+                            if (blocked) Body("It's turned off for Vyoma: allow it under Permissions > Camera.")
+                            PillButton(if (blocked) "Open settings" else "Allow camera", onClick = {
+                                if (blocked) runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) }
                                 else ask.launch(Manifest.permission.CAMERA)
                             })
                         }
+                        s is ScanState.Looking && cameraBroken && !fromLink -> {
+                            Heading("The camera didn't open")
+                            Body("Another app may be using it. Close that app, then try again.")
+                            Spacer(Modifier.height(8.dp))
+                            PillButton("Try again", onClick = { cameraBroken = false; cameraTry++ })
+                        }
                         s is ScanState.Looking -> {
                             Heading("Scan the code on your PC")
-                            Body("Open Vyoma on the PC: its window shows a code. Point the camera at it and your phone pairs by itself.")
+                            Body(
+                                if (otherCode) "That code isn't one of Vyoma's. Open Vyoma on the PC and scan the code in its window."
+                                else "Open Vyoma on the PC and choose Add a phone: it shows a code. Point the camera at it from about a forearm away. Blurry? Tap the code.",
+                            )
                         }
                         s is ScanState.Confirm -> {
                             Heading("Pair with ${s.invite.name}?")
@@ -203,6 +223,13 @@ private fun PairScan(linked: QrInvite?, onClose: () -> Unit, onPaired: () -> Uni
                                 CircularProgressIndicator(Modifier.size(32.dp), color = Color.White, strokeWidth = 3.dp)
                                 Heading(if (step == CodePairing.Step.Connecting) "Connecting to ${s.name}" else "Pairing with ${s.name}")
                                 Body("Keep the phone on the same Wi-Fi as the PC.")
+                            }
+                            is CodePairing.Step.AcceptOnPc -> {
+                                Heading("Accept on ${s.name}")
+                                Body("The PC is asking whether to pair with this phone. Accept there if it shows this code:")
+                                step.code?.let {
+                                    Text(it, style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace), color = Color.White)
+                                }
                             }
                             CodePairing.Step.Paired -> {
                                 Icon(Icons.Rounded.CheckCircle, null, tint = Color(0xFF34C759), modifier = Modifier.size(40.dp))
@@ -267,37 +294,77 @@ private fun Viewfinder(modifier: Modifier) {
     }
 }
 
-/** The back camera's picture, read for Vyoma's codes while [scanning]. */
+/**
+ * The back camera's picture, read for Vyoma's codes while [scanning]. Focus is continuous; a tap
+ * focuses and meters on that spot and holds it. [onError]: the camera couldn't be opened.
+ */
+@android.annotation.SuppressLint("ClickableViewAccessibility") // A tap on the picture only focuses; nothing to announce.
 @Composable
-private fun CameraFeed(scanning: Boolean, onCode: (QrInvite) -> Unit) {
+private fun CameraFeed(scanning: Boolean, onCode: (QrInvite) -> Unit, onOther: () -> Unit, onError: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val owner = LocalLifecycleOwner.current
     val current = androidx.compose.runtime.rememberUpdatedState(onCode)
     val active = androidx.compose.runtime.rememberUpdatedState(scanning)
+    val other = androidx.compose.runtime.rememberUpdatedState(onOther)
+    val failed = androidx.compose.runtime.rememberUpdatedState(onError)
     val previewView = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } }
     DisposableEffect(owner) {
+        val main = ContextCompat.getMainExecutor(context)
         val worker = Executors.newSingleThreadExecutor()
-        val reader = QrReader()
+        val reader = QrReader { main.execute { other.value() } }
         val future = ProcessCameraProvider.getInstance(context)
         var provider: ProcessCameraProvider? = null
+        var disposed = false
         future.addListener({
-            val p = runCatching { future.get() }.getOrNull() ?: return@addListener
+            if (disposed) return@addListener
+            val p = runCatching { future.get() }.getOrNull() ?: return@addListener failed.value()
             provider = p
             val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+            // Full HD, not the default 640x480: a code on a monitor at arm's length was about one
+            // pixel per square there, too few to read.
             val analysis = ImageAnalysis.Builder()
+                .setResolutionSelector(
+                    ResolutionSelector.Builder()
+                        .setResolutionStrategy(ResolutionStrategy(android.util.Size(1920, 1080), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
+                        .build(),
+                )
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
             analysis.setAnalyzer(worker) { image ->
-                val invite = if (active.value) reader.read(image) else null
-                image.close()
-                if (invite != null) ContextCompat.getMainExecutor(context).execute { if (active.value) current.value(invite) }
+                val invite = try {
+                    if (active.value) reader.read(image) else null
+                } catch (e: Exception) {
+                    dev.vyoma.connect.protocol.VLog.w("PairScan", "frame skipped: ${e.javaClass.simpleName}")
+                    null
+                } finally {
+                    image.close()
+                }
+                if (invite != null) main.execute { if (active.value) current.value(invite) }
             }
-            runCatching {
+            val camera = runCatching {
                 p.unbindAll()
                 p.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+            }.getOrElse {
+                dev.vyoma.connect.protocol.VLog.w("PairScan", "camera didn't open: ${it.javaClass.simpleName}")
+                return@addListener failed.value()
             }
-        }, ContextCompat.getMainExecutor(context))
+            meterTheMiddle(camera)
+            previewView.setOnTouchListener { view, event ->
+                if (event.action == android.view.MotionEvent.ACTION_UP) {
+                    val spot = previewView.meteringPointFactory.createPoint(event.x, event.y)
+                    val action = androidx.camera.core.FocusMeteringAction.Builder(
+                        spot,
+                        androidx.camera.core.FocusMeteringAction.FLAG_AF or androidx.camera.core.FocusMeteringAction.FLAG_AE,
+                    ).disableAutoCancel().build()
+                    runCatching { camera.cameraControl.startFocusAndMetering(action) }
+                    view.performClick()
+                }
+                true
+            }
+        }, main)
         onDispose {
+            disposed = true
+            previewView.setOnTouchListener(null)
             provider?.unbindAll()
             worker.shutdown()
         }
@@ -305,29 +372,45 @@ private fun CameraFeed(scanning: Boolean, onCode: (QrInvite) -> Unit) {
     AndroidView({ previewView }, Modifier.fillMaxSize())
 }
 
-/** Finds a QR code in a camera frame's brightness plane and keeps it only if it's one of Vyoma's. */
-private class QrReader {
-    private val reader = MultiFormatReader().apply {
-        setHints(mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE), DecodeHintType.TRY_HARDER to true))
+/**
+ * Exposure from the middle, where the code is, and a little darker: metered on the whole room, a
+ * lit monitor came out blown white and its dark squares washed away. Focus stays continuous: a
+ * focus lock here held the distance the scan started at, blurring the code as the phone came closer.
+ */
+private fun meterTheMiddle(camera: androidx.camera.core.Camera) {
+    val middle = androidx.camera.core.SurfaceOrientedMeteringPointFactory(1f, 1f).createPoint(0.5f, 0.5f, 0.3f)
+    val action = androidx.camera.core.FocusMeteringAction.Builder(middle, androidx.camera.core.FocusMeteringAction.FLAG_AE)
+        .disableAutoCancel().build()
+    runCatching { camera.cameraControl.startFocusAndMetering(action) }
+    val ev = camera.cameraInfo.exposureState
+    if (ev.isExposureCompensationSupported) {
+        val step = ev.exposureCompensationStep.toFloat()
+        val index = (-1f / step).toInt().coerceIn(ev.exposureCompensationRange.lower, 0)
+        runCatching { camera.cameraControl.setExposureCompensationIndex(index) }
     }
+}
+
+/** Finds a QR code in a camera frame and keeps it only if it's one of Vyoma's. */
+private class QrReader(private val onOther: () -> Unit) {
+    private val frames = QrFrames()
+    private var seen = 0
+    private var spent = 0L
 
     fun read(image: ImageProxy): QrInvite? {
         val plane = image.planes.firstOrNull() ?: return null
         val buffer = plane.buffer.duplicate().apply { rewind() }
-        val width = image.width
-        val height = image.height
-        val stride = plane.rowStride
         val bytes = ByteArray(buffer.remaining()).also(buffer::get)
-        val source = runCatching { PlanarYUVLuminanceSource(bytes, stride, height, 0, 0, width, height, false) }.getOrNull() ?: return null
-        val text = try {
-            reader.decodeWithState(BinaryBitmap(HybridBinarizer(source))).text
-        } catch (_: NotFoundException) {
-            null
-        } catch (_: Exception) {
-            null
-        } finally {
-            reader.reset()
+        val start = System.nanoTime()
+        val text = frames.read(bytes, plane.rowStride, image.width, image.height)
+        spent += System.nanoTime() - start
+        // How it's going, never what it read (the code holds a secret and addresses).
+        if (++seen % 150 == 0) {
+            dev.vyoma.connect.protocol.VLog.i("PairScan", "$seen frames ${image.width}x${image.height} stride ${plane.rowStride}, ${spent / seen / 1_000_000} ms each, ${frames.lastStage}, middle ${QrFrames.brightness(bytes, plane.rowStride, image.width, image.height)}")
         }
-        return text?.let(QrInvite::parse)
+        if (text == null) return null
+        val invite = QrInvite.parse(text)
+        dev.vyoma.connect.protocol.VLog.i("PairScan", "read a code of ${text.length} chars: ${if (invite != null) "Vyoma's" else "not Vyoma's"}")
+        if (invite == null) onOther()
+        return invite
     }
 }
