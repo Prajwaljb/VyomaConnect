@@ -18,6 +18,12 @@ import dev.vyoma.connect.designsystem.GlassDialog
 import dev.vyoma.connect.designsystem.DialogButton
 import androidx.compose.animation.core.Animatable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.Crossfade
+import android.content.Intent
+import dev.vyoma.connect.service.ConnectionDoctor
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -186,7 +192,7 @@ fun HomeScreen(
                     }
                 }
             }
-            if (!live) item(key = "away") { AwayCard(vm, Modifier.animateItem()) }
+            if (!live) item(key = "away") { AwayCard(vm, id, primary.identity.deviceName, Modifier.animateItem()) }
             if (live && companionOnline.not() && vm.companionPromo()) {
                 item(key = "promo") { CompanionPromoCard(vm, primary?.identity?.deviceId, onDismiss = vm::dismissCompanionPromo, modifier = Modifier.animateItem()) }
             }
@@ -503,28 +509,60 @@ internal fun SearchingCard(vm: AppViewModel, modifier: Modifier = Modifier) {
 }
 
 /**
- * Home's PC is away: what to try, in one place, with one clear action. The rest of Home stays as it
- * was (dimmed last known state), so it's still recognisably this PC's page.
+ * The PC is away: what's wrong, found by trying (ConnectionDoctor), with the one thing that fixes
+ * it. Looked at again whenever the screen comes back (from Wi-Fi settings, say) and on Try again.
+ * The rest of Home stays as it was (dimmed last known state), so it's still this PC's page.
  */
 @Composable
-private fun AwayCard(vm: AppViewModel, modifier: Modifier = Modifier) {
+internal fun AwayCard(vm: AppViewModel, pcId: String, pcName: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
     var usb by rememberSaveable { mutableStateOf(false) }
+    var findings by remember(pcId) { mutableStateOf<List<ConnectionDoctor.Finding>?>(null) }
+    var round by remember { mutableIntStateOf(0) }
+    LifecycleResumeEffect(pcId) {
+        round++
+        onPauseOrDispose { }
+    }
+    LaunchedEffect(pcId, round) {
+        findings = null
+        findings = runCatching { ConnectionDoctor.findings(ConnectionDoctor.examine(context, pcId, pcName)) }.getOrNull()
+            ?: listOf(ConnectionDoctor.Finding("Not connected", "Wake $pcName and check it's on the same Wi-Fi as this phone."))
+    }
+    val allow = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { round++ }
     SectionCard(modifier, contentPadding = PaddingValues(20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             ConnectionOrb(OrbState.OFFLINE, size = 10.dp)
             Spacer(Modifier.width(8.dp))
             Text("Not connected", style = MaterialTheme.typography.titleMedium)
         }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Wake the PC and check it's on the same Wi-Fi as this phone.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Spacer(Modifier.height(10.dp))
+        Crossfade(findings, animationSpec = VyomaMotion.effects(), label = "doctor") { found ->
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (found == null) {
+                    Text("Checking what's wrong…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else found.forEach { f ->
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(f.title, style = MaterialTheme.typography.titleSmall)
+                        Text(f.detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
         Spacer(Modifier.height(16.dp))
+        val fix = findings?.firstOrNull { it.fix != ConnectionDoctor.Fix.NONE }?.fix
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PillButton("Try again", onClick = vm::refresh)
-            PillButton("Use USB", onClick = { usb = true }, prominent = false)
+            when (fix) {
+                ConnectionDoctor.Fix.ALLOW_LOCAL_NETWORK -> PillButton("Allow", onClick = { allow.launch("android.permission.ACCESS_LOCAL_NETWORK") })
+                ConnectionDoctor.Fix.WIFI_SETTINGS -> PillButton("Wi-Fi settings", onClick = {
+                    runCatching { context.startActivity(Intent(android.provider.Settings.Panel.ACTION_WIFI)) }
+                })
+                ConnectionDoctor.Fix.VPN_SETTINGS -> PillButton("VPN settings", onClick = {
+                    runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_VPN_SETTINGS)) }
+                })
+                ConnectionDoctor.Fix.USE_CABLE -> PillButton("Use a cable", onClick = { usb = true })
+                ConnectionDoctor.Fix.NONE, null -> Unit
+            }
+            PillButton("Try again", onClick = { vm.refresh(); round++ }, prominent = fix == null, enabled = findings != null)
         }
     }
     if (usb) UsbHelpDialog { usb = false }

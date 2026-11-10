@@ -1,6 +1,6 @@
 //! Vyoma's desktop window. It only shows and asks: the daemon (`vyoma-desktop`) owns the links,
 //! so closing or crashing this never drops a phone. `--snapshot <png>` renders it offscreen with
-//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|commands|commands-empty|commands-edit|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|add|down`, `--setup` to open on setup). `--page commands|this-pc|activity|<phone id>` opens on that page;
+//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|away|unpair|notice|cable|pc|pc-setup|activity|commands|commands-empty|commands-edit|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|add|down`, `--setup` to open on setup). `--page commands|this-pc|activity|<phone id>` opens on that page;
 //! a window already open shows it instead (`instance.rs`).
 
 mod daemon;
@@ -264,6 +264,17 @@ fn wire(ui: &MainWindow) {
             });
         }
     });
+    ui.on_open_firewall({
+        let ui = ui.as_weak();
+        move || {
+            let ui = ui.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = DbusDaemon::connect().and_then(|d| d.open_firewall()) {
+                    notify(&ui, format!("{e:#}"));
+                }
+            });
+        }
+    });
     ui.on_install({
         let ui = ui.as_weak();
         move || {
@@ -455,6 +466,10 @@ fn watch(ui: slint::Weak<MainWindow>) {
                             notify(&told, if ok { "Installed. This PC is set up".into() } else { "The install didn't finish".into() });
                             read_health(&told);
                         }
+                        Event::FirewallDone { ok } => {
+                            notify(&told, if ok { "Ports open. Phones on this Wi-Fi can reach this PC".into() } else { "The ports weren't opened".into() });
+                            read_health(&told);
+                        }
                     }
                 }
             }
@@ -622,7 +637,9 @@ pub fn show_health(ui: &MainWindow, h: &Health) {
             },
         })
         .collect();
-    let checks: Vec<Check> = h.checks.iter().map(|c| Check { name: c.name.clone().into(), state: c.state.clone().into(), detail: c.detail.clone().into() }).collect();
+    let checks: Vec<Check> = h.checks.iter().map(|c| Check { name: c.name.clone().into(), state: c.state.clone().into(), detail: c.detail.clone().into(), action: c.action.clone().into() }).collect();
+    // A firewall that may keep phones out: an away phone's page offers the same fix.
+    ui.set_firewall_fix(h.checks.iter().any(|c| c.name == "Firewall" && !c.action.is_empty()));
     let notes: Vec<SharedString> = h.notes.iter().map(|n| n.clone().into()).collect();
     // Setup lists only what an install fixes.
     let missing: Vec<Feature> = features.iter().filter(|f| !f.ready && f.detail.starts_with("Needs")).cloned().collect();
