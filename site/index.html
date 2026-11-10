@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Vyoma: your Android phone and Linux PC, working as one</title>
-<meta name="description" content="Vyoma links your Android phone and Linux PC: files, clipboard, notifications, touchpad, webcam and screen control. One scan to pair. No account, no cloud.">
+<meta name="description" content="Vyoma links your Android phone and Linux PC: files, clipboard, calls, texts, notifications, touchpad, webcam and screen control. One scan to pair. No account, no cloud.">
 <link rel="canonical" href="https://prajwaljb.github.io/VyomaConnect/">
 <meta name="theme-color" content="#2a5d9a">
 <meta name="color-scheme" content="light dark">
@@ -14,7 +14,7 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Vyoma">
 <meta property="og:title" content="Vyoma: your Android phone and Linux PC, working as one">
-<meta property="og:description" content="Set it up once with one scan, then it just works. Files, clipboard, notifications, touchpad, webcam and your PC's screen. No account, no cloud, open source.">
+<meta property="og:description" content="Set it up once with one scan, then it just works. Files, clipboard, calls, texts, notifications, touchpad, webcam and your PC's screen. No account, no cloud, open source.">
 <meta property="og:url" content="https://prajwaljb.github.io/VyomaConnect/">
 <meta property="og:image" content="https://prajwaljb.github.io/VyomaConnect/og.jpg">
 <meta property="og:image:width" content="1200">
@@ -39,7 +39,7 @@
   "@type": "SoftwareApplication",
   "name": "Vyoma",
   "alternateName": "VyomaConnect",
-  "description": "Links your Android phone and Linux PC: files both ways, one clipboard, calls and notifications on the PC, the PC's screen on the phone, touchpad, presenter, webcam and game controller. Pair with one scan, no account, no cloud.",
+  "description": "Links your Android phone and Linux PC: files both ways, one clipboard, calls, texts and notifications on the PC, the PC's screen on the phone, touchpad, presenter, webcam and game controller. Pair with one scan, no account, no cloud.",
   "applicationCategory": "UtilitiesApplication",
   "operatingSystem": "Android 12+, Linux (KDE Plasma, GNOME)",
   "softwareVersion": "@VERSION@",
@@ -69,6 +69,8 @@
       "acceptedAnswer": { "@type": "Answer", "text": "Yes. The phone app pairs with either and covers the essentials: files, clipboard, notifications, media, commands, touchpad and presenter. Vyoma's own PC app unlocks the rest, and takes over from KDE Connect with your pairings intact." } },
     { "@type": "Question", "name": "Do I need root, Shizuku or USB debugging?",
       "acceptedAnswer": { "@type": "Answer", "text": "No. Everything works over Wi-Fi without them. Only reading the clipboard while Vyoma is closed needs a one-time grant from your PC over a USB cable, after which USB debugging can go off again." } },
+    { "@type": "Question", "name": "Can I take calls and answer texts on the PC?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Yes, with Vyoma's PC app. Calls pop up with Answer and Decline. To talk through the PC's speakers and microphone it needs Bluetooth, which carries only the call's sound. Texts are read from your phone when you open Messages and sent through it, never saved on the PC." } },
     { "@type": "Question", "name": "Which PCs and phones does Vyoma run on?",
       "acceptedAnswer": { "@type": "Answer", "text": "Android 12 or newer, and Linux with KDE Plasma or GNOME on x86_64 or ARM64. Other desktops and macOS are on the way." } },
     { "@type": "Question", "name": "Does anything go through the cloud?",
@@ -249,12 +251,14 @@
     <div class="show-copy rise">
       <span class="kicker" style="text-align:inherit">On the PC</span>
       <h3>A real app on your desktop</h3>
-      <p>Right-click any file in Dolphin, Nautilus or Thunar and choose Send to your phone. Find the phone in your file manager's sidebar. Calls and notifications arrive in your desktop's own pop-ups.</p>
+      <p>Right-click any file in Dolphin, Nautilus or Thunar and choose Send to your phone. Find the phone in your file manager's sidebar. Answer calls and talk through the PC, read and reply to texts in Vyoma's window, and get notifications in your desktop's own pop-ups.</p>
       <ul class="chips">
         <li class="raised"><svg class="icon" style="color:var(--blue)"><use href="assets/icons.svg#download"/></svg>Send to</li>
         <li class="raised"><svg class="icon" style="color:var(--teal)"><use href="assets/icons.svg#devices"/></svg>Phone files</li>
+        <li class="raised"><svg class="icon" style="color:var(--red)"><use href="assets/icons.svg#call"/></svg>Calls</li>
+        <li class="raised"><svg class="icon" style="color:var(--green)"><use href="assets/icons.svg#chat"/></svg>Texts</li>
         <li class="raised"><svg class="icon" style="color:var(--orange)"><use href="assets/icons.svg#notifications"/></svg>Notifications</li>
-        <li class="raised"><svg class="icon" style="color:var(--green)"><use href="assets/icons.svg#task_alt"/></svg>Per-phone permissions</li>
+        <li class="raised"><svg class="icon" style="color:var(--teal)"><use href="assets/icons.svg#task_alt"/></svg>Per-phone permissions</li>
       </ul>
     </div>
   </div>
@@ -268,15 +272,15 @@
   <div class="tiles">
     <article class="tile blue rise"><svg class="icon"><use href="assets/icons.svg#folder"/></svg><h3>Files, both ways</h3><p>Files and whole folders either way. A dropped transfer picks up where it left off.</p></article>
     <article class="tile orange rise"><svg class="icon"><use href="assets/icons.svg#content_paste"/></svg><h3>One clipboard</h3><p>Copy on one, paste on the other. Private copies stay on the phone.</p></article>
-    <article class="tile red rise"><svg class="icon"><use href="assets/icons.svg#notifications"/></svg><h3>Calls and notifications</h3><p>See who's calling and mute the ringer from your desk. Reply from the PC.</p></article>
+    <article class="tile red rise"><svg class="icon"><use href="assets/icons.svg#call"/></svg><h3>Calls on the PC</h3><p>Answer, decline or hang up from your desk, and talk through the PC.</p></article>
+    <article class="tile green rise"><svg class="icon"><use href="assets/icons.svg#chat"/></svg><h3>Texts on the PC</h3><p>Read your conversations and reply from the keyboard.</p></article>
     <article class="tile cyan rise"><svg class="icon"><use href="assets/icons.svg#screen_share"/></svg><h3>Your PC's screen</h3><p>Watch and control it from the phone, or grab a screenshot.</p></article>
-    <article class="tile teal rise"><svg class="icon"><use href="assets/icons.svg#touch_app"/></svg><h3>Touchpad and keyboard</h3><p>With swipes for windows and desktops, like a laptop's.</p></article>
+    <article class="tile teal rise"><svg class="icon"><use href="assets/icons.svg#touch_app"/></svg><h3>Touchpad and keyboard</h3><p>Swipes like a laptop's, or tilt the phone to move the pointer.</p></article>
     <article class="tile yellow rise"><svg class="icon"><use href="assets/icons.svg#co_present"/></svg><h3>Presenter remote</h3><p>Next slide with a tap or the volume keys, and a pointer on screen.</p></article>
     <article class="tile pink rise"><svg class="icon"><use href="assets/icons.svg#videocam"/></svg><h3>Phone as webcam</h3><p>Camera and microphone for any video call on the PC.</p></article>
     <article class="tile mint rise"><svg class="icon"><use href="assets/icons.svg#sports_esports"/></svg><h3>Game controller</h3><p>Xbox or DualSense layout, analog triggers and gyro aiming.</p></article>
-    <article class="tile green rise"><svg class="icon"><use href="assets/icons.svg#terminal"/></svg><h3>Commands and rules</h3><p>Run your own commands. Lock the PC when you walk away.</p></article>
-    <article class="tile brown rise"><svg class="icon"><use href="assets/icons.svg#widgets"/></svg><h3>Widgets and tiles</h3><p>Home screen widgets, Quick Settings tiles and lock-screen controls.</p></article>
-    <article class="tile blue rise"><svg class="icon"><use href="assets/icons.svg#speed"/></svg><h3>PC at a glance</h3><p>Battery, CPU, memory, temperature, music, volume and brightness.</p></article>
+    <article class="tile brown rise"><svg class="icon"><use href="assets/icons.svg#terminal"/></svg><h3>Commands and rules</h3><p>Run your own commands. Lock the PC when you walk away.</p></article>
+        <article class="tile blue rise"><svg class="icon"><use href="assets/icons.svg#speed"/></svg><h3>PC at a glance</h3><p>Battery, CPU, memory, temperature, music, volume and brightness.</p></article>
     <article class="tile teal rise"><svg class="icon"><use href="assets/icons.svg#wifi"/></svg><h3>Always connected</h3><p>Wi-Fi, a USB cable, Bluetooth or a VPN address. It picks the best.</p></article>
   </div>
   <p class="more rise"><a class="pill tinted" href="https://github.com/Prajwaljb/VyomaConnect/blob/main/docs/FEATURES.md" data-press>Everything Vyoma does <svg class="icon"><use href="assets/icons.svg#arrow_forward"/></svg></a></p>
@@ -380,6 +384,10 @@
     <details>
       <summary>Do I need root, Shizuku or USB debugging?<svg class="icon chev"><use href="assets/icons.svg#arrow_forward"/></svg></summary>
       <p>No. Everything works over Wi-Fi without them. Only reading the clipboard while Vyoma is closed needs a one-time grant from your PC over a USB cable, after which USB debugging can go off again. Controlling the phone from the PC uses Android's accessibility service, asked for only when you first use it.</p>
+    </details>
+    <details>
+      <summary>Can I take calls and answer texts on the PC?<svg class="icon chev"><use href="assets/icons.svg#arrow_forward"/></svg></summary>
+      <p>Yes, with Vyoma's PC app. Calls pop up with Answer and Decline. To talk through the PC's speakers and microphone it needs Bluetooth, which carries only the call's sound. Texts are read from your phone when you open Messages and sent through it, never saved on the PC.</p>
     </details>
     <details>
       <summary>Which PCs and phones does it run on?<svg class="icon chev"><use href="assets/icons.svg#arrow_forward"/></svg></summary>
