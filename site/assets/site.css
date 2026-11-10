@@ -111,7 +111,8 @@ code, pre { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Conso
 /* ---------- Glass ---------- */
 .glass {
   position: relative;
-  border-radius: var(--r-card);
+  --rr: var(--r-card);
+  border-radius: var(--rr);
   background-color: var(--card);
   background-image: radial-gradient(130% 70% at 50% 0%, var(--card-lit), transparent 62%);
   box-shadow: var(--shadow);
@@ -119,14 +120,19 @@ code, pre { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Conso
 }
 /* The lit rim: light from straight above, a second highlight about half as bright below, quiet on
    the sides. A plain rounded border, faded by a mask: every engine draws its corners as one even line
-   with the straight edges (a ring cut out by masking rectangles came apart at the corners in Firefox). */
+   with the straight edges (a ring cut out by masking rectangles came apart at the corners in Firefox).
+   The mask's stops are in pixels from each end, past the corner radius, so the top and bottom corners
+   are lit in full on any card; in percent, a short card's rim had faded before it rounded the corner. */
 .glass::before {
   content: "";
   position: absolute; inset: 0;
   border-radius: inherit;
   border: 1px solid var(--rim-hi);
-  -webkit-mask: linear-gradient(180deg, #000, transparent 22%, transparent 74%, var(--rim-lo-mask));
-  mask: linear-gradient(180deg, #000, transparent 22%, transparent 74%, var(--rim-lo-mask));
+  --rim-mask: linear-gradient(180deg,
+    #000 0, #000 calc(var(--rr) + 4px), transparent calc(var(--rr) + 64px),
+    transparent calc(100% - var(--rr) - 52px), var(--rim-lo-mask) calc(100% - var(--rr) - 4px), var(--rim-lo-mask) 100%);
+  -webkit-mask: var(--rim-mask);
+  mask: var(--rim-mask);
   pointer-events: none;
   z-index: 1;
 }
@@ -139,11 +145,14 @@ code, pre { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Conso
   pointer-events: none;
 }
 
-@supports (corner-shape: superellipse(1.6)) {
+/* Smoother corners where they're drawn as one: not in Firefox and its forks (Zen...), whose GPU renderer gave
+   the rim and band layers a different corner from the card's fill (two lines at each corner); plain round
+   corners there. */
+@supports (corner-shape: superellipse(1.6)) and (not (-moz-appearance: none)) {
   .glass, .badge, .tile, .shot-pc { corner-shape: superellipse(1.6); }
   /* The rim and the band are separate layers: they take the card's corner too, or they sit inside it. */
   .glass::before, .glass::after { corner-shape: inherit; }
-  .glass { border-radius: calc(var(--r-card) * 1.25); }
+  .glass { --rr: calc(var(--r-card) * 1.25); }
   .tile { border-radius: calc(var(--r-tile) * 1.25); }
 }
 
