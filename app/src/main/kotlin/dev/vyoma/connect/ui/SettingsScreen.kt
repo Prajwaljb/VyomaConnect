@@ -177,6 +177,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
             val clipSync by vm.clipboardSync.collectAsStateWithLifecycle()
             val clipOn = clipSync == dev.vyoma.connect.platform.AndroidClipboard.SyncState.ON
             val clipWaiting = clipGranted && !clipOn
+            val askIn = clipboardAskWait(vm)
             var phoneTick by remember { mutableIntStateOf(0) }
             val phoneOn = remember(resumeTick, phoneTick) { PhonePermissions.allGranted(context) }
             val askPhone = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -220,12 +221,13 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                     title = "Sync when closed",
                     subtitle = when {
                         clipOn -> "Copies sync even when Vyoma is closed"
+                        clipWaiting && askIn != null -> "Keep Vyoma open: Android asks in $askIn s"
                         clipWaiting -> "Tap, then Allow one-time access when Android asks"
                         else -> "Optional: set up once over a USB cable"
                     },
                     icon = Icons.Rounded.ContentPaste,
                     iconTint = SystemColor.ORANGE.color,
-                    trailing = { RowChevron(if (clipOn) "On" else if (clipWaiting) "Ask again" else "Off") },
+                    trailing = { RowChevron(if (clipOn) "On" else if (clipWaiting && askIn != null) "$askIn s" else if (clipWaiting) "Ask again" else "Off") },
                     onClick = {
                         when {
                             clipOn -> showAdbHelp = true

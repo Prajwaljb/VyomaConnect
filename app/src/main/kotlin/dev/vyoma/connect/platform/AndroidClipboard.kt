@@ -25,6 +25,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -136,29 +137,71 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
 
     private val _syncState = MutableStateFlow(SyncState.NEEDS_GRANT)
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
+
+    /** When (elapsedRealtime) an Ask again tapped during Android's minute of refusals runs; 0 = none waiting. */
+    private val _askAt = MutableStateFlow(0L)
+    val askAt: StateFlow<Long> = _askAt.asStateFlow()
+
+    /** Vyoma's window has focus: Android asks only an app in front, and its question takes the focus while it shows. */
+    private val inFront = MutableStateFlow(false)
+    @Volatile private var lastTouch = 0L
+    /** When the current reader started (0 = none), and whether it has read a line (Android said yes). */
+    @Volatile private var readerAt = 0L
+    @Volatile private var readable = false
+    /** Android turned a reader down (no line came), and until when it turns new ones down without asking. */
+    @Volatile private var refused = false
+    @Volatile private var quietUntil = 0L
+    private var askLater: Job? = null
+
+    /** A touch on Vyoma's screen: its question waits for the finger to rest, so a tap meant for Vyoma can't answer it. */
+    fun touched() { lastTouch = SystemClock.elapsedRealtime() }
+
+    /** Vyoma's window gained or lost focus. */
+    fun front(focus: Boolean) {
+        inFront.value = focus
+        if (focus) checkRefused()
+    }
+
     /**
-     * Follows the system log. Call it with Vyoma in front only: Android 13+ asks about each new
-     * logcat reader whether it may see other apps' lines, it can only ask an app in front, and it
-     * refuses one started in the background without asking, and keeps refusing for about a minute
-     * after (what broke this: the service started it at launch, so opening Vyoma never got asked).
-     * [again] starts a fresh reader, so Android asks again.
+     * Follows the system log. Android 13+ asks about each new logcat reader whether it may see
+     * other apps' lines, only while the app is in front, and turns one down without asking
+     * otherwise; either "no" stands for about a minute, so readers in that time are turned down
+     * silently. So a reader starts only with Vyoma in front and the finger at rest (the question
+     * once popped up under a tap meant for Vyoma, which answered it), opening Vyoma asks once per
+     * run, and [again] (Ask again) inside that minute waits it out, shown as [askAt].
      */
     fun startBackgroundSync(again: Boolean = false) {
         if (!backgroundSyncAvailable()) {
             _syncState.value = SyncState.NEEDS_GRANT
             return
         }
-        // A reader Android turned down stays unanswered: opening Vyoma again asks again, once its
-        // ~60 s memory of the refusal is over.
-        val unanswered = _syncState.value == SyncState.WAITING && SystemClock.elapsedRealtime() - askedAt > ASK_AGAIN_AFTER_MS
-        if (!again && watcher?.isActive == true && !unanswered) return
+        if (_syncState.value == SyncState.ON || (!again && (watcher?.isActive == true || refused))) return
+        val now = SystemClock.elapsedRealtime()
+        if (now < quietUntil) {
+            if (again && askLater?.isActive != true) {
+                _askAt.value = quietUntil
+                askLater = scope.launch {
+                    delay(quietUntil - now)
+                    _askAt.value = 0L
+                    startBackgroundSync(again = true)
+                }
+            }
+            return
+        }
+        askLater?.cancel()
+        _askAt.value = 0L
         watcher?.cancel()
+        readerAt = 0L
         _syncState.value = SyncState.WAITING
-        askedAt = SystemClock.elapsedRealtime()
         watcher = scope.launch(Dispatchers.IO) {
-            // Android only asks while Vyoma is on screen, and on a cold start the reader got there
-            // before Android counted it as such, so it was turned down without asking.
+            // In front, settled (on a cold start Android counted Vyoma as in front a moment late), finger at rest.
             delay(SETTLE_MS)
+            while (true) {
+                inFront.first { it }
+                val wait = QUIET_TOUCH_MS - (SystemClock.elapsedRealtime() - lastTouch)
+                if (wait <= 0 && inFront.value) break
+                delay(wait.coerceAtLeast(100))
+            }
             val marker = "Denying clipboard access to ${context.packageName}"
             val process = runCatching {
                 // ClipboardService logs through Slog, i.e. the system buffer, the quiet one; warnings
@@ -170,11 +213,15 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
                 _syncState.value = SyncState.NEEDS_GRANT
                 return@launch
             }
+            readable = false
+            readerAt = SystemClock.elapsedRealtime()
             VLog.i(TAG, "background clipboard sync starting")
+            checkRefused()
             try {
                 process.inputStream.bufferedReader().useLines { lines ->
                     for (line in lines) {
                         if (!isActive) break
+                        readable = true
                         if (_syncState.value != SyncState.ON) {
                             _syncState.value = SyncState.ON
                             VLog.i(TAG, "background clipboard sync on: the system log is readable")
@@ -184,13 +231,32 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
                 }
             } finally {
                 process.destroy()
-                if (watcher == coroutineContext[Job]) _syncState.value = if (backgroundSyncAvailable()) SyncState.WAITING else SyncState.NEEDS_GRANT
+                if (watcher == coroutineContext[Job]) {
+                    readerAt = 0L
+                    _syncState.value = if (backgroundSyncAvailable()) SyncState.WAITING else SyncState.NEEDS_GRANT
+                }
                 VLog.i(TAG, "background clipboard sync stopped")
             }
         }
     }
 
-    private var askedAt = 0L
+    /**
+     * A reader that has had Vyoma in front a while (asked and answered, or turned down without
+     * asking) and still read nothing was turned down.
+     */
+    private fun checkRefused() {
+        if (readerAt == 0L || readable) return
+        scope.launch {
+            delay(REFUSAL_SEEN_MS)
+            val now = SystemClock.elapsedRealtime()
+            if (readerAt == 0L || readable || !inFront.value || now - readerAt < REFUSAL_SEEN_MS || _syncState.value != SyncState.WAITING) return@launch
+            if (!refused || now >= quietUntil) {
+                if (now >= quietUntil) quietUntil = now + REFUSED_FOR_MS
+                if (!refused) VLog.i(TAG, "Android turned log access down")
+                refused = true
+            }
+        }
+    }
 
     private var overlay: View? = null
     private var focused = false
@@ -238,7 +304,12 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
     private companion object {
         const val TAG = "Clipboard"
         private const val SETTLE_MS = 1_000L
-        private const val ASK_AGAIN_AFTER_MS = 65_000L
+        /** How long the finger must rest before Android's question may pop up. */
+        private const val QUIET_TOUCH_MS = 1_200L
+        /** In front this long with nothing read: turned down. */
+        private const val REFUSAL_SEEN_MS = 1_500L
+        /** Android's memory of a "no" (LogcatManagerService: 60 s), plus a little. */
+        private const val REFUSED_FOR_MS = 62_000L
         const val HISTORY_SIZE = 30
         const val MAX_STORED_CHARS = 20_000
 

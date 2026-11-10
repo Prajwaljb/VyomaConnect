@@ -129,12 +129,14 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
             item(key = "bg") {
                 SectionCard(Modifier.padding(top = 8.dp)) {
                     // Set up already: only Android's log question, asked again on each restart of the app, is missing.
+                    val askIn = clipboardAskWait(vm)
                     if (sync == dev.vyoma.connect.platform.AndroidClipboard.SyncState.WAITING) ListRow(
                         title = "Allow log access",
-                        subtitle = "Tap Ask again, then Allow one-time access, and copies go to your PC by themselves. Android didn't ask? Restart the phone, then open Vyoma",
+                        subtitle = if (askIn != null) "Android waits a minute after a no before it asks again. Keep Vyoma open: it asks in $askIn s, then tap Allow one-time access"
+                        else "Tap Ask again, then Allow one-time access, and copies go to your PC by themselves",
                         icon = Icons.Rounded.Sync,
                         iconTint = SystemColor.ORANGE.color,
-                        trailing = { RowChevron("Ask again") },
+                        trailing = { RowChevron(if (askIn != null) "$askIn s" else "Ask again") },
                         onClick = { vm.retryClipboardSync() },
                     ) else ListRow(
                         title = "Sync when closed",
@@ -158,4 +160,20 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
             dismissButton = { DialogButton(onClick = { clearing = false }) { Text("Cancel") } },
         )
     }
+}
+
+/** Seconds until a waiting Ask again runs (Android refuses new asks for a minute after a no), ticking; null when none waits. */
+@Composable
+internal fun clipboardAskWait(vm: AppViewModel): Int? {
+    val at by vm.clipboardAskAt.collectAsStateWithLifecycle()
+    val left by androidx.compose.runtime.produceState<Int?>(null, at) {
+        while (true) {
+            val ms = at - android.os.SystemClock.elapsedRealtime()
+            if (at == 0L || ms <= 0) break
+            value = ((ms + 999) / 1000).toInt()
+            kotlinx.coroutines.delay((ms % 1000).coerceAtLeast(1))
+        }
+        value = null
+    }
+    return left
 }

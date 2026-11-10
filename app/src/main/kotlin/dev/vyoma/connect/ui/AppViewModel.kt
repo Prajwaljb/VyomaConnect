@@ -200,6 +200,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val clipboardSync get() = container.clipboard.syncState
     /** Starts the clipboard watcher again from here, in front, so Android asks about log access again. */
     fun retryClipboardSync() = container.clipboard.startBackgroundSync(again = true)
+    /** When a waiting Ask again runs (elapsedRealtime), 0 = none: Android refuses new asks for a minute after a no. */
+    val clipboardAskAt get() = container.clipboard.askAt
+    fun clipboardFocus(focus: Boolean) = container.clipboard.front(focus)
+    fun touched() = container.clipboard.touched()
 
     /** Opens [url] in the PC's browser, as a shared link. */
     suspend fun openOnPc(id: String, url: String): Boolean = device(id)?.plugin<dev.vyoma.connect.protocol.plugin.builtin.SharePlugin>(dev.vyoma.connect.protocol.plugin.builtin.SharePlugin.ID)?.sendUrl(url) == true
