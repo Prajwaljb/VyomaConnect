@@ -93,6 +93,12 @@ interface TextsGuard {
     /** [peerId] locked again (or went). */
     fun close(peerId: String)
 
+    /**
+     * Whether [peerId] is held to the lock, given whether its identity [claims] it can ask. A PC that once could
+     * stays held, so leaving the capability out of its identity later doesn't get round the lock.
+     */
+    fun holds(peerId: String, claims: Boolean): Boolean = claims
+
     /** No lock: every PC may. */
     object None : TextsGuard {
         override fun open(peerId: String) = true
@@ -103,9 +109,11 @@ interface TextsGuard {
 
 class SmsPlugin(private val ctx: PluginContext, private val store: SmsStore, private val guard: TextsGuard = TextsGuard.None) : Plugin {
     private val peerId get() = ctx.device.id
-    /** A PC that can ask for the texts, so it's held to the lock. */
-    private val guarded get() = PacketTypes.TEXTS_UNLOCK in ctx.device.identity.outgoingCapabilities
+    /** A PC that can ask for the texts (or once could), so it's held to the lock. */
+    private val guarded get() = guard.holds(peerId, PacketTypes.TEXTS_UNLOCK in ctx.device.identity.outgoingCapabilities)
     private fun allowed() = !guarded || guard.open(peerId)
+    /** The PC was told the texts locked (on this phone's own clock), so it isn't told again for each text. */
+    @Volatile private var toldLocked = false
 
     // Only push live updates once this peer has shown interest, like upstream.
     @Volatile private var requested = false
@@ -116,7 +124,17 @@ class SmsPlugin(private val ctx: PluginContext, private val store: SmsStore, pri
     override suspend fun onStart() {
         ctx.scope.launch(Dispatchers.IO) {
             newestLock.withLock { newest = runCatching { store.newestTimestamp() }.getOrDefault(Long.MIN_VALUE) }
-            store.changes.debounce(300).collect { if (requested && allowed()) pushNew() }
+            store.changes.debounce(300).collect {
+                if (!requested) return@collect
+                if (allowed()) {
+                    toldLocked = false
+                    pushNew()
+                } else if (!toldLocked) {
+                    // The yes ran out here: say so, so the PC's page locks instead of going stale.
+                    toldLocked = true
+                    ctx.send(packet(PacketTypes.TEXTS_LOCKED) {})
+                }
+            }
         }
     }
 
@@ -345,9 +363,15 @@ interface ContactStore {
     fun vcards(keys: Collection<String>): Map<String, String>
 }
 
-class ContactsPlugin(private val ctx: PluginContext, private val store: ContactStore) : Plugin {
+class ContactsPlugin(private val ctx: PluginContext, private val store: ContactStore, private val guard: TextsGuard = TextsGuard.None) : Plugin {
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         if (!store.available()) return true
+        // Behind the texts lock too: names and numbers are who you talk to.
+        val peer = ctx.device.id
+        if (guard.holds(peer, PacketTypes.TEXTS_UNLOCK in ctx.device.identity.outgoingCapabilities) && !guard.open(peer)) {
+            VLog.i("Contacts", "${packet.type} refused: Messages is locked for this PC")
+            return true
+        }
         when (packet.type) {
             PacketTypes.CONTACTS_REQUEST_ALL_UIDS_TIMESTAMPS -> ctx.scope.launch(Dispatchers.IO) {
                 val all = store.timestamps()
@@ -430,11 +454,11 @@ class ContactsPlugin(private val ctx: PluginContext, private val store: ContactS
             }
         }
 
-        fun spec(store: ContactStore) = PluginSpec(
+        fun spec(store: ContactStore, guard: TextsGuard = TextsGuard.None) = PluginSpec(
             ID,
             incoming = setOf(PacketTypes.CONTACTS_REQUEST_ALL_UIDS_TIMESTAMPS, PacketTypes.CONTACTS_REQUEST_VCARDS_BY_UIDS),
             outgoing = setOf(PacketTypes.CONTACTS_RESPONSE_UIDS_TIMESTAMPS, PacketTypes.CONTACTS_RESPONSE_VCARDS),
-        ) { ContactsPlugin(it, store) }
+        ) { ContactsPlugin(it, store, guard) }
     }
 }
 
