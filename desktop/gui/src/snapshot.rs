@@ -44,6 +44,12 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str, size: Option<(u32, 
         ui.set_selected("c".into());
         crate::apply(&ui, Some(phones(scene)));
     }
+    if scene == "away" {
+        // The away phone, with this PC's firewall possibly in the way.
+        ui.set_selected("b".into());
+        crate::apply(&ui, Some(phones(scene)));
+        crate::show_health(&ui, &health(true));
+    }
     if scene == "unpair" {
         ui.set_confirm_unpair(true);
     }
@@ -196,11 +202,11 @@ fn health(missing: bool) -> Health {
             Feature { name: (*n).into(), ready: needs.is_empty(), needs, unavailable: false }
         })
         .collect();
-    let mut checks = vec![Check { name: "Firewall".into(), state: "ok".into(), detail: "On, and your phones get through on Wi-Fi".into() }];
+    let mut checks = vec![Check { name: "Firewall".into(), state: "ok".into(), detail: "On, and phones get through".into(), action: String::new() }];
     let mut notes = vec![];
     if missing {
-        checks[0] = Check { name: "Firewall".into(), state: "info".into(), detail: "ufw is on. If phones don't show up on Wi-Fi, allow ports 1714 to 1764, TCP and UDP.".into() };
-        checks.push(Check { name: "KDE Connect".into(), state: "warn".into(), detail: "Also running, so the USB cable, tethering and Bluetooth stay with it. Quit it to use them here.".into() });
+        checks[0] = Check { name: "Firewall".into(), state: "info".into(), detail: "ufw is on and may stop phones finding this PC on Wi-Fi. Open ports lets Vyoma through (ports 1714 to 1764).".into(), action: "Open ports".into() };
+        checks.push(Check { name: "KDE Connect".into(), state: "warn".into(), detail: "Also running, so the USB cable, tethering and Bluetooth stay with it. Quit it to use them here.".into(), action: String::new() });
         notes.push("PC screen on the phone needs vah264enc, which comes from your graphics card's VA-API driver.".into());
     }
     let update = crate::daemon::Update { current: "0.3.0".into(), latest: missing.then(|| "0.4.0".into()), checks: true, can_update: true, ..Default::default() };

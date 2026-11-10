@@ -72,6 +72,8 @@ export struct Check {
     name: string,
     state: string,
     detail: string,
+    // The button that fixes it ("Open ports"), or "".
+    action: string,
 }
 
 // Something a phone did here: [meta] is "Phone · 14:32".
@@ -458,6 +460,9 @@ component StatusRow inherits Rectangle {
     in property <string> value;
     in property <color> value-color: Theme.muted;
     in property <bool> last;
+    // A button that fixes it, at the end, when there's one.
+    in property <string> action;
+    callback act;
     HorizontalLayout {
         padding-left: 18px;
         padding-right: 18px;
@@ -497,6 +502,14 @@ component StatusRow inherits Rectangle {
             text: root.value;
             color: root.value-color;
             font-size: 14px;
+        }
+        if root.action != "": VerticalLayout {
+            alignment: center;
+            PillButton {
+                text: root.action;
+                prominent: true;
+                clicked => { root.act(); }
+            }
         }
     }
     Rectangle {
@@ -1021,6 +1034,8 @@ component PhonePage inherits Page {
     callback send-files(string);
     callback set-permission(string, string, bool);
     callback allow-clipboard(string);
+    in property <bool> firewall-fix;
+    callback open-firewall();
     title: phone.name;
     subtitle: Words.headline(phone);
     glyph: @image-url("icons/phone.svg");
@@ -1069,6 +1084,24 @@ component PhonePage inherits Page {
                 prominent: true;
                 enabled: root.phone.linked;
                 clicked => { root.pair(root.phone.id); }
+            }
+        }
+    }
+
+    // Paired but away: what usually brings it back, and this PC's own part (its firewall) with its fix.
+    // The phone's Home works out its side by itself.
+    if root.phone.paired && !root.phone.linked: AskCard {
+        title: "Not connected";
+        body: root.firewall-fix
+            ? "It connects by itself on the same Wi-Fi as this PC. This PC's firewall may be keeping it out: Open ports lets it in. Vyoma on the phone shows what else might be wrong."
+            : "It connects by itself on the same Wi-Fi as this PC, or over a USB cable. Open Vyoma on the phone: it shows what's wrong.";
+        if root.firewall-fix: HorizontalLayout {
+            alignment: center;
+            padding-top: 4px;
+            PillButton {
+                text: "Open ports";
+                prominent: true;
+                clicked => { root.open-firewall(); }
             }
         }
     }
@@ -1245,6 +1278,7 @@ component PcPage inherits Page {
     in property <bool> can-update;
     in property <bool> update-packaged;
     callback install();
+    callback open-firewall();
     callback setup();
     callback update();
     callback update-checks-toggled(bool);
@@ -1273,7 +1307,9 @@ component PcPage inherits Page {
             dot: c.state == "ok" ? Theme.connected : c.state == "warn" ? Theme.pending : Theme.offline;
             title: c.name;
             subtitle: c.detail;
+            action: c.action;
             last: i == root.checks.length - 1;
+            act => { root.open-firewall(); }
         }
     }
 
@@ -2470,6 +2506,9 @@ export component MainWindow inherits Window {
     pure callback check-command(string, string, string) -> string;
     callback clear-activity();
     callback install();
+    // This PC's firewall may keep phones out, and Open ports would let them in.
+    in property <bool> firewall-fix;
+    callback open-firewall();
     callback update();
     callback update-checks-toggled(bool);
     callback finish-setup();
@@ -2676,6 +2715,7 @@ export component MainWindow inherits Window {
             can-update: root.can-update;
             update-packaged: root.update-packaged;
             install => { root.install(); }
+            open-firewall => { root.open-firewall(); }
             setup => { root.setup = true; }
             update => { root.update(); }
             update-checks-toggled(on) => { root.update-checks-toggled(on); }
@@ -2725,6 +2765,8 @@ export component MainWindow inherits Window {
             send-files(id) => { root.send-files(id); }
             set-permission(id, key, on) => { root.set-permission(id, key, on); }
             allow-clipboard(id) => { root.allow-clipboard(id); }
+            firewall-fix: root.firewall-fix;
+            open-firewall => { root.open-firewall(); }
         }
         if ((root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands" && root.selected != "add") || !root.daemon-ok) && !root.has-current: EmptyPage {
             daemon-ok: root.daemon-ok;

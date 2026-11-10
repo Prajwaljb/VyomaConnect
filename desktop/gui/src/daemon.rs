@@ -117,6 +117,8 @@ pub struct Check {
     pub name: String,
     pub state: String,
     pub detail: String,
+    /// The button that fixes it ("Open ports"), or empty.
+    pub action: String,
 }
 
 /// This PC's setup.
@@ -168,6 +170,7 @@ impl Health {
                     name: c["name"].as_str().unwrap_or("").to_owned(),
                     state: c["state"].as_str().unwrap_or("info").to_owned(),
                     detail: c["detail"].as_str().unwrap_or("").to_owned(),
+                    action: c["action"].as_str().unwrap_or("").to_owned(),
                 })
                 .collect(),
             notes: strings(&v["notes"]),
@@ -218,6 +221,8 @@ pub enum Event {
     Sent { id: String, count: u32, error: String },
     /// An install from the window is over.
     SetupDone { ok: bool },
+    /// Opening the firewall from the window is over.
+    FirewallDone { ok: bool },
     /// The activity has something new.
     Activity,
 }
@@ -244,6 +249,8 @@ pub trait Daemon: Send + Sync {
     fn remove_command(&self, key: &str) -> Result<()>;
     /// Installs what's missing; [Event::SetupDone] follows.
     fn install(&self) -> Result<()>;
+    /// Opens Vyoma's ports in the firewall; [Event::FirewallDone] follows.
+    fn open_firewall(&self) -> Result<()>;
     /// Updates the PC app to the newest release; the daemon restarts when it's done.
     fn update(&self) -> Result<()>;
     fn set_update_checks(&self, on: bool) -> Result<()>;
@@ -336,6 +343,10 @@ impl Daemon for DbusDaemon {
         self.call("Install", &())
     }
 
+    fn open_firewall(&self) -> Result<()> {
+        self.call("OpenFirewall", &())
+    }
+
     fn update(&self) -> Result<()> {
         self.call("Update", &())
     }
@@ -403,6 +414,10 @@ impl Daemon for DbusDaemon {
                     Some("SetupDone") => {
                         let (ok,): (bool,) = message.body().deserialize()?;
                         return Ok(Event::SetupDone { ok });
+                    }
+                    Some("FirewallDone") => {
+                        let (ok,): (bool,) = message.body().deserialize()?;
+                        return Ok(Event::FirewallDone { ok });
                     }
                     _ => {}
                 }

@@ -230,6 +230,7 @@ internal fun ConnectionChecksScreen(vm: AppViewModel, onBack: () -> Unit) {
         pcs.forEach { pc ->
             val id = pc.identity.deviceId
             if (pcs.size > 1) item(key = "label-$id") { SectionLabel(pc.identity.deviceName, Modifier.animateItem()) }
+            if (!pc.isReachable) item(key = "away-$id") { AwayCard(vm, id, pc.identity.deviceName, Modifier.animateItem().padding(bottom = 12.dp)) }
             item(key = "checks-$id") {
                 val companion = devices.firstOrNull { it.identity.featuresOf == id && it.isPaired && it.isReachable }
                 val plugin = remember(companion?.identity?.deviceId, companion?.plugins) {

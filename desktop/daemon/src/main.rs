@@ -130,6 +130,8 @@ struct Control {
 
 /// A phone has reached this PC over the network since start: a firewall lets it through.
 static WIFI_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Vyoma's ports were opened from the window since start (ufw's rules can't be read without root).
+static FIREWALL_OPENED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// An install from the window is running.
 static INSTALLING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -385,6 +387,27 @@ impl Control {
         });
         Ok(())
     }
+
+    /// Opens Vyoma's ports in the firewall that's up (asks for the password once); [firewall_done] says how it went.
+    fn open_firewall(&self) -> fdo::Result<()> {
+        let conn = self.conn.clone();
+        tokio::spawn(async move {
+            let ok = open_firewall().await;
+            if ok {
+                FIREWALL_OPENED.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            tracing::info!("firewall from the window: {}", if ok { "opened" } else { "not opened" });
+            if let Ok(emitter) = zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
+                let _ = Control::firewall_done(&emitter, ok).await;
+                let _ = Control::changed(&emitter).await;
+            }
+        });
+        Ok(())
+    }
+
+    /// An [open_firewall] is over.
+    #[zbus(signal)]
+    async fn firewall_done(emitter: &zbus::object_server::SignalEmitter<'_>, ok: bool) -> zbus::Result<()>;
 
     /// An [install] is over.
     #[zbus(signal)]
@@ -1633,19 +1656,74 @@ fn health(beside_kde: bool, shell: Option<Option<u32>>) -> serde_json::Value {
     })
 }
 
-/// Whether a firewall is up, and whether phones get through it (its rules need root to read; a
-/// phone that reached us over the network says enough). Up with none seen yet is no fault: a
-/// day on the cable proves nothing either way.
+/// Whether a firewall is up, and whether phones get through it. firewalld says whether a port is
+/// open to anyone who asks; ufw's rules need root to read, so a phone that reached us over the
+/// network, or the ports opened from here, says enough. Up with none seen yet is no fault (a day
+/// on the cable proves nothing either way), so it offers the fix rather than warning.
 fn firewall() -> serde_json::Value {
     let active = ["ufw", "firewalld"].into_iter().find(|unit| {
         std::process::Command::new("systemctl").args(["is-active", "--quiet", unit]).status().is_ok_and(|s| s.success())
     });
-    let (state, detail) = match active {
-        None => ("ok", "Off".to_owned()),
-        Some(_) if WIFI_SEEN.load(std::sync::atomic::Ordering::Relaxed) => ("ok", "On, and your phones get through on Wi-Fi".to_owned()),
-        Some(name) => ("info", format!("{name} is on. If phones don't show up on Wi-Fi, allow ports 1714 to 1764, TCP and UDP.")),
+    let quiet = |args: &[&str]| {
+        std::process::Command::new("firewall-cmd")
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
     };
-    json!({ "name": "Firewall", "state": state, "detail": detail })
+    let open = |name: &str| {
+        WIFI_SEEN.load(std::sync::atomic::Ordering::Relaxed)
+            || FIREWALL_OPENED.load(std::sync::atomic::Ordering::Relaxed)
+            || (name == "firewalld" && (quiet(&["--query-port=1716/tcp"]) || quiet(&["--query-service=kdeconnect"])))
+            || (name == "ufw" && ufw_lets_vyoma_in())
+    };
+    let (state, detail, action) = match active {
+        None => ("ok", "Off".to_owned(), ""),
+        Some(name) if open(name) => ("ok", "On, and phones get through".to_owned(), ""),
+        Some(name) => ("info", format!("{name} is on and may stop phones finding this PC on Wi-Fi. Open ports lets Vyoma through (ports 1714 to 1764)."), "Open ports"),
+    };
+    json!({ "name": "Firewall", "state": state, "detail": detail, "action": action })
+}
+
+/// ufw's own record of its rules, where a distro leaves it readable: Vyoma's TCP port allowed in.
+fn ufw_lets_vyoma_in() -> bool {
+    std::fs::read_to_string("/etc/ufw/user.rules").is_ok_and(|rules| ufw_allows(&rules))
+}
+
+/// Whether ufw's rules (its `### tuple ###` lines) let TCP in on port 1716.
+fn ufw_allows(rules: &str) -> bool {
+    rules.lines().filter_map(|l| l.strip_prefix("### tuple ### allow ")).any(|rule| {
+        let mut parts = rule.split_whitespace();
+        let (Some(proto), Some(port)) = (parts.next(), parts.next()) else { return false };
+        (proto == "tcp" || proto == "any")
+            && port.split(',').any(|p| match p.split_once(':') {
+                Some((lo, hi)) => lo.parse::<u16>().is_ok_and(|lo| lo <= 1716) && hi.parse::<u16>().is_ok_and(|hi| hi >= 1716),
+                None => p == "1716",
+            })
+    })
+}
+
+/// Lets phones through the firewall that's up: Vyoma's (KDE Connect's) ports, TCP and UDP, kept
+/// across restarts. Run as root by pkexec, outside this service's sandbox, from constants only.
+const OPEN_FIREWALL: &str = "set -e
+if systemctl is-active --quiet firewalld; then
+  firewall-cmd --permanent --add-port=1714-1764/tcp --add-port=1714-1764/udp
+  firewall-cmd --reload
+fi
+if systemctl is-active --quiet ufw; then
+  ufw allow 1714:1764/tcp
+  ufw allow 1714:1764/udp
+fi
+";
+
+/// Runs [OPEN_FIREWALL] (one password prompt); whether it finished.
+async fn open_firewall() -> bool {
+    let status = tokio::process::Command::new("systemd-run")
+        .args(["--user", "--wait", "--collect", "--quiet", "--unit=vyoma-desktop-firewall", "pkexec", "sh", "-c", OPEN_FIREWALL])
+        .status()
+        .await;
+    status.is_ok_and(|s| s.success())
 }
 
 /// Vyoma's GNOME extension: clipboard sync, the presenter's pointer and the Overview need it.
@@ -1760,6 +1838,16 @@ fn host_name() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reads_ufw_rules() {
+        assert!(super::ufw_allows("### tuple ### allow tcp 1714:1764 0.0.0.0/0 any 0.0.0.0/0 in\n"));
+        assert!(super::ufw_allows("### tuple ### allow any 1716 0.0.0.0/0 any 0.0.0.0/0 in\n"));
+        assert!(super::ufw_allows("### tuple ### allow tcp 22,1700:1720 0.0.0.0/0 any 0.0.0.0/0 in\n"));
+        assert!(!super::ufw_allows("### tuple ### allow udp 1714:1764 0.0.0.0/0 any 0.0.0.0/0 in\n"));
+        assert!(!super::ufw_allows("### tuple ### deny tcp 1716 0.0.0.0/0 any 0.0.0.0/0 in\n"));
+        assert!(!super::ufw_allows("### tuple ### allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in\n"));
+    }
+
     use super::*;
 
     #[test]
