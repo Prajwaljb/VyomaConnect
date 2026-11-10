@@ -28,6 +28,9 @@ data=${XDG_DATA_HOME:-$HOME/.local/share}
 # Keeps kdeconnectd from starting: Plasma's autostart and D-Bus activation both start it.
 autostart="$config/autostart/org.kde.kdeconnect.daemon.desktop"
 activation="$data/dbus-1/services/org.kde.kdeconnect.service"
+# Starts Vyoma at login where the desktop doesn't reach systemd's graphical-session.target
+# (Cinnamon, MATE, Xfce, i3...), with the session's display, which systemd may not have been given.
+starter="$config/autostart/vyoma-desktop.desktop"
 
 as_root() {
     if command -v pkexec >/dev/null 2>&1; then pkexec "$@"; else sudo "$@"; fi
@@ -110,7 +113,7 @@ fi
 if [ "${1:-}" = "--undo" ]; then
     systemctl --user disable --now vyoma-desktop 2>/dev/null || true
     "$bin/vyoma-desktop" --remove-menus 2>/dev/null || true
-    rm -f "$autostart" "$activation"
+    rm -f "$autostart" "$activation" "$starter"
     [ -n "$packaged" ] || rm -f "$data/applications/vyoma.desktop" "$data/icons/hicolor/scalable/apps/vyoma.svg"
     if has_gnome; then
         shell_remove enabled-extensions "$extension" || true
@@ -229,6 +232,15 @@ fi
 mkdir -p "$(dirname "$autostart")" "$(dirname "$activation")"
 printf '[Desktop Entry]\nType=Application\nName=KDE Connect\nHidden=true\n' >"$autostart"
 printf '[D-BUS Service]\nName=org.kde.kdeconnect\nExec=/bin/false\n' >"$activation"
+cat >"$starter" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Vyoma
+Comment=Starts Vyoma's desktop app with this session
+Exec=sh -c "systemctl --user import-environment DISPLAY XAUTHORITY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE 2>/dev/null; systemctl --user start vyoma-desktop"
+NotShowIn=KDE;GNOME;
+NoDisplay=true
+EOF
 systemctl --user disable --now vyoma-companion 2>/dev/null || true
 pkill -x kdeconnectd 2>/dev/null || true
 

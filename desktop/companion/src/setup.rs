@@ -55,6 +55,17 @@ struct Need {
 }
 
 impl Need {
+    /// Whether this session uses it: X11 has its own clipboard and screen capture, Wayland the
+    /// data-control clipboard and the portal's PipeWire streams.
+    fn applies(&self) -> bool {
+        let x11 = crate::x11::active();
+        match self.probe {
+            Probe::Tool("wl-copy") | Probe::Gst("pipewire") => !x11,
+            Probe::Gst("ximagesrc") => x11,
+            _ => true,
+        }
+    }
+
     fn packages(&self, distro: Distro) -> &'static str {
         match distro {
             Distro::Pacman => self.pacman,
@@ -104,6 +115,7 @@ const NEEDS: &[Need] = &[
     need("Send to in Files", Probe::NautilusPython, "python-nautilus", "python3-nautilus", "nautilus-python"),
     need("PC screen on the phone", Probe::Tool("gst-launch-1.0"), "gstreamer", "gstreamer1.0-tools", "gstreamer1"),
     need("PC screen on the phone", Probe::Gst("pipewire"), "gst-plugin-pipewire", "gstreamer1.0-pipewire", "pipewire-gstreamer"),
+    need("PC screen on the phone", Probe::Gst("ximagesrc"), "gst-plugins-good", "gstreamer1.0-plugins-good", "gstreamer1-plugins-good"),
     need("PC screen on the phone", Probe::Gst("coreelements"), "gstreamer", "gstreamer1.0-tools", "gstreamer1"),
     need("PC screen on the phone", Probe::Gst("videoconvertscale"), "gst-plugins-base", "gstreamer1.0-plugins-base", "gstreamer1-plugins-base"),
     need("phone on PC", Probe::Gst("opengl"), "gst-plugins-base", "gstreamer1.0-gl", "gstreamer1-plugins-base"),
@@ -203,7 +215,7 @@ pub fn check() -> Missing {
     let distro = Distro::detect();
     let mut missing = Missing::default();
     let standalone = STANDALONE.load(std::sync::atomic::Ordering::Relaxed);
-    for need in NEEDS.iter().filter(|n| !(standalone && n.feature == "pairing")) {
+    for need in NEEDS.iter().filter(|n| !(standalone && n.feature == "pairing") && n.applies()) {
         if need.met() {
             continue;
         }
@@ -241,7 +253,7 @@ pub fn report() -> Report {
     let distro = Distro::detect();
     let standalone = STANDALONE.load(std::sync::atomic::Ordering::Relaxed);
     let mut features: Vec<FeatureState> = Vec::new();
-    for need in NEEDS.iter().filter(|n| !(standalone && n.feature == "pairing")) {
+    for need in NEEDS.iter().filter(|n| !(standalone && n.feature == "pairing") && n.applies()) {
         let i = match features.iter().position(|f| f.feature == need.feature) {
             Some(i) => i,
             None => {

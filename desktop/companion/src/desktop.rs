@@ -23,6 +23,12 @@ pub fn is_gnome() -> bool {
 /// The desktop's first keyboard layout and its variant ("de", "nodeadkeys"), for pressing the
 /// keys that type each character: GNOME's input sources, or Plasma's kxkbrc; "us" when neither says.
 pub fn keyboard_layout() -> (String, String) {
+    // X11 (Cinnamon, MATE, Xfce...): the X server's own, as setxkbmap set it.
+    if crate::x11::active()
+        && let Some(found) = crate::x11::keyboard_layout()
+    {
+        return found;
+    }
     let from_gnome = || {
         let out = std::process::Command::new("gsettings").args(["get", "org.gnome.desktop.input-sources", "sources"]).output().ok()?;
         parse_gnome_sources(&String::from_utf8_lossy(&out.stdout))
@@ -59,6 +65,9 @@ pub fn scroll_needs_finish() -> bool {
 
 /// The next virtual desktop to the right, or the left.
 pub async fn switch(right: bool) -> Result<()> {
+    if crate::x11::active() {
+        return crate::x11::switch_workspace(right);
+    }
     if is_gnome() {
         crate::shell::switch_workspace(right).await?;
         return Ok(());

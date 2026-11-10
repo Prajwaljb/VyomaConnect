@@ -2031,6 +2031,7 @@ dependencies = [
  "tracing-subscriber",
  "vyoma-companion",
  "vyoma-core",
+ "x11rb",
  "x509-parser",
  "zbus",
 ]

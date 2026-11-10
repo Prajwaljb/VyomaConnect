@@ -5,7 +5,6 @@
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use tokio::process::Command;
 use tokio::sync::Mutex;
 
 /// Long enough for the paste, and for the next emoji of a burst to keep the first save.
@@ -53,10 +52,10 @@ async fn current_text() -> Option<String> {
     crate::clip::text().await
 }
 
-/// What's on the clipboard, to put back: its best type and bytes. GNOME's extension deals in
-/// text only, so there it's the text.
+/// What's on the clipboard, to put back: its best type and bytes. GNOME's extension and X11 deal
+/// in text only, so there it's the text.
 async fn read_clipboard() -> Option<(String, Vec<u8>)> {
-    if crate::desktop::is_gnome() {
+    if crate::clip::text_only() {
         return crate::clip::text().await.map(|t| ("text/plain;charset=utf-8".to_owned(), t.into_bytes()));
     }
     let list = String::from_utf8_lossy(&crate::clip::wl_paste(&["--list-types"]).await?).into_owned();
@@ -68,17 +67,12 @@ async fn read_clipboard() -> Option<(String, Vec<u8>)> {
 
 async fn restore(saved: Option<(String, Vec<u8>)>) {
     match saved {
-        Some((_, bytes)) if crate::desktop::is_gnome() => {
+        Some((_, bytes)) if crate::clip::text_only() => {
             crate::clip::set(&String::from_utf8_lossy(&bytes)).await;
         }
         Some((kind, bytes)) => {
             crate::clip::copy_as(&kind, &bytes).await;
         }
-        None if crate::desktop::is_gnome() => {
-            crate::clip::set("").await;
-        }
-        None => {
-            let _ = Command::new("wl-copy").arg("--clear").status().await;
-        }
+        None => crate::clip::clear().await,
     }
 }

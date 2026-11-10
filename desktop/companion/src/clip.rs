@@ -1,6 +1,6 @@
-//! The PC's clipboard as text, wherever it runs: through Vyoma's GNOME extension on GNOME (which
-//! has no clipboard protocol for apps), through wl-clipboard elsewhere (the data-control protocol
-//! of KWin, wlroots and COSMIC).
+//! The PC's clipboard as text, wherever it runs: on the X server itself in X11 sessions (`x11.rs`),
+//! through Vyoma's GNOME extension on GNOME (which has no clipboard protocol for apps), through
+//! wl-clipboard elsewhere (the data-control protocol of KWin, wlroots and COSMIC).
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -11,13 +11,21 @@ use tokio::process::Command;
 /// Password managers (KeePassXC, KWallet) mark what they copy with this; it's never read.
 pub const SECRET_HINT: &str = "x-kde-passwordManagerHint";
 
-/// On GNOME, where the extension is the only way.
+/// On GNOME (Wayland), where the extension is the only way.
 fn through_shell() -> bool {
-    crate::desktop::is_gnome()
+    crate::desktop::is_gnome() && !crate::x11::active()
+}
+
+/// Where only text can be read and put back (no other types, as wl-clipboard has).
+pub fn text_only() -> bool {
+    through_shell() || crate::x11::active()
 }
 
 /// The clipboard's text, unless it holds none or a password manager's copy.
 pub async fn text() -> Option<String> {
+    if crate::x11::active() {
+        return crate::x11::text().await;
+    }
     if through_shell() {
         return crate::shell::clipboard().await.ok().filter(|t| !t.is_empty());
     }
@@ -30,6 +38,9 @@ pub async fn text() -> Option<String> {
 
 /// Puts [text] on the clipboard; whether it took.
 pub async fn set(text: &str) -> bool {
+    if crate::x11::active() {
+        return crate::x11::set(Some(text)).await;
+    }
     if through_shell() {
         return match crate::shell::set_clipboard(text).await {
             Ok(()) => true,
@@ -44,6 +55,9 @@ pub async fn set(text: &str) -> bool {
 
 /// Calls [changed] on each copy, for as long as it can follow them.
 pub async fn follow(mut changed: impl FnMut()) -> anyhow::Result<()> {
+    if crate::x11::active() {
+        return crate::x11::follow(changed).await;
+    }
     if through_shell() {
         return crate::shell::follow_clipboard(changed).await;
     }
@@ -53,6 +67,17 @@ pub async fn follow(mut changed: impl FnMut()) -> anyhow::Result<()> {
         changed();
     }
     anyhow::bail!("wl-paste stopped: {}", child.wait().await?)
+}
+
+/// Empties the clipboard.
+pub async fn clear() {
+    if crate::x11::active() {
+        crate::x11::set(None).await;
+    } else if through_shell() {
+        set("").await;
+    } else {
+        let _ = Command::new("wl-copy").arg("--clear").status().await;
+    }
 }
 
 /// wl-paste waits on whichever app owns the clipboard, which can be frozen.

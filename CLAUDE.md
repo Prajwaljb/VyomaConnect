@@ -61,6 +61,18 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   Plasma, which does DDC itself), power via org.gnome.SessionManager/logind, wake via Mutter `PowerSaveMode`,
   wallpaper via gsettings. Test it headless: `dbus-run-session` + `gnome-shell --headless --wayland
   --virtual-monitor 1280x720` with XDG_CONFIG_HOME/XDG_DATA_HOME on a scratch dir (never the real dconf).
+- X11 desktops (Cinnamon, MATE, Xfce, Plasma on X11, i3), picked when `XDG_SESSION_TYPE=x11` or DISPLAY is set without
+  WAYLAND_DISPLAY: `companion/src/x11.rs` (x11rb) is the clipboard (its own thread owns CLIPBOARD on a hidden window;
+  TARGETS then UTF8_STRING, INCR pieces, XFIXES for others' copies, password-manager copies skipped), input (XTEST;
+  a keysym no key types goes on a spare keycode, given back on drop), RandR's primary monitor, DPMS wake, the EWMH
+  workspace switch and the layout from `_XKB_RULES_NAMES`; `clip.rs`, `desktop.rs`, `pc.rs`, `screen.rs` (ximagesrc
+  instead of the portal's PipeWire node) and `screenshot.rs` route to it; daemon `input.rs` (`Sink::X11`) and
+  `presenter_x11.rs` (an override-redirect dot: ARGB with a compositor, Shape-cut without, clicks pass through).
+  `install.sh` writes `~/.config/autostart/vyoma-desktop.desktop` (NotShowIn KDE;GNOME), which hands systemd the
+  session's DISPLAY and starts the unit where graphical-session.target is never reached. Tests against Xvfb
+  (`Xvfb :97 -screen 0 1280x720x24 -nolisten tcp`): `DISPLAY=:97 XDG_SESSION_TYPE=x11 VYOMA_X11_TEST=1 cargo test
+  --release --lib x11::` in companion, `... cargo test --release presenter_x11` in daemon. Not yet run on a real
+  Cinnamon/MATE/Xfce session; wlroots (Sway, Hyprland) input still has no path.
 - `desktop/icon/gen.py`: Vyoma's icon ("Moon": the PC as a white glass orb, the phone as a small orb in a gap of one ring, on a sky tile) for every place from one geometry: Android adaptive layers, monochrome, notification glyph, splash; the desktop's `dist/vyoma.svg` (installed into hicolor) and the window's `ui/icons/vyoma.svg`. Run `python3 desktop/icon/gen.py .` from the repo root after changing it.
 - `desktop/companion`: lib + bin (the session loop is `session.rs`, shared with the desktop app); the bin is the Rust daemon beside stock kdeconnectd, built on `vyoma-core`. Dials only phones kdeconnectd trusts (mDNS), pairs with
   no prompt via `CompanionProof` (signed with kdeconnectd's key; phone verifies against the pinned PC cert), speaks

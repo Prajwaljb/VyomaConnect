@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use zbus::Connection;
-use zbus::zvariant::Value;
+use zbus::Variant;
 
 /// The app id the portal shows: our desktop entry's name (`vyoma.desktop`).
 pub const APP_ID: &str = "vyoma";
@@ -15,7 +15,7 @@ pub const APP_ID: &str = "vyoma";
 /// `Register` still works, only unnamed.
 pub async fn connection() -> Result<Connection> {
     let conn = Connection::session().await.context("no session bus")?;
-    let options: HashMap<&str, Value> = HashMap::new();
+    let options: HashMap<&str, Variant> = HashMap::new();
     if let Err(e) = conn
         .call_method(Some("org.freedesktop.portal.Desktop"), "/org/freedesktop/portal/desktop", Some("org.freedesktop.host.portal.Registry"), "Register", &(APP_ID, options))
         .await
