@@ -18,7 +18,7 @@
   --raised: rgba(255, 255, 255, .62);
   --rim-hi: rgba(255, 255, 255, .95);
   --rim-lo: rgba(255, 255, 255, .6);
-  --rim-lo-mask: rgba(0, 0, 0, .63);
+  --rim-ring: rgba(255, 255, 255, .5);
   --band: rgba(255, 255, 255, .75);
   --hair: rgba(11, 12, 14, .08);
   --shadow: 0 1px 2px rgba(22, 28, 45, .05), 0 12px 32px -8px rgba(22, 28, 45, .12);
@@ -54,10 +54,10 @@
     --raised: rgba(255, 255, 255, .1);
     --rim-hi: rgba(255, 255, 255, .45);
     --rim-lo: rgba(255, 255, 255, .22);
-    --rim-lo-mask: rgba(0, 0, 0, .49);
+    --rim-ring: rgba(255, 255, 255, .1);
     --band: rgba(255, 255, 255, .16);
     --hair: rgba(255, 255, 255, .1);
-    --shadow: none;
+    --shadow: 0 0 #0000;
     --accent: #ff9a73;
     --glow-a: rgba(255, 154, 115, .16);
     --glow-b: rgba(100, 210, 255, .12);
@@ -115,43 +115,24 @@ code, pre { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Conso
   border-radius: var(--rr);
   background-color: var(--card);
   background-image: radial-gradient(130% 70% at 50% 0%, var(--card-lit), transparent 62%);
-  box-shadow: var(--shadow);
+  /* The rim is painted by the card itself, so it always has the card's own outline in every browser
+     (a separate rim layer, masked to fade, split from the card or faded out at the corners in Firefox):
+     a faint ring all round, light from above on the top edge and about half as much on the bottom,
+     and a soft band of light just inside, which is what makes it read as glass. */
+  box-shadow:
+    inset 0 0 0 1px var(--rim-ring),
+    inset 0 1px 0 var(--rim-hi),
+    inset 0 -1px 0 var(--rim-lo),
+    inset 0 10px 16px -12px var(--band),
+    inset 0 -8px 14px -12px var(--band),
+    var(--shadow);
   isolation: isolate;
 }
-/* The lit rim: light from straight above, a second highlight about half as bright below, quiet on
-   the sides. A plain rounded border, faded by a mask: every engine draws its corners as one even line
-   with the straight edges (a ring cut out by masking rectangles came apart at the corners in Firefox).
-   The mask's stops are in pixels from each end, past the corner radius, so the top and bottom corners
-   are lit in full on any card; in percent, a short card's rim had faded before it rounded the corner. */
-.glass::before {
-  content: "";
-  position: absolute; inset: 0;
-  border-radius: inherit;
-  border: 1px solid var(--rim-hi);
-  --rim-mask: linear-gradient(180deg,
-    #000 0, #000 calc(var(--rr) + 4px), transparent calc(var(--rr) + 64px),
-    transparent calc(100% - var(--rr) - 52px), var(--rim-lo-mask) calc(100% - var(--rr) - 4px), var(--rim-lo-mask) 100%);
-  -webkit-mask: var(--rim-mask);
-  mask: var(--rim-mask);
-  pointer-events: none;
-  z-index: 1;
-}
-/* The band of light just inside the edge: what makes it read as glass rather than a grey slab. */
-.glass::after {
-  content: "";
-  position: absolute; inset: 0;
-  border-radius: inherit;
-  box-shadow: inset 0 10px 16px -12px var(--band), inset 0 -8px 14px -12px var(--band);
-  pointer-events: none;
-}
 
-/* Smoother corners where they're drawn as one: not in Firefox and its forks (Zen...), whose GPU renderer gave
-   the rim and band layers a different corner from the card's fill (two lines at each corner); plain round
-   corners there. */
+/* Smoother corners, in Chromium: Firefox and its forks (Zen...) draw this newer corner unevenly with the GPU,
+   so they keep plain round ones. */
 @supports (corner-shape: superellipse(1.6)) and (not (-moz-appearance: none)) {
   .glass, .badge, .tile, .shot-pc { corner-shape: superellipse(1.6); }
-  /* The rim and the band are separate layers: they take the card's corner too, or they sit inside it. */
-  .glass::before, .glass::after { corner-shape: inherit; }
   .glass { --rr: calc(var(--r-card) * 1.25); }
   .tile { border-radius: calc(var(--r-tile) * 1.25); }
 }
@@ -243,12 +224,18 @@ code, pre { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Conso
   background: #2a5d9a;
 }
 .scene, .scene svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* The word's size and centre follow the screen's height too, so on a short laptop screen it stays clear of
+   the headline and buttons below it. */
+.hero {
+  --wf: clamp(92px, min(21vw, 27vh), 236px);
+  --wy: min(37%, calc(100% - 385px - var(--wf) * .5));
+}
 .word {
-  position: absolute; left: 0; right: 0; top: 37%;
+  position: absolute; left: 0; right: 0; top: var(--wy);
   margin: 0;
   transform: translateY(-50%);
   text-align: center;
-  font-size: clamp(92px, 21vw, 236px);
+  font-size: var(--wf);
   font-weight: 800;
   letter-spacing: -.045em;
   line-height: 1;
@@ -257,7 +244,7 @@ code, pre { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Conso
   user-select: none;
 }
 .hint {
-  position: absolute; left: 0; right: 0; top: calc(37% + clamp(64px, 13vw, 150px));
+  position: absolute; left: 0; right: 0; top: calc(var(--wy) + var(--wf) * .63);
   margin: 0; text-align: center;
   font-size: 15px; font-weight: 550; letter-spacing: .01em;
   color: rgba(255, 255, 255, .92);
@@ -265,6 +252,7 @@ code, pre { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Conso
   transition: opacity .6s var(--ease);
 }
 .no-js .hint, .hint.gone { opacity: 0; }
+@media (max-height: 700px) { .hint { display: none; } }
 
 .lens {
   position: absolute; left: 0; top: 0;
@@ -306,7 +294,7 @@ code, pre { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Conso
 .tagline {
   margin: 0 auto 22px;
   max-width: 16ch;
-  font-size: clamp(32px, 5.4vw, 60px);
+  font-size: clamp(32px, 4.4vw, 56px);
   font-weight: 700;
   line-height: 1.08;
   letter-spacing: -.03em;
@@ -314,6 +302,16 @@ code, pre { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Conso
   text-shadow: 0 2px 18px rgba(60, 20, 10, .35);
 }
 .tagline span { color: rgba(255, 255, 255, .78); }
+.hero-sub {
+  margin: -8px auto 24px;
+  max-width: 60ch;
+  font-size: clamp(16px, 1.55vw, 19px);
+  font-weight: 500;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, .94);
+  text-shadow: 0 1px 12px rgba(60, 20, 10, .45);
+}
+@media (max-height: 600px) { .hero-sub { display: none; } }
 .hero-cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 .hero .pill { min-height: 54px; padding: 0 28px; font-size: 17px; color: #fff; }
 .glass-btn {
@@ -330,7 +328,7 @@ code, pre { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Conso
   font-size: 14px; font-weight: 550; color: rgba(255, 255, 255, .9);
   text-shadow: 0 1px 8px rgba(60, 20, 10, .4);
 }
-@media (max-height: 700px) and (max-width: 760px) { .facts { display: none; } }
+@media (max-height: 820px) { .facts { display: none; } }
 
 /* ---------- Canvas below the hero: the aurora ---------- */
 main { position: relative; }
