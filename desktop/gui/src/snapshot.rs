@@ -53,8 +53,12 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str, size: Option<(u32, 
     if scene == "unpair" {
         ui.set_confirm_unpair(true);
     }
-    if scene == "add" || scene == "add-offline" {
+    if scene == "add" || scene == "add-offline" || scene == "add-done" {
         ui.set_selected(crate::ADD.into());
+    }
+    if scene == "add-done" {
+        // Just paired by the code: its tick, before the moment.
+        ui.set_pair_code_done("Pixel 9 Pro".into());
     }
     // A made-up pairing code wherever one shows.
     let made_up = "https://github.com/Prajwaljb/VyomaConnect/releases/latest#pair?v=1&id=0123456789abcdef0123456789abcdef&name=Desk&fp=1b9f3d973c838fe866cb806b72ef20448ccb55c320a514b35e9e03808d00069b&s=00112233445566778899aabbccddeeff&a=192.168.1.20,10.0.0.5&p=1716";
