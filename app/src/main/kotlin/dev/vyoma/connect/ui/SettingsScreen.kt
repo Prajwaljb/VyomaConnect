@@ -304,12 +304,16 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
             SectionCard {
                 ListRow(
                     title = if (unrestricted) "Background activity allowed" else "Allow background activity",
-                    subtitle = if (unrestricted) "Vyoma won't be put to sleep" else "Keeps your PC connected",
+                    subtitle = if (unrestricted) "Tap to change in Android settings" else "Keeps your PC connected",
                     icon = Icons.Rounded.BatteryChargingFull,
                     iconTint = SystemColor.GREEN.color,
                     trailing = { RowChevron(if (unrestricted) "On" else "Off") },
                     showDivider = true,
-                    onClick = { if (!unrestricted) requestUnrestricted(context) },
+                    // On: Vyoma's page in Android's settings, where its battery use can be changed back.
+                    onClick = {
+                        if (!unrestricted) requestUnrestricted(context)
+                        else runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) }
+                    },
                 )
                 val outdoor by vm.outdoorMode.collectAsStateWithLifecycle()
                 ListRow(
