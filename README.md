@@ -3,7 +3,7 @@
 <h1 align="center">Vyoma</h1>
 
 <p align="center"><b>Your Android phone and your Linux PC, working as one.</b><br>
-Files, clipboard, calls, notifications, screens and remote control, all over your own network.<br>
+Set it up once. After that it just works: no fiddling, no developer switches left on.<br>
 Open source. No account. No cloud.</p>
 
 <p align="center"><a href="https://github.com/Prajwaljb/VyomaConnect/releases/latest"><b>Download</b></a> ·
@@ -13,10 +13,46 @@ Open source. No account. No cloud.</p>
 
 <p align="center"><img src="docs/screenshots/desktop-phone.png" width="760" alt="Vyoma's PC window showing a connected phone: battery, connection, response time, and Send files, Phone files and Ring"></p>
 
-Vyoma is a phone app and a PC app built to work together. It speaks the KDE Connect protocol, so
-it moves into your desktop without losing a single pairing, then goes well beyond it: screen
-mirroring both ways, your phone as a webcam or game controller, resumable transfers over a USB
-cable, fingerprint-protected commands, and a PC window that shows exactly what each phone can do.
+Vyoma is a phone app and a PC app made as one product. Scan a code once and they belong together:
+from then on they find each other, pick the best way to connect and keep going, while your PC stays
+yours, behind your fingerprint.
+
+## Why Vyoma
+
+**Set up once, then forget about it.** Pairing is one scan of the code in the PC's window: nothing
+to type, nothing to compare. After that the phone and PC connect by themselves, every time. Wi-Fi
+at home, the USB cable the moment you plug it in, Bluetooth when there's no Wi-Fi: Vyoma picks the
+best route and switches on its own. The PC app updates itself with one click and keeps your
+pairings. And if they ever can't reach each other, the phone says why in plain words (not on
+Wi-Fi, a VPN in the way, the PC's firewall, Vyoma not running there) with the button that fixes it.
+
+**No developer switches left on.** Vyoma doesn't need root or Shizuku, and doesn't ask you to keep
+USB debugging on. Everything works over Wi-Fi without it, the cable works through USB tethering,
+and the game controller works over USB as a plain accessory. The one thing Android lets only a
+computer unlock, reading the clipboard while Vyoma is closed, is a one-time grant from your PC:
+plug in once, click Allow, and switch USB debugging off again. Copies keep syncing.
+
+**Your fingerprint guards your PC.** An unlocked phone in someone else's hand isn't a way into
+your PC. With the fingerprint lock on, unlocking the PC, opening its files, seeing its screen,
+using its camera, its power buttons, the touchpad, keyboard and presenter, and your clipboard
+history all ask for your fingerprint first, once per use, not at every tap. Commands that matter
+can ask every time, and that's set on the PC, so it can't be switched off from the phone.
+
+**Secure without thinking about it.** Phone and PC talk directly and encrypted, and each remembers
+the other's certificate from the moment they pair. The pairing code works once, for one phone, for
+ten minutes, and names the PC's certificate, so a phone can't be tricked into pairing with a
+different PC. The PC decides what each phone may do and keeps a log of what it did. Copies your
+password manager marks as private never leave the phone, and the PC always tells you when its
+camera was used.
+
+**Made with care.** One design across phone and PC, in your wallpaper's colours, light or dark,
+with motion and haptics that answer every touch. Widgets, Quick Settings tiles and lock-screen
+controls for what you use most. On the PC it fits into the desktop you already have: right-click
+any file and choose **Send to** your phone, find the phone in your file manager's sidebar, and see
+its calls and notifications in your desktop's own pop-ups.
+
+**Private by design.** No account, no server, no tracking. The only thing that goes online is the
+PC app's daily look for a new version on GitHub, which you can turn off.
 
 ## What you get
 
@@ -122,7 +158,7 @@ hides devices from each other. (Pointed at the code, a phone without Vyoma opens
 You can also pick your PC from the list and confirm a code matches on both screens. From then on
 they find each other automatically.
 
-<p align="center"><img src="docs/screenshots/desktop-setup.png" width="640" alt="The PC's setup: pairing, with the code to compare against the phone"></p>
+<p align="center"><img src="docs/screenshots/desktop-setup.png" width="640" alt="The PC's setup: the code to scan with Vyoma on the phone"></p>
 
 ## Good to know
 
@@ -130,17 +166,15 @@ they find each other automatically.
 essentials: files, clipboard, notifications, media, commands, touchpad and presenter. Vyoma's PC
 app unlocks everything else.
 
-**Clipboard in the background.** Android lets only the app on screen read the clipboard. Vyoma
-works around that: plug the phone into the PC once with USB debugging on and click **Allow** on the
-phone's page in Vyoma's window. After that, copies reach the PC even with Vyoma closed. When the
-app restarts, Android asks once for log access: tap **Allow one-time access**. The Clipboard page
-also has a Send button for a quick manual push.
+**Clipboard with Vyoma closed (optional).** Android lets only the app on screen read the
+clipboard, and only a computer can lift that. So it's a one-time step: plug the phone into the PC
+with USB debugging on and click **Allow** on the phone's page in Vyoma's window. Then turn USB
+debugging off again; copies keep reaching the PC with Vyoma closed. After Vyoma restarts or
+updates, Android asks once for log access: tap **Allow one-time access**. Without this step,
+clipboard sync works whenever Vyoma is open, and the Clipboard page has a Send button.
 
-**Private by design.** Your phone and PC talk directly, encrypted, over your own network, cable or
-Bluetooth. No account, no server. The only thing that goes online is the PC app's daily look for a
-new version on GitHub, which you can turn off on **This PC**. Pairing needs a matching code on both screens, the PC window
-decides what each phone may do, and the phone can ask for your fingerprint before it unlocks the
-PC, opens its files or shows its screen.
+**Controlling the phone from the PC** (its screen in a window on the PC, clicked and typed into)
+uses Android's accessibility service, asked for only when you first use it. Nothing else needs it.
 
 <p align="center"><img src="docs/screenshots/desktop-commands-dark.png" width="640" alt="The PC's Commands page in dark mode, with commands that ask for a fingerprint"></p>
 

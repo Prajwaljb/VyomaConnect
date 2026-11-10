@@ -8,22 +8,27 @@ calls, media and commands. Its window shows your phones and lets you choose what
 
 ## Install
 
+Paste this into a terminal on the PC:
+
 ```sh
-git clone https://github.com/Prajwaljb/VyomaConnect && VyomaConnect/desktop/daemon/install.sh
+curl -fsSL https://github.com/Prajwaljb/VyomaConnect/releases/latest/download/install.sh | sh
 ```
 
-Install it before pairing: it's what Vyoma on your phone pairs with. When it's done, its window
-opens on the same setup steps as the phone, so you pair from both screens at once.
+No curl? `wget -qO- https://github.com/Prajwaljb/VyomaConnect/releases/latest/download/install.sh | sh`
 
-This builds it, installs it for your user with a menu entry ("Vyoma"), starts it at login, and
-takes over from KDE Connect, keeping its pairings. It asks for your password to install the
-packages it needs and to open the firewall for phones on Wi-Fi. Anything missing later shows on
-This PC in Vyoma's window, with an Install button.
+It downloads the ready-made build for your PC, checks it, adds Vyoma to your app menu, starts it at
+login and takes over from KDE Connect, keeping its pairings. Nothing is compiled. It asks for your
+password once, for the libraries it needs and to let phones through the firewall. Anything missing
+later shows on This PC in Vyoma's window, with an Install button.
 
-`install.sh --undo` gives the PC back to KDE Connect.
+Then open Vyoma's window: it shows a code. In Vyoma on your phone, tap **Scan code**, and they're
+paired, for good. They find each other by themselves from then on.
 
-## Clipboard sync when the phone app is closed
+Rather build it yourself? `git clone https://github.com/Prajwaljb/VyomaConnect && VyomaConnect/desktop/daemon/install.sh`
+does the same from source. `install.sh --undo` gives the PC back to KDE Connect.
 
-Android only lets a computer grant this. Plug the phone in once with USB debugging on, allow it on
-the phone, then click Allow on the phone's page in Vyoma's window (or in its notification). You
-can turn USB debugging off afterwards.
+## Clipboard sync when the phone app is closed (optional)
+
+Android lets only a computer grant this, once. Plug the phone in with USB debugging on, allow it on
+the phone, then click Allow on the phone's page in Vyoma's window (or in its notification). Then
+turn USB debugging off again: copies keep syncing. Nothing else in Vyoma needs USB debugging.

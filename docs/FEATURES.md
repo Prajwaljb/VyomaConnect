@@ -22,7 +22,8 @@ when the phone is paired with KDE Connect or GSConnect.</p>
 ## Clipboard
 
 - **Copy on one side, paste on the other**, text and links.
-- **Works with the phone app closed**, after a one-time USB setup from the PC window. *PC app*
+- **Works with the phone app closed**, after a one-time step from the PC window; USB debugging can go off again
+  afterwards. *PC app*
 - **Clipboard history** on the phone: tap any past copy to use it again.
 - **Respects sensitive copies:** passwords marked private by your password manager never leave the phone.
 - A **Send button**, Quick Settings tile and widget for a one-tap push.
@@ -91,15 +92,26 @@ When something happens, Vyoma does something for you.
 - **USB tethering**, with no USB debugging needed. *PC app*
 - **Bluetooth** when there's no Wi-Fi: notifications, controls, stats and the controller keep working. *PC app*
 - **By IP address or name**, for Tailscale and other VPNs.
-- **Connection checks** on the phone explain what's working and what to do when something isn't.
+- **Pair by scanning a code** in the PC's window: nothing to type or compare, and it works on Wi-Fi that hides
+  devices from each other. *PC app*
+- **When it can't connect, it says why:** not on Wi-Fi, a VPN in the way, a different network, Vyoma not running on
+  the PC, or the PC's firewall, each with the button that fixes it. The PC's window opens the firewall in one
+  click. *PC app for the firewall*
+- **Connection checks** on the phone show what each link is carrying right now.
+- **No USB debugging to leave on, no root, no Shizuku.** Wi-Fi, USB tethering and the controller's USB accessory
+  mode all work without it.
 - **Outdoor mode:** off Wi-Fi with no PC around, Vyoma rests and starts again when you're home.
 
 ## Privacy and security
 
 - **No account, no cloud.** Phone and PC talk directly, encrypted, over your own network, cable or Bluetooth.
-- **Pairing needs a matching code** on both screens, and each side remembers the other's certificate after that.
+- **Each side remembers the other's certificate** from pairing on, and refuses anyone else under that name.
+- **The pairing code works once,** for one phone, for ten minutes, and names the PC's certificate, so the phone
+  can't be tricked into pairing with another PC. Pairing from the list instead needs a matching code on both screens.
 - **Per-phone permissions on the PC:** choose what each phone may do, and see what it did on the Activity page. *PC app*
-- **Fingerprint lock** before the phone unlocks the PC, opens its files or shows its screen.
+- **Fingerprint lock:** unlocking the PC, its files, its screen, its camera and power buttons, the touchpad, keyboard
+  and presenter, and the clipboard history ask for your fingerprint (or PIN) first, once per use.
+- **Commands that ask every time,** set on the PC, so they can't be switched off from the phone.
 - **Sensitive clipboard copies stay on the phone.**
 - **The only thing that goes online** is the PC app's daily look for a new version, which you can turn off. *PC app*
 
