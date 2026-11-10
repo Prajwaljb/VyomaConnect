@@ -3,6 +3,7 @@ package dev.vyoma.connect.ui
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import androidx.compose.ui.platform.LocalContext
 
+import androidx.compose.material.icons.rounded.AdsClick
 import androidx.compose.material.icons.rounded.Slideshow
 import androidx.compose.material.icons.rounded.SportsEsports
 
@@ -11,6 +12,8 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.layout.layout
 import dev.vyoma.connect.designsystem.VyomaMotion
@@ -141,6 +144,8 @@ import dev.vyoma.connect.service.BluetoothPointerChannel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import dev.vyoma.connect.presenter.AirMouseMath
+import dev.vyoma.connect.presenter.PointerGyro
 import dev.vyoma.connect.protocol.plugin.builtin.characterCount
 import dev.vyoma.connect.protocol.plugin.builtin.commonEnds
 import dev.vyoma.connect.protocol.plugin.builtin.typeable
@@ -226,6 +231,17 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                 delay(8)
                 flushMotion(p)
             }
+        }
+    }
+    // Air mouse: aim the phone and the pointer follows (the presenter's gyro, in pixels). The pad still
+    // clicks, drags and scrolls meanwhile. Only while the page is on screen; off again when it's left.
+    var airMouse by rememberSaveable { mutableStateOf(false) }
+    val gyro = remember { PointerGyro(appContext, AirMouseMath::step) { dx, dy -> synchronized(motion) { motion[0] += dx; motion[1] += dy } } }
+    LaunchedEffect(airMouse, pad) {
+        if (!airMouse || pad == null) return@LaunchedEffect
+        flushLifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            gyro.start()
+            try { kotlinx.coroutines.awaitCancellation() } finally { gyro.stop() }
         }
     }
     // The phone keyboard types on the PC through the typing bar.
@@ -353,6 +369,22 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                         }
                     }
                 }
+            }
+            // Air mouse: a switch, so filled accent while on (never mistaken for a one-shot action).
+            if (gyro.available && pad != null) {
+                Box(
+                    Modifier
+                        .size(48.dp)
+                        .pressable(glass = true) {
+                            airMouse = !airMouse
+                            haptics.perform(if (airMouse) Haptic.ToggleOn else Haptic.ToggleOff)
+                            note(if (airMouse) "Aim the phone to move the pointer" else "Air mouse off")
+                        }
+                        .semantics { stateDescription = if (airMouse) "On" else "Off" }
+                        .glassRaised(CircleShape, Glass.accent.takeIf { airMouse }),
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Rounded.AdsClick, "Air mouse", tint = if (airMouse) Color.White else LocalContentColor.current) }
+                Spacer(Modifier.width(8.dp))
             }
             // Slides: keys and a pointer, so it works with plain KDE Connect too.
             Box(
@@ -562,7 +594,11 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                 Text("Connect a PC to use the touchpad", Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
                 Column(Modifier.align(Alignment.BottomCenter).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
+                    if (airMouse) Text(
+                        "Aim the phone to move the pointer · tap to click · hold to drag",
+                        style = MaterialTheme.typography.labelSmall.copy(lineBreak = LineBreak.Heading, textAlign = TextAlign.Center),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    ) else Text(
                         "Tap to click · two fingers to scroll, pinch or right-click · three up or down for windows, desktop and ${kind.value.overviewName().lowercase()}, sideways between desktops · hold to drag",
                         // Balanced lines, centred: no lone "drag" on a line of its own.
                         style = MaterialTheme.typography.labelSmall.copy(lineBreak = LineBreak.Heading, textAlign = TextAlign.Center),

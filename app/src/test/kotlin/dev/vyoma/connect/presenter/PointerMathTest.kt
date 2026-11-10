@@ -33,4 +33,16 @@ class PointerMathTest {
         val (dx, _) = PointerMath.step(0f, 0f, -0.009f, flat, 1f)
         assertTrue(dx < 0.006f, "$dx")
     }
+
+    @Test fun airMouseIsPreciseSlowAndQuickFast() {
+        // A slow 10°/s pan: about 19 px a degree. A quick flick: three times that.
+        val slow = AirMouseMath.step(0f, 0f, -Math.toRadians(10.0).toFloat(), flat, 1f).first
+        assertEquals(Math.toRadians(10.0).toFloat() * AirMouseMath.SLOW_PX_RAD, slow, 0.5f)
+        val fast = AirMouseMath.step(0f, 0f, -3f, flat, 0.01f).first
+        assertEquals(3f * 0.01f * AirMouseMath.FAST_PX_RAD, fast, 0.5f)
+        assertTrue(AirMouseMath.step(1f, 0f, 0f, upright, 0.01f).second < 0f)
+    }
+
+    @Test fun airMouseHoldsStillInASteadyHand() =
+        assertTrue(AirMouseMath.step(0f, 0f, -0.009f, flat, 0.02f).first < 0.05f)
 }

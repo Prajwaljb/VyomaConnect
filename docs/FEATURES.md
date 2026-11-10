@@ -57,7 +57,8 @@ when the phone is paired with KDE Connect or GSConnect.</p>
 ## Your phone as a PC accessory
 
 - **Touchpad and keyboard**, with multi-finger gestures for Plasma, GNOME and other desktops. With the PC app,
-  type in any language, emoji included.
+  type in any language, emoji included. Air mouse: turn it on in the touchpad's header and the pointer follows where
+  you aim the phone, while taps still click.
 - **Presenter remote:** next and previous slide, start, black screen, and a laser pointer you aim by moving the phone.
 - **Webcam and microphone** for any video call app on the PC. *PC app*
 - **Game controller** with gyro aiming, a layout you can rearrange, and a profile per game; over USB, Wi-Fi or

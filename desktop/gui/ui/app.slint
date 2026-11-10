@@ -1709,8 +1709,10 @@ component Composer inherits Rectangle {
     callback escape();
     public function take-focus() { input.focus(); }
     property <bool> ready: root.enabled && root.text != "";
-    height: min(input.preferred-height, 4 * 21px) + 26px;
-    border-radius: min(self.height / 2, 26px);
+    // At least 52 px, so one line is a capsule whose end the 36 px send circle sits in concentrically
+    // (26 px radius = 18 + the 8 px inset); taller, the circle keeps to the bottom corner the same way.
+    height: max(52px, min(input.preferred-height, 4 * 21px) + 26px);
+    border-radius: 26px;
     background: Theme.chrome;
     border-width: 1px;
     border-color: Theme.rim;
