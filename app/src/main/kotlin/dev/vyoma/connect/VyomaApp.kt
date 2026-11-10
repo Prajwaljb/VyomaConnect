@@ -93,6 +93,7 @@ class VyomaApp : Application() {
             DemoDiagnostics.install(this)
         }
         AppLock.install(this)
+        dev.vyoma.connect.platform.TextsLock.install(this)
         container = AppContainer(this)
         if (BuildConfig.DEMO) container.appScope.launch { DemoDiagnostics.reportCrashes(this@VyomaApp) }
         // Lighter glass: the user's setting, or found here when this phone can't keep up with the full kind.
@@ -250,7 +251,7 @@ class AppContainer(private val app: Application) {
         SystemVolumePlugin.spec,
         MousePadPlugin.spec,
         PresenterPlugin.spec,
-        SmsPlugin.spec(sms),
+        SmsPlugin.spec(sms, dev.vyoma.connect.platform.TextsLock),
         TelephonyPlugin.spec(calls),
         ContactsPlugin.spec(contacts),
         dev.vyoma.connect.protocol.plugin.builtin.SftpPlugin.spec(phoneFiles),

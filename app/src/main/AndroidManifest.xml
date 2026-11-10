@@ -93,6 +93,14 @@
             android:theme="@style/Theme.Vyoma.Invisible" />
 
         <activity
+            android:name=".ui.TextsUnlockActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Vyoma.Invisible" />
+
+        <activity
             android:name=".ui.ShareActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="true"

@@ -101,6 +101,43 @@ class ClipboardActivity : Activity() {
 }
 
 /**
+ * Answers a PC asking for the texts ([TextsLock]): the fingerprint prompt over whatever was on screen, or with
+ * `refuse`, the notification's Don't allow.
+ */
+class TextsUnlockActivity : Activity() {
+    private var done = false
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus || done) return
+        done = true
+        val peer = intent.getStringExtra(EXTRA_PEER) ?: return finish()
+        if (intent.getBooleanExtra(EXTRA_REFUSE, false)) {
+            dev.vyoma.connect.platform.TextsLock.answered(peer, false)
+            finish()
+            return
+        }
+        val name = intent.getStringExtra(EXTRA_NAME) ?: "your PC"
+        dev.vyoma.connect.platform.AppLock.check(this, "To show your texts on $name") { ok ->
+            dev.vyoma.connect.platform.TextsLock.answered(peer, ok)
+            finish()
+        }
+    }
+
+    companion object {
+        private const val EXTRA_PEER = "peer"
+        private const val EXTRA_NAME = "name"
+        private const val EXTRA_REFUSE = "refuse"
+
+        fun intent(context: Context, peerId: String, peerName: String, refuse: Boolean = false) = Intent(context, TextsUnlockActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+            .putExtra(EXTRA_PEER, peerId)
+            .putExtra(EXTRA_NAME, peerName)
+            .putExtra(EXTRA_REFUSE, refuse)
+    }
+}
+
+/**
  * Share target ("Send to PC" in the share sheet) and the file picker for "Send files".
  * Work is handed to [LinkService] together with the URI grants, so it outlives this screen.
  */

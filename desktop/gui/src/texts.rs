@@ -31,6 +31,14 @@ pub fn wire(ui: &MainWindow) {
             win.set_texts_linked(win.get_current().linked);
             win.set_selected(MESSAGES.into());
             read(&ui);
+            unlock(&ui, id.to_string());
+        }
+    });
+    ui.on_unlock_texts({
+        let ui = ui.as_weak();
+        move || {
+            let Some(win) = ui.upgrade() else { return };
+            unlock(&ui, win.get_current().id.to_string());
         }
     });
     ui.on_open_thread({
@@ -45,6 +53,7 @@ pub fn wire(ui: &MainWindow) {
             win.set_draft("".into());
             win.set_thread(thread);
             read(&ui);
+            unlock(&ui, win.get_current().id.to_string());
         }
     });
     ui.on_send_text({
@@ -72,6 +81,19 @@ pub fn wire(ui: &MainWindow) {
                     });
                 }
             });
+        }
+    });
+}
+
+/// Asks the phone to let its texts in, or, open, keeps them open: the page shows how that goes as it rereads.
+fn unlock(ui: &slint::Weak<MainWindow>, id: String) {
+    if MADE_UP.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let ui = ui.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = DbusDaemon::connect().and_then(|d| d.unlock_texts(&id)) {
+            notify(&ui, format!("Couldn't ask the phone: {e:#}"));
         }
     });
 }
@@ -118,6 +140,11 @@ pub fn read(ui: &slint::Weak<MainWindow>) {
 pub fn show_inbox(ui: &MainWindow, inbox: &Inbox, linked: bool, now: DateTime<Local>) {
     let state = if inbox.list.is_empty() && !linked { "away" } else { inbox.state.as_str() };
     ui.set_texts_state(state.into());
+    // Locked while a conversation was open: back to the page that says so.
+    if matches!(state, "locked" | "asking" | "declined") && !ui.get_thread().is_empty() {
+        ui.set_thread("".into());
+        ui.set_draft("".into());
+    }
     let chats: Vec<Chat> = inbox
         .list
         .iter()

@@ -481,7 +481,8 @@ impl Control {
         if !takes {
             return Err(fdo::Error::NotSupported("This phone doesn't share its texts".into()));
         }
-        let (json, ask) = self.texts.conversations(&id);
+        let guarded = self.texts_guarded(&id);
+        let (json, ask) = self.texts.conversations(&id, guarded);
         for p in ask {
             self.command(Command::Send(id.clone(), p))?;
         }
@@ -490,7 +491,7 @@ impl Control {
 
     /// One conversation's texts as JSON, oldest first.
     fn thread(&self, id: String, thread: i64) -> fdo::Result<String> {
-        let (json, ask) = self.texts.thread(&id, thread);
+        let (json, ask) = self.texts.thread(&id, thread, self.texts_guarded(&id));
         for p in ask {
             self.command(Command::Send(id.clone(), p))?;
         }
@@ -503,9 +504,26 @@ impl Control {
         if !linked {
             return Err(fdo::Error::Failed("The phone isn't connected".into()));
         }
-        let p = self.texts.send(&id, thread, &text).map_err(fdo::Error::Failed)?;
+        let p = self.texts.send(&id, thread, &text, self.texts_guarded(&id)).map_err(fdo::Error::Failed)?;
         tracing::info!("{id}: sending a text");
         self.command(Command::Send(id, p))
+    }
+
+    /// The Messages page was opened, a conversation picked or a text sent: a phone with the texts lock is asked to
+    /// let them in (its owner confirms there), or, already open, stays open 10 more minutes.
+    fn unlock_texts(&self, id: String) -> fdo::Result<()> {
+        if !self.texts_guarded(&id) {
+            return Ok(());
+        }
+        let linked = self.devices.lock().unwrap().get(&id).is_some_and(|d| d.linked);
+        if !linked {
+            return Err(fdo::Error::Failed("The phone isn't connected".into()));
+        }
+        if let Some(p) = self.texts.unlock(&id) {
+            tracing::info!("{id}: asking to show the texts");
+            self.command(Command::Send(id, p))?;
+        }
+        Ok(())
     }
 
     /// The texts have something new.
@@ -547,6 +565,11 @@ impl Control {
 }
 
 impl Control {
+    /// The phone holds its texts behind Vyoma's texts lock.
+    fn texts_guarded(&self, id: &str) -> bool {
+        self.devices.lock().unwrap().get(id).is_some_and(|d| plugins::takes(d, messages::UNLOCK))
+    }
+
     /// Every linked device that takes the list gets it again.
     fn commands_changed(&self) {
         let ids: Vec<String> = self.devices.lock().unwrap().iter().filter(|(_, d)| d.linked && plugins::takes(d, commands::RUNCOMMAND)).map(|(id, _)| id.clone()).collect();
@@ -932,6 +955,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
     }
 
     let mut battery_tick = tokio::time::interval(BATTERY_EVERY);
+    let mut texts_tick = tokio::time::interval(Duration::from_secs(30));
     let mut mounts_tick = tokio::time::interval(MOUNTS_EVERY);
     let mut echo_tick = tokio::time::interval(ECHO_EVERY);
     loop {
@@ -960,9 +984,21 @@ async fn daemon(dir: PathBuf) -> Result<()> {
             Some((id, result)) = mounts_done.recv() => desk.on_mounted(id, result).await,
             _ = mounts_tick.tick() => desk.check_mounts().await,
             Some(locked) = lock_changes.recv() => {
+                if locked {
+                    for id in desk.texts.lock_all() {
+                        tracing::info!("{id}: texts locked with the screen");
+                        desk.send(&id, vyoma_core::link::packet(messages::LOCK, json!({})));
+                    }
+                }
                 if desk.locked != Some(locked) {
                     desk.locked = Some(locked);
                     desk.broadcast(plugins::LOCK, plugins::lock_packet(locked));
+                }
+            }
+            _ = texts_tick.tick() => {
+                for id in desk.texts.expire() {
+                    tracing::info!("{id}: texts locked, unused for a while");
+                    desk.send(&id, vyoma_core::link::packet(messages::LOCK, json!({})));
                 }
             }
             _ = battery_tick.tick() => {
@@ -1351,6 +1387,11 @@ impl Desk {
                 let Some(mut device) = self.devices.lock().unwrap().get(&id).cloned() else { return };
                 if packet["type"] == ECHO {
                     return self.on_echo(&id, &packet);
+                }
+                if packet["type"] == messages::UNLOCKED || packet["type"] == messages::LOCKED {
+                    tracing::info!("{id}: {}", packet["type"].as_str().unwrap_or(""));
+                    self.texts.on_packet(&id, &packet);
+                    return;
                 }
                 if packet["type"] == telephony::DONE {
                     return self.on_call_done(&id, &packet).await;

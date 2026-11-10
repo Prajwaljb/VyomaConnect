@@ -123,6 +123,11 @@ object AppLock {
         if (canAsk(context)) prompt(context, why, then = then) else then()
     }
 
+    /** Always asks, like [confirm], and says how it went: for a PC asking for the texts. */
+    fun check(context: Context, why: String, answer: (Boolean) -> Unit) {
+        if (canAsk(context)) prompt(context, why, onDenied = { answer(false) }) { answer(true) } else answer(true)
+    }
+
     private fun prompt(context: Context, why: String, onDenied: () -> Unit = {}, then: () -> Unit) {
         if (asking) {
             onDenied()
