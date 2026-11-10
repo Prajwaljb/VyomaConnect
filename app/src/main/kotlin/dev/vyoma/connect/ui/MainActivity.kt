@@ -152,8 +152,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        vm.clipboardFocus(hasFocus)
         // Focus is what Android wants before it lets us read the clipboard.
         if (hasFocus) vm.onForeground()
+    }
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        vm.touched()
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onStart() {
