@@ -46,11 +46,10 @@ pub fn pick<'a>(phones: &'a [Bonded], name: Option<&str>) -> Option<&'a Bonded> 
 /// The call's sound on this PC; give it back with [release].
 pub struct Audio {
     path: String,
-    address: String,
-    /// This connected the profile, so it disconnects it after.
-    connected_here: bool,
-    /// The card's profile before, to put back when the phone stays connected.
-    was: Option<String>,
+    /// The default microphone before, when it was a Bluetooth headset's: put back after.
+    mic_was: Option<String>,
+    /// The microphone this chose instead.
+    mic: Option<String>,
 }
 
 /// Takes the call's sound from the phone called [name] over Bluetooth.
@@ -60,44 +59,106 @@ pub async fn take(name: Option<&str>) -> Result<Audio> {
     let Some(phone) = pick(&phones, name) else {
         bail!(if phones.is_empty() { "This PC isn't paired with the phone over Bluetooth" } else { "Couldn't tell which Bluetooth device is the phone" });
     };
-    let reply = device(&system, &phone.path, "ConnectProfile").await;
-    let connected_here = match reply {
-        Ok(()) => !phone.connected,
-        Err(e) if e.to_string().contains("AlreadyConnected") => false,
-        Err(e) => return Err(e).context("the phone didn't take this PC as its headset"),
+    // A Bluetooth headset as the microphone would go into its own call mode for it: a second call
+    // link on the same Bluetooth chip, which many can't carry (silence both ways), and its music
+    // mode gone meanwhile. The PC's own microphone instead, for the call, keeps the headphones as they are.
+    let (mic_was, mic) = match away_from_headset().await {
+        Some((was, mic)) if pactl(&["set-default-source", &mic]).await.is_ok() => {
+            tracing::info!("call audio: this PC's microphone for the call, not the headset's");
+            (Some(was), Some(mic))
+        }
+        _ => (None, None),
     };
-    tracing::info!("call audio: this PC is the phone's headset{}", if connected_here { "" } else { " (it already was)" });
-    let mut audio = Audio { path: phone.path.clone(), address: phone.address.clone(), connected_here, was: None };
+    let audio = Audio { path: phone.path.clone(), mic_was, mic };
+    match device(&system, &phone.path, "ConnectProfile").await {
+        Ok(()) => {}
+        Err(e) if e.to_string().contains("AlreadyConnected") => {}
+        Err(e) => {
+            release(audio).await;
+            return Err(e).context("the phone didn't take this PC as its headset");
+        }
+    }
+    tracing::info!("call audio: this PC is the phone's headset");
     // The card shows up a moment after the profile connects.
     for _ in 0..20 {
-        if let Some((card, active, has)) = card(&audio.address).await {
+        if let Some((card, active, has)) = card(&phone.address).await {
             if active != PROFILE && has {
                 pactl(&["set-card-profile", &card, PROFILE]).await?;
-                audio.was = Some(active);
             }
-            return Ok(audio);
+            break;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    tracing::warn!("call audio: the phone's sound card didn't show up");
+    // Its microphone stream, if it linked before the default changed.
+    if let Some(mic) = &audio.mic {
+        for _ in 0..20 {
+            if move_phone_capture(&phone.address, mic).await {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
     Ok(audio)
 }
 
-/// Gives the call's sound back to the phone.
+/// Gives the call's sound back to the phone. Always lets the phone go: a PC still connected as its
+/// headset would take every later call too, answered there or not.
 pub async fn release(audio: Audio) {
-    if let Some(was) = &audio.was
-        && !audio.connected_here
-        && let Some((card, ..)) = card(&audio.address).await
-    {
-        let _ = pactl(&["set-card-profile", &card, was]).await;
-    }
     tracing::info!("call audio: back to the phone");
-    if audio.connected_here {
-        let Ok(system) = Connection::system().await else { return };
-        if let Err(e) = device(&system, &audio.path, "DisconnectProfile").await {
-            tracing::warn!("call audio: couldn't let the phone go: {e:#}");
-        }
+    if let Ok(system) = Connection::system().await
+        && let Err(e) = device(&system, &audio.path, "DisconnectProfile").await
+    {
+        tracing::warn!("call audio: couldn't let the phone go: {e:#}");
     }
+    // The microphone back, unless someone chose another meanwhile.
+    if let (Some(was), Some(mic)) = (&audio.mic_was, &audio.mic)
+        && default_source().await.as_deref() == Some(mic.as_str())
+    {
+        let _ = pactl(&["set-default-source", was]).await;
+    }
+}
+
+async fn default_source() -> Option<String> {
+    let out = Command::new("pactl").arg("get-default-source").output().await.ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_owned()).filter(|s| !s.is_empty())
+}
+
+/// When the default microphone is a Bluetooth device's: it, and the PC's own one to use instead.
+async fn away_from_headset() -> Option<(String, String)> {
+    let default = default_source().await?;
+    let out = Command::new("pactl").args(["-f", "json", "list", "sources"]).output().await.ok()?;
+    let sources: Value = serde_json::from_slice(&out.stdout).ok()?;
+    pick_mic(&sources, &default).map(|mic| (default, mic))
+}
+
+fn pick_mic(sources: &Value, default: &str) -> Option<String> {
+    let list = sources.as_array()?;
+    let api = |s: &Value| s["properties"]["device.api"].as_str().unwrap_or("").to_owned();
+    let current = list.iter().find(|s| s["name"] == default)?;
+    if api(current) != "bluez5" {
+        return None;
+    }
+    let mics: Vec<&Value> = list
+        .iter()
+        .filter(|s| s["properties"]["media.class"] == "Audio/Source" && api(s) != "bluez5" && !s["name"].as_str().unwrap_or("").ends_with(".monitor"))
+        .collect();
+    // One that's there (an empty jack's port says "not available"), a microphone over a line input or HDMI.
+    let score = |s: &Value| {
+        let text = format!("{} {}", s["name"].as_str().unwrap_or(""), s["description"].as_str().unwrap_or("")).to_lowercase();
+        let ports = s["ports"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let there = ports.is_empty() || ports.iter().any(|p| p["availability"] != "not available");
+        (there, text.contains("mic"), !text.contains("hdmi") && !text.contains("line"))
+    };
+    mics.into_iter().max_by_key(|s| score(s)).and_then(|s| s["name"].as_str()).map(str::to_owned)
+}
+
+/// Moves the phone's microphone stream (what this PC sends into the call) to [mic]; whether it was there.
+async fn move_phone_capture(address: &str, mic: &str) -> bool {
+    let Ok(out) = Command::new("pactl").args(["-f", "json", "list", "source-outputs"]).output().await else { return false };
+    let Ok(list) = serde_json::from_slice::<Value>(&out.stdout) else { return false };
+    let ours = list.as_array().into_iter().flatten().find(|o| o["properties"]["api.bluez5.address"].as_str().is_some_and(|a| a.eq_ignore_ascii_case(address)));
+    let Some(index) = ours.and_then(|o| o["index"].as_u64()) else { return false };
+    pactl(&["move-source-output", &index.to_string(), mic]).await.is_ok()
 }
 
 async fn device(system: &Connection, path: &str, method: &str) -> Result<()> {
@@ -171,6 +232,19 @@ mod tests {
         assert_eq!(pick(&two, Some("A phone")).map(|p| p.alias.as_str()), Some("A"));
         assert_eq!(pick(&two, None), None);
         assert_eq!(pick(&[], Some("A")), None);
+    }
+
+    #[test]
+    fn leaves_a_headsets_microphone_for_the_pcs_own() {
+        let src = |name: &str, api: &str, desc: &str| json!({ "name": name, "description": desc, "properties": { "device.api": api, "media.class": "Audio/Source" } });
+        let all = json!([src("bluez_input.x", "bluez5", "Headphones"), src("alsa_input.hdmi", "alsa", "HDMI"), src("alsa_input.analog", "alsa", "Digital Microphone"), src("alsa_output.a.monitor", "alsa", "Monitor")]);
+        assert_eq!(pick_mic(&all, "bluez_input.x").as_deref(), Some("alsa_input.analog"));
+        assert_eq!(pick_mic(&all, "alsa_input.hdmi"), None);
+        assert_eq!(pick_mic(&json!([src("bluez_input.x", "bluez5", "H")]), "bluez_input.x"), None);
+        let mut jack = src("alsa_input.jack", "alsa", "Stereo Microphone");
+        jack["ports"] = json!([{ "availability": "not available" }]);
+        let all = json!([src("bluez_input.x", "bluez5", "H"), jack, src("alsa_input.dmic", "alsa", "Digital Microphone")]);
+        assert_eq!(pick_mic(&all, "bluez_input.x").as_deref(), Some("alsa_input.dmic"));
     }
 
     #[test]
