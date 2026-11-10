@@ -1,0 +1,6 @@
+• Take calls on the PC: Answer, Decline and Silence, and talk through the PC's speakers and mic over Bluetooth
+• Read and reply to your texts in the PC's window, locked behind your fingerprint on the phone
+• While texts are locked, text notifications on the PC say only who wrote
+• Choose per PC whether it may answer your calls; optionally keep texts from KDE Connect and GSConnect
+• Touchpad air mouse: aim the phone to move the pointer
+• Sync when closed: Android's question no longer pops up under your finger, and Ask again counts down
