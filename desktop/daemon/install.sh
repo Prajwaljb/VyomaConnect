@@ -5,12 +5,19 @@
 # It asks for your password only to install packages and open the firewall.
 # `install.sh --update` moves this copy to the newest release and installs that, pairings kept.
 # Installed by a package (as /usr/share/vyoma/install.sh) it builds nothing: it only takes over.
+# From a release's ready-made build (what `curl ... install.sh | sh` unpacks into
+# ~/.local/share/vyoma/app, with its programs in bin/) it builds nothing either, and updates by
+# downloading the newest one.
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH= cd -- "$here/../.." && pwd)
+repo=Prajwaljb/VyomaConnect
 packaged=
+prebuilt=
 bin="$HOME/.local/bin"
-if [ ! -f "$here/Cargo.toml" ] && [ -x /usr/bin/vyoma-desktop ]; then
+if [ ! -f "$here/Cargo.toml" ] && [ -x "$root/bin/vyoma-desktop" ]; then
+    prebuilt=1
+elif [ ! -f "$here/Cargo.toml" ] && [ -x /usr/bin/vyoma-desktop ]; then
     packaged=1
     bin=/usr/bin
 fi
@@ -65,6 +72,24 @@ if [ "${1:-}" = "--update" ] && [ -n "$packaged" ]; then
     exit 0
 fi
 
+if [ "${1:-}" = "--update" ] && [ -n "$prebuilt" ]; then
+    echo "Getting the newest release..."
+    # GitHub sends .../releases/latest on to the newest release's tag.
+    tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest")
+    tag=${tag##*/}
+    case "$tag" in v[0-9]*) ;; *) echo "No release found." >&2; exit 1 ;; esac
+    current=$(cat "$root/VERSION" 2>/dev/null || echo 0)
+    if [ "$(printf '%s\n%s\n' "$current" "${tag#v}" | sort -V | tail -n 1)" = "$current" ]; then
+        echo "Vyoma $current is already the newest."
+        exit 0
+    fi
+    get=$(mktemp)
+    curl -fsSL -o "$get" "https://github.com/$repo/releases/download/$tag/install.sh"
+    # That release's own download and installer from here on.
+    trap - EXIT
+    exec sh "$get" --updating
+fi
+
 if [ "${1:-}" = "--update" ]; then
     echo "Getting the newest release..."
     git -C "$root" fetch --quiet --tags --force origin
@@ -101,7 +126,32 @@ if [ "${1:-}" = "--undo" ]; then
     exit 0
 fi
 
-if [ -z "$packaged" ]; then
+if [ -n "$prebuilt" ]; then
+# Ready-made: only the libraries the programs load, where the desktop didn't bring them.
+if ldd "$root/bin/vyoma-desktop" "$root/bin/vyoma" 2>/dev/null | grep -q 'not found'; then
+    echo "Installing the libraries it needs..."
+    if command -v pacman >/dev/null 2>&1; then
+        as_root pacman -S --needed --noconfirm gstreamer gst-plugins-base-libs fontconfig libxkbcommon
+    elif command -v apt-get >/dev/null 2>&1; then
+        as_root sh -c 'apt-get update && apt-get install -y libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 libgstreamer-gl1.0-0 libfontconfig1 libxkbcommon0'
+    elif command -v dnf >/dev/null 2>&1; then
+        as_root dnf install -y gstreamer1 gstreamer1-plugins-base fontconfig libxkbcommon
+    elif command -v zypper >/dev/null 2>&1; then
+        as_root zypper --non-interactive install gstreamer gstreamer-plugins-base libgstgl-1_0-0 fontconfig libxkbcommon0
+    fi
+    if ldd "$root/bin/vyoma-desktop" "$root/bin/vyoma" 2>/dev/null | grep 'not found' >&2; then
+        echo "Vyoma needs these libraries, which this installer couldn't add. Install them with your package manager, then run this again." >&2
+        exit 1
+    fi
+fi
+install -Dm755 "$root/bin/vyoma-desktop" "$bin/vyoma-desktop"
+install -Dm755 "$root/bin/vyoma" "$bin/vyoma"
+mkdir -p "$config/vyoma-desktop" "$data/applications"
+# Where updates start from.
+printf '%s\n' "$root" >"$config/vyoma-desktop/source"
+sed "s|@BIN@|$bin/vyoma|" "$here/dist/vyoma.desktop" >"$data/applications/vyoma.desktop"
+install -Dm644 "$here/dist/vyoma.svg" "$data/icons/hicolor/scalable/apps/vyoma.svg"
+elif [ -z "$packaged" ]; then
 # The newest Rust any of the crates asks for (cargo names the crate when that moves up).
 min_rust=1.96
 rust_ok() {

@@ -1,0 +1,74 @@
+# The PC app, ready-made, for each release: pushing a v* tag builds it for x86_64 and aarch64 on
+# Debian 12 (so it runs on any distro as new as that) and attaches it to that tag's release, with
+# SHA256SUMS and the one-line installer (packaging/get.sh as install.sh). The release is created as
+# a draft when there isn't one yet; publishing it stays a person's job.
+name: PC app release build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and attach to (e.g. v0.5.1)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    container: debian:12
+    steps:
+      - name: Build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libfontconfig-dev libxkbcommon-dev
+          curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/daemon/target
+            desktop/gui/target
+          key: desktop-${{ matrix.runner }}-${{ hashFiles('desktop/*/Cargo.lock') }}
+          restore-keys: desktop-${{ matrix.runner }}-
+      - name: Build and pack
+        run: sh packaging/bundle-desktop.sh dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.runner }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          sed "s/@TAG@/$TAG/" packaging/get.sh > dist/install.sh
+          (cd dist && sha256sum vyoma-desktop-*.tar.gz > SHA256SUMS && cat SHA256SUMS)
+          gh release view "$TAG" >/dev/null 2>&1 ||
+            gh release create "$TAG" --draft --verify-tag --title "Vyoma ${TAG#v}" --notes "Release notes to come."
+          gh release upload "$TAG" dist/vyoma-desktop-*.tar.gz dist/SHA256SUMS dist/install.sh --clobber
