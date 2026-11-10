@@ -18,14 +18,16 @@ import java.util.concurrent.ConcurrentHashMap
  * Texts go to a PC's Messages page only after the owner says so here, with a fingerprint (or the phone's PIN), each
  * time someone opens it there: whoever sits at an unlocked PC shouldn't read this phone's texts and login codes. The
  * PC locks it again when its screen locks, when Messages sits unused for 10 minutes and when the phone goes; this
- * phone refuses texts to it meanwhile, so turning something off on the PC can't get round it. Only Vyoma's PCs can
- * ask, so stock desktops are let be ([TextsGuard]).
+ * phone refuses texts to it meanwhile, so turning something off on the PC can't get round it; what the texting app's
+ * notifications say is held back from it too. Only Vyoma's PCs can ask, so stock desktops are let be ([TextsGuard]),
+ * unless the owner keeps texts from them altogether ([stockCutOff]).
  */
 object TextsLock : TextsGuard {
     private const val TAG = "TextsLock"
     private const val PREFS = "texts_lock"
     private const val KEY_ON = "on"
     private const val KEY_HELD = "held"
+    private const val KEY_STOCK_OFF = "stock_off"
     private const val ASK_FOR_MS = 120_000L
     /** A yes lasts at most this long on the phone's own clock, whatever the PC says (it locks it sooner). */
     private const val GRANT_MS = 60 * 60_000L
@@ -51,6 +53,15 @@ object TextsLock : TextsGuard {
         prefs(context).edit().putBoolean(KEY_ON, on).apply()
         if (on) grants.clear()
     }
+
+    /** PCs that can't ask (KDE Connect, GSConnect) get no texts, contacts or text notifications' words. Off unless turned on. */
+    fun stockCutOff(context: Context) = prefs(context).getBoolean(KEY_STOCK_OFF, false)
+
+    fun setStockCutOff(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean(KEY_STOCK_OFF, on).apply()
+    }
+
+    override fun cutOff(peerId: String, claims: Boolean): Boolean = stockCutOff(app) && !holds(peerId, claims)
 
     override fun open(peerId: String): Boolean {
         if (!enabled(app)) return true

@@ -240,7 +240,7 @@ class AppContainer(private val app: Application) {
         BatteryPlugin.spec(battery.state),
         ClipboardPlugin.spec(clipboard),
         SharePlugin.spec(shareSink),
-        NotificationsPlugin.spec(NotificationBridge),
+        NotificationsPlugin.spec(NotificationBridge, dev.vyoma.connect.platform.TextsLock),
         MprisPlugin.spec,
         FindMyPhonePlugin.spec { from ->
             Ringer.start(app, from)

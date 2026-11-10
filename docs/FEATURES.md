@@ -40,7 +40,9 @@ when the phone is paired with KDE Connect or GSConnect.</p>
 - **Messages:** read your texts on the PC and reply, from the phone's number, with contact names. Texts (SMS) only:
   Android keeps RCS chats to the Messages app. Opening Messages on the PC asks for your fingerprint on the phone,
   and it locks again when the PC locks, the phone goes, or after 10 minutes unused (Settings > Ask before PCs show
-  texts). *PC app*
+  texts). While it's locked, text notifications on that PC say only who wrote ("New text from Sam"), with no reply.
+  Settings > Texts only on Vyoma PCs keeps texts, contacts and text notifications' words from KDE Connect and
+  GSConnect, which can't ask first. *PC app*
 - **PC notifications** for what the phone does there: screenshots, photos, files received.
 
 ## Your PC, from the phone

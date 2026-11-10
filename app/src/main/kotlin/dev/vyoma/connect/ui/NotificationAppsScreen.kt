@@ -196,7 +196,11 @@ private fun AppRow(app: NotifApp, mode: NotifMode, first: Boolean, last: Boolean
             maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.width(12.dp))
-        RowChevron(mode.label)
+        // The texting app's words follow the texts lock: a PC sees them only once Messages is unlocked there.
+        val textsHeld = remember(app.pkg, mode) {
+            mode == NotifMode.SHOW && dev.vyoma.connect.platform.TextsLock.enabled(context) && NotificationBridge.isTextingApp(context, app.pkg)
+        }
+        RowChevron(if (textsHeld) "Hidden when locked" else mode.label)
     }
 }
 
