@@ -1,0 +1,13 @@
+{
+  "name": "Vyoma",
+  "short_name": "Vyoma",
+  "description": "Your Android phone and Linux PC, working as one.",
+  "start_url": "./",
+  "display": "browser",
+  "background_color": "#000000",
+  "theme_color": "#2a5d9a",
+  "icons": [
+    { "src": "favicon.svg", "type": "image/svg+xml", "sizes": "any" },
+    { "src": "img/icon-512.png", "type": "image/png", "sizes": "512x512" }
+  ]
+}
