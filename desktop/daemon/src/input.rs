@@ -331,7 +331,7 @@ fn opts() -> HashMap<&'static str, Variant<'static>> {
 impl Session {
     /// A RemoteDesktop session for keyboard and pointer, no screen.
     async fn open(token_file: &std::path::Path) -> Result<Self> {
-        let conn = Connection::session().await.context("no session bus")?;
+        let conn = vyoma_companion::portal::connection().await?;
         let sender = conn.unique_name().context("not on the bus")?.trim_start_matches(':').replace('.', "_");
         let created = request(&conn, &sender, "CreateSession", |t| (HashMap::from([("handle_token", Variant::from(t.to_owned())), ("session_handle_token", Variant::from("vyomainput"))]),)).await?;
         let path: OwnedObjectPath = created
