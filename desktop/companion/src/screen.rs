@@ -486,7 +486,7 @@ struct Cast {
 
 /// A session for the pointer alone, no screen: Plasma asks once, then its own token reopens it.
 pub async fn pointer_session() -> Result<Pointer> {
-    let conn = Connection::session().await.context("no session bus")?;
+    let conn = crate::portal::connection().await?;
     let portal = Portal::new(&conn)?;
     let created = portal
         .request_on(REMOTE, "CreateSession", |t| (opts([("handle_token", t.to_string().into()), ("session_handle_token", "vyomapointer".into())]),))
@@ -538,7 +538,7 @@ impl Cast {
     /// RemoteDesktop with its ScreenCast: Plasma asks once (screen, and allowing control), then the
     /// restore token reopens it. The pointer is moved in the stream's own coordinates.
     async fn remote() -> Result<Cast> {
-        let conn = Connection::session().await.context("no session bus")?;
+        let conn = crate::portal::connection().await?;
         let portal = Portal::new(&conn)?;
         let created = portal
             .request_on(REMOTE, "CreateSession", |t| (opts([("handle_token", t.to_string().into()), ("session_handle_token", "vyomarc".into())]),))
@@ -598,7 +598,7 @@ impl Cast {
     }
 
     async fn watch() -> Result<Cast> {
-        let conn = Connection::session().await.context("no session bus")?;
+        let conn = crate::portal::connection().await?;
         let portal = Portal::new(&conn)?;
 
         let created = portal.request("CreateSession", |t| (opts([("handle_token", t.to_string().into()), ("session_handle_token", "vyoma".into())]),)).await?;
