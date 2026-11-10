@@ -127,7 +127,7 @@ async fn a_phone_that_scanned_the_code_pairs_without_a_prompt() {
     let good = proof(&secret, ts, &ph.cert, &pc.me.cert);
     link.sender.send(&packet("kdeconnect.pair", json!({ "pair": true, "timestamp": ts, FIELD: good.clone() }))).await.unwrap();
     assert_eq!(next(&mut link).await["body"], json!({ "pair": true }));
-    assert!(matches!(pc.event().await, Event::Paired { by_code: true, .. }));
+    assert!(matches!(pc.event().await, Event::Paired { by_code: true, watched: true, .. }));
     assert!(TrustStore::open(&pc.dir).unwrap().get(&ph.device_id).is_some());
 
     // One phone per code: the same proof from another phone now gets a prompt.
