@@ -1,11 +1,12 @@
 //! Vyoma's desktop window. It only shows and asks: the daemon (`vyoma-desktop`) owns the links,
 //! so closing or crashing this never drops a phone. `--snapshot <png>` renders it offscreen with
-//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|commands|commands-empty|commands-edit|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|down`, `--setup` to open on setup). `--page commands|this-pc|activity|<phone id>` opens on that page;
+//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|commands|commands-empty|commands-edit|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|add|down`, `--setup` to open on setup). `--page commands|this-pc|activity|<phone id>` opens on that page;
 //! a window already open shows it instead (`instance.rs`).
 
 mod daemon;
 mod instance;
 mod look;
+mod qr;
 mod snapshot;
 
 use std::cell::RefCell;
@@ -91,6 +92,7 @@ fn main() -> anyhow::Result<()> {
     }
     ui.set_setup(args.iter().any(|a| a == "--setup") || !setup_done());
     wire(&ui);
+    qr::wire(&ui);
     watch(ui.as_weak());
     if !page.is_empty() {
         open_page(&ui, &page);

@@ -47,6 +47,15 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str, size: Option<(u32, 
     if scene == "unpair" {
         ui.set_confirm_unpair(true);
     }
+    if scene == "add" {
+        ui.set_selected("add".into());
+    }
+    // A made-up pairing code wherever one shows.
+    let made_up = "https://github.com/Prajwaljb/VyomaConnect/releases/latest#pair?v=1&id=0123456789abcdef0123456789abcdef&name=Desk&fp=1b9f3d973c838fe866cb806b72ef20448ccb55c320a514b35e9e03808d00069b&s=00112233445566778899aabbccddeeff&a=192.168.1.20,10.0.0.5&p=1716";
+    if let Some(code) = crate::qr::image(made_up) {
+        ui.set_pair_code(code);
+        ui.set_pair_code_ready(true);
+    }
     if scene.starts_with("pc") {
         ui.set_selected(crate::THIS_PC.into());
         crate::apply(&ui, Some(phones(scene)));

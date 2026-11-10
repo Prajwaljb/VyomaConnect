@@ -60,6 +60,7 @@ import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Lan
+import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Usb
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -335,6 +336,15 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                         },
                     )
                 }
+                ListRow(
+                    title = "Scan a PC's code",
+                    subtitle = "Pairs with the PC whose Vyoma window shows it",
+                    icon = Icons.Rounded.QrCodeScanner,
+                    iconTint = SystemColor.GREEN.color,
+                    showDivider = true,
+                    trailing = { RowChevron() },
+                    onClick = { PairScanActivity.open(context) },
+                )
                 ListRow(
                     title = "Add a PC by IP or name",
                     subtitle = "For Tailscale, or when it isn't found",

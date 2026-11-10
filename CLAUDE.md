@@ -20,7 +20,7 @@ scripts/deploy.sh debug          # install + launch on phone
 (cd desktop/gui && cargo build --release && ./target/release/vyoma)   # the desktop window (talks to vyoma-desktop)
 (cd desktop/daemon && cargo build --release && VYOMA_DIR=<scratch dir> VYOMA_ALLOW=<ids> VYOMA_ANNOUNCE=<IPs> ./target/release/vyoma-desktop)
                                  # standalone desktop app (in development, not installed); drive it with
-                                 # busctl --user call dev.vyoma.Desktop /dev/vyoma/Desktop dev.vyoma.Desktop1 Devices|Pair|Accept|Reject|Unpair|Refresh|Browse.
+                                 # busctl --user call dev.vyoma.Desktop /dev/vyoma/Desktop dev.vyoma.Desktop1 Devices|Pair|Accept|Reject|Unpair|Refresh|Browse|PairingCode.
                                  # Against this PC's kdeconnectd: allow only its id, announce to the PC's own global IPv6 (it ignores
                                  # loopback UDP), check codes with qdbus6 verificationKey, unpair at the end, rmdir ~/.config/kdeconnect/<dev id>
 install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ && systemctl --user restart vyoma-companion
@@ -46,7 +46,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `desktop/gui` (`vyoma-gui`, binary `vyoma`): the desktop app's window, Slint (GPL-3.0 option) in the phone app's look
   (`ui/app.slint`: the PC wallpaper as a soft canvas with its accent (`src/look.rs`, the phone's formulas, from the daemon's `Wallpaper`), glass cards whose rims and shadows follow the wallpaper's light, centred heroes, tiles, the floating glass sidebar, glass dialogs and status bubble, Inter; first run is the phone's setup steps, `--setup` or This PC > Run setup again shows it again, done is kept in ~/.config/vyoma-desktop/window.json; motion as the phone's: pages rise in, the title docks in a glass bubble once scrolled, pressed things dip, rings and bars ease; Up/Down walk the sidebar, Escape/Return answer dialogs; a phone's Clipboard card has the one-time adb Allow for background clipboard sync, D-Bus `AllowClipboardSync`, state in Details `clipboardSync` on|ask|plug; a Commands page adds and edits commands in a sheet, with Ask for fingerprint first and Every time). App id `vyoma` (matches vyoma.desktop; the mirror window takes it too, `mirror.rs` `brand`, as do notifications' `desktop-entry`). Wrapped Text needs `min-height: self.preferred-height` (Slint 1.18 shrinks it otherwise) and long unbroken words go through `breakable()`. The command editor warns (`command_warning`: a program not on PATH, sudo, a name used twice) and Delete offers Undo. One window at a time (`src/instance.rs` holds `dev.vyoma.Window`; a second start, or `--page commands|this-pc|activity|<id>`, shows that page in the open one). `install.sh` installs it as ~/.local/bin/vyoma with a menu entry.. It only shows and asks: `src/daemon.rs` is the `Daemon`
   trait (D-Bus `dev.vyoma.Desktop1` today, a local socket on macOS later), rereading on the daemon's `Changed` signal.
-  `vyoma --snapshot out.png [--dark] [--plain (no wallpaper)] [--size WxH (780x540 is the smallest window)] [--scroll PX] [--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|activity-empty|activity-late|commands|commands-empty|commands-edit|commands-warn|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|down]` renders it offscreen
+  `vyoma --snapshot out.png [--dark] [--plain (no wallpaper)] [--size WxH (780x540 is the smallest window)] [--scroll PX] [--scene phones|pairing|nearby|unpair|notice|cable|pc|pc-setup|activity|activity-empty|activity-late|commands|commands-empty|commands-edit|commands-warn|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|add|down]` renders it offscreen
   with made-up phones (after the enter animations settle; `cable` shows the clipboard Allow): check the look with that, never by capturing the screen.
 - `desktop/gnome-extension` (uuid `vyoma@vyoma.dev`, ESM, GNOME 45+): what GNOME keeps from apps, on the session
   bus as `dev.vyoma.Shell1` (client: `companion/src/shell.rs`): the clipboard (GNOME has no data-control protocol;
@@ -73,8 +73,22 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `packaging/aur`: the AUR package `vyoma` (PKGBUILD + `.SRCINFO`, from the release tarball; binaries in /usr/bin, the
   KDE handoff left to `/usr/share/vyoma/install.sh`, which builds nothing when packaged; the update check then only
   says a release is out). `fastlane/metadata/android/en-US`: store listing for IzzyOnDroid/F-Droid (changelogs/<versionCode>.txt).
-- Releasing: bump `VERSION` and `versionCode`, add the changelog, build the APK, `gh release create vX.Y.Z` with
-  `vyoma-X.Y.Z.apk` + `.sha256`, then the PKGBUILD's pkgver and sha256 (`makepkg -g`) and `makepkg --printsrcinfo > .SRCINFO`.
+- Ready-made PC builds: `packaging/bundle-desktop.sh OUT` (both binaries + installer, extension, dist, VERSION, LICENSE in
+  `vyoma-desktop-<arch>.tar.gz`), built on Debian 12 (oldest glibc) by `.github/workflows/desktop-release.yml` for x86_64
+  and aarch64 on each `v*` tag, which also uploads `SHA256SUMS` and `packaging/get.sh` as the release's `install.sh`
+  (its `@TAG@` filled in): the one-liner `curl -fsSL .../releases/latest/download/install.sh | sh` (wget too) checks the sum,
+  unpacks into ~/.local/share/vyoma/app and runs its `desktop/daemon/install.sh`, which there is in `prebuilt` mode
+  (`bin/vyoma-desktop` beside it, no Cargo.toml): installs missing runtime libraries (ldd), copies the binaries;
+  `--update` fetches the newest release's install.sh. `VYOMA_DOWNLOADS=<url>` points get.sh at a local copy for tests.
+- Pairing by QR code: the window shows `PairingCode` (the release page's link, the invite after `#`: id, name, cert
+  fingerprint, IPv4 addresses, port, a one-time 10-minute secret; `vyoma_core::invite`), renewed every 5 min while shown,
+  `EndPairingCode` when hidden. The phone (`PairScanActivity`: CameraX + ZXing; `service/CodePairing.kt`; protocol
+  `crypto/QrInvite.kt`) dials those addresses, checks the fingerprint and sends the pair request with `vyomaInvite` =
+  HMAC over both certs; the hub pairs on it with no prompt (one phone per secret), else prompts as usual.
+  `vyoma://pair?...` opens the scanner too, asking first. Live check: `QrPairLiveTest` with `VYOMA_QR_CODE` (it unpairs after).
+- Releasing: bump `VERSION` and `versionCode`, add the changelog, push the tag `vX.Y.Z`: CI makes the draft release with the
+  PC builds; build the APK and `gh release upload` `vyoma-X.Y.Z.apk` + `.sha256` and the notes to it (the user publishes
+  the draft), then the PKGBUILD's pkgver and sha256 (`makepkg -g`) and `makepkg --printsrcinfo > .SRCINFO`.
 
 ## Conventions
 - Protocol details and extension rules: the `protocol-ref` skill. Design rules: the `oneui-design` skill.

@@ -111,7 +111,7 @@ private fun Context.granted(permission: String) =
 
 /** Where Vyoma's PC app is explained and installed from, for the phone to open on the PC. */
 internal const val PC_APP_URL = "https://github.com/Prajwaljb/VyomaConnect/tree/main/desktop/daemon#install"
-internal const val PC_APP_INSTALL = "git clone https://github.com/Prajwaljb/VyomaConnect && VyomaConnect/desktop/daemon/install.sh"
+internal const val PC_APP_INSTALL = "curl -fsSL https://github.com/Prajwaljb/VyomaConnect/releases/latest/download/install.sh | sh"
 
 /**
  * First run: the show ([WelcomeShow]), then setup one step at a time on the same picture. Vyoma's PC
@@ -268,6 +268,11 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
             }
             SetupCard(backdrop, 2, "Vyoma on your PC", status, vyomaOn, opened == 1, { opened = 1 }) {
                 CompanionSetup(vm, vyomaOn, paired.firstOrNull()?.identity?.deviceId)
+                if (!vyomaOn && !anyPc) {
+                    // Found or not (some Wi-Fi hides PCs from each other), its window's code pairs it.
+                    Tip("Installed? Vyoma's window on the PC shows a code: scan it and your phone pairs.")
+                    PillButton("Scan code", onClick = { PairScanActivity.open(context) })
+                }
                 if (!vyomaOn && !anyPc && !withoutVyoma) {
                     Tip("Already use KDE Connect or GSConnect? Vyoma pairs with them too, with fewer features.")
                     PillButton("Use KDE Connect", onClick = { withoutVyoma = true }, prominent = false)
@@ -300,7 +305,10 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
                                 },
                             )
                         }
-                        if (paired.isEmpty()) Tip("You'll check that a code matches on both screens, and accept on the PC too: Vyoma asks there in a notification and in its window.")
+                        if (paired.isEmpty()) {
+                            Tip("Tap Pair and check that a code matches on both screens, then accept on the PC. Or scan the code in Vyoma's window on the PC, and there's nothing to check.")
+                            PillButton("Scan code", onClick = { PairScanActivity.open(context) }, prominent = false)
+                        }
                     }
                     pairing.isEmpty() -> {
                         SearchingCard(vm)

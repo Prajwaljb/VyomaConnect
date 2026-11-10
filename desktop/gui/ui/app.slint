@@ -1750,16 +1750,77 @@ component CommandSheet inherits Rectangle {
     }
 }
 
+// The pairing QR code: scanned with Vyoma on the phone, it pairs at once, with no code to compare.
+// White under it in both themes, as cameras need; the picture brings its own white margin.
+component PairCode inherits VerticalLayout {
+    in property <image> code;
+    in property <bool> ready;
+    spacing: 10px;
+    HorizontalLayout {
+        alignment: center;
+        padding-bottom: 6px;
+        Rectangle {
+            width: 212px;
+            height: 212px;
+            border-radius: 22px;
+            background: white;
+            border-width: Theme.dark ? 0px : 1px;
+            border-color: Theme.rim;
+            // Padded, not clipped: the code's corners stay clear of the rounded ones.
+            HorizontalLayout {
+                padding: 12px;
+                if root.ready: Image {
+                    source: root.code;
+                    image-rendering: pixelated;
+                }
+                if !root.ready: Text {
+                    text: "Making a code…";
+                    color: #8e8e93;
+                    font-size: 13px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+    Text {
+        text: "Scan with Vyoma on your phone";
+        color: Theme.text;
+        font-size: 17px;
+        font-weight: 600;
+        horizontal-alignment: center;
+    }
+    Text {
+        text: "In the app, tap Scan code. No app yet? Point your phone's camera here to download it.";
+        color: Theme.muted;
+        font-size: 14px;
+        wrap: word-wrap;
+        min-height: self.preferred-height;
+        horizontal-alignment: center;
+    }
+}
+
 // No phone to show: the daemon's down, or nothing's paired or nearby yet.
 component EmptyPage inherits Page {
     in property <bool> daemon-ok;
+    in property <image> code;
+    in property <bool> code-ready;
     callback search();
     callback start();
     title: daemon-ok ? "No phones yet" : "Vyoma isn't running";
     glyph: @image-url("icons/phone.svg");
+    if root.daemon-ok: Glass {
+        VerticalLayout {
+            padding: 24px;
+            PairCode {
+                code: root.code;
+                ready: root.code-ready;
+            }
+        }
+    }
     Text {
         text: root.daemon-ok
-            ? "Open Vyoma on your phone, on the same network as this PC. It shows up here."
+            ? "Or open Vyoma on your phone, on the same network as this PC: it shows up here to pair."
             : "The part of Vyoma that talks to your phones has stopped. Start it, and your phones connect again.";
         color: Theme.muted;
         font-size: 15px;
@@ -1913,11 +1974,68 @@ component SetupPhone inherits HorizontalLayout {
     }
 }
 
+// Phones nearby to pair by comparing a code: each with Pair, and the code under the one pairing,
+// with Accept and Reject when the phone asked. Setup's pairing step and Add a phone share it.
+component NearbyPairing inherits VerticalLayout {
+    in property <[Phone]> nearby;
+    callback pair(string);
+    callback accept(string);
+    callback reject(string);
+    spacing: 14px;
+    for p in root.nearby: VerticalLayout {
+        spacing: 12px;
+        SetupPhone {
+            phone: p;
+            pair(id) => { root.pair(id); }
+        }
+        // The code to compare, right under the phone it's for.
+        if p.code != "": Rectangle {
+            border-radius: 18px;
+            background: Theme.raised;
+            VerticalLayout {
+                padding: 18px;
+                spacing: 10px;
+                Text {
+                    text: p.asking ? "Make sure this code matches the one on your phone, then accept." : "Accept on your phone if it shows this same code.";
+                    color: Theme.muted;
+                    font-size: 14px;
+                    wrap: word-wrap;
+                    min-height: self.preferred-height;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: p.code;
+                    color: Theme.text;
+                    font-size: 32px;
+                    font-weight: 600;
+                    letter-spacing: 5px;
+                    horizontal-alignment: center;
+                }
+                if p.asking: HorizontalLayout {
+                    alignment: center;
+                    spacing: 10px;
+                    PillButton {
+                        text: "Reject";
+                        clicked => { root.reject(p.id); }
+                    }
+                    PillButton {
+                        text: "Accept";
+                        prominent: true;
+                        clicked => { root.accept(p.id); }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // First run, as the phone's: one step at a time on the wallpaper, each saying why it asks and
 // closing into a tick when done. Only pairing matters to use it; the rest is on This PC later.
 component SetupPage inherits Page {
     in property <[Phone]> phones;
     in property <[Phone]> nearby;
+    in property <image> code;
+    in property <bool> code-ready;
     in property <bool> daemon-ok;
     in property <[Feature]> missing;
     in property <bool> installable;
@@ -1954,60 +2072,25 @@ component SetupPage inherits Page {
         for p in root.phones: SetupPhone {
             phone: p;
         }
-        for p in root.nearby: VerticalLayout {
-            spacing: 12px;
-            SetupPhone {
-                phone: p;
-                pair(id) => { root.pair(id); }
-            }
-            // The code to compare, right under the phone it's for.
-            if p.code != "": Rectangle {
-                border-radius: 18px;
-                background: Theme.raised;
-                VerticalLayout {
-                    padding: 18px;
-                    spacing: 10px;
-                    Text {
-                        text: p.asking ? "Make sure this code matches the one on your phone, then accept." : "Accept on your phone if it shows this same code.";
-                        color: Theme.muted;
-                        font-size: 14px;
-                        wrap: word-wrap;
-                        min-height: self.preferred-height;
-                        horizontal-alignment: center;
-                    }
-                    Text {
-                        text: p.code;
-                        color: Theme.text;
-                        font-size: 32px;
-                        font-weight: 600;
-                        letter-spacing: 5px;
-                        horizontal-alignment: center;
-                    }
-                    if p.asking: HorizontalLayout {
-                        alignment: center;
-                        spacing: 10px;
-                        PillButton {
-                            text: "Reject";
-                            clicked => { root.reject(p.id); }
-                        }
-                        PillButton {
-                            text: "Accept";
-                            prominent: true;
-                            clicked => { root.accept(p.id); }
-                        }
-                    }
-                }
-            }
+        if root.daemon-ok && !root.paired: PairCode {
+            code: root.code;
+            ready: root.code-ready;
+        }
+        if !root.paired && root.nearby.length > 0: SectionLabel {
+            text: "Or pair one nearby";
+            height: 36px;
+            vertical-alignment: bottom;
+        }
+        NearbyPairing {
+            nearby: root.nearby;
+            pair(id) => { root.pair(id); }
+            accept(id) => { root.accept(id); }
+            reject(id) => { root.reject(id); }
         }
         if root.daemon-ok && root.phones.length == 0 && root.nearby.length == 0: VerticalLayout {
             spacing: 12px;
-            Text {
-                text: "Looking for your phone…";
-                color: Theme.text;
-                font-size: 15px;
-            }
             Tip {
-                text: "Open Vyoma on your phone, on the same Wi-Fi as this PC, or plug it in with a USB cable. Don't have it yet? It's at github.com/Prajwaljb/VyomaConnect.";
+                text: "No camera handy? Open Vyoma on your phone, on the same Wi-Fi as this PC or plugged in with a USB cable: it shows up here to pair.";
             }
             HorizontalLayout {
                 alignment: start;
@@ -2018,7 +2101,7 @@ component SetupPage inherits Page {
             }
         }
         if !root.paired && root.nearby.length > 0: Tip {
-            text: "You'll check that a code matches on both screens: that's how you know it's your phone.";
+            text: "Pairing from this list, you'll check that a code matches on both screens: that's how you know it's your phone.";
         }
     }
 
@@ -2238,6 +2321,47 @@ component Dialog inherits Rectangle {
     }
 }
 
+// Pairing another phone: the QR code first, then phones nearby to pair by comparing a code.
+component AddPhonePage inherits Page {
+    in property <[Phone]> nearby;
+    in property <image> code;
+    in property <bool> code-ready;
+    callback pair(string);
+    callback accept(string);
+    callback reject(string);
+    title: "Add a phone";
+    glyph: @image-url("icons/plus.svg");
+    Glass {
+        VerticalLayout {
+            padding: 24px;
+            PairCode {
+                code: root.code;
+                ready: root.code-ready;
+            }
+        }
+    }
+    Section {
+        label: "Or pick it from phones nearby";
+        VerticalLayout {
+            padding: 18px;
+            spacing: 12px;
+            NearbyPairing {
+                nearby: root.nearby;
+                pair(id) => { root.pair(id); }
+                accept(id) => { root.accept(id); }
+                reject(id) => { root.reject(id); }
+            }
+            if root.nearby.length == 0: Text {
+                text: "None yet. Open Vyoma on the phone, on the same Wi-Fi as this PC or plugged in with a USB cable.";
+                color: Theme.muted;
+                font-size: 14px;
+                wrap: word-wrap;
+                min-height: self.preferred-height;
+            }
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "Vyoma";
     icon: @image-url("icons/vyoma.svg");
@@ -2297,6 +2421,18 @@ export component MainWindow inherits Window {
     // A phone just paired during setup: [moment] is its name, shown while [moment-on].
     in property <string> moment;
     in-out property <bool> moment-on;
+    // The pairing QR code, while a page shows it ([wants-code]: Rust keeps a fresh one, and takes it down after).
+    in property <image> pair-code;
+    in property <bool> pair-code-ready;
+    out property <bool> wants-code: root.daemon-ok && (root.setup ? root.phones.length == 0
+        : root.selected == "add" || (!root.has-current && root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands"));
+    callback wants-code-changed(bool);
+    changed wants-code => { root.wants-code-changed(root.wants-code); }
+    // A phone paired with the code shown: that code is used up, so a page still showing one gets a new one.
+    property <int> paired-count: root.phones.length;
+    changed paired-count => {
+        if root.wants-code { root.wants-code-changed(true); }
+    }
 
     callback select(string);
     // Up (-1) or Down (+1) through the sidebar.
@@ -2472,11 +2608,11 @@ export component MainWindow inherits Window {
                 selected: root.selected == "commands";
                 clicked => { root.show-commands(); }
             }
-            // Asks phones nearby to show themselves again.
+            // Pairing another phone: its page, which also asks phones nearby to show themselves again.
             if root.daemon-ok: Rectangle {
                 height: 40px;
                 border-radius: 14px;
-                background: search-touch.pressed ? Theme.pressed : search-touch.has-hover ? Theme.hover : transparent;
+                background: root.selected == "add" ? Theme.selection : search-touch.pressed ? Theme.pressed : search-touch.has-hover ? Theme.hover : transparent;
                 animate background { duration: 120ms; }
                 HorizontalLayout {
                     padding-left: 17px;
@@ -2484,22 +2620,25 @@ export component MainWindow inherits Window {
                     VerticalLayout {
                         alignment: center;
                         Glyph {
-                            source: @image-url("icons/refresh.svg");
-                            tint: Theme.muted;
+                            source: @image-url("icons/plus.svg");
+                            tint: root.selected == "add" ? Theme.accent : Theme.muted;
                             width: 16px;
                             height: 16px;
                         }
                     }
                     Text {
-                        text: "Search for phones";
-                        color: Theme.muted;
+                        text: "Add a phone";
+                        color: root.selected == "add" ? Theme.accent : Theme.muted;
                         font-size: 13px;
                         vertical-alignment: center;
                     }
                 }
                 search-touch := TouchArea {
                     mouse-cursor: pointer;
-                    clicked => { root.search(); }
+                    clicked => {
+                        root.selected = "add";
+                        root.search();
+                    }
                 }
             }
         }
@@ -2554,7 +2693,15 @@ export component MainWindow inherits Window {
                 root.editing = true;
             }
         }
-        if root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands" && root.has-current: PhonePage {
+        if root.selected == "add" && root.daemon-ok: AddPhonePage {
+            nearby: root.nearby;
+            code: root.pair-code;
+            code-ready: root.pair-code-ready;
+            pair(id) => { root.pair(id); }
+            accept(id) => { root.accept(id); }
+            reject(id) => { root.reject(id); }
+        }
+        if root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands" && root.selected != "add" && root.has-current: PhonePage {
             phone: root.current;
             confirm-unpair <=> root.confirm-unpair;
             pair(id) => { root.pair(id); }
@@ -2566,8 +2713,10 @@ export component MainWindow inherits Window {
             set-permission(id, key, on) => { root.set-permission(id, key, on); }
             allow-clipboard(id) => { root.allow-clipboard(id); }
         }
-        if ((root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands") || !root.daemon-ok) && !root.has-current: EmptyPage {
+        if ((root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands" && root.selected != "add") || !root.daemon-ok) && !root.has-current: EmptyPage {
             daemon-ok: root.daemon-ok;
+            code: root.pair-code;
+            code-ready: root.pair-code-ready;
             search => { root.search(); }
             start => { root.start-daemon(); }
         }
@@ -2578,6 +2727,8 @@ export component MainWindow inherits Window {
         height: root.height;
         phones: root.phones;
         nearby: root.nearby;
+        code: root.pair-code;
+        code-ready: root.pair-code-ready;
         daemon-ok: root.daemon-ok;
         missing: root.missing;
         installable: root.installable;

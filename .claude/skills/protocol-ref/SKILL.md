@@ -42,6 +42,12 @@ Peers mix up number and string types, so always use the lenient `NetworkPacket.s
 - 30 s timeout. Verification key = first 8 hex chars (uppercase) of SHA-256(larger SPKI ‖ smaller SPKI ‖ decimal timestamp),
   compared unsigned. This is verified against kdeconnectd over D-Bus.
 - Paired peer re-requests → we re-confirm with `pair:true`. Packets from unpaired peer → reply `pair:false` once.
+- By QR code (Vyoma only): the PC window's code carries the PC's id, name, cert SHA-256, IPv4 addresses, port and a
+  one-time secret (16 bytes, 10 min, one phone; `vyoma_core::invite`, phone `QrInvite`). The phone dials those IP
+  literals, pairs only if every link shows that fingerprint, and adds `vyomaInvite` to its request = lowercase hex
+  HMAC-SHA256(secret, "vyoma-invite-v1|<timestamp>|<phone cert sha256 hex>|<PC cert sha256 hex>"). The hub accepts on a
+  good proof instead of prompting; anything else (stock peers ignore the field) prompts as before. Known answer:
+  secret [7;16], ts 1700000000, certs b"phone"/b"pc" → 1b9f3d97…069b (both sides' tests).
 
 ## Desktop core (desktop/core, standalone side)
 - Mirrors the rules above:

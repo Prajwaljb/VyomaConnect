@@ -13,7 +13,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-const REPO: &str = "Prajwaljb/VyomaConnect";
+pub const REPO: &str = "Prajwaljb/VyomaConnect";
 /// The release this was built from, kept in one file for the phone app and the PC app.
 const VERSION: &str = include_str!("../../../VERSION");
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;

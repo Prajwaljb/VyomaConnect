@@ -5,6 +5,7 @@
 pub mod cert;
 pub mod device;
 pub mod identity;
+pub mod invite;
 pub mod lan;
 pub mod link;
 pub mod pairing;

@@ -61,13 +61,23 @@ Set up the PC first, then the phone.
 Vyoma runs on Linux with KDE Plasma or GNOME. Support for other desktops and macOS is coming in
 future releases.
 
+Paste this into a terminal:
+
 ```sh
-git clone https://github.com/Prajwaljb/VyomaConnect && VyomaConnect/desktop/daemon/install.sh
+curl -fsSL https://github.com/Prajwaljb/VyomaConnect/releases/latest/download/install.sh | sh
 ```
 
-The installer builds Vyoma, adds it to your app menu, starts it at login and takes over from KDE
-Connect with your pairings intact. It asks for your password once, to install what it needs and
-let phones through the firewall. Prefer KDE Connect after all? `install.sh --undo` puts it back.
+No curl (Ubuntu's desktop has wget instead)?
+
+```sh
+wget -qO- https://github.com/Prajwaljb/VyomaConnect/releases/latest/download/install.sh | sh
+```
+
+It downloads the ready-made build for your PC (x86_64 or ARM64), checks it against the release's
+checksums, adds Vyoma to your app menu, starts it at login and takes over from KDE Connect with your
+pairings intact. Nothing is compiled. It asks for your password once, to install the libraries it
+needs and let phones through the firewall. Prefer KDE Connect after all? Run the same line with
+`sh -s -- --undo` in place of the last `sh` to put it back.
 
 On GNOME, the installer also adds Vyoma's small GNOME Shell extension, which clipboard sync, the
 presenter's pointer, screenshots, the touchpad's swipes and replying to notifications need. Log out
@@ -76,7 +86,10 @@ switched off while Vyoma runs, as both use the same port. Locking the PC from th
 own login screen (GDM).
 
 When a new version is out, Vyoma tells you and updates itself with one click, your pairings kept
-(or run `install.sh --update`).
+(or run the install line again).
+
+**Rather build it from source?** `git clone https://github.com/Prajwaljb/VyomaConnect && VyomaConnect/desktop/daemon/install.sh`
+does the same from a clone, building it first (Arch, Debian, Ubuntu and Fedora).
 
 **On Arch or CachyOS?** Build it as a package instead, so pacman keeps track of it:
 
@@ -103,8 +116,11 @@ The signing certificate's SHA-256 fingerprint, for anyone who checks
 
 ### 3. Pair
 
-Open Vyoma on both. The phone and the PC walk you through the same steps: pick your PC, confirm the
-code matches on both screens, done. From then on they find each other automatically.
+Open Vyoma on both. The PC's window shows a QR code: in the phone app, tap **Scan code** and point
+the camera at it. That's it, with nothing to compare or accept, and it works even on Wi-Fi that
+hides devices from each other. (Pointed at the code, a phone without Vyoma opens the download.)
+You can also pick your PC from the list and confirm a code matches on both screens. From then on
+they find each other automatically.
 
 <p align="center"><img src="docs/screenshots/desktop-setup.png" width="640" alt="The PC's setup: pairing, with the code to compare against the phone"></p>
 

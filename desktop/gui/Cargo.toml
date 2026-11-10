@@ -13,6 +13,8 @@ path = "src/main.rs"
 anyhow = "1.0.104"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 png = "0.18.1"
+# The pairing QR code (MIT or Apache-2.0); drawn here, so none of its image features.
+qrcode = { version = "0.14.1", default-features = false }
 rfd = "0.18.0"
 serde = "1"
 serde_json = "1.0.154"

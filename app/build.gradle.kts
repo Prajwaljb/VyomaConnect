@@ -96,6 +96,10 @@ dependencies {
     implementation(libs.androidx.palette)
     implementation(libs.sshd.core)
     implementation(libs.sshd.sftp)
+    implementation(libs.camera.camera2)
+    implementation(libs.camera.lifecycle)
+    implementation(libs.camera.view)
+    implementation(libs.zxing.core)
 
     testImplementation(libs.junit)
     testImplementation(kotlin("test-junit"))
