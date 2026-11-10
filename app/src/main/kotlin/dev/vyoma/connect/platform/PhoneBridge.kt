@@ -203,6 +203,9 @@ class AndroidContacts(private val context: Context) : ContactStore {
  * Turns PHONE_STATE broadcasts into ringing / talking / missed events. The number only comes
  * with READ_CALL_LOG, and Android then delivers each change twice: we use the copy with it.
  */
+/** What a PC is told when this phone can't act on a call yet. */
+private const val TURN_ON = "On the phone, open Vyoma's Settings and turn on Calls & messages on PC"
+
 class CallMonitor(private val context: Context, private val contacts: AndroidContacts) : CallSource {
     private val _events = MutableSharedFlow<CallEvent>(extraBufferCapacity = 8)
     override val events: SharedFlow<CallEvent> = _events.asSharedFlow()
@@ -318,7 +321,9 @@ class CallMonitor(private val context: Context, private val contacts: AndroidCon
         val headset = bt && runCatching {
             headsets?.connectedDevices.orEmpty().any { it.bluetoothClass?.majorDeviceClass != BluetoothClass.Device.Major.COMPUTER }
         }.getOrDefault(false)
-        val canAct = PhonePermissions.granted(context, Manifest.permission.ANSWER_PHONE_CALLS) || NotificationBridge.isEnabled(context)
+        // Always offered: a press without the permission comes back with what to turn on, which a
+        // missing button never said.
+        val canAct = true
         val name = if (bt) runCatching { bluetooth()?.name }.getOrNull()?.takeIf { it.isNotBlank() } else null
         return CallFacts(canAct = canAct, headset = headset, bluetoothName = name)
     }
@@ -326,8 +331,29 @@ class CallMonitor(private val context: Context, private val contacts: AndroidCon
     /** Phone calls through Telecom; an app's call (WhatsApp...), or Telecom saying no, by its notification's button. */
     @SuppressLint("MissingPermission")
     override fun act(action: String): String? {
-        val call = synchronized(this) { last }
-        val appCall = call?.app != null
+        val call = synchronized(this) { last } ?: return "There's no call on the phone"
+        val appCall = call.app != null
+        val error = tryAct(action, appCall) ?: return if (happened(action)) null else when {
+            !appCall && !PhonePermissions.granted(context, Manifest.permission.ANSWER_PHONE_CALLS) -> TURN_ON
+            action == CallAction.ANSWER -> "The phone didn't let Vyoma answer"
+            else -> "The phone didn't let Vyoma end the call"
+        }
+        return error
+    }
+
+    /** Waits up to 3 s for the call to do what [action] asked: Android's calls say nothing back. */
+    private fun happened(action: String): Boolean {
+        repeat(30) {
+            val now = synchronized(this) { last }
+            if (if (action == CallAction.ANSWER) now is CallEvent.Talking else now == null) return true
+            Thread.sleep(100)
+        }
+        return false
+    }
+
+    /** Asks Telecom (phone calls) or presses the call notification's button; why it couldn't even try, or null. */
+    @SuppressLint("MissingPermission")
+    private fun tryAct(action: String, appCall: Boolean): String? {
         if (!appCall && PhonePermissions.granted(context, Manifest.permission.ANSWER_PHONE_CALLS)) {
             val telecom = context.getSystemService(TelecomManager::class.java)
             val done = runCatching {
@@ -339,14 +365,10 @@ class CallMonitor(private val context: Context, private val contacts: AndroidCon
             }.onFailure { VLog.w("Calls", "Telecom refused to $action: ${it.message}") }.getOrDefault(false)
             if (done) return null
         }
-        if (NotificationBridge.pressCall(context, action, appOnly = appCall)) return null
-        return when {
-            call == null -> "There's no call on the phone"
-            !PhonePermissions.granted(context, Manifest.permission.ANSWER_PHONE_CALLS) && !NotificationBridge.isEnabled(context) ->
-                "On the phone, open Vyoma's Settings and turn on Calls & messages on PC"
-            action == CallAction.ANSWER -> "The phone didn't let Vyoma answer"
-            else -> "The phone didn't let Vyoma end the call"
-        }
+        // The phone's own call screen ignores its buttons pressed from here: a phone call needs the permission.
+        if (!appCall) return TURN_ON
+        if (NotificationBridge.pressCall(context, action, appOnly = true)) return null
+        return if (NotificationBridge.isEnabled(context)) "The call's app has no button for that" else TURN_ON
     }
 
     override fun muteRinger() {

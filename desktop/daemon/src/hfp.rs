@@ -66,6 +66,7 @@ pub async fn take(name: Option<&str>) -> Result<Audio> {
         Err(e) if e.to_string().contains("AlreadyConnected") => false,
         Err(e) => return Err(e).context("the phone didn't take this PC as its headset"),
     };
+    tracing::info!("call audio: this PC is the phone's headset{}", if connected_here { "" } else { " (it already was)" });
     let mut audio = Audio { path: phone.path.clone(), address: phone.address.clone(), connected_here, was: None };
     // The card shows up a moment after the profile connects.
     for _ in 0..20 {
@@ -90,6 +91,7 @@ pub async fn release(audio: Audio) {
     {
         let _ = pactl(&["set-card-profile", &card, was]).await;
     }
+    tracing::info!("call audio: back to the phone");
     if audio.connected_here {
         let Ok(system) = Connection::system().await else { return };
         if let Err(e) = device(&system, &audio.path, "DisconnectProfile").await {
