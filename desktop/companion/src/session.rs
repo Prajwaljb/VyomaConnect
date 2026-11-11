@@ -58,6 +58,7 @@ pub fn phone_name(raw: &str) -> String {
 /// is fetched) until the channel closes, then ends everything it started
 /// (screen, camera, controller…). Replies go out through [sender].
 pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: mpsc::UnboundedReceiver<(Value, IpAddr)>) {
+    files::install();
     let (phone_id, pinned, name) = (phone.id.as_str(), phone.pinned.as_slice(), phone.name.clone());
     let lease = Arc::new(Mutex::new(Instant::now()));
     let mut stats_task: Option<tokio::task::JoinHandle<()>> = None;

@@ -163,7 +163,7 @@ async fn run(dir: PathBuf) -> Result<()> {
     let (media_out_tx, mut media_out) = mpsc::unbounded_channel::<(Option<String>, Value)>();
     tokio::spawn(media::run(media_wanted.clone(), media_rx, media_out_tx));
     let mut pointer = input::Pointer::default();
-    let mut features = vyoma::Vyoma::new(commands.clone());
+    let mut features = vyoma::Vyoma::new(me.clone(), commands.clone());
 
     let send = |id: &str, p: Value| {
         let _ = commands.send(Command::Send(id.to_owned(), p));
@@ -327,7 +327,7 @@ async fn run(dir: PathBuf) -> Result<()> {
                         kind if vyoma::takes(kind) && d.paired => {
                             // AppKit tells only this thread where the wallpaper is.
                             let wallpaper = if kind == vyoma::WALLPAPER_REQUEST { vyoma::wallpaper_path() } else { None };
-                            features.handle(&id, &packet, wallpaper);
+                            features.handle(&id, &vyoma::Phone { name: &d.name, cert: &d.cert, from }, &packet, wallpaper);
                         }
                         _ => {
                             for reply in on_packet(d, &packet, from, &me, &mut clip, &mut ringer, &found_tx).await {
