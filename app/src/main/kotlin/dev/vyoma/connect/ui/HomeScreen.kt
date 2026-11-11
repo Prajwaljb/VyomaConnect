@@ -510,7 +510,8 @@ internal fun SearchingCard(vm: AppViewModel, modifier: Modifier = Modifier) {
 
 /**
  * The PC is away: what's wrong, found by trying (ConnectionDoctor), with the one thing that fixes
- * it. Looked at again whenever the screen comes back (from Wi-Fi settings, say) and on Try again.
+ * it. The hero already says it's away, so the card leads with the cause, not "Not connected" again.
+ * Looked at again whenever the screen comes back (from Wi-Fi settings, say) and on Try again.
  * The rest of Home stays as it was (dimmed last known state), so it's still this PC's page.
  */
 @Composable
@@ -519,28 +520,42 @@ internal fun AwayCard(vm: AppViewModel, pcId: String, pcName: String, modifier: 
     var usb by rememberSaveable { mutableStateOf(false) }
     var findings by remember(pcId) { mutableStateOf<List<ConnectionDoctor.Finding>?>(null) }
     var round by remember { mutableIntStateOf(0) }
+    // Again on coming back, not on the first resume, which is the card appearing (two checks at
+    // once, and the first one's cancellation landing on top of the second).
+    var appeared by remember { mutableStateOf(false) }
     LifecycleResumeEffect(pcId) {
-        round++
+        if (appeared) round++ else appeared = true
         onPauseOrDispose { }
     }
     LaunchedEffect(pcId, round) {
         findings = null
-        findings = runCatching { ConnectionDoctor.findings(ConnectionDoctor.examine(context, pcId, pcName)) }.getOrNull()
-            ?: listOf(ConnectionDoctor.Finding("Not connected", "Wake $pcName and check it's on the same Wi-Fi as this phone."))
+        findings = try {
+            ConnectionDoctor.findings(ConnectionDoctor.examine(context, pcId, pcName))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            dev.vyoma.connect.protocol.VLog.w("Doctor", "couldn't check: $e")
+            listOf(ConnectionDoctor.unknown(pcName))
+        }
     }
     val allow = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { round++ }
     SectionCard(modifier, contentPadding = PaddingValues(20.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            ConnectionOrb(OrbState.OFFLINE, size = 10.dp)
-            Spacer(Modifier.width(8.dp))
-            Text("Not connected", style = MaterialTheme.typography.titleMedium)
-        }
-        Spacer(Modifier.height(10.dp))
         Crossfade(findings, animationSpec = VyomaMotion.effects(), label = "doctor") { found ->
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (found == null) {
-                    Text("Checking what's wrong…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else found.forEach { f ->
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                val lead = found?.firstOrNull()
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ConnectionOrb(OrbState.OFFLINE, size = 10.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text(lead?.title ?: "Looking for $pcName…", style = MaterialTheme.typography.titleMedium)
+                    }
+                    Text(
+                        lead?.detail ?: "Checking this phone's Wi-Fi and whether $pcName answers.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                found.orEmpty().drop(1).forEach { f ->
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(f.title, style = MaterialTheme.typography.titleSmall)
                         Text(f.detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

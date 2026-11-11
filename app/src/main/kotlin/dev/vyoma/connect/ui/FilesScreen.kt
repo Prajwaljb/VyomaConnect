@@ -112,11 +112,7 @@ fun FilesScreen(
             when (e) {
                 // Looked at: straight into a viewer. Saved: it stays put, and says where.
                 is PcFileEvent.Saved -> if (e.temporary) {
-                    val open = Intent(Intent.ACTION_VIEW)
-                        .setDataAndType(Uri.parse(e.location), AndroidShareSink.mimeOf(e.name))
-                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    runCatching { context.startActivity(open) }
-                        .onFailure { status.show("No app here opens ${e.name}. Save it instead", failure = true) }
+                    openFile(context, Uri.parse(e.location), e.name, status)
                 } else {
                     status.show("Saved to Downloads/Vyoma", icon = Icons.Rounded.Download)
                 }

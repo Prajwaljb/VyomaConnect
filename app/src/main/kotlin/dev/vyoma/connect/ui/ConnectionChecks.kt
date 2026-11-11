@@ -78,8 +78,12 @@ internal data class LinkFacts(
     val touchpadTrip: TripReport?,
 )
 
-/** What's really connected, because Android's own Bluetooth page leaves out everything but calls and audio. */
-internal fun connectionChecks(f: LinkFacts): List<ConnectionCheck> {
+/**
+ * What's really connected, because Android's own Bluetooth page leaves out everything but calls and audio.
+ * [away]: the PC isn't connected, and the card above says why; of the rest only what still has
+ * something to say stays (the Bluetooth backup, anything that needs doing), not seven ways of "not in use".
+ */
+internal fun connectionChecks(f: LinkFacts, away: Boolean = false): List<ConnectionCheck> {
     fun users(kind: TransportKind, route: GamepadRoute) = buildList {
         if (kind in f.pc) add("PC link")
         if (!f.companionIsPc && f.companion?.contains(kind) == true) add("Vyoma on the PC")
@@ -103,7 +107,7 @@ internal fun connectionChecks(f: LinkFacts): List<ConnectionCheck> {
             CheckLevel.GOOD,
         )
         else -> when (f.bluetooth) {
-            BluetoothFallback.Readiness.READY -> ConnectionCheck(CheckKind.BLUETOOTH, "Paired with your PC and ready, nothing using it right now. Android's Bluetooth page stops saying Paired once audio and calls are off for the PC.", CheckLevel.QUIET)
+            BluetoothFallback.Readiness.READY -> ConnectionCheck(CheckKind.BLUETOOTH, "Ready as a backup when Wi-Fi can't reach the PC", CheckLevel.QUIET)
             BluetoothFallback.Readiness.RADIO_OFF -> ConnectionCheck(CheckKind.BLUETOOTH, "Turned off on this phone", CheckLevel.QUIET)
             BluetoothFallback.Readiness.NO_ADAPTER -> ConnectionCheck(CheckKind.BLUETOOTH, "This phone has no Bluetooth", CheckLevel.QUIET)
             BluetoothFallback.Readiness.NEEDS_PERMISSION -> ConnectionCheck(CheckKind.BLUETOOTH, "Vyoma needs the Nearby devices permission", CheckLevel.PROBLEM)
@@ -112,6 +116,7 @@ internal fun connectionChecks(f: LinkFacts): List<ConnectionCheck> {
         }
     }
     val companion = f.companion
+    if (away) return listOf(radio)
     return listOf(
         carried(CheckKind.WIFI, TransportKind.LAN, GamepadRoute.WIFI),
         carried(CheckKind.USB, TransportKind.USB, GamepadRoute.USB),
@@ -126,11 +131,11 @@ internal fun connectionChecks(f: LinkFacts): List<ConnectionCheck> {
             else -> ConnectionCheck(CheckKind.ENCRYPTION, "Encrypted, but this PC isn't paired yet", CheckLevel.PROBLEM)
         },
         when (val route = f.controllerRoute) {
-            null -> ConnectionCheck(CheckKind.CONTROLLER, "Not open, or only over the main link", CheckLevel.QUIET)
+            null -> ConnectionCheck(CheckKind.CONTROLLER, "Not in use", CheckLevel.QUIET)
             else -> ConnectionCheck(CheckKind.CONTROLLER, timed(routeName(route), f.controllerTrip), CheckLevel.GOOD)
         },
         if (f.touchpadOpen) ConnectionCheck(CheckKind.TOUCHPAD, timed("Bluetooth", f.touchpadTrip), CheckLevel.GOOD)
-        else ConnectionCheck(CheckKind.TOUCHPAD, "No channel of its own open", CheckLevel.QUIET),
+        else ConnectionCheck(CheckKind.TOUCHPAD, "Goes over the main connection", CheckLevel.QUIET),
     )
 }
 
@@ -253,6 +258,7 @@ internal fun ConnectionChecksScreen(vm: AppViewModel, onBack: () -> Unit) {
                             touchpadOpen = pointerOpen,
                             touchpadTrip = pointerTrip,
                         ),
+                        away = !pc.isReachable,
                     ),
                     Modifier.animateItem(),
                 )
