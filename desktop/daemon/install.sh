@@ -32,6 +32,55 @@ activation="$data/dbus-1/services/org.kde.kdeconnect.service"
 # (Cinnamon, MATE, Xfce, i3...), with the session's display, which systemd may not have been given.
 starter="$config/autostart/vyoma-desktop.desktop"
 
+# KDE's Share menu (Purpose: Dolphin, Spectacle, Gwenview, Okular...) gets "Send to phone" from a
+# small plugin (desktop/purpose). Qt finds plugins only on its own path, so for this user's copy
+# Plasma is told where at login.
+share_plugins="$HOME/.local/lib/qt6/plugins"
+share_env="$config/plasma-workspace/env/vyoma-share.sh"
+has_purpose() {
+    for d in /usr/lib/qt6/plugins/kf6/purpose /usr/lib64/qt6/plugins/kf6/purpose /usr/lib/*-linux-gnu*/qt6/plugins/kf6/purpose; do
+        [ -d "$d" ] && return 0
+    done
+    return 1
+}
+share_note=
+put_share_plugin() {
+    install -Dm755 "$1" "$share_plugins/kf6/purpose/vyomaplugin.so"
+    mkdir -p "$(dirname "$share_env")"
+    cat >"$share_env" <<'EOF'
+# Vyoma: "Send to phone" in KDE's Share menu; its plugin is in ~/.local/lib/qt6/plugins.
+case ":${QT_PLUGIN_PATH:-}:" in
+    *":$HOME/.local/lib/qt6/plugins:"*) ;;
+    *) export QT_PLUGIN_PATH="$HOME/.local/lib/qt6/plugins${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}" ;;
+esac
+EOF
+    case ":${QT_PLUGIN_PATH:-}:" in
+        *":$share_plugins:"*) ;;
+        *) share_note="\"Send to phone\" shows in KDE's Share menu after you log out and back in once." ;;
+    esac
+}
+# From source: built where KDE's Share menu is, with what that needs; nothing else waits on it.
+build_share_plugin() {
+    has_purpose || return 0
+    src="$here/../purpose"
+    configure() { cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1; }
+    if ! command -v cmake >/dev/null 2>&1 || ! configure; then
+        if command -v pacman >/dev/null 2>&1; then
+            as_root pacman -S --needed --noconfirm cmake extra-cmake-modules || true
+        elif command -v apt-get >/dev/null 2>&1; then
+            as_root apt-get install -y cmake extra-cmake-modules qt6-base-dev libkf6purpose-dev libkf6coreaddons-dev || true
+        elif command -v dnf >/dev/null 2>&1; then
+            as_root dnf install -y cmake extra-cmake-modules qt6-qtbase-devel kf6-purpose-devel kf6-kcoreaddons-devel || true
+        fi
+        configure || { echo "Skipped \"Send to phone\" in KDE's Share menu: its build tools aren't here (cmake, extra-cmake-modules, KDE's Purpose)."; return 0; }
+    fi
+    if cmake --build "$src/build" >/dev/null 2>&1; then
+        put_share_plugin "$src/build/bin/kf6/purpose/vyomaplugin.so"
+    else
+        echo "Skipped \"Send to phone\" in KDE's Share menu: it didn't build (cmake --build $src/build says why)."
+    fi
+}
+
 as_root() {
     if command -v pkexec >/dev/null 2>&1; then pkexec "$@"; else sudo "$@"; fi
 }
@@ -114,6 +163,7 @@ if [ "${1:-}" = "--undo" ]; then
     systemctl --user disable --now vyoma-desktop 2>/dev/null || true
     "$bin/vyoma-desktop" --remove-menus 2>/dev/null || true
     rm -f "$autostart" "$activation" "$starter"
+    [ -n "$packaged" ] || rm -f "$share_plugins/kf6/purpose/vyomaplugin.so" "$share_env"
     [ -n "$packaged" ] || rm -f "$data/applications/vyoma.desktop" "$data/icons/hicolor/scalable/apps/vyoma.svg"
     if has_gnome; then
         shell_remove enabled-extensions "$extension" || true
@@ -154,6 +204,10 @@ mkdir -p "$config/vyoma-desktop" "$data/applications"
 printf '%s\n' "$root" >"$config/vyoma-desktop/source"
 sed "s|@BIN@|$bin/vyoma|" "$here/dist/vyoma.desktop" >"$data/applications/vyoma.desktop"
 install -Dm644 "$here/dist/vyoma.svg" "$data/icons/hicolor/scalable/apps/vyoma.svg"
+# Built on Debian 13 (Qt 6.8); an older KDE just doesn't load it.
+if has_purpose && [ -f "$root/lib/qt6/plugins/kf6/purpose/vyomaplugin.so" ]; then
+    put_share_plugin "$root/lib/qt6/plugins/kf6/purpose/vyomaplugin.so"
+fi
 elif [ -z "$packaged" ]; then
 # The newest Rust any of the crates asks for (cargo names the crate when that moves up).
 min_rust=1.96
@@ -213,6 +267,7 @@ install -Dm755 "$here/../gui/target/release/vyoma" "$HOME/.local/bin/vyoma"
 mkdir -p "$data/applications"
 sed "s|@BIN@|$HOME/.local/bin/vyoma|" "$here/dist/vyoma.desktop" >"$data/applications/vyoma.desktop"
 install -Dm644 "$here/dist/vyoma.svg" "$data/icons/hicolor/scalable/apps/vyoma.svg"
+build_share_plugin
 fi
 "$bin/vyoma-desktop" --setup
 
@@ -278,6 +333,7 @@ systemctl --user restart vyoma-desktop
 echo "Done. Open Vyoma from your app menu to pair your phone."
 echo "(To undo: $0 --undo)"
 [ -z "$gnome_note" ] || echo "$gnome_note"
+[ -z "$share_note" ] || echo "$share_note"
 # Its window, on its first-run setup: pairing with the phone, side by side with the phone's own steps.
 if [ -z "$updating" ] && [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then
     (setsid "$bin/vyoma" >/dev/null 2>&1 &)

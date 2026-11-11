@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 pub const SEND_ARG: &str = "--send";
+/// The Share menus' side (KDE's Purpose plugin, `desktop/purpose`): no phone named, [pick] chooses.
+pub const SEND_ANY_ARG: &str = "--send-any";
 
 /// A line in each script of ours, to know it from the user's own.
 const MARKER: &str = "# vyoma-send";
@@ -147,6 +149,81 @@ pub fn send(args: &[String]) -> Result<()> {
             .status();
     }
     Ok(())
+}
+
+/// Who `--send-any` sends to, from `Devices` (id, name, paired, linked).
+#[derive(Debug, PartialEq)]
+pub enum Pick {
+    One(String),
+    /// Several could take it: the person chooses (id, name).
+    Ask(Vec<(String, String)>),
+    NonePaired,
+}
+
+/// The connected phone; with none connected, the only paired one (sending says it isn't there);
+/// otherwise the person chooses among the connected ones, or among all when none is.
+pub fn pick(devices: &[(String, String, bool, bool)]) -> Pick {
+    let paired: Vec<_> = devices.iter().filter(|d| d.2).collect();
+    let linked: Vec<_> = paired.iter().copied().filter(|d| d.3).collect();
+    let from = if linked.is_empty() { paired } else { linked };
+    match from.as_slice() {
+        [] => Pick::NonePaired,
+        [only] => Pick::One(only.0.clone()),
+        many => Pick::Ask(many.iter().map(|d| (d.0.clone(), d.1.clone())).collect()),
+    }
+}
+
+fn notify(title: &str, body: &str) {
+    let _ = std::process::Command::new("notify-send").args(["--app-name=Vyoma", "--icon=vyoma", "--hint=string:desktop-entry:vyoma", title, body]).status();
+}
+
+/// `--send-any [paths]`: to the phone [pick] chooses; asks in a notification when it can't.
+pub fn send_any(paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    let devices = runtime.block_on(async {
+        let conn = zbus::Connection::session().await?;
+        let reply = conn.call_method(Some(crate::BUS_NAME), crate::OBJECT_PATH, Some("dev.vyoma.Desktop1"), "Devices", &()).await?;
+        let all: Vec<(String, String, String, bool, bool, String)> = reply.body().deserialize()?;
+        anyhow::Ok(all.into_iter().map(|d| (d.0, d.1, d.3, d.4)).collect::<Vec<_>>())
+    });
+    let devices = match devices {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("couldn't ask for the phones: {e:#}");
+            notify("Couldn't send", "Vyoma isn't running on this PC right now. Open Vyoma, then try again.");
+            return Ok(());
+        }
+    };
+    let id = match pick(&devices) {
+        Pick::One(id) => id,
+        Pick::NonePaired => {
+            notify("No phone to send to", "Pair your phone in Vyoma first, then share again.");
+            return Ok(());
+        }
+        Pick::Ask(phones) => {
+            let what = if paths.len() == 1 {
+                Path::new(&paths[0]).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+            } else {
+                format!("{} items", paths.len())
+            };
+            let mut ask = std::process::Command::new("notify-send");
+            ask.args(["--app-name=Vyoma", "--icon=vyoma", "--hint=string:desktop-entry:vyoma", "--wait"]);
+            for (id, name) in &phones {
+                ask.arg(format!("--action={id}=Send to {name}"));
+            }
+            ask.args(["Send to which phone?", &what]);
+            let out = ask.output().context("notify-send")?;
+            let chosen = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            match phones.into_iter().find(|p| p.0 == chosen) {
+                Some(p) => p.0,
+                None => return Ok(()),
+            }
+        }
+    };
+    send(&std::iter::once(id).chain(paths.iter().cloned()).collect::<Vec<_>>())
 }
 
 // ---- Dolphin ------------------------------------------------------------------------------
@@ -353,6 +430,18 @@ fn remove_file(file: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn picks_the_phone_to_share_to() {
+        use super::{Pick, pick};
+        let d = |id: &str, paired, linked| (id.to_owned(), format!("{id} name"), paired, linked);
+        assert_eq!(pick(&[]), Pick::NonePaired);
+        assert_eq!(pick(&[d("a", false, true)]), Pick::NonePaired);
+        assert_eq!(pick(&[d("a", true, false)]), Pick::One("a".into()));
+        assert_eq!(pick(&[d("a", true, false), d("b", true, true)]), Pick::One("b".into()));
+        assert_eq!(pick(&[d("a", true, true), d("b", true, true), d("c", true, false)]), Pick::Ask(vec![("a".into(), "a name".into()), ("b".into(), "b name".into())]));
+        assert_eq!(pick(&[d("a", true, false), d("b", true, false)]), Pick::Ask(vec![("a".into(), "a name".into()), ("b".into(), "b name".into())]));
+    }
+
     use super::*;
 
     const USER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<actions>\n<action>\n\t<name>Open Terminal Here</name>\n\t<unique-id>1-1</unique-id>\n</action>\n</actions>\n";
