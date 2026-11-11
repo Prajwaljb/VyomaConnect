@@ -9,6 +9,7 @@ pub mod device;
 pub mod identity;
 pub mod invite;
 pub mod lan;
+pub mod messages;
 pub mod link;
 pub mod pairing;
 pub mod payload;

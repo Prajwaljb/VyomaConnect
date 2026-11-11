@@ -1,4 +1,4 @@
-//! Texts on the phone, read and sent from the window's Messages page, over the stock SMS and
+//! Texts on the phone, read and sent from the window's Messages page (Linux and the Mac), over the stock SMS and
 //! contacts packets (kdeconnect.sms.*, kdeconnect.contacts.*), so any KDE Connect phone app works.
 //! Kept in memory only, per phone: asked for when the page first opens on each link, then kept
 //! current by the phone, which sends each new text once it's been asked. Plain SMS only (Android
@@ -477,11 +477,11 @@ fn quoted_printable(s: &str) -> String {
 }
 
 fn packet(kind: &str, body: Value) -> Value {
-    vyoma_core::link::packet(kind, body)
+    crate::link::packet(kind, body)
 }
 
 fn now_ms() -> i64 {
-    vyoma_core::link::now_ms()
+    crate::link::now_ms()
 }
 
 #[cfg(test)]

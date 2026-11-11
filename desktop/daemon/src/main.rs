@@ -17,7 +17,7 @@ mod commands;
 mod input;
 mod media;
 mod menus;
-mod messages;
+use vyoma_core::messages;
 mod notifications;
 mod notify;
 mod plugins;
