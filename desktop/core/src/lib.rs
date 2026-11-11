@@ -3,6 +3,7 @@
 //! builds and tests the same on any Linux desktop and on macOS (see docs/PLAN.md section 10).
 
 pub mod cert;
+pub mod clipboard;
 pub mod device;
 pub mod identity;
 pub mod invite;
@@ -10,4 +11,5 @@ pub mod lan;
 pub mod link;
 pub mod pairing;
 pub mod payload;
+pub mod share;
 pub mod trust;
