@@ -11,6 +11,8 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 pub const LABEL: &str = "dev.vyoma.desktop";
+/// The phone's commands run with this: launchd's own PATH leaves out Homebrew's programs.
+const PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 /// Vyoma.app's identifier, which macOS's Login Items shows the agent under.
 pub const BUNDLE_ID: &str = "dev.vyoma.Vyoma";
 
@@ -61,6 +63,11 @@ pub fn plist(program: &Path, log: &Path) -> String {
 	<true/>
 	<key>ProcessType</key>
 	<string>Interactive</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>{PATH}</string>
+	</dict>
 	<key>StandardOutPath</key>
 	<string>{log}</string>
 	<key>StandardErrorPath</key>
@@ -136,6 +143,7 @@ mod tests {
         assert!(p.contains("<key>RunAtLoad</key>\n\t<true/>"));
         assert!(p.contains("<key>KeepAlive</key>\n\t<true/>"));
         assert!(!p.contains("AssociatedBundleIdentifiers"), "a bare binary isn't the app");
+        assert!(p.contains("<string>/opt/homebrew/bin:"), "commands find Homebrew's programs");
     }
 
     #[test]

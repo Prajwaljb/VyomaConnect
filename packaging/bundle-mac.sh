@@ -45,6 +45,8 @@ cat > "$app/Contents/Info.plist" <<EOF
 	<string>public.app-category.utilities</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Vyoma plays, pauses and skips in Music and Spotify from your phone.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Vyoma finds your phone and talks to it over your Wi-Fi.</string>
 	<key>NSHumanReadableCopyright</key>

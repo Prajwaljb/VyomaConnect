@@ -81,6 +81,46 @@ pub async fn notify(title: &str, body: &str) {
     }
 }
 
+/// A phone's notification, [app]'s under its [title]: a later one under the same [key] replaces
+/// it, and [withdraw] takes it down (inside Vyoma.app; osascript's can't be).
+pub async fn phone_notification(key: &str, app: &str, title: &str, text: &str) {
+    #[cfg(target_os = "macos")]
+    if crate::notify::post_as(Some(key), title, app, text) {
+        return;
+    }
+    let _ = key;
+    let lines = ["on run argv", "display notification (item 4 of argv) with title (item 2 of argv) subtitle (item 3 of argv)", "end run"];
+    if let Err(e) = script(&lines, &[title, app, text]).output().await {
+        tracing::warn!("couldn't show a notification: {e}");
+    }
+}
+
+/// Opens Vyoma.app (its window), from the agent inside it or wherever it's installed.
+pub fn open_app() {
+    if let Ok(mut child) = std::process::Command::new("open").args(["-b", crate::launchd::BUNDLE_ID]).stdin(Stdio::null()).spawn() {
+        std::thread::spawn(move || child.wait());
+    }
+}
+
+/// The phone dismissed the notification shown under [key].
+pub fn withdraw(key: &str) {
+    #[cfg(target_os = "macos")]
+    crate::notify::withdraw(key);
+    let _ = key;
+}
+
+/// [notify] from a thread of its own (a command that didn't start).
+pub fn notify_now(title: &str, body: &str) {
+    #[cfg(target_os = "macos")]
+    if crate::notify::post(title, body) {
+        return;
+    }
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", "on run argv", "-e", "display notification (item 3 of argv) with title (item 2 of argv)", "-e", "end run", FIRST, title, body])
+        .stdin(Stdio::null())
+        .status();
+}
+
 /// A question with two buttons: true for [yes]. Asked as a dialog that gives up after
 /// [timeout]; the child is killed (and the dialog closed) if this is dropped.
 pub fn ask(title: &str, text: &str, no: &str, yes: &str, timeout: Duration) -> Result<Child> {

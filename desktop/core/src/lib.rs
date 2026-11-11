@@ -4,6 +4,7 @@
 
 pub mod cert;
 pub mod clipboard;
+pub mod commands;
 pub mod device;
 pub mod identity;
 pub mod invite;
