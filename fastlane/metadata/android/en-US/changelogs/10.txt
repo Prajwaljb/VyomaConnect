@@ -1,0 +1,6 @@
+• Early support for X11 desktops on the PC: Cinnamon, MATE, Xfce, Plasma on X11
+• A PC that's away says so: tapping its tiles tells you, and Home leads with what's wrong and how to fix it
+• Files no app can open go to the share sheet instead of failing
+• The player you pick stays on the media card
+• Rules no longer offer conditions that contradict their trigger
+• Clearer words everywhere, and many small fixes
