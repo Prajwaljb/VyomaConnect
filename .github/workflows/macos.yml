@@ -1,6 +1,7 @@
 # The macOS side, built and tested where there's a Mac: GitHub's macOS runners (Apple silicon).
-# Nobody on the project has a Mac yet, so this is the only place macOS code runs: it compiles the
-# shared core and runs its tests. It's no stand-in for trying the app on a real Mac.
+# Nobody on the project has a Mac yet, so this is the only place macOS code runs: it builds the
+# shared core and the Mac daemon and runs their tests. It's no stand-in for trying it on a real Mac.
+# The daemon is kept as a download (a universal binary, unsigned) for whoever tries it on one.
 name: macOS
 
 on:
@@ -10,7 +11,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  core:
+  build:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,7 +21,25 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             desktop/core/target
-          key: macos-core-${{ hashFiles('desktop/core/Cargo.toml') }}
-      - name: Build and test vyoma-core
+            desktop/mac/target
+          key: macos-${{ hashFiles('desktop/core/Cargo.toml', 'desktop/mac/Cargo.lock') }}
+      - name: Test vyoma-core
         working-directory: desktop/core
         run: cargo test --release
+      - name: Test vyoma-mac
+        working-directory: desktop/mac
+        run: cargo test --release
+      - name: Build a universal vyoma-mac
+        working-directory: desktop/mac
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p out
+          lipo -create -output out/vyoma-mac target/aarch64-apple-darwin/release/vyoma-mac target/x86_64-apple-darwin/release/vyoma-mac
+          lipo -info out/vyoma-mac
+          cp ../../LICENSE out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vyoma-mac-universal
+          path: desktop/mac/out/
