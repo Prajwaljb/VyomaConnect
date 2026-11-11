@@ -113,7 +113,7 @@ async fn a_phone_that_scanned_the_code_pairs_without_a_prompt() {
 
     // A wrong proof (another code's secret) is prompted for as any request is.
     let stranger = phone("ph-qr-stranger");
-    let mut link = pc.dial(&stranger).await;
+    let link = pc.dial(&stranger).await;
     pc.event().await;
     let ts = link::now_ms() / 1000;
     let wrong = proof(&[1u8; 16], ts, &stranger.cert, &pc.me.cert);
@@ -132,7 +132,7 @@ async fn a_phone_that_scanned_the_code_pairs_without_a_prompt() {
 
     // One phone per code: the same proof from another phone now gets a prompt.
     let late = phone("ph-qr-late");
-    let mut link = pc.dial(&late).await;
+    let link = pc.dial(&late).await;
     while !matches!(pc.event().await, Event::Linked { .. }) {}
     let again = proof(&secret, ts, &late.cert, &pc.me.cert);
     link.sender.send(&packet("kdeconnect.pair", json!({ "pair": true, "timestamp": ts, FIELD: again }))).await.unwrap();
