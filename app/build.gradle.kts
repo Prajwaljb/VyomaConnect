@@ -25,7 +25,7 @@ android {
         applicationId = "dev.vyoma.connect"
         minSdk = 31
         targetSdk = 37
-        versionCode = 11
+        versionCode = 12
         // One version for the phone app and the PC app (desktop/daemon reads it too).
         versionName = rootProject.file("VERSION").readText().trim()
         buildConfigField("boolean", "DEMO", "false")

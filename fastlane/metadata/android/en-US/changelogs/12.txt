@@ -1,0 +1,4 @@
+• New: Vyoma for Mac (beta), with Send to Phone in Finder
+• The touchpad keeps up over Bluetooth when Wi-Fi is busy, and is there at once when you come back to it
+• If Android blocks notification access for an app installed from a file, Vyoma says how to allow it
+• Each PC shows only the tiles it can do
