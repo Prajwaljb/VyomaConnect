@@ -10,10 +10,11 @@ depends=('glib2' 'gstreamer' 'gst-plugins-base' 'gst-plugins-base-libs' 'gst-plu
          'gst-plugin-va' 'gst-libav' 'fontconfig' 'freetype2' 'libxkbcommon' 'wayland' 'libglvnd' 'libx11' 'libxcb'
          'pipewire' 'wireplumber' 'libpulse' 'wl-clipboard' 'libnotify' 'xdg-utils' 'android-tools' 'ffmpeg'
          'sshfs' 'gvfs' 'curl')
-makedepends=('cargo' 'pkgconf')
+makedepends=('cargo' 'pkgconf' 'cmake' 'extra-cmake-modules' 'purpose')
 # makepkg's LTO builds ring's C code in a form the Rust linker can't use.
 options=('!lto')
-optdepends=('v4l2loopback-dkms: the phone as a webcam (CachyOS kernels already have it)'
+optdepends=("purpose: Send to your phone from KDE's Share menu"
+            'v4l2loopback-dkms: the phone as a webcam (CachyOS kernels already have it)'
             'thunar: Send to your phone from Thunar'
             'python-nautilus: Send to your phone from GNOME Files'
             'ddcutil: brightness of external monitors on GNOME'
@@ -34,6 +35,11 @@ build() {
     export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
     (cd daemon && cargo build --frozen --release)
     (cd gui && cargo build --frozen --release)
+    # KDE's Share menu (from 0.9.0 on).
+    if [ -d purpose ]; then
+        cmake -S purpose -B purpose/build -DCMAKE_BUILD_TYPE=None -DCMAKE_INSTALL_PREFIX=/usr
+        cmake --build purpose/build
+    fi
 }
 
 package() {
@@ -47,5 +53,6 @@ package() {
     sed 's|@BIN@|/usr/bin/vyoma|' daemon/dist/vyoma.desktop | install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/vyoma.desktop"
     sed 's|%h/.local/bin/vyoma-desktop|/usr/bin/vyoma-desktop|' daemon/dist/vyoma-desktop.service |
         install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/user/vyoma-desktop.service"
+    [ ! -d purpose/build ] || DESTDIR="$pkgdir" cmake --install purpose/build
     install -Dm644 ../LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

@@ -1,0 +1,14 @@
+{
+    "KPlugin": {
+        "Authors": [{ "Name": "Vyoma" }],
+        "Description": "Send files to your phone with Vyoma",
+        "Icon": "vyoma",
+        "License": "GPL",
+        "Name": "Vyoma"
+    },
+    "X-Purpose-ActionDisplay": "Send to phone",
+    "X-Purpose-Configuration": [],
+    "X-Purpose-InboundArguments": ["urls"],
+    "X-Purpose-OutboundArguments": [],
+    "X-Purpose-PluginTypes": ["Export"]
+}

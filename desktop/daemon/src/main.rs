@@ -694,6 +694,7 @@ fn main() -> Result<()> {
         Some("--import-kde") => import_kde(&dir),
         Some(phonefiles::RELAY_ARG) => phonefiles::relay(&std::env::args().nth(2).unwrap_or_default()),
         Some(menus::SEND_ARG) => menus::send(&std::env::args().skip(2).collect::<Vec<_>>()),
+        Some(menus::SEND_ANY_ARG) => menus::send_any(&std::env::args().skip(2).collect::<Vec<_>>()),
         Some("--remove-menus") => {
             menus::remove_all();
             Ok(())

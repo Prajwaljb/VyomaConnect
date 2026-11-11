@@ -17,7 +17,35 @@ permissions:
   contents: write
 
 jobs:
+  # KDE's Share menu plugin (desktop/purpose) needs KDE Frameworks 6, which Debian has from 13 on;
+  # built there (Qt 6.8), it loads on any KDE as new as that, and an older one skips it.
+  share-plugin:
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    container: debian:13
+    steps:
+      - name: Build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates cmake ninja-build g++ extra-cmake-modules \
+            qt6-base-dev libkf6purpose-dev libkf6coreaddons-dev
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Build
+        run: |
+          cmake -S desktop/purpose -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: purpose-${{ matrix.runner }}
+          path: build/bin/kf6/purpose/vyomaplugin.so
+          if-no-files-found: error
+
   build:
+    needs: share-plugin
     strategy:
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
@@ -43,8 +71,12 @@ jobs:
             desktop/gui/target
           key: desktop-${{ matrix.runner }}-${{ hashFiles('desktop/*/Cargo.lock') }}
           restore-keys: desktop-${{ matrix.runner }}-
+      - uses: actions/download-artifact@v4
+        with:
+          name: purpose-${{ matrix.runner }}
+          path: purpose
       - name: Build and pack
-        run: sh packaging/bundle-desktop.sh dist
+        run: VYOMA_SHARE_PLUGIN=purpose/vyomaplugin.so sh packaging/bundle-desktop.sh dist
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.runner }}
