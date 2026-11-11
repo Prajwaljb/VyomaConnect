@@ -105,7 +105,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - Connection doctor: a PC away on the phone (Home's card, the Connection page) runs `service/ConnectionDoctor.kt`: Wi-Fi,
   VPN, local network permission, the PC's last address on this subnet, and a TCP knock on it (answers / refused = Vyoma
   not running / instant "no route" = its firewall / silence), each cause in plain words with its fix. The PC's Firewall
-  check reads firewalld (`--query-port`) or ufw's rules file and offers Open ports (D-Bus `OpenFirewall`, pkexec,
+  check reads firewalld (`--query-port`) or ufw's rules file and offers Let phones through (D-Bus `OpenFirewall`, pkexec,
   `FirewallDone`), also on an away phone's page (`--scene away`).
 - Releasing: bump `VERSION` and `versionCode`, add the changelog, push the tag `vX.Y.Z`: CI makes the draft release with the
   PC builds; build the APK and `gh release upload` `vyoma-X.Y.Z.apk` + `.sha256` and the notes to it (the user publishes

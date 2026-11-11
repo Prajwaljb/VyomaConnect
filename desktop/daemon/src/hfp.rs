@@ -82,8 +82,12 @@ pub async fn take(name: Option<&str>) -> Result<Audio> {
     // The card shows up a moment after the profile connects.
     for _ in 0..20 {
         if let Some((card, active, has)) = card(&phone.address).await {
-            if active != PROFILE && has {
-                pactl(&["set-card-profile", &card, PROFILE]).await?;
+            if active != PROFILE && has
+                && let Err(e) = pactl(&["set-card-profile", &card, PROFILE]).await
+            {
+                // Connected as its headset by now: let it go, or the PC keeps taking its calls.
+                release(audio).await;
+                return Err(e).context("couldn't switch the phone's sound to call mode");
             }
             break;
         }

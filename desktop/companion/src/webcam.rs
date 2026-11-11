@@ -52,7 +52,7 @@ fn setup_needed() -> &'static str {
     if crate::setup::is_standalone() {
         "The PC needs a one-time setup for the phone camera: click Install on This PC in Vyoma's window there"
     } else {
-        "The PC needs a one-time setup for the phone camera: click Install in Vyoma's notification there, or run vyoma-companion --setup"
+        "The PC needs a one-time setup for the phone camera: click Install in Vyoma's notification there"
     }
 }
 

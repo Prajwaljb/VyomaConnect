@@ -186,7 +186,7 @@ mod tests {
         let file = dir.join("permissions.json");
         let p = Permits::load(file.clone());
         assert!(Permit::ALL.iter().all(|&f| p.allows("a", f)));
-        let mut ticks = p.subscribe();
+        let ticks = p.subscribe();
         p.set("a", Permit::Screen, false).unwrap();
         assert!(ticks.has_changed().unwrap());
         assert!(!p.allows("a", Permit::Screen) && p.allows("b", Permit::Screen) && p.allows("a", Permit::Files));

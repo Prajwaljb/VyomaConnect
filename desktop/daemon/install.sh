@@ -275,7 +275,8 @@ fi
 systemctl --user daemon-reload
 systemctl --user enable vyoma-desktop
 systemctl --user restart vyoma-desktop
-echo "Done: Vyoma's desktop app is this PC's KDE Connect now. Logs: journalctl --user -u vyoma-desktop. Undo: $0 --undo"
+echo "Done. Open Vyoma from your app menu to pair your phone."
+echo "(To undo: $0 --undo)"
 [ -z "$gnome_note" ] || echo "$gnome_note"
 # Its window, on its first-run setup: pairing with the phone, side by side with the phone's own steps.
 if [ -z "$updating" ] && [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then

@@ -25,6 +25,7 @@ mod gvfs;
 mod hfp;
 mod phonefiles;
 mod places;
+mod plain;
 mod presenter;
 mod presenter_x11;
 mod share;
@@ -268,8 +269,9 @@ impl Control {
                 Ok(()) => String::new(),
                 Err(e) => {
                     tracing::warn!("{id}: {e:#}");
-                    plugins::tell(&notifier, "Couldn't send", &format!("{e:#}")).await;
-                    format!("{e:#}")
+                    let why = plain::send(&e);
+                    plugins::tell(&notifier, "Couldn't send", &why).await;
+                    why
                 }
             };
             if let Ok(emitter) = zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
@@ -304,7 +306,10 @@ impl Control {
         let files = match (problem, self.sharing(&id), share::expand(&paths)) {
             (Some(why), _, _) => Err(why),
             (None, Err(e), _) => Err(e.to_string()),
-            (None, _, Err(e)) => Err(format!("{e:#}")),
+            (None, _, Err(e)) => {
+                tracing::warn!("{id}: {e:#}");
+                Err(plain::send(&e))
+            }
             (None, Ok(pinned), Ok(files)) => Ok((pinned, files)),
         };
         let (pinned, files) = match files {
@@ -330,8 +335,9 @@ impl Control {
                 }
                 Err(e) => {
                     tracing::warn!("{id}: {e:#}");
-                    sending(&notifier, &failed, &format!("{e:#}"), started).await;
-                    format!("{e:#}")
+                    let why = plain::send(&e);
+                    sending(&notifier, &failed, &why, started).await;
+                    why
                 }
             };
             if let Ok(emitter) = zbus::object_server::SignalEmitter::new(&conn, OBJECT_PATH) {
@@ -1154,7 +1160,7 @@ impl Desk {
             Ok(path) => path,
             Err(e) => {
                 tracing::warn!("{}: {} not received: {e:#}", r.id, r.name);
-                plugins::tell(&self.notifier, &format!("Couldn't receive {}", r.name), &format!("{e:#}")).await;
+                plugins::tell(&self.notifier, &format!("Couldn't receive {}", r.name), &plain::receive(&e)).await;
                 return;
             }
         };
@@ -1201,7 +1207,7 @@ impl Desk {
                         Ok(None) => {}
                         Err(e) => {
                             tracing::warn!("couldn't ask for a reply: {e:#}");
-                            plugins::tell(&notifier, "Can't reply from this PC", &format!("{e:#}")).await;
+                            plugins::tell(&notifier, "Can't reply from this PC", &plain::reply(&e)).await;
                         }
                     }
                 });
@@ -1605,7 +1611,7 @@ impl Desk {
                 tracing::warn!("{id}: couldn't mount its files: {e:#}");
                 self.kept.remove(&id);
                 self.remounting.remove(&id);
-                plugins::tell(&self.notifier, "Couldn't open the phone's files", &format!("{e:#}")).await;
+                plugins::tell(&self.notifier, "Couldn't open the phone's files", &plain::mount(&e)).await;
             }
         }
     }
@@ -1700,7 +1706,7 @@ impl Desk {
                 Ok(audio) => Some(audio),
                 Err(e) => {
                     tracing::warn!("call audio: {e:#}");
-                    plugins::tell(&notifier, "The call's sound stays on the phone", &format!("{e:#}")).await;
+                    plugins::tell(&notifier, "The call's sound stays on the phone", &plain::call_audio(&e)).await;
                     None
                 }
             }
@@ -1852,7 +1858,7 @@ fn health(beside_kde: bool, shell: Option<Option<u32>>) -> serde_json::Value {
     let mut checks = vec![firewall()];
     if beside_kde {
         checks.push(json!({ "name": "KDE Connect", "state": "warn",
-            "detail": "Also running, so the USB cable, tethering and Bluetooth stay with it. Quit it to use them here." }));
+            "detail": "Also running, so the USB cable, tethering and Bluetooth stay with it; the rest works here. To use them with Vyoma, turn KDE Connect off in your startup apps, then log out and back in." }));
     }
     if let Some(running) = shell {
         checks.push(gnome_extension(running));
@@ -1868,8 +1874,8 @@ fn health(beside_kde: bool, shell: Option<Option<u32>>) -> serde_json::Value {
 
 /// Whether a firewall is up, and whether phones get through it. firewalld says whether a port is
 /// open to anyone who asks; ufw's rules need root to read, so a phone that reached us over the
-/// network, or the ports opened from here, says enough. Up with none seen yet is no fault (a day
-/// on the cable proves nothing either way), so it offers the fix rather than warning.
+/// network, or the ports opened from here, says enough. Up with none seen yet may be nothing (a
+/// day on the cable proves nothing either way), but phones on Wi-Fi would stop there: it warns, with the fix.
 fn firewall() -> serde_json::Value {
     let active = ["ufw", "firewalld"].into_iter().find(|unit| {
         std::process::Command::new("systemctl").args(["is-active", "--quiet", unit]).status().is_ok_and(|s| s.success())
@@ -1891,7 +1897,10 @@ fn firewall() -> serde_json::Value {
     let (state, detail, action) = match active {
         None => ("ok", "Off".to_owned(), ""),
         Some(name) if open(name) => ("ok", "On, and phones get through".to_owned(), ""),
-        Some(name) => ("info", format!("{name} is on and may stop phones finding this PC on Wi-Fi. Open ports lets Vyoma through (ports 1714 to 1764)."), "Open ports"),
+        Some(name) => {
+            tracing::debug!("{name} is up and Vyoma's ports (1714 to 1764) aren't seen open");
+            ("warn", "This PC's firewall may be blocking phones on Wi-Fi.".to_owned(), "Let phones through")
+        }
     };
     json!({ "name": "Firewall", "state": state, "detail": detail, "action": action })
 }
@@ -1944,7 +1953,7 @@ fn gnome_extension(running: Option<u32>) -> serde_json::Value {
     } else if running.is_some() {
         "Updated. Log out and back in once to finish: until then, the newest touchpad gestures wait."
     } else if ![menus::data_home(), PathBuf::from("/usr/share")].into_iter().map(|d| d.join("gnome-shell/extensions").join(UUID)).any(|d| d.join("extension.js").exists()) {
-        "Not installed. Run install.sh again to add it: clipboard sync and the presenter's pointer need it."
+        "Not installed. Reinstall Vyoma to add it: clipboard sync and the presenter's pointer need it."
     } else if std::process::Command::new("gsettings")
         .args(["get", "org.gnome.shell", "enabled-extensions"])
         .output()
