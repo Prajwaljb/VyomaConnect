@@ -2,9 +2,12 @@
 //! D-Bus interface, `dev.vyoma.Desktop1`; on macOS a local socket (`vyoma-mac`'s `control.rs`),
 //! behind the same [Daemon]: [connect] picks.
 
+#[cfg(target_os = "linux")]
 use std::sync::{Mutex, OnceLock};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+#[cfg(target_os = "linux")]
+use anyhow::Context;
 #[cfg(target_os = "linux")]
 use futures_util::StreamExt;
 use serde_json::Value;
@@ -366,6 +369,7 @@ const PATH: &str = "/dev/vyoma/Desktop";
 const INTERFACE: &str = "dev.vyoma.Desktop1";
 
 /// zbus is async: its calls run here, each blocked on by the window's worker threads.
+#[cfg(target_os = "linux")]
 pub fn runtime() -> &'static tokio::runtime::Runtime {
     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RT.get_or_init(|| tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().expect("a tokio runtime"))
