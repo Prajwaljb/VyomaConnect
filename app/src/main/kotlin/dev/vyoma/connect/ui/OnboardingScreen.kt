@@ -246,7 +246,7 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
                         0 -> "Let's find your PC. This takes a minute."
                         1 -> "Step 2 of 4: Vyoma on your PC"
                         2 -> "Step 3 of 4: pair with your PC"
-                        else -> "Nearly there"
+                        else -> if (notifOn && phoneOn && batteryOn) "All set" else "Nearly there"
                     },
                     style = MaterialTheme.typography.bodyLarge,
                     color = Color.White.copy(alpha = 0.9f),

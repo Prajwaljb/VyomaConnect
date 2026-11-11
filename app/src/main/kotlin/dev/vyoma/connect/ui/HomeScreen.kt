@@ -530,7 +530,8 @@ internal fun AwayCard(vm: AppViewModel, pcId: String, pcName: String, modifier: 
     }
     LaunchedEffect(pcId, round) {
         findings = null
-        findings = try {
+        val started = System.currentTimeMillis()
+        val found = try {
             ConnectionDoctor.findings(ConnectionDoctor.examine(context, pcId, pcName))
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -538,6 +539,9 @@ internal fun AwayCard(vm: AppViewModel, pcId: String, pcName: String, modifier: 
             dev.vyoma.connect.protocol.VLog.w("Doctor", "couldn't check: $e")
             listOf(ConnectionDoctor.unknown(pcName))
         }
+        // A retry that comes back in a blink looked like the button did nothing: it shows "Trying…" a moment.
+        if (round > 0) delay((900 - (System.currentTimeMillis() - started)).coerceAtLeast(0))
+        findings = found
     }
     val allow = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { round++ }
     SectionCard(modifier, contentPadding = PaddingValues(20.dp)) {
@@ -578,7 +582,7 @@ internal fun AwayCard(vm: AppViewModel, pcId: String, pcName: String, modifier: 
                 ConnectionDoctor.Fix.USE_CABLE -> PillButton("Use a cable", onClick = { usb = true })
                 ConnectionDoctor.Fix.NONE, null -> Unit
             }
-            PillButton("Try again", onClick = { vm.refresh(); round++ }, prominent = fix == null, enabled = findings != null)
+            PillButton(if (findings == null) "Trying…" else "Try again", onClick = { vm.refresh(); round++ }, prominent = fix == null, enabled = findings != null)
         }
     }
     if (usb) UsbHelpDialog { usb = false }

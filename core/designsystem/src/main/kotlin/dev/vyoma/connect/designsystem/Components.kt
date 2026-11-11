@@ -277,6 +277,10 @@ fun CollapsingHeaderScaffold(
 
     val backdrop = rememberBackdrop()
     val bottomInset = LocalBottomBarInset.current
+    // A status pops up where the docked title sits: the title steps aside for it rather than show
+    // through the pill (both are clear glass), and comes back when it goes.
+    val statuses = LocalStatus.current
+    val ceded = animateFloatAsState(if (statuses.current != null) 1f else 0f, VyomaMotion.effects(), label = "ceded")
     // Content color for everything on the canvas, so bar icons and titles are legible.
     CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) { Box(modifier.fillMaxSize().onPlaced { anchor.coordinates = it }) {
         // The backdrop records the canvas too: blurring only the cards would let sharp text show through.
@@ -404,6 +408,7 @@ fun CollapsingHeaderScaffold(
                             scaleY = 1f + 0.12f * maxOf(pop, away)
                         }
                         .drawWithContent { if (bubblePop.value < 1f) drawContent() }
+                        .graphicsLayer { alpha = 1f - ceded.value }
                         .glassChrome(backdrop, CircleShape, blur = 1.5.dp, bevel = 16.dp),
                 )
                 Row(
@@ -425,6 +430,7 @@ fun CollapsingHeaderScaffold(
                 .padding(horizontal = 24.dp)
                 .onSizeChanged { titleSize = it }
                 .clearAndSetSemantics {}
+                .graphicsLayer { alpha = 1f - ceded.value }
                 .graphicsLayer {
                     val rest = restY
                     val inBar = statusTop + BAR_HEIGHT.toPx() / 2f

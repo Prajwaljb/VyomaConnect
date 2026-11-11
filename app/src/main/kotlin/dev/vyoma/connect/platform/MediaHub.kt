@@ -40,13 +40,19 @@ data class NowPlaying(
 )
 
 /**
- * Picks the one PC player worth showing (whatever is playing, else the user's pick, else the
+ * Picks the one PC player worth showing (the user's pick, else whatever is playing, else the
  * last active) and resolves the best artwork we can get for it.
  */
 @OptIn(ExperimentalCoroutinesApi::class, kotlinx.coroutines.FlowPreview::class)
 class MediaHub(private val hub: StateFlow<DeviceHub?>, private val scope: CoroutineScope) {
-    /** The player the user chose in the UI; playing players still win. */
-    val preferredPlayer = MutableStateFlow<String?>(null)
+    /**
+     * The player the user chose in the UI, with when they chose it. It holds until another player
+     * starts playing after that (a video started in the other browser takes the card, as it would
+     * have before any pick).
+     */
+    private val preferredPlayer = MutableStateFlow<Pair<String, Long>?>(null)
+
+    fun choose(name: String) { preferredPlayer.value = name to System.nanoTime() }
 
     private class Source(val device: Device, val plugin: MprisPlugin, val player: RemotePlayer, val embeddedArt: ByteArray?, val players: List<String>)
 
@@ -66,11 +72,16 @@ class MediaHub(private val hub: StateFlow<DeviceHub?>, private val scope: Corout
             }
         }
 
-    private fun pick(all: List<Triple<Device, MprisPlugin, Pair<Map<String, RemotePlayer>, Map<String, ByteArray>>>>, preferred: String?): Source? {
+    private fun pick(all: List<Triple<Device, MprisPlugin, Pair<Map<String, RemotePlayer>, Map<String, ByteArray>>>>, choice: Pair<String, Long>?): Source? {
         val candidates = all.flatMap { (d, p, state) -> state.first.values.map { Triple(d, p, it) to state.second } }
+        val playing = candidates.filter { it.first.third.isPlaying && it.first.third.hasMedia }.map { it.first.third.name }.toSet()
+        // Another player starting after the pick ends it; one already playing when it was made doesn't.
+        if (choice != null && choice != superseded && (playing - wasPlaying).any { it != choice.first }) superseded = choice
+        wasPlaying = playing
+        val preferred = choice?.takeIf { it != superseded }?.first
         // Stick with what's on screen while nothing plays, so a paused card doesn't jump players.
-        val chosen = candidates.firstOrNull { it.first.third.isPlaying && it.first.third.hasMedia }
-            ?: candidates.firstOrNull { it.first.third.name == preferred && it.first.third.hasMedia }
+        val chosen = candidates.firstOrNull { it.first.third.name == preferred && it.first.third.hasMedia }
+            ?: candidates.firstOrNull { it.first.third.isPlaying && it.first.third.hasMedia }
             ?: candidates.firstOrNull { it.first.third.name == shown && it.first.third.hasMedia }
             ?: all.firstNotNullOfOrNull { (d, p, state) -> p.activePlayer?.let { Triple(d, p, it) to state.second } }
             ?: return null
@@ -80,6 +91,8 @@ class MediaHub(private val hub: StateFlow<DeviceHub?>, private val scope: Corout
     }
 
     @Volatile private var shown: String? = null
+    @Volatile private var wasPlaying: Set<String> = emptySet()
+    @Volatile private var superseded: Pair<String, Long>? = null
 
     /**
      * Browsers churn: YouTube hover previews and autoplay flip play/pause and swap titles several

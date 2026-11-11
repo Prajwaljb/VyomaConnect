@@ -150,7 +150,7 @@ fun DeviceScreen(
             item(key = "specs") { SpecsCard(specs, Modifier.animateItem()) }
         }
 
-        item(key = "security-label") { SectionLabel("Security", Modifier.animateItem()) }
+        item(key = "security-label") { SectionLabel("Trust", Modifier.animateItem()) }
         item(key = "security") {
             SectionCard {
                 // One line until asked for: the full fingerprint is for comparing with the PC's.
@@ -268,7 +268,16 @@ internal fun diskSize(bytes: Long): String {
 private fun CallsFromPcRow(deviceId: String) {
     val context = LocalContext.current
     var on by remember(deviceId) { mutableStateOf(dev.vyoma.connect.platform.CallsFromPc.allowed(deviceId)) }
+    // Without Android's phone permissions no PC answers anything: the switch says so instead of showing on.
+    var tick by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) { tick++; onPauseOrDispose { } }
+    val phoneOn = remember(tick) { dev.vyoma.connect.platform.PhonePermissions.allGranted(context) }
+    val askPhone = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        tick++
+        if (result.values.any { it }) dev.vyoma.connect.service.LinkService.start(context, refresh = true, visible = true)
+    }
     fun toggle(want: Boolean) {
+        if (!phoneOn) return askPhone.launch(dev.vyoma.connect.platform.PhonePermissions.ask)
         if (!want) {
             dev.vyoma.connect.platform.CallsFromPc.set(deviceId, false)
             on = false
@@ -281,12 +290,12 @@ private fun CallsFromPcRow(deviceId: String) {
     }
     ListRow(
         title = "Answer calls from this PC",
-        subtitle = "Answer, decline and hang up there",
+        subtitle = if (phoneOn) "Answer, decline and hang up there" else "Needs Vyoma's calls and contacts access. Tap to allow",
         icon = Icons.Rounded.Call,
         iconTint = SystemColor.GREEN.color,
         showDivider = true,
         haptic = if (on) dev.vyoma.connect.designsystem.Haptic.ToggleOff else dev.vyoma.connect.designsystem.Haptic.ToggleOn,
         onClick = { toggle(!on) },
-        trailing = { dev.vyoma.connect.designsystem.VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Answer calls from this PC") },
+        trailing = { dev.vyoma.connect.designsystem.VyomaSwitch(checked = on && phoneOn, onCheckedChange = ::toggle, contentDescription = "Answer calls from this PC") },
     )
 }

@@ -1,5 +1,7 @@
 package dev.vyoma.connect.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.LinkOff
 import kotlinx.coroutines.coroutineScope
 import androidx.compose.animation.core.Animatable
 import androidx.compose.ui.graphics.Color
@@ -230,6 +232,7 @@ private fun PermissionGate(onReady: () -> Unit) {
 @Composable
 private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState<Tab>, vm: AppViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val status = LocalStatus.current
     val scope = rememberCoroutineScope()
     var tab by tabState
     val toTab: (Tab) -> Unit = { t -> backStack.retainAll { it == Screen.Home }; tab = t }
@@ -341,7 +344,11 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
                     onTab = toTab,
                     // At the root, back on another tab goes Home first, like One UI apps.
                     backToHome = backStack.size == 1,
-                    onTouchpad = { AppLock.ask(context, AppLock.TOUCHPAD) { backStack.add(Screen.Touchpad(null, keyboard = false)) } },
+                    onTouchpad = {
+                        val away = vm.awayReason()
+                        if (away != null) status.show(away, icon = Icons.Rounded.LinkOff)
+                        else AppLock.ask(context, AppLock.TOUCHPAD) { backStack.add(Screen.Touchpad(null, keyboard = false)) }
+                    },
                     onGamepad = { GamepadActivity.open(context, null) },
                     onPresenter = { AppLock.ask(context, AppLock.PRESENTER) { backStack.add(Screen.Presenter(null)) } },
                 ) { t ->

@@ -143,7 +143,7 @@ object Suggestions {
         ),
         Suggestion(
             "pcbattery", "A heads-up on your phone before the laptop dies.",
-            Rule(name = "PC battery alert", trigger = Trigger.PcBatteryBelow(20), conditions = listOf(Trigger.PcCharging(charging = false)), actions = listOf(Action.NotifyMe("Your PC is below 20%. Plug it in.")), suggestion = "pcbattery"),
+            Rule(name = "PC battery alert", trigger = Trigger.PcBatteryBelow(20), conditions = listOf(Trigger.PcCharging(charging = false)), actions = listOf(Action.NotifyMe("Your PC's battery is low. Plug it in.")), suggestion = "pcbattery"),
         ),
         Suggestion(
             "night", "Late at night the PC's sound goes off and its screen dims, until morning.",

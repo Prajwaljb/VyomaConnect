@@ -152,6 +152,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Bolt
@@ -497,8 +498,9 @@ fun PcDashboard(
                 },
             ),
             modifier = modifier,
-            // Away, the tiles keep their places but rest, quiet and untappable.
+            // Away, the tiles keep their places but rest, quiet; a tap says why instead of nothing.
             enabled = state.isReachable,
+            onRest = { status.show("${state.identity.deviceName} is away", icon = Icons.Rounded.LinkOff) },
           )
         }
     }
@@ -793,7 +795,7 @@ private data class Control(
  * icons with labels under.
  */
 @Composable
-private fun ControlGrid(actions: List<Control>, toggles: List<Control>, modifier: Modifier = Modifier, enabled: Boolean = true) {
+private fun ControlGrid(actions: List<Control>, toggles: List<Control>, modifier: Modifier = Modifier, enabled: Boolean = true, onRest: () -> Unit = {}) {
     BoxWithConstraints(modifier.fillMaxWidth().pressGroup()) {
         // Narrow grids (small screens, the largest display sizes) close the gaps a little so the
         // labels keep a readable size.
@@ -812,11 +814,11 @@ private fun ControlGrid(actions: List<Control>, toggles: List<Control>, modifier
             val pop = remember { FirstRun.assembling }
             @Composable fun Tile(i: Int, tile: @Composable () -> Unit) = if (pop) Staggered(i + 4) { tile() } else tile()
             Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-                actions.take(4).forEachIndexed { i, c -> Tile(i) { ControlTile(c, Modifier.size(tile), enabled) } }
+                actions.take(4).forEachIndexed { i, c -> Tile(i) { ControlTile(c, Modifier.size(tile), enabled, onRest) } }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-                actions.drop(4).forEachIndexed { i, c -> Tile(i + 4) { ControlTile(c, Modifier.size(tile), enabled) } }
-                toggles.forEachIndexed { i, c -> Tile(i + actions.size) { ToggleTile(c, Modifier.size(tile), enabled) } }
+                actions.drop(4).forEachIndexed { i, c -> Tile(i + 4) { ControlTile(c, Modifier.size(tile), enabled, onRest) } }
+                toggles.forEachIndexed { i, c -> Tile(i + actions.size) { ToggleTile(c, Modifier.size(tile), enabled, onRest) } }
             }
         } }
     }
@@ -827,7 +829,7 @@ private val LocalTileLabel = staticCompositionLocalOf { TextStyle.Default }
 private val LocalTilePad = staticCompositionLocalOf { TilePadX }
 
 @Composable
-private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true) {
+private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true, onRest: () -> Unit = {}) {
     val tone = c.color.color
     val lum = remember(tone) { tone.luminance() }
     val fill = tileFill(tone, lum).copy(alpha = 0.92f)
@@ -866,17 +868,17 @@ private fun ControlTile(c: Control, modifier: Modifier, enabled: Boolean = true)
             }
             .onPlaced { placed[0] = it }
             .liquidPress(
-                enabled = enabled, onLongClickLabel = "More",
-                onClick = if (c.menuOnTap && openMenu != null) openMenu else c.onClick,
-                onLongClick = c.onHold ?: openMenu,
+                onLongClickLabel = if (enabled) "More" else null,
+                onClick = if (!enabled) onRest else if (c.menuOnTap && openMenu != null) openMenu else c.onClick,
+                onLongClick = if (!enabled) onRest else c.onHold ?: openMenu,
             )
             .glassRaised(SmoothCornerShape(TileRadius), fill),
-    ) { TileFace(c, ink) }
+    ) { TileFace(c, ink, marks = enabled) }
 }
 
 /** A tile's glyph, corner mark and label; also what its menu grows out of (there without the glyph, which glides on its own). */
 @Composable
-private fun TileFace(c: Control, ink: Color, icon: Boolean = true) {
+private fun TileFace(c: Control, ink: Color, icon: Boolean = true, marks: Boolean = true) {
     Column(
         // Even on both sides (6 dp at the end ran "Commands" to the edge), and 9 dp so it fits at full size.
         Modifier.fillMaxSize().padding(horizontal = LocalTilePad.current, vertical = 10.dp),
@@ -903,6 +905,8 @@ private fun TileFace(c: Control, ink: Color, icon: Boolean = true) {
             // Tiles that hold more on a long press say so with a quiet "more" mark (the user wanted
             // an indicator); it takes the chevron's corner, one mark per tile.
             when {
+                // Resting (the PC away), a tile promises nothing more.
+                !marks -> {}
                 c.menu != null || c.onHold != null -> Icon(Icons.Rounded.MoreHoriz, null, tint = ink.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
                 c.opens -> Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = ink.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
             }
@@ -918,7 +922,7 @@ private fun TileFace(c: Control, ink: Color, icon: Boolean = true) {
  * label, coloured glyph). Each is its own tile: two halves in one module didn't read as two.
  */
 @Composable
-private fun ToggleTile(c: Control, modifier: Modifier, enabled: Boolean) {
+private fun ToggleTile(c: Control, modifier: Modifier, enabled: Boolean, onRest: () -> Unit = {}) {
     val tone = c.color.color
     val on by animateFloatAsState(if (c.active) 1f else 0f, VyomaMotion.effects(), label = "toggleOn")
     val dark = isDarkUi
@@ -933,7 +937,7 @@ private fun ToggleTile(c: Control, modifier: Modifier, enabled: Boolean) {
     Column(
         modifier
             .graphicsLayer { if (!enabled) { alpha = 0.4f; compositingStrategy = CompositingStrategy.ModulateAlpha } }
-            .pressable(enabled = enabled && c.toggle, haptic = if (c.active) Haptic.ToggleOff else Haptic.ToggleOn, onClick = c.onClick)
+            .pressable(enabled = !enabled || c.toggle, haptic = if (!enabled) Haptic.Tap else if (c.active) Haptic.ToggleOff else Haptic.ToggleOn, onClick = if (enabled) c.onClick else onRest)
             .glassRaised(shape, lerp(toggleOff, Color.White.copy(alpha = 0.96f), on))
             // On a light card, white alone barely lifts: a hairline of the tone outlines it.
             .then(if (!dark && on > 0.01f) Modifier.border(1.dp, tone.copy(alpha = 0.55f * on), shape) else Modifier)

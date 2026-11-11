@@ -327,7 +327,7 @@ fun RuleEditorScreen(vm: AppViewModel, ruleId: String?, onBack: () -> Unit) {
 
     CollapsingHeaderScaffold(
         title = name.ifBlank { trigger?.look()?.label ?: "New rule" },
-        subtitle = if (valid) "Saves when you go back" else "Pick when it runs and what it does",
+        subtitle = if (valid) null else "Pick when it runs and what it does",
         navigation = { BounceIconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
         actions = {
             if (valid) BounceIconButton(onClick = {
@@ -351,7 +351,7 @@ fun RuleEditorScreen(vm: AppViewModel, ruleId: String?, onBack: () -> Unit) {
                         trailing = { RowChevron(if (tunable(t)) "Edit" else "Change") },
                         onClick = { if (tunable(t)) tuning = Slot.When to t else picking = Slot.When },
                     )
-                    LiquidReveal(tunable(t)) { ListRow(title = "Something else", icon = Icons.Rounded.Edit, iconTint = SystemColor.GRAY.color, trailing = { RowChevron() }, onClick = { picking = Slot.When }) }
+                    LiquidReveal(tunable(t)) { ListRow(title = "Choose another", icon = Icons.Rounded.Edit, iconTint = SystemColor.GRAY.color, trailing = { RowChevron() }, onClick = { picking = Slot.When }) }
                 }
             }
         }
@@ -461,6 +461,9 @@ fun RuleEditorScreen(vm: AppViewModel, ruleId: String?, onBack: () -> Unit) {
             vm = vm,
             slot = slot,
             away = away,
+            // A condition of the trigger's own kind either repeats it or contradicts it ("when locked,
+            // only if unlocked"), and one kind twice is the same: neither is offered.
+            taken = if (slot is Slot.OnlyIf) (listOfNotNull(trigger) + conditions.filterIndexed { i, _ -> i != slot.index }).map { it::class }.toSet() else emptySet(),
             onDismiss = { picking = null },
             onPick = { choice ->
                 picking = null
@@ -576,11 +579,11 @@ private fun actionGroups(away: Boolean) = listOf(
 )
 
 @Composable
-private fun PickerDialog(vm: AppViewModel, slot: Slot, away: Boolean, onDismiss: () -> Unit, onPick: (Any) -> Unit) {
+private fun PickerDialog(vm: AppViewModel, slot: Slot, away: Boolean, taken: Set<kotlin.reflect.KClass<*>> = emptySet(), onDismiss: () -> Unit, onPick: (Any) -> Unit) {
     val context = LocalContext.current
     val groups = when (slot) {
         Slot.When -> triggerGroups(condition = false)
-        is Slot.OnlyIf -> triggerGroups(condition = true)
+        is Slot.OnlyIf -> triggerGroups(condition = true).map { g -> Group(g.title, g.items.filter { it::class !in taken }) }.filter { it.items.isNotEmpty() }
         is Slot.Do -> actionGroups(away)
     }
     val companion = remember { vm.hasCompanion() }
