@@ -34,6 +34,7 @@ use vyoma_core::device::{Command, Event, Hub};
 use vyoma_core::identity::Identity;
 use vyoma_core::invite::Invite;
 use vyoma_core::lan::{Lan, Ports, Rules, UDP_PORT};
+use vyoma_core::messages::{self, Store};
 use vyoma_core::link::packet;
 use vyoma_core::share::{self, SHARE, SHARE_UPDATE, Shared};
 use vyoma_core::trust::TrustStore;
@@ -49,10 +50,13 @@ pub const KEYBOARDSTATE: &str = "kdeconnect.mousepad.keyboardstate";
 const INCOMING: &[&str] = &[
     PING, BATTERY, FIND, LOCK_REQUEST, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE,
     media::MPRIS_REQUEST, media::VOLUME_REQUEST, RUNCOMMAND_REQUEST, NOTIFICATION, input::MOUSEPAD_REQUEST,
+    messages::MESSAGES, messages::CONTACTS_UIDS_REPLY, messages::CONTACTS_VCARDS_REPLY, messages::UNLOCKED, messages::LOCKED,
 ];
 const OUTGOING: &[&str] = &[
     PING, BATTERY, FIND, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE,
     media::MPRIS, media::VOLUME, RUNCOMMAND, input::MOUSEPAD_ECHO, KEYBOARDSTATE,
+    messages::REQUEST, messages::REQUEST_CONVERSATIONS, messages::REQUEST_CONVERSATION, messages::CONTACTS_UIDS, messages::CONTACTS_VCARDS,
+    messages::UNLOCK, messages::LOCK,
 ];
 
 /// This release, as the Linux app reads it: the repo's one version.
@@ -63,6 +67,8 @@ const REPO: &str = "Prajwaljb/VyomaConnect";
 /// and the battery read.
 const CLIPBOARD_EVERY: Duration = Duration::from_secs(1);
 const BATTERY_EVERY: Duration = Duration::from_secs(60);
+/// How often the screen's lock and unused texts are looked at (texts lock again with the screen).
+const LOCK_EVERY: Duration = Duration::from_secs(3);
 /// How long a pairing question stays up: the phone gives up after 30 s too.
 const PAIR_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -139,7 +145,17 @@ async fn run(dir: PathBuf) -> Result<()> {
         });
     }
     let run_commands = Commands::new(&dir);
-    let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone, run: run_commands.clone() };
+    // The phone's texts, in memory only, for the window's Messages page.
+    let texts = Arc::new(Store::default());
+    {
+        let (changes, mut ticks) = (changes.clone(), texts.subscribe());
+        tokio::spawn(async move {
+            while ticks.changed().await.is_ok() {
+                let _ = changes.send(json!({ "event": "MessagesChanged" }));
+            }
+        });
+    }
+    let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone, run: run_commands.clone(), texts: texts.clone() };
 
     // Players and the volume, read while a phone that takes them is linked.
     let media_wanted = Arc::new(AtomicBool::new(false));
@@ -174,6 +190,8 @@ async fn run(dir: PathBuf) -> Result<()> {
     let mut clip = Clipboard::default();
     let mut battery_tick = tokio::time::interval(BATTERY_EVERY);
     battery_tick.tick().await;
+    let mut lock_tick = tokio::time::interval(LOCK_EVERY);
+    let mut screen_locked = mac::screen_locked();
 
     // Answers to the pairing questions on screen, and the Found it of a ring.
     let (answers_tx, mut answers) = mpsc::unbounded_channel::<(String, bool)>();
@@ -199,6 +217,7 @@ async fn run(dir: PathBuf) -> Result<()> {
                         d.linked = false;
                     }
                     features.gone(&id);
+                    texts.gone(&id);
                 }
                 Event::Routes { id, remotes } => {
                     if let Some(d) = devices.get_mut(&id) {
@@ -253,6 +272,7 @@ async fn run(dir: PathBuf) -> Result<()> {
                     if let Some(d) = devices.get_mut(&id) {
                         d.paired = false;
                     }
+                    texts.forget(&id);
                     mac::notify(&format!("{name} is no longer paired"), "Pair again from the phone to use it with this Mac.").await;
                 }
                 Event::Asked { id, key, .. } => {
@@ -295,6 +315,15 @@ async fn run(dir: PathBuf) -> Result<()> {
                             }
                         }
                         NOTIFICATION => phone_notification(&id, d, &packet["body"]).await,
+                        messages::UNLOCKED | messages::LOCKED => {
+                            tracing::info!("{id}: {}", packet["type"].as_str().unwrap_or(""));
+                            texts.on_packet(&id, &packet);
+                        }
+                        messages::MESSAGES | messages::CONTACTS_UIDS_REPLY | messages::CONTACTS_VCARDS_REPLY => {
+                            for p in texts.on_packet(&id, &packet) {
+                                send(&id, p);
+                            }
+                        }
                         kind if vyoma::takes(kind) && d.paired => {
                             // AppKit tells only this thread where the wallpaper is.
                             let wallpaper = if kind == vyoma::WALLPAPER_REQUEST { vyoma::wallpaper_path() } else { None };
@@ -349,6 +378,18 @@ async fn run(dir: PathBuf) -> Result<()> {
                 }
                 battery = now;
             }
+            _ = lock_tick.tick() => {
+                let now = mac::screen_locked();
+                let mut relock = texts.expire();
+                if now == Some(true) && screen_locked != Some(true) {
+                    relock.extend(texts.lock_all());
+                }
+                screen_locked = now;
+                for id in relock {
+                    tracing::info!("{id}: texts locked again");
+                    send(&id, packet(messages::LOCK, json!({})));
+                }
+            }
             _ = tokio::signal::ctrl_c() => break,
         }
     }
@@ -363,6 +404,7 @@ struct Window {
     changes: broadcast::Sender<Value>,
     everyone: [SocketAddr; 1],
     run: Commands,
+    texts: Arc<Store>,
 }
 
 impl Window {
@@ -434,6 +476,46 @@ impl Window {
                 Ok(Value::Null)
             }
             "Activity" => Ok(json!([])),
+            "Conversations" => {
+                let id = control::text(args, 0)?;
+                let d = devices.get(&id).filter(|d| d.takes(messages::REQUEST)).ok_or("This phone doesn't share its texts")?;
+                let (json, ask) = self.texts.conversations(&id, d.takes(messages::UNLOCK));
+                for p in ask {
+                    command(Command::Send(id.clone(), p))?;
+                }
+                serde_json::from_str(&json).map_err(|e| e.to_string())
+            }
+            "Thread" => {
+                let id = control::text(args, 0)?;
+                let thread = args[1].as_i64().ok_or("which conversation?")?;
+                let guarded = devices.get(&id).is_some_and(|d| d.takes(messages::UNLOCK));
+                let (json, ask) = self.texts.thread(&id, thread, guarded);
+                for p in ask {
+                    command(Command::Send(id.clone(), p))?;
+                }
+                serde_json::from_str(&json).map_err(|e| e.to_string())
+            }
+            "TextThread" => {
+                let id = control::text(args, 0)?;
+                let thread = args[1].as_i64().ok_or("which conversation?")?;
+                let text = control::text(args, 2)?;
+                let d = devices.get(&id).filter(|d| d.takes(messages::REQUEST)).ok_or("The phone isn't connected")?;
+                let p = self.texts.send(&id, thread, &text, d.takes(messages::UNLOCK))?;
+                tracing::info!("{id}: sending a text");
+                command(Command::Send(id, p))
+            }
+            "UnlockTexts" => {
+                let id = control::text(args, 0)?;
+                let Some(d) = devices.get(&id).filter(|d| d.takes(messages::UNLOCK)) else { return Ok(Value::Null) };
+                if !d.linked {
+                    return Err("The phone isn't connected".into());
+                }
+                if let Some(p) = self.texts.unlock(&id) {
+                    tracing::info!("{id}: asking to show the texts");
+                    command(Command::Send(id, p))?;
+                }
+                Ok(Value::Null)
+            }
             _ => Err("Not on the Mac yet".into()),
         }
     }
@@ -455,7 +537,7 @@ fn details(id: &str, d: &Device) -> Value {
     let mut v = json!({
         "id": id, "name": d.name, "paired": d.paired, "linked": d.linked, "key": d.key, "asking": d.asking,
         "via": if d.linked { "wifi" } else { "" },
-        "can": { "share": d.takes(SHARE), "ring": d.takes(FIND), "browse": false, "text": false },
+        "can": { "share": d.takes(SHARE), "ring": d.takes(FIND), "browse": false, "text": d.takes(messages::REQUEST) },
         // No cable here, so nothing to allow for the clipboard.
         "clipboardSync": "on",
         "permits": [],

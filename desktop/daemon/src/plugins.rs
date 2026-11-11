@@ -15,7 +15,7 @@ use crate::commands::{RUNCOMMAND, RUNCOMMAND_REQUEST};
 use crate::input::{MOUSEPAD_ECHO, MOUSEPAD_KEYBOARDSTATE, MOUSEPAD_REQUEST};
 use crate::notifications::{NOTIFICATION, NOTIFICATION_ACTION, NOTIFICATION_REPLY, NOTIFICATION_REQUEST};
 use crate::share::{SHARE, SHARE_UPDATE};
-use crate::messages;
+use vyoma_core::messages;
 use crate::telephony::{self, MUTE, TELEPHONY};
 use crate::presenter::PRESENTER;
 use crate::phonefiles::{SFTP, SFTP_REQUEST};

@@ -261,3 +261,46 @@ mod tests {
         assert_eq!(args, ["-e", "on run argv", "-e", "return item 2 of argv", "-e", "end run", FIRST, "-x", evil]);
     }
 }
+
+/// Whether the screen is locked, from the login session's own record (CoreGraphics'
+/// `CGSSessionScreenIsLocked`, there only while it's locked); None outside a login session.
+#[cfg(target_os = "macos")]
+pub fn screen_locked() -> Option<bool> {
+    use std::ffi::{c_char, c_void};
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGSessionCopyCurrentDictionary() -> *const c_void;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFDictionaryGetValue(dict: *const c_void, key: *const c_void) -> *const c_void;
+        fn CFStringCreateWithCString(alloc: *const c_void, text: *const c_char, encoding: u32) -> *const c_void;
+        fn CFGetTypeID(cf: *const c_void) -> usize;
+        fn CFBooleanGetTypeID() -> usize;
+        fn CFBooleanGetValue(b: *const c_void) -> u8;
+        fn CFRelease(cf: *const c_void);
+    }
+    const UTF8: u32 = 0x0800_0100;
+    // SAFETY: a copied dictionary and a created string, each released once; the value is borrowed
+    // from the dictionary and read as a boolean only after its type is checked.
+    unsafe {
+        let session = CGSessionCopyCurrentDictionary();
+        if session.is_null() {
+            return None;
+        }
+        let key = CFStringCreateWithCString(std::ptr::null(), c"CGSSessionScreenIsLocked".as_ptr(), UTF8);
+        let value = if key.is_null() { std::ptr::null() } else { CFDictionaryGetValue(session, key) };
+        let locked = !value.is_null() && CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue(value) != 0;
+        if !key.is_null() {
+            CFRelease(key);
+        }
+        CFRelease(session);
+        Some(locked)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn screen_locked() -> Option<bool> {
+    None
+}
+
