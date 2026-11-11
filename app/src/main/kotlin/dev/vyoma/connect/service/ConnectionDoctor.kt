@@ -84,6 +84,13 @@ object ConnectionDoctor {
         )
     }
 
+    /** When the checks themselves couldn't run: the likeliest causes, still with something to try. */
+    fun unknown(pcName: String) = Finding(
+        "$pcName doesn't answer",
+        "It may be asleep, off, or on another Wi-Fi. Wake it and check both are on the same network, or use a USB cable.",
+        Fix.USE_CABLE,
+    )
+
     /** Looks at the phone's network and knocks on the PC's last address (a second or two). */
     suspend fun examine(context: Context, pcId: String, pcName: String): Facts = withContext(Dispatchers.IO) {
         val app = context.applicationContext

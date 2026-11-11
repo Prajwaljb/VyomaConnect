@@ -1014,7 +1014,7 @@ private fun PcStatus(battery: BatteryState?, stale: Boolean, stats: PcStats?, sh
             // A cached reading shows dimmed until the PC sends a fresh one.
             Box(Modifier.graphicsLayer { alpha = if (stale) 0.5f else 1f }) {
                 Gauge(
-                    if (battery.charging) "Charging" else if (plugged) "Plugged in" else "Battery", "${battery.charge}", "%",
+                    if (stale) "Battery" else if (battery.charging) "Charging" else if (plugged) "Plugged in" else "Battery", "${battery.charge}", "%",
                     battery.charge / 100f, color, Modifier, size = 80.dp, stroke = 7.dp,
                     valueStyle = MaterialTheme.typography.headlineSmall,
                 )
@@ -1023,9 +1023,20 @@ private fun PcStatus(battery: BatteryState?, stale: Boolean, stats: PcStats?, sh
         }
         if (!showLoad) {
             if (battery != null) Column(Modifier.weight(1f)) {
-                Text(if (battery.charging) "Charging" else if (plugged) "Plugged in" else if (battery.low) "Battery low" else "On battery", style = MaterialTheme.typography.titleMedium)
+                // Away, the charger can't be known (the companion's word on it went with the link),
+                // so a cached reading claims nothing about now.
                 Text(
-                    if (stale) "Last known level" else "PC battery",
+                    when {
+                        stale -> "Last known level"
+                        battery.charging -> "Charging"
+                        plugged -> "Plugged in"
+                        battery.low -> "Battery low"
+                        else -> "On battery"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    if (stale) "Updates when it's back" else "PC battery",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

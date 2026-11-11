@@ -232,7 +232,7 @@ class AppContainer(private val app: Application) {
                 deviceName = name,
                 deviceType = if (app.resources.configuration.smallestScreenWidthDp >= 600) DeviceType.TABLET else DeviceType.PHONE,
                 lanConfig = network.lanConfig().let { if (demo != null) Demo.lanConfig(it) else it },
-            ).also { hub -> demo?.let { Demo.start(hub, it, appScope) } }
+            ).also { hub -> demo?.takeUnless { Demo.away(app) }?.let { Demo.start(hub, it, appScope) } }
         }.also { _hub.value = it }
     }
 

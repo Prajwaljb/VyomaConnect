@@ -47,6 +47,12 @@ object Demo {
         transportOf = { _, _ -> TransportKind.LAN },
     )
 
+    /**
+     * The laptop stays away (paired, never connecting), to show the away screens: made by
+     * `adb shell touch /sdcard/Android/data/dev.vyoma.connect.demo/files/away`, read at start.
+     */
+    fun away(context: Context): Boolean = context.getExternalFilesDir(null)?.let { File(it, "away").exists() } == true
+
     fun start(hub: DeviceHub, peers: Peers, scope: CoroutineScope) {
         val pc = DemoPc(peers.pc)
         pc.run(scope) { hub.lan.tcpPort }

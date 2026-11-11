@@ -52,6 +52,12 @@ class ConnectionChecksTest {
         )
     }
 
+    @Test fun awayKeepsOnlyWhatStillHasSomethingToSay() {
+        val away = connectionChecks(offline, away = true)
+        assertEquals(listOf(CheckKind.BLUETOOTH), away.map { it.kind })
+        assertEquals(CheckLevel.PROBLEM, connectionChecks(offline.copy(bluetooth = BluetoothFallback.Readiness.NOT_PAIRED), away = true).single().level)
+    }
+
     @Test fun nothingConnectedClaimsNoEncryption() {
         assertEquals(CheckLevel.QUIET, offline.check(CheckKind.ENCRYPTION).level)
     }

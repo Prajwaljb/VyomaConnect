@@ -305,12 +305,7 @@ private fun DoneRow(f: FileRecord, divider: Boolean, modifier: Modifier, context
             !f.incoming && f.ok -> { { Icon(Icons.AutoMirrored.Rounded.Send, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp)) } }
             else -> null
         },
-        onClick = if (openable) { {
-            val open = Intent(Intent.ACTION_VIEW)
-                .setDataAndType(Uri.parse(f.location), AndroidShareSink.mimeOf(f.name))
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-            runCatching { context.startActivity(open) }.onFailure { status.show("No app here opens this file", failure = true) }
-        } } else null,
+        onClick = if (openable) { { openFile(context, Uri.parse(f.location), f.name, status) } } else null,
     )
 }
 
