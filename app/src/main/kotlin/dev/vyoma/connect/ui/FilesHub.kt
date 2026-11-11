@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.ContentCopy
@@ -105,9 +106,13 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
         // Sending is the job people come here for: three big glass tiles, one per kind of thing.
         item(key = "send-label") { SectionLabel(pc?.let { "Send to ${it.identity.deviceName}" } ?: "Send to your PC", Modifier.animateItem()) }
         item(key = "send") {
+            // Away, a tap says why rather than nothing.
+            val away = devices.firstOrNull { it.identity.companionOf == null && it.isPaired }?.let { "${it.identity.deviceName} is away" }
+                ?: "Pair a PC first to send to it"
+            val rest = { status.show(away, icon = Icons.Rounded.LinkOff) }
             Row(Modifier.animateItem().fillMaxWidth().pressGroup(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                SendTile(Icons.Rounded.UploadFile, "Files", SystemColor.BLUE, pc != null, Modifier.weight(1f), dim = bluetooth) { send { vm.pickFiles(context) } }
-                SendTile(Icons.Rounded.PhotoLibrary, "Photos", SystemColor.PINK, pc != null, Modifier.weight(1f), dim = bluetooth) { send { vm.pickPhotos(context) } }
+                SendTile(Icons.Rounded.UploadFile, "Files", SystemColor.BLUE, pc != null, Modifier.weight(1f), dim = bluetooth, onRest = rest) { send { vm.pickFiles(context) } }
+                SendTile(Icons.Rounded.PhotoLibrary, "Photos", SystemColor.PINK, pc != null, Modifier.weight(1f), dim = bluetooth, onRest = rest) { send { vm.pickPhotos(context) } }
                 // Folders travel through the companion (stock KDE Connect sends files only).
                 if (companion) SendTile(Icons.Rounded.DriveFolderUpload, "Folder", SystemColor.ORANGE, true, Modifier.weight(1f), dim = bluetooth) { send { vm.pickFolder(context) } }
             }
@@ -137,7 +142,11 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
                 SectionCard(Modifier.animateItem()) {
                     ListRow(
                         title = "Browse PC files",
-                        subtitle = if (pc == null) "Connect to your PC first" else "Needs Vyoma on your PC",
+                        subtitle = when {
+                            pc != null -> "Needs Vyoma on your PC"
+                            devices.any { it.identity.companionOf == null && it.isPaired } -> "When your PC is back"
+                            else -> "Pair a PC first"
+                        },
                         icon = Icons.Rounded.FolderOff,
                         iconTint = SystemColor.GRAY.color,
                     )
@@ -197,14 +206,14 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
 
 /** One of the Send tiles: a filled Shortcuts tile, wider than Home's, glyph over its name. */
 @Composable
-private fun SendTile(icon: ImageVector, label: String, color: SystemColor, enabled: Boolean, modifier: Modifier, dim: Boolean = false, onClick: () -> Unit) {
+private fun SendTile(icon: ImageVector, label: String, color: SystemColor, enabled: Boolean, modifier: Modifier, dim: Boolean = false, onRest: () -> Unit = {}, onClick: () -> Unit) {
     val tone = color.color
     val fill = if (tone.luminance() in 0.2f..0.5f) tone.toned(lightness = 0.38f) else tone
     Column(
         modifier
             .height(96.dp)
             .graphicsLayer { if (!enabled || dim) alpha = 0.4f }
-            .pressable(enabled = enabled, onClick = onClick)
+            .pressable(onClick = if (enabled) onClick else onRest)
             .glassRaised(SmoothCornerShape(20.dp), fill.copy(alpha = 0.92f))
             .padding(14.dp),
         verticalArrangement = Arrangement.SpaceBetween,

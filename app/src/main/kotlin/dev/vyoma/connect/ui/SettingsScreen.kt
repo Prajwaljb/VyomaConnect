@@ -391,7 +391,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
             SectionCard {
                 FingerprintLockRow(resumeTick)
                 RowDivider()
-                TextsLockRow()
+                TextsLockRow(resumeTick)
                 RowDivider()
                 StockTextsRow()
             }
@@ -923,6 +923,11 @@ private fun PhoneFilesRow(resumeTick: Int) {
     )
 }
 
+/** Android's screen lock settings: what the fingerprint rows need before they mean anything. */
+private fun setScreenLock(context: android.content.Context) {
+    runCatching { context.startActivity(android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)) }
+}
+
 @Composable
 private fun FingerprintLockRow(resumeTick: Int) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -932,6 +937,8 @@ private fun FingerprintLockRow(resumeTick: Int) {
     // The clipboard widget hides what was copied while the lock is on.
     fun widgets() { scope.launch { dev.vyoma.connect.widget.Widgets.refresh(context) } }
     fun toggle(want: Boolean) {
+        // With no screen lock there's nothing to ask for: a switch showing on would promise a check that never comes.
+        if (!usable) return setScreenLock(context)
         if (want) {
             AppLock.setEnabled(context, true)
             on = true
@@ -951,7 +958,7 @@ private fun FingerprintLockRow(resumeTick: Int) {
         iconTint = SystemColor.MINT.color,
         haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
         onClick = { toggle(!on) },
-        trailing = { VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Fingerprint lock") },
+        trailing = { VyomaSwitch(checked = on && usable, onCheckedChange = ::toggle, contentDescription = "Fingerprint lock") },
     )
     LiquidReveal(on && usable) {
         Column {
@@ -963,10 +970,12 @@ private fun FingerprintLockRow(resumeTick: Int) {
 
 /** Texts reach a PC's Messages page only after a fingerprint here ([dev.vyoma.connect.platform.TextsLock]). */
 @Composable
-private fun TextsLockRow() {
+private fun TextsLockRow(resumeTick: Int) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var on by remember { mutableStateOf(dev.vyoma.connect.platform.TextsLock.enabled(context)) }
+    val usable = remember(resumeTick) { AppLock.canAsk(context) }
     fun toggle(want: Boolean) {
+        if (!usable) return setScreenLock(context)
         if (want) {
             dev.vyoma.connect.platform.TextsLock.setEnabled(context, true)
             on = true
@@ -979,12 +988,12 @@ private fun TextsLockRow() {
     }
     ListRow(
         title = "Ask before PCs show texts",
-        subtitle = "Each time Messages opens on a PC",
+        subtitle = if (usable) "Each time Messages opens on a PC" else "Set a screen lock on this phone to use it",
         icon = Icons.AutoMirrored.Rounded.Message,
         iconTint = SystemColor.GREEN.color,
         haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
         onClick = { toggle(!on) },
-        trailing = { VyomaSwitch(checked = on, onCheckedChange = ::toggle, contentDescription = "Ask before PCs show texts") },
+        trailing = { VyomaSwitch(checked = on && usable, onCheckedChange = ::toggle, contentDescription = "Ask before PCs show texts") },
     )
 }
 

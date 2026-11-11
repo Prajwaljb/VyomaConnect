@@ -167,7 +167,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun next() = container.media.control { p, n -> p.action(n, MprisPlugin.MediaAction.NEXT) }
     fun previous() = container.media.control { p, n -> p.action(n, MprisPlugin.MediaAction.PREVIOUS) }
     fun seekTo(ms: Long) = container.media.control { p, n -> p.seekTo(n, ms) }
-    fun pickPlayer(name: String) { container.media.preferredPlayer.value = name }
+    fun pickPlayer(name: String) { container.media.choose(name) }
 
     /**
      * Latest-value sender for slider drags: the first value goes out at once, then at most one
@@ -208,6 +208,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun nothingSentReason(): String =
         devices.value.firstOrNull { it.isPaired && it.identity.companionOf == null }?.let { "${it.identity.deviceName} is away: nothing sent" }
             ?: "No PC connected yet"
+    /** Why the PC controls can't open now, or null when a PC is there to take them. */
+    fun awayReason(): String? = if (connectedPc() != null) null else
+        devices.value.firstOrNull { it.isPaired && it.identity.companionOf == null }?.let { "${it.identity.deviceName} is away" }
+            ?: "Pair a PC first to use it as a touchpad"
     fun clearClipHistory() = container.clipboard.clearHistory()
     fun backgroundClipboardSync() = container.clipboard.backgroundSyncAvailable()
     /** Whether copies here are reaching the PC by themselves right now. */
