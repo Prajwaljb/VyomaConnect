@@ -251,11 +251,14 @@ fn wire(ui: &MainWindow) {
     ui.on_update({
         let ui = ui.as_weak();
         move || {
-            if let Some(win) = ui.upgrade() {
+            // On the Mac, Update opens the release's page to download from: nothing runs here.
+            let download = ui.upgrade().is_some_and(|win| win.get_update_download());
+            if let Some(win) = ui.upgrade().filter(|_| !download) {
                 win.set_updating(true);
             }
             let ui = ui.clone();
             std::thread::spawn(move || match daemon::connect().and_then(|d| d.update()) {
+                Ok(()) if download => {}
                 Ok(()) => notify(&ui, "Updating: Vyoma restarts by itself when it's done".to_owned()),
                 Err(e) => {
                     notify(&ui, format!("{e:#}"));
@@ -693,6 +696,7 @@ pub fn show_health(ui: &MainWindow, h: &Health) {
     ui.set_updating(u.updating);
     ui.set_can_update(u.can_update);
     ui.set_update_packaged(u.packaged);
+    ui.set_update_download(u.download);
     ui.set_health_loaded(true);
 }
 

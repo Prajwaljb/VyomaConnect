@@ -160,6 +160,8 @@ pub struct Update {
     pub can_update: bool,
     /// Installed by a package manager, which updates it.
     pub packaged: bool,
+    /// Updated by downloading the new app (the Mac): Update opens the release's page.
+    pub download: bool,
 }
 
 impl Health {
@@ -197,6 +199,7 @@ impl Health {
                 updating: v["update"]["updating"].as_bool().unwrap_or(false),
                 can_update: v["update"]["canUpdate"].as_bool().unwrap_or(false),
                 packaged: v["update"]["packaged"].as_bool().unwrap_or(false),
+                download: v["update"]["download"].as_bool().unwrap_or(false),
             },
         }
     }

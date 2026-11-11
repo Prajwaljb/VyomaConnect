@@ -16,6 +16,7 @@ mod mac;
 mod media;
 #[cfg(target_os = "macos")]
 mod notify;
+mod update;
 mod vyoma;
 
 use std::collections::HashMap;
@@ -63,7 +64,7 @@ const OUTGOING: &[&str] = &[
 
 /// This release, as the Linux app reads it: the repo's one version.
 const VERSION: &str = include_str!("../../../VERSION");
-const REPO: &str = "Prajwaljb/VyomaConnect";
+use vyoma_core::release::REPO;
 
 /// How often the clipboard is looked at (macOS sends no change events to a program like this one)
 /// and the battery read.
@@ -184,7 +185,18 @@ async fn run(dir: PathBuf) -> Result<()> {
             }
         });
     }
-    let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone, run: run_commands.clone(), texts: texts.clone(), permits: permits.clone(), activity: activity.clone() };
+    // Newer releases with a Mac app, once a day.
+    let updates = update::Updates::load(&dir, VERSION);
+    {
+        let changes = changes.clone();
+        tokio::spawn(updates.clone().run(move || {
+            let _ = changes.send(json!({ "event": "Changed" }));
+        }));
+    }
+    // Inside Vyoma.app, pairing is asked in its window (with Accept and Reject by the code), as on
+    // Linux; the bare binary asks with a dialog.
+    let in_app = std::env::current_exe().is_ok_and(|exe| launchd::app_of(&exe).is_some());
+    let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone, run: run_commands.clone(), texts: texts.clone(), permits: permits.clone(), activity: activity.clone(), updates };
 
     // Players and the volume, read while a phone that takes them is linked.
     let media_wanted = Arc::new(AtomicBool::new(false));
@@ -256,22 +268,27 @@ async fn run(dir: PathBuf) -> Result<()> {
                 Event::Prompt { id, name, key } => {
                     let d = devices.entry(id.clone()).or_default();
                     (d.key, d.asking) = (key.clone(), true);
-                    let answers = answers_tx.clone();
-                    let asked = id.clone();
-                    let text = format!("{name} wants to pair with this Mac.\n\nPair only if the phone shows this same code:\n\n{key}");
-                    let task = tokio::spawn(async move {
-                        let yes = match mac::ask("Vyoma", &text, "Reject", "Pair", PAIR_TIMEOUT) {
-                            Ok(child) => child.wait_with_output().await.is_ok_and(|out| mac::answered_yes(&out.stdout, "Pair")),
-                            Err(e) => {
-                                tracing::warn!("couldn't ask about pairing: {e:#}");
-                                false
-                            }
-                        };
-                        let _ = answers.send((asked, yes));
-                    });
-                    // A second request replaces the first question.
-                    if let Some(old) = prompts.insert(id, task) {
-                        old.abort();
+                    if in_app {
+                        mac::open_app();
+                        mac::notify(&format!("{name} wants to pair"), &format!("Pair in Vyoma if the phone shows the code {key}.")).await;
+                    } else {
+                        let answers = answers_tx.clone();
+                        let asked = id.clone();
+                        let text = format!("{name} wants to pair with this Mac.\n\nPair only if the phone shows this same code:\n\n{key}");
+                        let task = tokio::spawn(async move {
+                            let yes = match mac::ask("Vyoma", &text, "Reject", "Pair", PAIR_TIMEOUT) {
+                                Ok(child) => child.wait_with_output().await.is_ok_and(|out| mac::answered_yes(&out.stdout, "Pair")),
+                                Err(e) => {
+                                    tracing::warn!("couldn't ask about pairing: {e:#}");
+                                    false
+                                }
+                            };
+                            let _ = answers.send((asked, yes));
+                        });
+                        // A second request replaces the first question.
+                        if let Some(old) = prompts.insert(id, task) {
+                            old.abort();
+                        }
                     }
                 }
                 // Over before it was answered (the phone gave up): aborting drops the dialog's process.
@@ -456,6 +473,7 @@ struct Window {
     texts: Arc<Store>,
     permits: Arc<Permits>,
     activity: Arc<Activity>,
+    updates: Arc<update::Updates>,
 }
 
 impl Window {
@@ -512,8 +530,16 @@ impl Window {
             "EndPairingCode" => command(Command::Invite(None)),
             "Health" => Ok(json!({
                 "features": [], "installable": false, "checks": [], "notes": [],
-                "update": { "current": VERSION.trim(), "checks": false },
+                "update": self.updates.status(),
             })),
+            "SetUpdateChecks" => {
+                self.updates.set_checks(args[0].as_bool().ok_or("on or off?")?);
+                Ok(Value::Null)
+            }
+            "Update" => {
+                mac::open(&self.updates.page().ok_or("No newer Vyoma for the Mac yet")?);
+                Ok(Value::Null)
+            }
             "Commands" => Ok(Value::Object(self.run.all().into_iter().collect())),
             "SaveCommand" => {
                 let flag = |i: usize| args[i].as_bool().unwrap_or(false);
