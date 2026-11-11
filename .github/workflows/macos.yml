@@ -1,0 +1,26 @@
+# The macOS side, built and tested where there's a Mac: GitHub's macOS runners (Apple silicon).
+# Nobody on the project has a Mac yet, so this is the only place macOS code runs: it compiles the
+# shared core and runs its tests. It's no stand-in for trying the app on a real Mac.
+name: macOS
+
+on:
+  push:
+    branches: [main]
+    paths: ["desktop/**", ".github/workflows/macos.yml"]
+  workflow_dispatch:
+
+jobs:
+  core:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/core/target
+          key: macos-core-${{ hashFiles('desktop/core/Cargo.toml') }}
+      - name: Build and test vyoma-core
+        working-directory: desktop/core
+        run: cargo test --release
