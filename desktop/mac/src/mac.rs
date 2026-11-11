@@ -136,6 +136,22 @@ pub fn ask(title: &str, text: &str, no: &str, yes: &str, timeout: Duration) -> R
     Ok(child)
 }
 
+/// A list to pick one of [items] from, with [ok] as the button: its output is the chosen item, or
+/// nothing for Cancel. Brought to the front, as it answers something the person just did.
+pub fn choose(title: &str, prompt: &str, ok: &str, items: &[String]) -> Result<Child> {
+    let lines = [
+        "on run argv",
+        "activate",
+        "set picked to choose from list (items 5 thru -1 of argv) with title (item 2 of argv) with prompt (item 3 of argv) OK button name (item 4 of argv) default items {item 5 of argv}",
+        "if picked is false then return \"\"",
+        "return item 1 of picked",
+        "end run",
+    ];
+    let mut args = vec![title, prompt, ok];
+    args.extend(items.iter().map(String::as_str));
+    utf8(script(&lines, &args)).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().context("no osascript")
+}
+
 /// What [ask]'s dialog answered: true only for the [yes] button (not giving up, not Cancel).
 pub fn answered_yes(output: &[u8], yes: &str) -> bool {
     String::from_utf8_lossy(output).trim() == yes

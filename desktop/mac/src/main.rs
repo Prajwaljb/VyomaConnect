@@ -10,6 +10,7 @@
 //! Built and tested on GitHub's macOS runners only; not yet tried on a real Mac.
 
 mod control;
+mod finder;
 mod input;
 mod launchd;
 mod mac;
@@ -86,13 +87,22 @@ fn permit_words(p: Permit) -> (&'static str, &'static str) {
         other => (other.name(), other.detail()),
     }
 }
+/// Finder's Quick Action runs the helper with this and the selected files ([finder]).
+const SEND_ANY: &str = "--send-any";
+/// How long [SEND_ANY] waits for Vyoma to start, in half seconds.
+const SEND_ANY_WAIT_STEPS: u32 = 20;
+
 /// How long a pairing question stays up: the phone gives up after 30 s too.
 const PAIR_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn main() -> Result<()> {
     match std::env::args().nth(1).as_deref() {
         Some("--install") => launchd::install(),
-        Some("--uninstall") => launchd::uninstall(),
+        Some("--uninstall") => {
+            finder::remove();
+            launchd::uninstall()
+        }
+        Some(SEND_ANY) => send_any(std::env::args().skip(2).collect()),
         Some(other) => bail!("unknown option {other}: try --install or --uninstall"),
         None => run(std::env::var_os("VYOMA_DIR").map(PathBuf::from).unwrap_or_else(launchd::support_dir)),
     }
@@ -154,9 +164,9 @@ async fn run(dir: PathBuf) -> Result<()> {
     let (requests_tx, mut requests) = mpsc::channel::<control::Request>(16);
     let (changes, _) = broadcast::channel::<Value>(64);
     {
-        let (path, changes) = (control::socket_path(&dir), changes.clone());
+        let (path, changes, requests) = (control::socket_path(&dir), changes.clone(), requests_tx.clone());
         tokio::spawn(async move {
-            if let Err(e) = control::serve(path, requests_tx, changes).await {
+            if let Err(e) = control::serve(path, requests, changes).await {
                 tracing::warn!("no window socket: {e:#}");
             }
         });
@@ -195,8 +205,17 @@ async fn run(dir: PathBuf) -> Result<()> {
     }
     // Inside Vyoma.app, pairing is asked in its window (with Accept and Reject by the code), as on
     // Linux; the bare binary asks with a dialog.
-    let in_app = std::env::current_exe().is_ok_and(|exe| launchd::app_of(&exe).is_some());
-    let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone, run: run_commands.clone(), texts: texts.clone(), permits: permits.clone(), activity: activity.clone(), updates };
+    let exe = std::env::current_exe().ok();
+    let in_app = exe.as_deref().and_then(launchd::app_of).is_some();
+    // Finder's "Send to Phone", pointing at this copy of the app (not one macOS runs from a download).
+    if let Some(exe) = exe.as_deref().filter(|e| launchd::app_of(e).is_some_and(finder::lasting)) {
+        match finder::install(exe) {
+            Ok(true) => tracing::info!("Finder's {} is in place", finder::NAME),
+            Ok(false) => {}
+            Err(e) => tracing::warn!("no {} in Finder: {e:#}", finder::NAME),
+        }
+    }
+    let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone, run: run_commands.clone(), texts: texts.clone(), permits: permits.clone(), activity: activity.clone(), updates, requests: requests_tx };
 
     // Players and the volume, read while a phone that takes them is linked.
     let media_wanted = Arc::new(AtomicBool::new(false));
@@ -474,6 +493,8 @@ struct Window {
     permits: Arc<Permits>,
     activity: Arc<Activity>,
     updates: Arc<update::Updates>,
+    /// For a choice made in a dialog to come back as a request.
+    requests: mpsc::Sender<control::Request>,
 }
 
 impl Window {
@@ -494,19 +515,45 @@ impl Window {
             }
             "SendFiles" => {
                 let id = control::text(args, 0)?;
-                let d = devices.get(&id).filter(|d| d.takes(SHARE)).ok_or("That phone isn't connected right now")?;
-                let paths: Vec<String> = args[1].as_array().map(|a| a.iter().filter_map(|p| p.as_str().map(str::to_owned)).collect()).unwrap_or_default();
-                let files = share::expand(&paths).map_err(|e| format!("{e:#}"))?;
-                let (me, cert, commands, changes) = (self.me.clone(), d.cert.clone(), self.commands.clone(), self.changes.clone());
-                tokio::spawn(async move {
-                    let count = files.len();
-                    let error = match share::send_files(&commands, &id, &me, &cert, files).await {
-                        Ok(()) => String::new(),
-                        Err(e) => format!("{e:#}"),
-                    };
-                    let _ = changes.send(json!({ "event": "FilesSent", "id": id, "count": count, "error": error }));
-                });
-                Ok(Value::Null)
+                // From Finder ([finder]): nobody's looking at the window, so notifications say how it went.
+                let tell = args[2].as_bool().unwrap_or(false);
+                self.send(id, strings(&args[1]), devices, tell).await
+            }
+            "SendAny" => {
+                let paths = strings(&args[0]);
+                if paths.is_empty() {
+                    return Ok(Value::Null);
+                }
+                let all: Vec<_> = devices.iter().map(|(id, d)| (id.clone(), d.name.clone(), d.paired, d.linked)).collect();
+                match share::pick(&all) {
+                    share::Pick::One(id) => self.send(id, paths, devices, true).await,
+                    share::Pick::NonePaired => {
+                        mac::notify("No phone to send to", "Pair your phone in Vyoma first, then try again.").await;
+                        Ok(Value::Null)
+                    }
+                    share::Pick::Ask(phones) => {
+                        let names: Vec<String> = phones.iter().map(|p| p.1.clone()).collect();
+                        let what = if paths.len() == 1 {
+                            format!("Send \u{201c}{}\u{201d} to which phone?", std::path::Path::new(&paths[0]).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+                        } else {
+                            format!("Send {} items to which phone?", paths.len())
+                        };
+                        let requests = self.requests.clone();
+                        tokio::spawn(async move {
+                            let picked = match mac::choose("Vyoma", &what, "Send", &names) {
+                                Ok(child) => child.wait_with_output().await.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()).unwrap_or_default(),
+                                Err(e) => {
+                                    tracing::warn!("couldn't ask which phone: {e:#}");
+                                    return;
+                                }
+                            };
+                            let Some((id, _)) = phones.into_iter().find(|p| !picked.is_empty() && p.1 == picked) else { return };
+                            let (reply, _) = tokio::sync::oneshot::channel();
+                            let _ = requests.send(control::Request { method: "SendFiles".into(), args: json!([id, paths, true]), reply }).await;
+                        });
+                        Ok(Value::Null)
+                    }
+                }
             }
             "Refresh" => self.lan.announce(&self.everyone).await.map(|_| Value::Null).map_err(|e| format!("{e:#}")),
             "PairingCode" => {
@@ -611,6 +658,45 @@ impl Window {
 }
 
 impl Window {
+    /// Sends [paths] (files and folders) to [id]; with [tell], notifications say how it went.
+    async fn send(&self, id: String, paths: Vec<String>, devices: &HashMap<String, Device>, tell: bool) -> Result<Value, String> {
+        let Some(d) = devices.get(&id).filter(|d| d.takes(SHARE)) else {
+            let name = devices.get(&id).map_or("The phone", |d| d.name.as_str());
+            let why = format!("{name} isn't connected. Open Vyoma on it, then try again.");
+            if tell {
+                mac::notify("Couldn't send", &why).await;
+            }
+            return Err(why);
+        };
+        let files = match share::expand(&paths) {
+            Ok(f) => f,
+            Err(e) => {
+                if tell {
+                    mac::notify("Couldn't send", &format!("{e:#}")).await;
+                }
+                return Err(format!("{e:#}"));
+            }
+        };
+        let what = share::summary(&files);
+        let (me, cert, commands, changes, name) = (self.me.clone(), d.cert.clone(), self.commands.clone(), self.changes.clone(), d.name.clone());
+        tokio::spawn(async move {
+            let count = files.len();
+            let error = match share::send_files(&commands, &id, &me, &cert, files).await {
+                Ok(()) => String::new(),
+                Err(e) => format!("{e:#}"),
+            };
+            if tell {
+                if error.is_empty() {
+                    mac::notify(&format!("Sent to {name}"), &what).await;
+                } else {
+                    mac::notify(&format!("Couldn't send to {name}"), &error).await;
+                }
+            }
+            let _ = changes.send(json!({ "event": "FilesSent", "id": id, "count": count, "error": error }));
+        });
+        Ok(Value::Null)
+    }
+
     /// Phones showing the list get the new one.
     fn commands_changed(&self, devices: &HashMap<String, Device>) {
         for (id, d) in devices {
@@ -638,6 +724,43 @@ fn details(id: &str, d: &Device, permits: &Permits) -> Value {
         v["battery"] = json!({ "charge": charge, "charging": charging, "low": low });
     }
     v
+}
+
+/// A JSON list of strings (the files of a send).
+fn strings(v: &Value) -> Vec<String> {
+    v.as_array().map(|a| a.iter().filter_map(|p| p.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+}
+
+/// `--send-any [paths]` (Finder's Quick Action): hands the files to the running agent, which picks
+/// the phone and says how it went. With the agent not running, opens Vyoma (which starts it) first.
+fn send_any(paths: Vec<String>) -> Result<()> {
+    use std::io::{BufRead, Write};
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let here = std::env::current_dir().unwrap_or_default();
+    let paths: Vec<String> = paths.iter().map(|p| here.join(p).to_string_lossy().into_owned()).collect();
+    let dir = std::env::var_os("VYOMA_DIR").map(PathBuf::from).unwrap_or_else(launchd::support_dir);
+    let socket = std::env::var_os("VYOMA_SOCKET").map(PathBuf::from).unwrap_or_else(|| control::socket_path(&dir));
+    for attempt in 0..SEND_ANY_WAIT_STEPS {
+        if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&socket) {
+            stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+            writeln!(stream, "{}", json!({ "method": "SendAny", "args": [paths] }))?;
+            let mut line = String::new();
+            std::io::BufReader::new(stream).read_line(&mut line)?;
+            // The agent tells of its own failures; this only covers an answer that never came.
+            if line.is_empty() {
+                mac::notify_now("Couldn't send", "Vyoma didn't answer. Open Vyoma, then try again.");
+            }
+            return Ok(());
+        }
+        if attempt == 0 {
+            mac::open_app();
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    mac::notify_now("Couldn't send", "Vyoma isn't running on this Mac right now. Open Vyoma, then try again.");
+    Ok(())
 }
 
 fn url_encode(s: &str) -> String {

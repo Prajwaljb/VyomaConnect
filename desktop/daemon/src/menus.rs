@@ -151,27 +151,7 @@ pub fn send(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Who `--send-any` sends to, from `Devices` (id, name, paired, linked).
-#[derive(Debug, PartialEq)]
-pub enum Pick {
-    One(String),
-    /// Several could take it: the person chooses (id, name).
-    Ask(Vec<(String, String)>),
-    NonePaired,
-}
-
-/// The connected phone; with none connected, the only paired one (sending says it isn't there);
-/// otherwise the person chooses among the connected ones, or among all when none is.
-pub fn pick(devices: &[(String, String, bool, bool)]) -> Pick {
-    let paired: Vec<_> = devices.iter().filter(|d| d.2).collect();
-    let linked: Vec<_> = paired.iter().copied().filter(|d| d.3).collect();
-    let from = if linked.is_empty() { paired } else { linked };
-    match from.as_slice() {
-        [] => Pick::NonePaired,
-        [only] => Pick::One(only.0.clone()),
-        many => Pick::Ask(many.iter().map(|d| (d.0.clone(), d.1.clone())).collect()),
-    }
-}
+pub use vyoma_core::share::{Pick, pick};
 
 fn notify(title: &str, body: &str) {
     let _ = std::process::Command::new("notify-send").args(["--app-name=Vyoma", "--icon=vyoma", "--hint=string:desktop-entry:vyoma", title, body]).status();
