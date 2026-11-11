@@ -74,7 +74,7 @@ export struct Check {
     name: string,
     state: string,
     detail: string,
-    // The button that fixes it ("Open ports"), or "".
+    // The button that fixes it ("Let phones through"), or "".
     action: string,
 }
 
@@ -150,8 +150,9 @@ export global Theme {
     out property <brush> rim: @linear-gradient(rim-angle, rim-lit 0%, rim-base 30%, rim-base 70%, rim-lit.transparentize(20%) 100%);
     // Floating chrome (sidebar, title bubble, capsules): a little more body than cards.
     out property <color> chrome: dark ? #1C1D2194 : #FFFFFF8A;
-    // Dialogs and the status bubble sit over anything, so they're nearly solid.
-    out property <color> popup: dark ? #1C1D21F2 : #F7F8FAF5;
+    // Dialogs, sheets, the status bubble and the docked title sit over anything, so they're solid:
+    // see-through, the page's words read through theirs (this window can't blur what's behind).
+    out property <color> popup: dark ? #1C1D21 : #F7F8FA;
     out property <color> raised: dark ? #FFFFFF12 : #0000000A;
     out property <color> divider: dark ? #FFFFFF14 : #00000012;
     // The chosen item: a neutral capsule (light 12% black, dark 14% white), as the tab bar's.
@@ -391,6 +392,8 @@ component Row inherits Rectangle {
     in property <string> value;
     in property <color> value-color: Theme.muted;
     in property <string> action;
+    // The action filled (the page's one way forward), else tinted.
+    in property <bool> action-prominent: true;
     in property <bool> switch;
     in property <bool> on;
     in property <bool> tappable: switch;
@@ -455,7 +458,7 @@ component Row inherits Rectangle {
             alignment: center;
             PillButton {
                 text: root.action;
-                prominent: true;
+                prominent: root.action-prominent;
                 clicked => { root.act(); }
             }
         }
@@ -532,7 +535,6 @@ component StatusRow inherits Rectangle {
             alignment: center;
             PillButton {
                 text: root.action;
-                prominent: true;
                 clicked => { root.act(); }
             }
         }
@@ -811,7 +813,7 @@ component AskCard inherits Glass {
     VerticalLayout {
         padding: 24px;
         spacing: 10px;
-        Text {
+        if root.title != "": Text {
             text: root.title;
             color: Theme.text;
             font-size: 17px;
@@ -822,8 +824,9 @@ component AskCard inherits Glass {
         }
         Text {
             text: root.body;
-            color: Theme.muted;
-            font-size: 14px;
+            // Alone, the body is the card's statement: full strength.
+            color: root.title != "" ? Theme.muted : Theme.text;
+            font-size: root.title != "" ? 14px : 15px;
             wrap: word-wrap;
             min-height: self.preferred-height;
             horizontal-alignment: center;
@@ -860,11 +863,14 @@ component Tip inherits HorizontalLayout {
 component Capsule inherits Rectangle {
     in property <string> text;
     in property <bool> tappable;
+    // Over content scrolling under it: a solid fill, so only the capsule covers what passes.
+    in property <bool> solid;
     callback clicked;
     height: 40px;
     width: words.preferred-width + 36px;
     border-radius: 20px;
-    background: tappable && touch.pressed ? Theme.popup : Theme.chrome;
+    background: root.solid ? (tappable && touch.pressed ? Theme.popup.darker(0.06) : Theme.popup) : tappable && touch.pressed ? Theme.popup : Theme.chrome;
+    animate background { duration: 160ms; }
     border-width: 1px;
     border-color: Theme.rim;
     drop-shadow-blur: Theme.dark ? 0px : 14px;
@@ -910,11 +916,11 @@ component Page inherits Rectangle {
     changed snap => {
         scroll.content-y = -min(root.snap, max(0px, scroll.content-height - scroll.visible-height));
     }
-    // Docked, the title bubble gets the top band to itself: the page stops just under it. This
-    // window can't blur what passes under glass (the phone can), and text under the bubble was
-    // unreadable. No shade, no fade: the wallpaper shows in the band.
+    // Docked, the capsules get the top band to themselves: the page stops just under them. This
+    // window can't blur what passes under glass (the phone can), and text between the capsules read
+    // as clutter. No shade, no fade: the wallpaper shows in the band.
     band := Rectangle {
-        y: root.docked ? 66px : 0px;
+        y: root.docked || root.stick-end ? 66px : 0px;
         animate y { duration: 220ms; easing: ease-out; }
         width: root.width;
         height: root.height - self.y;
@@ -975,8 +981,11 @@ component Page inherits Rectangle {
     }
     // Past the hero, the title docks in a bubble at the top.
     property <bool> docked: -scroll.content-y > root.hero - 64px;
+    // Content has reached the capsules at the top.
+    property <bool> under: -scroll.content-y > 8px;
     Capsule {
         text: root.title;
+        solid: true;
         x: (root.width - self.width) / 2;
         y: root.docked ? 16px : 2px;
         opacity: root.docked ? 1 : 0;
@@ -987,6 +996,7 @@ component Page inherits Rectangle {
     if root.action != "": Capsule {
         text: root.action;
         tappable: true;
+        solid: root.under;
         x: root.width - self.width - 20px;
         y: 16px;
         clicked => { root.act(); }
@@ -994,6 +1004,7 @@ component Page inherits Rectangle {
     if root.back != "": Capsule {
         text: "‹  " + root.back;
         tappable: true;
+        solid: root.under || root.stick-end;
         x: 20px;
         y: 16px;
         clicked => { root.go-back(); }
@@ -1132,18 +1143,17 @@ component PhonePage inherits Page {
         }
     }
 
-    // Paired but away: what usually brings it back, and this PC's own part (its firewall) with its fix.
-    // The phone's Home works out its side by itself.
+    // Paired but away: the hero says so once; this says what brings it back, and this PC's own part
+    // (its firewall) with its fix. The phone's Home works out its side by itself.
     if root.phone.paired && !root.phone.linked: AskCard {
-        title: "Not connected";
         body: root.firewall-fix
-            ? "It connects by itself on the same Wi-Fi as this PC. This PC's firewall may be keeping it out: Open ports lets it in. Vyoma on the phone shows what else might be wrong."
-            : "It connects by itself on the same Wi-Fi as this PC, or over a USB cable. Open Vyoma on the phone: it shows what's wrong.";
+            ? "It connects by itself on the same Wi-Fi. If it doesn't, this PC's firewall may be blocking it."
+            : "It connects by itself on the same Wi-Fi or over a USB cable. If it doesn't, open Vyoma on the phone: it shows what's wrong.";
         if root.firewall-fix: HorizontalLayout {
             alignment: center;
             padding-top: 4px;
             PillButton {
-                text: "Open ports";
+                text: "Let phones through";
                 prominent: true;
                 clicked => { root.open-firewall(); }
             }
@@ -1151,10 +1161,9 @@ component PhonePage inherits Page {
     }
 
     // Glanceable state first, as the phone's status card: its battery, then the link to this PC,
-    // how fast it answers and for how long it's been connected.
-    if root.phone.paired: Glass {
-        opacity: root.phone.linked ? 1 : 0.6;
-        animate opacity { duration: 300ms; }
+    // how fast it answers and for how long it's been connected. Only while connected: away, it
+    // would be a card of dashes.
+    if root.phone.paired && root.phone.linked: Glass {
         HorizontalLayout {
             padding: 20px;
             padding-left: 22px;
@@ -1210,10 +1219,19 @@ component PhonePage inherits Page {
         }
     }
 
-    // One-shot actions as the phone's tiles, floating on the canvas.
-    if root.phone.paired: HorizontalLayout {
-        spacing: 12px;
+    // One-shot actions as the phone's tiles, floating on the canvas: in one row, or two by two when
+    // the column is too narrow for four names (the smallest window).
+    if root.phone.paired: Rectangle {
+        property <int> count: root.phone.can-text ? 4 : 3;
+        property <bool> stacked: self.count == 4 && root.column < 520px;
+        property <int> across: self.stacked ? 2 : self.count;
+        property <length> gap: 12px;
+        property <length> tile-w: (self.width - (self.across - 1) * self.gap) / self.across;
+        height: self.stacked ? 2 * 100px + self.gap : 100px;
         Tile {
+            x: 0px;
+            y: 0px;
+            width: parent.tile-w;
             icon: @image-url("icons/send.svg");
             text: "Send files";
             fill: Theme.tile-blue;
@@ -1221,6 +1239,9 @@ component PhonePage inherits Page {
             clicked => { root.send-files(root.phone.id); }
         }
         Tile {
+            x: parent.tile-w + parent.gap;
+            y: 0px;
+            width: parent.tile-w;
             icon: @image-url("icons/folder.svg");
             text: "Phone files";
             fill: Theme.tile-teal;
@@ -1228,6 +1249,9 @@ component PhonePage inherits Page {
             clicked => { root.browse(root.phone.id); }
         }
         Tile {
+            x: parent.stacked ? 0px : 2 * (parent.tile-w + parent.gap);
+            y: parent.stacked ? 100px + parent.gap : 0px;
+            width: parent.tile-w;
             icon: @image-url("icons/bell.svg");
             text: "Ring";
             fill: Theme.tile-orange;
@@ -1235,9 +1259,14 @@ component PhonePage inherits Page {
             clicked => { root.ring(root.phone.id); }
         }
         if root.phone.can-text: Tile {
+            x: parent.stacked ? parent.tile-w + parent.gap : 3 * (parent.tile-w + parent.gap);
+            y: parent.stacked ? 100px + parent.gap : 0px;
+            width: parent.tile-w;
             icon: @image-url("icons/chat.svg");
             text: "Messages";
             fill: Theme.tile-green;
+            // Its texts come from the phone: away, there's nothing to open (as the other tiles).
+            enabled: root.phone.linked;
             clicked => { root.messages(root.phone.id); }
         }
     }
@@ -1258,8 +1287,8 @@ component PhonePage inherits Page {
             icon: @image-url("icons/clipboard.svg");
             icon-color: Theme.orange;
             title: "Sync when Vyoma's closed";
-            subtitle: root.phone.clip == "on" ? "Anything you copy on the phone reaches this PC, even with Vyoma closed."
-                : "Your phone's plugged in. Allow this once and copies on it reach this PC, even with Vyoma closed.";
+            subtitle: root.phone.clip == "on" ? "Anything you copy on the phone reaches this PC."
+                : "Your phone's plugged in. Allow this once and what you copy on it reaches this PC.";
             value: root.phone.clip == "on" ? "On" : "";
             value-color: Theme.connected;
             action: root.phone.clip == "ask" ? "Allow" : "";
@@ -1365,11 +1394,11 @@ component PcPage inherits Page {
 
     if root.features.length > 0: Section {
         label: "Features";
+        // Ready is the green dot alone; what isn't says why under its name.
         for f[i] in root.features: StatusRow {
             dot: f.ready ? Theme.connected : Theme.pending;
             title: f.name;
-            value: f.detail;
-            value-color: f.ready ? Theme.muted : Theme.pending;
+            subtitle: f.detail;
             last: i == root.features.length - 1;
         }
     }
@@ -1394,9 +1423,10 @@ component PcPage inherits Page {
             subtitle: root.updating ? "Updating. Vyoma restarts by itself when it's done."
                 : root.update-latest != "" && root.can-update ? "Vyoma " + root.update-latest + " is out"
                 : root.update-latest != "" && root.update-packaged ? "Vyoma " + root.update-latest + " is out. Update it with your package manager."
-                : root.update-latest != "" ? "Vyoma " + root.update-latest + " is out. Run install.sh --update in your copy of Vyoma."
+                : root.update-latest != "" ? "Vyoma " + root.update-latest + " is out. Get it from Vyoma's website; your phones stay paired."
                 : root.update-checks ? "Up to date" : "Not checking for updates";
             action: root.update-latest != "" && root.can-update && !root.updating ? "Update" : "";
+            action-prominent: !root.installable;
             act => { root.update(); }
         }
         Row {
@@ -1647,7 +1677,7 @@ component MessagesPage inherits Page {
     }
     if root.state == "locked": AskCard {
         title: "Messages is locked";
-        body: "It locks when this PC locks, when the phone goes, or after 10 minutes unused. Your fingerprint on the phone opens it again.";
+        body: "It locks when this PC locks, when the phone disconnects, or after 10 minutes unused. Your fingerprint on the phone opens it again.";
         HorizontalLayout {
             alignment: center;
             padding-top: 4px;
@@ -1881,7 +1911,9 @@ component CommandsPage inherits Page {
     title: "Commands";
     glyph: @image-url("icons/terminal.svg");
     subtitle: "What your phones can run on this PC";
-    action: "Add";
+    // One way to add: the capsule at the top once there are commands, the button under the words
+    // before; suggestions are tinted, as they start from something.
+    action: root.commands.length > 0 ? "Add" : "";
     act => { root.add(); }
 
     if root.commands.length == 0: Text {
@@ -1891,6 +1923,15 @@ component CommandsPage inherits Page {
         wrap: word-wrap;
         min-height: self.preferred-height;
         horizontal-alignment: center;
+    }
+    if root.commands.length == 0: HorizontalLayout {
+        alignment: center;
+        padding-top: 2px;
+        PillButton {
+            text: "Add a command";
+            prominent: true;
+            clicked => { root.add(); }
+        }
     }
 
     if root.commands.length > 0: Section {
@@ -1908,22 +1949,6 @@ component CommandsPage inherits Page {
         }
     }
 
-    VerticalLayout {
-        padding-top: root.commands.length > 0 ? 0px : 4px;
-        Glass {
-            Row {
-                icon: @image-url("icons/plus.svg");
-                icon-color: Theme.accent-fill;
-                title: "Add a command";
-                title-color: Theme.accent;
-                tappable: true;
-                first: true;
-                last: true;
-                clicked => { root.add(); }
-            }
-        }
-    }
-
     if root.suggestions.length > 0: Section {
         label: "Suggestions";
         for c[i] in root.suggestions: Row {
@@ -1932,6 +1957,7 @@ component CommandsPage inherits Page {
             title: c.name;
             subtitle: c.shown;
             action: "Add";
+            action-prominent: false;
             first: i == 0;
             last: i == root.suggestions.length - 1;
             act => { root.edit(c); }
@@ -2180,30 +2206,45 @@ component PairCode inherits VerticalLayout {
     in property <string> note;
     /// The phone that just paired while the code was up: the code gives way to its tick.
     in property <string> done;
+    /// Add a phone's way on from the tick: that phone's page, or another code.
+    in property <bool> has-actions;
+    callback open-done();
+    callback add-another();
     property <bool> is-done: root.done != "";
+    // No code to scan (no network, say): what to do instead, not an empty white square.
+    property <bool> no-code: !root.ready && root.note != "" && !root.is-done;
     spacing: 10px;
     HorizontalLayout {
         alignment: center;
         padding-bottom: 6px;
         // Big enough for a phone to read from arm's length (212 px read as ~1 px a square at 640x480).
+        // Paired, it closes around a green circle with a tick, as the phone's paired moment.
         tile := Rectangle {
-            width: 248px;
-            height: 248px;
-            border-radius: 24px;
-            background: white;
-            border-width: Theme.dark ? 0px : 1px;
+            width: root.is-done ? 132px : root.no-code ? 96px : 248px;
+            height: self.width;
+            animate width { duration: 420ms; easing: cubic-bezier(0.2, 0.9, 0.25, 1); }
+            border-radius: root.no-code ? self.width / 2 : 24px;
+            background: root.is-done ? transparent : root.no-code ? Theme.raised : white;
+            animate background { duration: 260ms; }
+            border-width: Theme.dark || root.is-done || root.no-code ? 0px : 1px;
             border-color: Theme.rim;
+            if root.no-code: Glyph {
+                source: @image-url("icons/wifi.svg");
+                tint: Theme.muted;
+                width: 40px;
+                height: 40px;
+            }
             // Padded, not clipped: the code's corners stay clear of the rounded ones.
-            HorizontalLayout {
+            if !root.no-code: HorizontalLayout {
                 padding: 12px;
                 opacity: root.is-done ? 0 : 1;
-                animate opacity { duration: 260ms; easing: ease-out; }
+                animate opacity { duration: 200ms; easing: ease-out; }
                 if root.ready: Image {
                     source: root.code;
                     image-rendering: pixelated;
                 }
                 if !root.ready: Text {
-                    text: root.note != "" ? root.note : "Making a code…";
+                    text: "Making a code…";
                     color: #6e6e73;
                     font-size: 13px;
                     wrap: word-wrap;
@@ -2211,22 +2252,26 @@ component PairCode inherits VerticalLayout {
                     vertical-alignment: center;
                 }
             }
-            // Read: a green drop wells up from the middle of the code and opens into the tile's own
-            // shape (a circle while small, the tile's rounded square once full), as the phone's tick does.
+            // Read: a green drop wells up from the middle into a circle, as the phone's tick does.
             Rectangle {
-                property <length> d: root.is-done ? tile.width : 0px;
-                property <float> t: self.d / tile.width;
-                animate d { duration: 620ms; easing: cubic-bezier(0.2, 0.9, 0.25, 1); }
+                property <length> d: root.is-done ? 100px : 0px;
+                animate d { duration: 620ms; easing: ease-out-back; }
                 x: (tile.width - self.d) / 2;
                 y: (tile.height - self.d) / 2;
                 width: self.d;
                 height: self.d;
-                border-radius: (1 - self.t) * self.d / 2 + self.t * tile.border-radius;
+                border-radius: self.d / 2;
                 background: Theme.green;
+                border-width: 1px;
+                border-color: @linear-gradient(Theme.rim-angle, #FFFFFFBF 0%, #FFFFFF24 35%, #FFFFFF24 65%, #FFFFFF99 100%);
+                drop-shadow-blur: 22px;
+                drop-shadow-offset-x: Theme.fall-x * 6px;
+                drop-shadow-offset-y: Theme.fall-y * 6px;
+                drop-shadow-color: #16A34A55;
             }
             // One ring runs out past the edge as it lands.
             Rectangle {
-                property <length> d: root.is-done ? 360px : 60px;
+                property <length> d: root.is-done ? 220px : 60px;
                 animate d { duration: 900ms; delay: 120ms; easing: ease-out; }
                 x: (tile.width - self.d) / 2;
                 y: (tile.height - self.d) / 2;
@@ -2236,10 +2281,10 @@ component PairCode inherits VerticalLayout {
                 border-width: 3px;
                 border-color: Theme.green;
                 // Fades as it grows, so it follows the size's own easing.
-                opacity: root.is-done ? max(0, 1 - (self.d - 60px) / 300px) * 0.7 : 0;
+                opacity: root.is-done ? max(0, 1 - (self.d - 60px) / 160px) * 0.7 : 0;
             }
             Glyph {
-                property <length> s: root.is-done ? 104px : 0px;
+                property <length> s: root.is-done ? 44px : 0px;
                 animate s { duration: 560ms; delay: 260ms; easing: ease-out-back; }
                 source: @image-url("icons/check.svg");
                 tint: white;
@@ -2251,19 +2296,37 @@ component PairCode inherits VerticalLayout {
         }
     }
     Text {
-        text: root.is-done ? "Paired with " + root.done : "Scan with Vyoma on your phone";
-        color: root.is-done ? Theme.connected : Theme.text;
+        text: root.is-done ? root.done + " is paired" : root.no-code ? "No code right now" : "Scan with Vyoma on your phone";
+        color: Theme.text;
         font-size: 17px;
         font-weight: 600;
         horizontal-alignment: center;
+        wrap: word-wrap;
+        min-height: self.preferred-height;
     }
     Text {
-        text: root.is-done ? "It's connected. Nothing to accept here." : "In the app, tap Scan code. No app yet? Point your phone's camera here to download it.";
+        text: root.is-done ? "It's connected. Nothing to accept here."
+            : root.no-code ? root.note + " Or plug your phone in with a USB cable: it shows up among the phones nearby to pair."
+            : "In the app, tap Scan code. No app yet? Point your phone's camera here to download it.";
         color: Theme.muted;
         font-size: 14px;
         wrap: word-wrap;
         min-height: self.preferred-height;
         horizontal-alignment: center;
+    }
+    if root.is-done && root.has-actions: HorizontalLayout {
+        alignment: center;
+        spacing: 10px;
+        padding-top: 6px;
+        PillButton {
+            text: "Add another";
+            clicked => { root.add-another(); }
+        }
+        PillButton {
+            text: "Open " + root.done;
+            prominent: true;
+            clicked => { root.open-done(); }
+        }
     }
 }
 
@@ -2413,7 +2476,7 @@ component SetupPhone inherits HorizontalLayout {
             font-weight: 500;
         }
         Text {
-            text: root.phone.paired ? "Paired" : root.phone.code != "" ? "Pairing…" : "Nearby";
+            text: root.phone.paired ? "Paired" : root.phone.code != "" ? (root.phone.asking ? "Wants to pair" : "Pairing…") : "Nearby";
             color: root.phone.paired ? Theme.connected : Theme.muted;
             font-size: 13px;
         }
@@ -2511,6 +2574,8 @@ component SetupPage inherits Page {
     in property <bool> installable;
     in property <bool> installing;
     in property <bool> health-loaded;
+    // A phone nearby is pairing: it takes the place of the QR code.
+    in property <bool> pairing;
     callback pair(string);
     callback accept(string);
     callback reject(string);
@@ -2534,7 +2599,7 @@ component SetupPage inherits Page {
     SetupCard {
         number: 1;
         title: "Pair with your phone";
-        status: root.paired ? root.phones[0].name : "One scan with your phone";
+        status: root.paired ? root.phones[0].name : root.pairing ? "Check the code on both screens" : "One scan with your phone";
         done: root.paired;
         open: root.open == 0;
         clicked => { root.chosen = 0; }
@@ -2544,13 +2609,14 @@ component SetupPage inherits Page {
         for p in root.phones: SetupPhone {
             phone: p;
         }
-        if root.daemon-ok && !root.paired: PairCode {
+        // A phone asking to pair takes the step: its code and Accept, right here, instead of the QR code.
+        if root.daemon-ok && !root.paired && (!root.pairing || root.code-done != ""): PairCode {
             code: root.code;
             ready: root.code-ready;
             note: root.code-note;
             done: root.code-done;
         }
-        if !root.paired && root.nearby.length > 0: SectionLabel {
+        if !root.paired && root.nearby.length > 0 && !root.pairing: SectionLabel {
             text: "Or pair one nearby";
             height: 36px;
             vertical-alignment: bottom;
@@ -2604,11 +2670,6 @@ component SetupPage inherits Page {
                     color: Theme.text;
                     font-size: 14px;
                     horizontal-stretch: 1;
-                }
-                Text {
-                    text: f.detail;
-                    color: Theme.muted;
-                    font-size: 13px;
                 }
             }
         }
@@ -2802,12 +2863,16 @@ component AddPhonePage inherits Page {
     in property <bool> code-ready;
     in property <string> code-note;
     in property <string> code-done;
+    // A phone nearby is pairing (asking, or waiting on its owner): it comes first, the code goes.
+    in property <bool> pairing;
     callback pair(string);
     callback accept(string);
     callback reject(string);
+    callback open-done();
+    callback add-another();
     title: "Add a phone";
     glyph: @image-url("icons/plus.svg");
-    Glass {
+    if !root.pairing || root.code-done != "": Glass {
         VerticalLayout {
             padding: 24px;
             PairCode {
@@ -2815,11 +2880,14 @@ component AddPhonePage inherits Page {
                 ready: root.code-ready;
                 note: root.code-note;
                 done: root.code-done;
+                has-actions: true;
+                open-done => { root.open-done(); }
+                add-another => { root.add-another(); }
             }
         }
     }
     Section {
-        label: "Or pick it from phones nearby";
+        label: root.pairing ? "Pairing with a phone nearby" : "Or pick it from phones nearby";
         VerticalLayout {
             padding: 18px;
             spacing: 12px;
@@ -2915,7 +2983,10 @@ export component MainWindow inherits Window {
     in property <bool> pair-code-ready;
     in property <string> pair-code-note;
     // A phone that just paired while the code was up (its name): the code turns into a tick.
-    in property <string> pair-code-done;
+    in-out property <string> pair-code-done;
+    in-out property <string> pair-code-done-id;
+    // A phone nearby is pairing (its code on screen): it comes before the QR code.
+    in property <bool> nearby-pairing;
     out property <bool> wants-code: root.daemon-ok && (root.setup ? root.phones.length == 0
         : root.selected == "add" || (!root.has-current && root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands" && root.selected != "messages"));
     callback wants-code-changed(bool);
@@ -2955,7 +3026,7 @@ export component MainWindow inherits Window {
     pure callback check-command(string, string, string) -> string;
     callback clear-activity();
     callback install();
-    // This PC's firewall may keep phones out, and Open ports would let them in.
+    // This PC's firewall may keep phones out, and Let phones through opens it.
     in property <bool> firewall-fix;
     callback open-firewall();
     callback update();
@@ -3223,9 +3294,19 @@ export component MainWindow inherits Window {
             code-ready: root.pair-code-ready;
             code-note: root.pair-code-note;
             code-done: root.pair-code-done;
+            pairing: root.nearby-pairing;
             pair(id) => { root.pair(id); }
             accept(id) => { root.accept(id); }
             reject(id) => { root.reject(id); }
+            open-done => {
+                root.select(root.pair-code-done-id);
+                root.pair-code-done = "";
+                root.pair-code-done-id = "";
+            }
+            add-another => {
+                root.pair-code-done = "";
+                root.pair-code-done-id = "";
+            }
         }
         if root.selected != "this-pc" && root.selected != "activity" && root.selected != "commands" && root.selected != "add" && root.selected != "messages" && root.has-current: PhonePage {
             phone: root.current;
@@ -3261,6 +3342,7 @@ export component MainWindow inherits Window {
         code-ready: root.pair-code-ready;
         code-note: root.pair-code-note;
         code-done: root.pair-code-done;
+        pairing: root.nearby-pairing;
         daemon-ok: root.daemon-ok;
         missing: root.missing;
         installable: root.installable;
@@ -3276,56 +3358,6 @@ export component MainWindow inherits Window {
     PairedMoment {
         shown: root.moment-on;
         name: root.moment;
-    }
-
-    // The status bubble: glass that drops from the top with the outcome, as the phone's.
-    Rectangle {
-        property <length> area-x: root.setup ? 0px : root.side + 12px;
-        width: min(notice-text.preferred-width + 44px + (root.notice-action != "" ? 72px : 0px), root.width - self.area-x - 160px);
-        height: max(44px, notice-text.preferred-height + 22px);
-        x: self.area-x + (root.width - self.area-x - self.width) / 2;
-        y: root.notice-on ? 18px : -self.height - 30px;
-        animate y { duration: 420ms; easing: ease-out-back; }
-        border-radius: 22px;
-        background: Theme.popup;
-        border-width: 1px;
-        border-color: Theme.rim;
-        drop-shadow-blur: 22px;
-        drop-shadow-offset-x: Theme.fall-x * 8px;
-        drop-shadow-offset-y: Theme.fall-y * 8px;
-        drop-shadow-color: Theme.dark ? #00000080 : #1A2B4C26;
-        HorizontalLayout {
-            padding-left: 22px;
-            padding-right: root.notice-action != "" ? 8px : 22px;
-            spacing: 6px;
-            notice-text := Text {
-                text: root.notice;
-                color: Theme.text;
-                font-size: 14px;
-                font-weight: 500;
-                wrap: word-wrap;
-                min-height: self.preferred-height;
-                vertical-alignment: center;
-                horizontal-alignment: center;
-            }
-            if root.notice-action != "": Rectangle {
-                width: act-text.preferred-width + 24px;
-                y: (parent.height - 32px) / 2;
-                height: 32px;
-                border-radius: 16px;
-                background: act.pressed ? Theme.accent.with-alpha(0.22) : act.has-hover ? Theme.accent.with-alpha(0.14) : transparent;
-                act-text := Text {
-                    text: root.notice-action;
-                    color: Theme.accent;
-                    font-size: 14px;
-                    font-weight: 600;
-                }
-                act := TouchArea {
-                    mouse-cursor: MouseCursor.pointer;
-                    clicked => { root.notice-acted(); }
-                }
-            }
-        }
     }
 
     CommandSheet {
@@ -3371,6 +3403,59 @@ export component MainWindow inherits Window {
         confirmed => {
             root.confirm-clear = false;
             root.clear-activity();
+        }
+    }
+
+    // The status bubble: the outcome, rising from the foot of the window (GNOME's toasts sit there),
+    // clear of the hero's glyph and the docked title at the top. Last, so it stays over dialogs
+    // and sheets, its Undo live; above the reply box on a conversation.
+    Rectangle {
+        property <length> area-x: root.setup ? 0px : root.side + 12px;
+        width: min(notice-text.preferred-width + 44px + (root.notice-action != "" ? 72px : 0px), root.width - self.area-x - 160px);
+        height: max(44px, notice-text.preferred-height + 22px);
+        x: self.area-x + (root.width - self.area-x - self.width) / 2;
+        property <length> foot: root.selected == "messages" && root.thread != "" && !root.setup ? 112px : 22px;
+        y: root.notice-on ? root.height - self.height - self.foot : root.height + 30px;
+        animate y { duration: 420ms; easing: ease-out-back; }
+        border-radius: 22px;
+        background: Theme.popup;
+        border-width: 1px;
+        border-color: Theme.rim;
+        drop-shadow-blur: 22px;
+        drop-shadow-offset-x: Theme.fall-x * 8px;
+        drop-shadow-offset-y: Theme.fall-y * 8px;
+        drop-shadow-color: Theme.dark ? #00000080 : #1A2B4C26;
+        HorizontalLayout {
+            padding-left: 22px;
+            padding-right: root.notice-action != "" ? 8px : 22px;
+            spacing: 6px;
+            notice-text := Text {
+                text: root.notice;
+                color: Theme.text;
+                font-size: 14px;
+                font-weight: 500;
+                wrap: word-wrap;
+                min-height: self.preferred-height;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+            if root.notice-action != "": Rectangle {
+                width: act-text.preferred-width + 24px;
+                y: (parent.height - 32px) / 2;
+                height: 32px;
+                border-radius: 16px;
+                background: act.pressed ? Theme.accent.with-alpha(0.22) : act.has-hover ? Theme.accent.with-alpha(0.14) : transparent;
+                act-text := Text {
+                    text: root.notice-action;
+                    color: Theme.accent;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                act := TouchArea {
+                    mouse-cursor: MouseCursor.pointer;
+                    clicked => { root.notice-acted(); }
+                }
+            }
         }
     }
 }

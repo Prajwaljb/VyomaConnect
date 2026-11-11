@@ -86,15 +86,18 @@ impl Updates {
             return Ok(());
         }
         anyhow::ensure!(!packaged(), "Vyoma came from your package manager: update it there.");
-        let dir = self.clone_dir().context("Vyoma's folder isn't where it was installed from. Run install.sh --update from your copy of Vyoma.")?;
+        let dir = self.clone_dir().context("Vyoma's files have moved since it was installed, so it can't update itself. Get the newest version from Vyoma's website.")?;
         let script = dir.join("desktop/daemon/install.sh");
         let status = tokio::process::Command::new("systemd-run")
             .args(["--user", "--collect", "--quiet", &format!("--unit={UNIT}"), "sh"])
             .arg(&script)
             .arg("--update")
             .status()
-            .await?;
-        anyhow::ensure!(status.success(), "systemd-run failed: {status}");
+            .await;
+        if !status.as_ref().is_ok_and(|s| s.success()) {
+            tracing::warn!("couldn't start the update: {status:?}");
+            anyhow::bail!("The update didn't start. Try again in a minute.");
+        }
         tracing::info!("update started");
         Ok(())
     }
@@ -161,7 +164,8 @@ impl Updates {
         match answer.map(|a| String::from_utf8_lossy(&a.stdout).trim().to_owned()).as_deref() {
             Ok("update") => {
                 if let Err(e) = self.start().await {
-                    let _ = tokio::process::Command::new("notify-send").args(["--app-name=Vyoma", "--icon=vyoma", "--hint=string:desktop-entry:vyoma", "Couldn't update"]).arg(format!("{e:#}")).status().await;
+                    // start's errors are written to be read (the raw cause went to the log).
+                    let _ = tokio::process::Command::new("notify-send").args(["--app-name=Vyoma", "--icon=vyoma", "--hint=string:desktop-entry:vyoma", "Couldn't update"]).arg(e.to_string()).status().await;
                 }
             }
             Ok("notes") => crate::share::open(page),

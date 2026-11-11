@@ -472,7 +472,7 @@ fn watch(ui: slint::Weak<MainWindow>) {
                             read_health(&told);
                         }
                         Event::FirewallDone { ok } => {
-                            notify(&told, if ok { "Ports open. Phones on this Wi-Fi can reach this PC".into() } else { "The ports weren't opened".into() });
+                            notify(&told, if ok { "Done. Phones on this Wi-Fi can reach this PC".into() } else { "The firewall wasn't changed".into() });
                             read_health(&told);
                         }
                     }
@@ -633,12 +633,14 @@ pub fn show_health(ui: &MainWindow, h: &Health) {
         .map(|f| Feature {
             name: f.name.clone().into(),
             ready: f.ready,
+            // Ready says itself with the green dot. What's missing is in plain words (the package
+            // names are for --check and the log).
             detail: if f.ready {
-                "Ready".into()
+                "".into()
             } else if f.needs.is_empty() {
                 "Not available here".into()
             } else {
-                format!("Needs {}", f.needs.join(", ")).into()
+                "Needs a small add-on: Install adds it".into()
             },
         })
         .collect();
@@ -697,14 +699,22 @@ fn apply(ui: &MainWindow, phones: Option<Vec<PhoneData>>) {
         let code_up = ui.get_selected() == ADD || (ui.get_setup() && !before.iter().any(|b| b.paired));
         if code_up {
             ui.set_pair_code_done(p.name.clone().into());
+            ui.set_pair_code_done_id(p.id.clone().into());
             let (weak, id) = (ui.as_weak(), p.id.clone());
-            slint::Timer::single_shot(CODE_DONE_FOR, move || {
+            // Setup moves on by itself; Add a phone keeps the tick with Open and Add another for a
+            // while, then opens the phone (unless one of those was chosen first).
+            let after = if ui.get_setup() { CODE_DONE_FOR } else { CODE_DONE_FOR * 3 };
+            slint::Timer::single_shot(after, move || {
                 let Some(win) = weak.upgrade() else { return };
+                if win.get_pair_code_done_id() != id.as_str() {
+                    return;
+                }
                 if win.get_selected() == ADD {
                     win.set_selected(id.into());
                     SHOWN.with(|s| show(&win, &s.borrow()));
                 }
                 win.set_pair_code_done("".into());
+                win.set_pair_code_done_id("".into());
             });
         } else {
             moment(ui, p.name.clone());
@@ -738,6 +748,7 @@ fn show(ui: &MainWindow, phones: &[PhoneData]) {
         if let Some(p) = paired.iter().find(|p| p.id == id) {
             ui.set_phones(ModelRc::new(VecModel::from(paired.iter().map(|p| to_ui(p)).collect::<Vec<_>>())));
             ui.set_nearby(ModelRc::new(VecModel::from(nearby.iter().map(|p| to_ui(p)).collect::<Vec<_>>())));
+            ui.set_nearby_pairing(nearby.iter().any(|p| !p.code.is_empty()));
             let was = ui.get_texts_linked();
             ui.set_current(to_ui(p));
             ui.set_texts_linked(p.linked);
@@ -753,6 +764,7 @@ fn show(ui: &MainWindow, phones: &[PhoneData]) {
     let current = paired.iter().chain(&nearby).find(|p| p.id == selected).or(paired.first()).or(nearby.iter().find(|p| !p.code.is_empty())).copied();
     ui.set_phones(ModelRc::new(VecModel::from(paired.iter().map(|p| to_ui(p)).collect::<Vec<_>>())));
     ui.set_nearby(ModelRc::new(VecModel::from(nearby.iter().map(|p| to_ui(p)).collect::<Vec<_>>())));
+    ui.set_nearby_pairing(nearby.iter().any(|p| !p.code.is_empty()));
     // This PC's page, the activity, commands and Add a phone stay put however the phones change: the
     // Add page leaving took its code down while a phone that had just linked was about to use it.
     if selected == THIS_PC || selected == ACTIVITY || selected == COMMANDS || selected == ADD {

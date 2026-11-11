@@ -201,7 +201,7 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
             "vyoma.webcam" => {
                 // A new stream replaces one still running (the phone switched cameras).
                 if !stop(webcam_task.take()) {
-                    log("webcam", "Was the webcam".into());
+                    log("webcam", "Used as webcam".into());
                 }
                 turn_tx.send_replace(p["body"]["rotate"].as_u64().unwrap_or(0) as u32);
                 let (sender, host, pinned, name, phone, turn) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone(), from, turn_tx.subscribe());
@@ -261,7 +261,7 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
             }
             "vyoma.webcam.mic" => {
                 if !stop(mic_task.take()) {
-                    log("webcam", "Was the microphone".into());
+                    log("webcam", "Used as microphone".into());
                 }
                 let (sender, host, pinned, name, phone) = (sender.clone(), host.clone(), pinned.to_vec(), name.clone(), from);
                 mic_task = Some(tokio::spawn(async move {
@@ -336,7 +336,7 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
             "vyoma.gamepad.state" => {
                 let s = gamepad::State::parse(&p["body"]);
                 if pad.as_ref().is_none_or(|(_, t)| t.is_finished()) {
-                    log("control", "Was a game controller".into());
+                    log("control", "Used as game controller".into());
                     let (tx, rx) = tokio::sync::mpsc::channel(64);
                     pad = Some((tx, tokio::spawn(gamepad::run(rx, sender.clone(), name.clone()))));
                 }
@@ -384,7 +384,7 @@ pub async fn serve(host: Arc<Host>, phone: Phone, sender: Sender, mut packets: m
                     Some((tx, _)) => {
                         let _ = tx.try_send(pointer::Frame::Close);
                     }
-                    None => log("touchpad", "Was the touchpad".into()),
+                    None => log("touchpad", "Used as touchpad".into()),
                 }
                 let (tx, rx) = tokio::sync::mpsc::channel(256);
                 touchpad = Some((tx.clone(), tokio::spawn(pointer::serve(sender.clone(), name.clone(), tx, rx))));

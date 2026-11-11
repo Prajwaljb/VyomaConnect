@@ -99,7 +99,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("activity.json");
         let a = Activity::load(file.clone());
-        let mut ticks = a.subscribe();
+        let ticks = a.subscribe();
         for i in 0..KEEP + 3 {
             a.add("p", "Phone", "files", format!("file {i}"));
         }

@@ -51,15 +51,29 @@ pub fn parse(p: &Value) -> Reply {
     }
     let port = b["port"].as_u64().or_else(|| b["port"].as_str()?.parse().ok()).and_then(|p| u16::try_from(p).ok());
     match (b["ip"].as_str(), port, b["password"].as_str()) {
-        (Some(ip), Some(port), Some(password)) => Reply::Ready(Server {
-            ip: ip.to_owned(),
-            port,
-            user: b["user"].as_str().unwrap_or("kdeconnect").to_owned(),
-            password: password.to_owned(),
-            path: b["path"].as_str().filter(|p| p.starts_with('/')).unwrap_or("/").to_owned(),
-        }),
+        (Some(ip), Some(port), Some(password)) => {
+            let user = b["user"].as_str().unwrap_or("kdeconnect");
+            let path = b["path"].as_str().filter(|p| p.starts_with('/')).unwrap_or("/");
+            // Both go to sshfs and ssh (and GVfs's ssh config): a user like "x@other.host:/y" or one with
+            // a newline would send the mount elsewhere.
+            if !safe_user(user) || !safe_path(path) || password.chars().any(char::is_control) {
+                tracing::warn!("the phone's file server details look wrong; not mounting");
+                return Reply::Failed("The phone sent file details this PC can't use. Update Vyoma (or KDE Connect) on the phone and try again.".into());
+            }
+            Reply::Ready(Server { ip: ip.to_owned(), port, user: user.to_owned(), password: password.to_owned(), path: path.to_owned() })
+        }
         _ => Reply::Nothing,
     }
+}
+
+/// A login name ssh can't read as anything else: letters, digits, '.', '_' and '-', not starting with '-'.
+fn safe_user(user: &str) -> bool {
+    !user.is_empty() && !user.starts_with('-') && user.len() <= 64 && user.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// A folder on the phone: absolute, no control characters.
+fn safe_path(path: &str) -> bool {
+    path.starts_with('/') && !path.chars().any(char::is_control)
 }
 
 /// A known_hosts line for [alias] from the phone's certificate (DER): its RSA key as OpenSSH writes it.
@@ -362,10 +376,12 @@ async fn run_sshfs(server: &Server, route: &[String], id: &str, unit: &str, at: 
         .args(["--user", "--quiet", "--pipe", "--collect", "--unit", unit])
         .arg(format!("--setenv=SSH_ASKPASS={}", this_program()?))
         .args(["--setenv=SSH_ASKPASS_REQUIRE=force", &format!("--setenv={ASKPASS_ENV}={}", pass.0.display()), "--", "sshfs"])
-        .arg(format!("{}@{}:{}", server.user, route[0], server.path))
+        .arg(format!("{}:{}", route[0], server.path))
         .arg(at)
         .arg("-f")
         .args(&route[1..])
+        .arg("-o")
+        .arg(format!("User={}", server.user))
         .args(["-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10"])
         .args(["-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2", "-o", "idmap=user"])
         .arg("-o")
@@ -428,6 +444,19 @@ mod tests {
         assert_eq!(parse(&p), Reply::Ready(Server { ip: "10.0.0.2".into(), port: 1740, user: "kdeconnect".into(), password: "pw".into(), path: "/".into() }));
         assert_eq!(parse(&json!({ "body": { "errorMessage": "no" } })), Reply::Failed("no".into()));
         assert_eq!(parse(&json!({ "body": { "serverRunning": false } })), Reply::Nothing);
+    }
+
+    #[test]
+    fn refuses_a_user_or_folder_that_would_send_the_mount_elsewhere() {
+        let reply = |user: &str, path: &str| parse(&json!({ "body": { "ip": "10.0.0.2", "port": 1740, "user": user, "password": "pw", "path": path } }));
+        assert!(matches!(reply("kdeconnect", "/storage/emulated/0"), Reply::Ready(_)));
+        assert!(matches!(reply("u0_a123.x-y", "/"), Reply::Ready(_)));
+        for user in ["x@other.host:/y", "-oProxyCommand=sh", "a b", "a\nHost *", "", "a,b"] {
+            assert!(matches!(reply(user, "/"), Reply::Failed(_)), "user {user:?}");
+        }
+        assert!(matches!(reply("kdeconnect", "/a\nb"), Reply::Failed(_)));
+        // A folder not starting with '/' (so also '-...') falls back to the root.
+        assert!(matches!(reply("kdeconnect", "-o x"), Reply::Ready(Server { ref path, .. }) if path == "/"));
     }
 
     #[test]

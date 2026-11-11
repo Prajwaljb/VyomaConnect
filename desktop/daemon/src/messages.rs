@@ -40,14 +40,18 @@ const SILENT_AFTER: Duration = Duration::from_secs(8);
 const PENDING_FOR: Duration = Duration::from_secs(90);
 /// Unlocked Messages left unused this long locks again.
 pub const IDLE_FOR: Duration = Duration::from_secs(10 * 60);
+/// An ask isn't sent again sooner than this: a second ask makes the phone's new prompt replace (and deny) the first.
+const ASK_AGAIN_AFTER: Duration = Duration::from_secs(30);
+/// An ask the phone never answers ends after this: the page offers asking again.
+const ASK_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 
 /// Where a phone with the texts lock stands.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum Gate {
     #[default]
     Locked,
-    /// Asked; the owner hasn't answered on the phone yet.
-    Asking,
+    /// Asked at this moment; the owner hasn't answered on the phone yet.
+    Asking(Instant),
     /// The owner said no (or the prompt was dismissed).
     Declined,
     Open,
@@ -120,8 +124,9 @@ impl Store {
         let inbox = all.entry(id.to_owned()).or_default();
         inbox.guarded |= guarded;
         if inbox.guarded && inbox.gate != Gate::Open {
+            inbox.end_stale_ask();
             let state = match inbox.gate {
-                Gate::Asking => "asking",
+                Gate::Asking(_) => "asking",
                 Gate::Declined => "declined",
                 _ => "locked",
             };
@@ -216,11 +221,16 @@ impl Store {
         let inbox = all.entry(id.to_owned()).or_default();
         let mut out = Vec::new();
         match p["type"].as_str().unwrap_or("") {
+            // Only an answer to an ask that's still out counts: a late or unasked yes doesn't open the texts.
             UNLOCKED => {
+                inbox.end_stale_ask();
+                if !matches!(inbox.gate, Gate::Asking(_)) {
+                    return out;
+                }
                 if b["ok"].as_bool() == Some(true) {
                     inbox.gate = Gate::Open;
                     inbox.used = Some(Instant::now());
-                } else if inbox.gate == Gate::Asking {
+                } else {
                     inbox.gate = Gate::Declined;
                 }
             }
@@ -273,7 +283,13 @@ impl Store {
             inbox.used = Some(Instant::now());
             return None;
         }
-        inbox.gate = Gate::Asking;
+        // Still waiting on the owner: asking again would put a new prompt over the one they may be answering.
+        if let Gate::Asking(at) = inbox.gate
+            && at.elapsed() < ASK_AGAIN_AFTER
+        {
+            return None;
+        }
+        inbox.gate = Gate::Asking(Instant::now());
         drop(all);
         self.changed();
         Some(packet(UNLOCK, json!({})))
@@ -284,8 +300,14 @@ impl Store {
         self.lock_where(|_| true)
     }
 
-    /// Locks the ones left unused for [IDLE_FOR]: the phones to tell.
+    /// Locks the ones left unused for [IDLE_FOR]: the phones to tell. Asks the phone never answered end here too.
     pub fn expire(&self) -> Vec<String> {
+        let mut all = self.inboxes.lock().unwrap();
+        let ended = all.values_mut().fold(false, |any, i| i.end_stale_ask() || any);
+        drop(all);
+        if ended {
+            self.changed();
+        }
         self.lock_where(|i| i.used.is_some_and(|at| at.elapsed() >= IDLE_FOR))
     }
 
@@ -293,7 +315,7 @@ impl Store {
         let mut all = self.inboxes.lock().unwrap();
         let mut told = Vec::new();
         for (id, inbox) in all.iter_mut() {
-            if inbox.guarded && matches!(inbox.gate, Gate::Open | Gate::Asking) && pick(inbox) {
+            if inbox.guarded && matches!(inbox.gate, Gate::Open | Gate::Asking(_)) && pick(inbox) {
                 inbox.lock();
                 told.push(id.clone());
             }
@@ -331,6 +353,15 @@ impl Store {
 }
 
 impl Inbox {
+    /// An ask out longer than [ASK_TIMEOUT] ends (the phone never answered): locked, so the page offers asking again.
+    fn end_stale_ask(&mut self) -> bool {
+        let stale = matches!(self.gate, Gate::Asking(at) if at.elapsed() >= ASK_TIMEOUT);
+        if stale {
+            self.gate = Gate::Locked;
+        }
+        stale
+    }
+
     /// Locked: nothing of the texts or the contacts stays.
     fn lock(&mut self) {
         *self = Inbox { guarded: self.guarded, ..Inbox::default() };
@@ -559,5 +590,26 @@ mod tests {
         s.on_packet("p", &json!({ "type": UNLOCKED, "body": { "ok": true } }));
         s.gone("p");
         assert_eq!(state(&s), "locked");
+    }
+
+    #[test]
+    fn asks_once_and_only_an_asked_yes_opens() {
+        let s = Store::default();
+        let state = |s: &Store| serde_json::from_str::<Value>(&s.conversations("p", true).0).unwrap()["state"].clone();
+        // A yes nobody asked for doesn't open the texts.
+        s.conversations("p", true);
+        s.on_packet("p", &json!({ "type": UNLOCKED, "body": { "ok": true } }));
+        assert_eq!(state(&s), "locked");
+        assert!(s.unlock("p").is_some());
+        assert!(s.unlock("p").is_none(), "no second prompt over the first");
+        let set_asked = |s: &Store, ago: Duration| s.inboxes.lock().unwrap().get_mut("p").unwrap().gate = Gate::Asking(Instant::now().checked_sub(ago).unwrap());
+        set_asked(&s, ASK_AGAIN_AFTER);
+        assert!(s.unlock("p").is_some(), "asked again after a while");
+        // Never answered: back to where the page offers asking again.
+        set_asked(&s, ASK_TIMEOUT);
+        assert!(s.expire().is_empty(), "nothing to tell the phone");
+        assert_eq!(state(&s), "locked");
+        s.on_packet("p", &json!({ "type": UNLOCKED, "body": { "ok": true } }));
+        assert_eq!(state(&s), "locked", "a yes after the ask ended doesn't count");
     }
 }

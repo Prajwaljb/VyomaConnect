@@ -59,6 +59,7 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str, size: Option<(u32, 
     if scene == "add-done" {
         // Just paired by the code: its tick, before the moment.
         ui.set_pair_code_done("Pixel 9 Pro".into());
+        ui.set_pair_code_done_id("a".into());
     }
     // A made-up pairing code wherever one shows.
     let made_up = "https://github.com/Prajwaljb/VyomaConnect/releases/latest#pair?v=1&id=0123456789abcdef0123456789abcdef&name=Desk&fp=1b9f3d973c838fe866cb806b72ef20448ccb55c320a514b35e9e03808d00069b&s=00112233445566778899aabbccddeeff&a=192.168.1.20,10.0.0.5&p=1716";
@@ -130,12 +131,12 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str, size: Option<(u32, 
             ev(4, "Pixel 9 Pro", "screenshot", "Took a screenshot"),
             ev(12, "Pixel 9 Pro", "files", "Copied \u{201c}Quarterly report for the whole team, final version two.pdf\u{201d} from this PC"),
             ev(38, "Work phone", "refused", "Refused: \u{201c}See and control this screen\u{201d} is off"),
-            ev(95, "Pixel 9 Pro", "touchpad", "Was the touchpad"),
+            ev(95, "Pixel 9 Pro", "touchpad", "Used as touchpad"),
             ev(97, "Pixel 9 Pro", "files", "Copied \u{201c}Screen_Recording_20261108_103512_Chrome.mp4\u{201d} from this PC"),
             ev(60 * 20, "Pixel 9 Pro", "power", "Put the PC to sleep"),
             ev(60 * 21, "Pixel 9 Pro", "share", "Shared 12 files with this PC"),
             ev(60 * 22, "Pixel 9 Pro", "photo", "Took a photo with the camera"),
-            ev(60 * 24 * 4, "Work phone", "webcam", "Was the webcam"),
+            ev(60 * 24 * 4, "Work phone", "webcam", "Used as webcam"),
             ev(60 * 24 * 4 + 5, "Work phone", "command", "Ran \u{201c}Lock screen\u{201d}"),
         ]
     } else {
@@ -187,6 +188,22 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str, size: Option<(u32, 
     window.draw_if_needed(|renderer| {
         renderer.render(&mut pixels, w as usize);
     });
+    // Again now that everything has unfolded (setup's steps open as they enter, so the first scroll
+    // was cut short at the page's height then): a hair off, so the page sees a change.
+    if scroll > 0.0 {
+        ui.global::<crate::Snap>().set_scroll(scroll + 0.01);
+        slint::platform::update_timers_and_animations();
+        window.request_redraw();
+        window.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, w as usize);
+        });
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        slint::platform::update_timers_and_animations();
+        window.request_redraw();
+        window.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, w as usize);
+        });
+    }
     let file = std::fs::File::create(path).with_context(|| format!("creating {path}"))?;
     let mut png = png::Encoder::new(std::io::BufWriter::new(file), w, h);
     png.set_color(png::ColorType::Rgb);
@@ -197,7 +214,7 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str, size: Option<(u32, 
 }
 
 fn health(missing: bool) -> Health {
-    let names = ["Sound", "Volume", "Clipboard", "Notifications", "Phone files", "PC screen on the phone", "Phone on PC", "Phone as webcam", "Game controller over USB"];
+    let names = ["Sound", "Volume", "Clipboard", "Notifications", "Phone files", "PC screen on the phone", "Phone's screen on this PC", "Phone as webcam", "Game controller over USB"];
     let features = names
         .iter()
         .map(|n| {
@@ -212,9 +229,9 @@ fn health(missing: bool) -> Health {
     let mut checks = vec![Check { name: "Firewall".into(), state: "ok".into(), detail: "On, and phones get through".into(), action: String::new() }];
     let mut notes = vec![];
     if missing {
-        checks[0] = Check { name: "Firewall".into(), state: "info".into(), detail: "ufw is on and may stop phones finding this PC on Wi-Fi. Open ports lets Vyoma through (ports 1714 to 1764).".into(), action: "Open ports".into() };
-        checks.push(Check { name: "KDE Connect".into(), state: "warn".into(), detail: "Also running, so the USB cable, tethering and Bluetooth stay with it. Quit it to use them here.".into(), action: String::new() });
-        notes.push("PC screen on the phone needs vah264enc, which comes from your graphics card's VA-API driver.".into());
+        checks[0] = Check { name: "Firewall".into(), state: "warn".into(), detail: "This PC's firewall may be blocking phones on Wi-Fi.".into(), action: "Let phones through".into() };
+        checks.push(Check { name: "KDE Connect".into(), state: "warn".into(), detail: "Also running, so the USB cable, tethering and Bluetooth stay with it; the rest works here. To use them with Vyoma, turn KDE Connect off in your startup apps, then log out and back in.".into(), action: String::new() });
+        notes.push("PC screen on the phone needs your graphics card's video driver for hardware encoding. Your system's driver settings can add it.".into());
     }
     let update = crate::daemon::Update { current: "0.3.0".into(), latest: missing.then(|| "0.4.0".into()), checks: true, can_update: true, ..Default::default() };
     Health { features, installable: missing, installing: false, checks, notes, update }
