@@ -331,6 +331,10 @@ fn bind_first_free(ports: RangeInclusive<u16>) -> Result<TcpListener> {
 fn shared_udp(port: u16) -> Result<UdpSocket> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     socket.set_reuse_address(true)?;
+    // BSD sockets (macOS) share a unicast port only with SO_REUSEPORT as well; on Linux it would
+    // spread the broadcasts across the sockets instead of giving each one all of them.
+    #[cfg(target_os = "macos")]
+    socket.set_reuse_port(true)?;
     socket.set_broadcast(true)?;
     socket.bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)).into())?;
     socket.set_nonblocking(true)?;
