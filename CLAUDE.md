@@ -91,7 +91,10 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   Vyoma's extras (`vyoma.rs`): stats, specs, power, wake, wallpaper; the phone's files (~/Library off limits) and resumable
   sends; the Messages page (texts lock again when the screen locks); per-phone permits and Activity; a daily update check
   (`update.rs`: tells when a release carries `Vyoma-mac*.zip`; the window's Download opens the release page, as
-  Health `update.download`). The phone shows only the tiles a PC offers (`PcFeature`, from phone 0.10). macOS's own tools only
+  Health `update.download`). Finder's "Send to Phone" Quick Action (`finder.rs`: an Automator workflow in
+  ~/Library/Services written at start from Vyoma.app, never from a translocated copy, removed by `--uninstall`) runs
+  `vyoma-mac --send-any`, which hands the files to the agent's `SendAny` (core `share::pick`, a choose-from-list for
+  several phones, notifications for the result; opens Vyoma first if the agent isn't up). The phone shows only the tiles a PC offers (`PcFeature`, from phone 0.10). macOS's own tools only
   (`mac.rs`), a device's text goes to `osascript` as argv after our own first word, never as script. Nobody has a
   Mac: `.github/workflows/macos.yml` builds and tests core, mac and the window on GitHub's runners and keeps Vyoma.app
   (universal) as an artifact; it compiles and tests on Linux too (`cd desktop/mac && cargo test --release`). Not yet run on a Mac.
