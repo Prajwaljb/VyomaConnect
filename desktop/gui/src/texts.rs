@@ -4,7 +4,7 @@
 use chrono::{DateTime, Datelike, Local, TimeZone};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use crate::daemon::{Daemon, DbusDaemon, Inbox, ThreadData};
+use crate::daemon::{self, Inbox, ThreadData};
 use crate::{Bubble, Chat, MainWindow, breakable, notify};
 
 /// The page's id in `selected`.
@@ -69,7 +69,7 @@ pub fn wire(ui: &MainWindow) {
             win.set_draft("".into());
             let ui = ui.clone();
             std::thread::spawn(move || {
-                if let Err(e) = DbusDaemon::connect().and_then(|d| d.send_text(&id, thread, &text)) {
+                if let Err(e) = daemon::connect().and_then(|d| d.send_text(&id, thread, &text)) {
                     notify(&ui, format!("Couldn't send: {e:#}"));
                     let ui = ui.clone();
                     let _ = slint::invoke_from_event_loop(move || {
@@ -92,7 +92,7 @@ fn unlock(ui: &slint::Weak<MainWindow>, id: String) {
     }
     let ui = ui.clone();
     std::thread::spawn(move || {
-        if let Err(e) = DbusDaemon::connect().and_then(|d| d.unlock_texts(&id)) {
+        if let Err(e) = daemon::connect().and_then(|d| d.unlock_texts(&id)) {
             notify(&ui, format!("Couldn't ask the phone: {e:#}"));
         }
     });
@@ -112,7 +112,7 @@ pub fn read(ui: &slint::Weak<MainWindow>) {
         let (id, thread) = (win.get_current().id.to_string(), win.get_thread().parse::<i64>().ok());
         let linked = win.get_current().linked;
         std::thread::spawn(move || {
-            let d = DbusDaemon::connect();
+            let d = daemon::connect();
             let inbox = d.as_ref().map_err(|e| anyhow::anyhow!("{e:#}")).and_then(|d| d.conversations(&id));
             let texts = thread.and_then(|t| d.as_ref().ok().and_then(|d| d.thread(&id, t).ok()));
             let _ = slint::invoke_from_event_loop(move || {

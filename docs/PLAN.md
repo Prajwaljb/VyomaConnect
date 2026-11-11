@@ -359,7 +359,6 @@ Activity (2026-11-08): an Activity page under This PC lists what phones did here
 screen, files both ways, shares, power and wake, webcam, touchpad and controller, refusals, commands run), the newest
 500 kept in `activity.json` (`vyoma_companion::activity`), Clear asked in place. Daemon: `Activity()` (JSON),
 `ClearActivity()`, signal `ActivityChanged`.
-Next: the macOS socket behind the same `Daemon` trait.
 
 macOS (started 2026-11-11, phase 5): nobody on the project has a Mac yet, so macOS code is built and
 tested only on GitHub's macOS runners (`.github/workflows/macos.yml`), and nothing counts as working
@@ -371,7 +370,12 @@ explain macOS's one-time Allow in Privacy & Security.
    same core: pairing with a prompt, ping, battery (`pmset`), find my phone, lock, clipboard both
    ways, shares into ~/Downloads, notifications (osascript, shown under Script Editor's name until
    it's an app bundle). Sharing and the clipboard's rules moved into vyoma-core first.
-3. The window over a local socket behind the `Daemon` trait (Slint runs on macOS as it is).
+3. Done (built and tested on CI, not run on a Mac): the window talks to vyoma-mac over
+   `control.sock` in its folder (this user only), one JSON line per request with the D-Bus method
+   names, plus an `Events` stream (`gui/src/socket.rs`, `mac/src/control.rs`). The Mac answers
+   phones, pairing (Accept and Reject in the window too), ring, send files, the QR code; the rest
+   says "Not on the Mac yet" until step 4. Next: an app bundle holding both, so it opens from
+   Launchpad and notifications carry Vyoma's name.
 4. Media and volume (AppleScript / CoreAudio), touchpad and keyboard (CGEvent, needs Accessibility),
    screen viewing (ScreenCaptureKit), run commands, the phone's notifications.
 

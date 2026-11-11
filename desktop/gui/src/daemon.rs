@@ -1,12 +1,21 @@
 //! The desktop app (the daemon that owns the links) as the window sees it. On Linux that's its
-//! D-Bus interface, `dev.vyoma.Desktop1`; macOS will reach it over a local socket instead, behind
-//! the same [Daemon].
+//! D-Bus interface, `dev.vyoma.Desktop1`; on macOS a local socket (`vyoma-mac`'s `control.rs`),
+//! behind the same [Daemon]: [connect] picks.
 
 use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
+#[cfg(target_os = "linux")]
 use futures_util::StreamExt;
 use serde_json::Value;
+
+/// The daemon of this system: D-Bus on Linux, the socket elsewhere.
+pub fn connect() -> Result<Box<dyn Daemon>> {
+    #[cfg(target_os = "linux")]
+    return Ok(Box::new(DbusDaemon::connect()?));
+    #[cfg(not(target_os = "linux"))]
+    return Ok(Box::new(crate::socket::SocketDaemon::connect()?));
+}
 
 /// One device as the window shows it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -349,8 +358,11 @@ pub trait Daemon: Send + Sync {
     fn next_event(&self) -> Result<Event>;
 }
 
+#[cfg(target_os = "linux")]
 const BUS_NAME: &str = "dev.vyoma.Desktop";
+#[cfg(target_os = "linux")]
 const PATH: &str = "/dev/vyoma/Desktop";
+#[cfg(target_os = "linux")]
 const INTERFACE: &str = "dev.vyoma.Desktop1";
 
 /// zbus is async: its calls run here, each blocked on by the window's worker threads.
@@ -359,12 +371,14 @@ pub fn runtime() -> &'static tokio::runtime::Runtime {
     RT.get_or_init(|| tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().expect("a tokio runtime"))
 }
 
+#[cfg(target_os = "linux")]
 pub struct DbusDaemon {
     proxy: zbus::Proxy<'static>,
     /// Its signals, subscribed on the first wait so none fall between two.
     signals: Mutex<Option<zbus::proxy::SignalStream<'static>>>,
 }
 
+#[cfg(target_os = "linux")]
 impl DbusDaemon {
     pub fn connect() -> Result<Self> {
         runtime().block_on(async {
@@ -382,6 +396,7 @@ impl DbusDaemon {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl Daemon for DbusDaemon {
     fn phones(&self) -> Result<Vec<PhoneData>> {
         let list: Vec<(String, String, String, bool, bool, String)> = self.call("Devices", &())?;
@@ -533,6 +548,7 @@ impl Daemon for DbusDaemon {
 
 /// A D-Bus error's own message, without zbus's wrapping.
 /// What went wrong, in words for the person at the window: bus errors name the bus, not the problem.
+#[cfg(target_os = "linux")]
 fn reason(e: zbus::Error) -> String {
     const NOT_RUNNING: &str = "Vyoma isn't running here right now. It restarts by itself; if it doesn't, use Start Vyoma";
     match e {
@@ -558,6 +574,7 @@ mod tests {
     use serde_json::json;
 
     /// Reads the running desktop app and waits for one change (prints no names).
+    #[cfg(target_os = "linux")]
     #[test]
     #[ignore]
     fn reads_the_running_daemon() {

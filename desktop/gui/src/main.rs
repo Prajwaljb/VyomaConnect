@@ -4,17 +4,19 @@
 //! a window already open shows it instead (`instance.rs`).
 
 mod daemon;
+#[cfg(target_os = "linux")]
 mod instance;
 mod look;
 mod qr;
 mod snapshot;
+mod socket;
 mod texts;
 
 use std::cell::RefCell;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use daemon::{ActivityEntry, CommandData, Daemon, DbusDaemon, Event, Health, PhoneData};
+use daemon::{ActivityEntry, CommandData, Daemon, Event, Health, PhoneData};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 slint::include_modules!();
@@ -92,7 +94,12 @@ fn main() -> anyhow::Result<()> {
     let _ = slint::set_xdg_app_id("vyoma");
     let ui = MainWindow::new()?;
     // Another window is open: it shows the page, this one ends. No bus at all: run anyway.
-    if !instance::claim(&ui, &page).unwrap_or(true) {
+    // One window at a time (a D-Bus name; macOS has no session bus, and a Mac app is one window anyway).
+    #[cfg(target_os = "linux")]
+    let alone = instance::claim(&ui, &page).unwrap_or(true);
+    #[cfg(not(target_os = "linux"))]
+    let alone = true;
+    if !alone {
         return Ok(());
     }
     ui.set_setup(args.iter().any(|a| a == "--setup") || !setup_done());
@@ -124,7 +131,7 @@ pub fn open_page(ui: &MainWindow, page: &str) {
 fn read_commands(ui: &slint::Weak<MainWindow>) {
     let ui = ui.clone();
     std::thread::spawn(move || {
-        let list = DbusDaemon::connect().and_then(|d| d.commands());
+        let list = daemon::connect().and_then(|d| d.commands());
         let _ = slint::invoke_from_event_loop(move || {
             if let (Some(win), Ok(list)) = (ui.upgrade(), list) {
                 show_commands(&win, &list);
@@ -188,7 +195,7 @@ fn wire(ui: &MainWindow) {
         move |id: SharedString| {
             let ui = ui.clone();
             std::thread::spawn(move || {
-                let result = DbusDaemon::connect().and_then(|d| d.act(method, &id));
+                let result = daemon::connect().and_then(|d| d.act(method, &id));
                 match (result, done) {
                     (Err(e), _) => notify(&ui, format!("{e:#}")),
                     (Ok(()), Some(text)) => notify(&ui, text.to_owned()),
@@ -227,7 +234,7 @@ fn wire(ui: &MainWindow) {
         move || {
             let ui = ui.clone();
             std::thread::spawn(move || {
-                if let Err(e) = DbusDaemon::connect().and_then(|d| d.clear_activity()) {
+                if let Err(e) = daemon::connect().and_then(|d| d.clear_activity()) {
                     notify(&ui, format!("{e:#}"));
                 }
             });
@@ -240,7 +247,7 @@ fn wire(ui: &MainWindow) {
                 win.set_updating(true);
             }
             let ui = ui.clone();
-            std::thread::spawn(move || match DbusDaemon::connect().and_then(|d| d.update()) {
+            std::thread::spawn(move || match daemon::connect().and_then(|d| d.update()) {
                 Ok(()) => notify(&ui, "Updating: Vyoma restarts by itself when it's done".to_owned()),
                 Err(e) => {
                     notify(&ui, format!("{e:#}"));
@@ -261,7 +268,7 @@ fn wire(ui: &MainWindow) {
             }
             let ui = ui.clone();
             std::thread::spawn(move || {
-                if let Err(e) = DbusDaemon::connect().and_then(|d| d.set_update_checks(on)) {
+                if let Err(e) = daemon::connect().and_then(|d| d.set_update_checks(on)) {
                     notify(&ui, format!("{e:#}"));
                 }
                 read_health(&ui);
@@ -273,7 +280,7 @@ fn wire(ui: &MainWindow) {
         move || {
             let ui = ui.clone();
             std::thread::spawn(move || {
-                if let Err(e) = DbusDaemon::connect().and_then(|d| d.open_firewall()) {
+                if let Err(e) = daemon::connect().and_then(|d| d.open_firewall()) {
                     notify(&ui, format!("{e:#}"));
                 }
             });
@@ -287,7 +294,7 @@ fn wire(ui: &MainWindow) {
             }
             let ui = ui.clone();
             std::thread::spawn(move || {
-                if let Err(e) = DbusDaemon::connect().and_then(|d| d.install()) {
+                if let Err(e) = daemon::connect().and_then(|d| d.install()) {
                     notify(&ui, format!("{e:#}"));
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(win) = ui.upgrade() {
@@ -303,7 +310,7 @@ fn wire(ui: &MainWindow) {
         move |id, key, on| {
             let ui = ui.clone();
             std::thread::spawn(move || {
-                if let Err(e) = DbusDaemon::connect().and_then(|d| d.set_permission(&id, &key, on)) {
+                if let Err(e) = daemon::connect().and_then(|d| d.set_permission(&id, &key, on)) {
                     notify(&ui, format!("{e:#}"));
                 }
             });
@@ -322,7 +329,7 @@ fn wire(ui: &MainWindow) {
         let ui = ui.as_weak();
         move |key, name, command, fingerprint, every| {
             let ui = ui.clone();
-            std::thread::spawn(move || match DbusDaemon::connect().and_then(|d| d.save_command(&key, &name, &command, fingerprint, every)) {
+            std::thread::spawn(move || match daemon::connect().and_then(|d| d.save_command(&key, &name, &command, fingerprint, every)) {
                 Ok(_) => {
                     notify(&ui, if key.is_empty() { format!("Added \u{201c}{}\u{201d}: it's on your phones now", name.trim()) } else { "Saved".into() });
                     read_commands(&ui);
@@ -336,14 +343,14 @@ fn wire(ui: &MainWindow) {
         move |key| {
             let ui = ui.clone();
             let gone = COMMANDS_SHOWN.with(|c| c.borrow().iter().find(|c| c.key == key.as_str()).cloned());
-            std::thread::spawn(move || match DbusDaemon::connect().and_then(|d| d.remove_command(&key)) {
+            std::thread::spawn(move || match daemon::connect().and_then(|d| d.remove_command(&key)) {
                 Ok(()) => {
                     read_commands(&ui);
                     let Some(gone) = gone else { return notify(&ui, "Deleted".into()) };
                     // Undo puts it back as it was (under a new key: phones just see it listed again).
                     let again = ui.clone();
                     notify_with(&ui, format!("Deleted \u{201c}{}\u{201d}", gone.name), "Undo", move || {
-                        std::thread::spawn(move || match DbusDaemon::connect().and_then(|d| d.save_command("", &gone.name, &gone.command, gone.fingerprint, gone.every_time)) {
+                        std::thread::spawn(move || match daemon::connect().and_then(|d| d.save_command("", &gone.name, &gone.command, gone.fingerprint, gone.every_time)) {
                             Ok(_) => {
                                 notify(&again, format!("\u{201c}{}\u{201d} is back", gone.name));
                                 read_commands(&again);
@@ -372,7 +379,7 @@ fn wire(ui: &MainWindow) {
         let ui = ui.as_weak();
         move |id| {
             let ui = ui.clone();
-            std::thread::spawn(move || match DbusDaemon::connect().and_then(|d| d.allow_clipboard(&id)) {
+            std::thread::spawn(move || match daemon::connect().and_then(|d| d.allow_clipboard(&id)) {
                 Ok(()) => notify(&ui, "Clipboard sync is on".into()),
                 Err(e) => notify(&ui, format!("{e:#}")),
             });
@@ -412,10 +419,9 @@ fn wire(ui: &MainWindow) {
         move || {
             let ui = ui.clone();
             std::thread::spawn(move || {
-                let started = std::process::Command::new("systemctl").args(["--user", "start", "vyoma-desktop"]).status();
-                match started {
+                match start_daemon() {
                     Ok(s) if s.success() => notify(&ui, "Starting Vyoma\u{2026}".into()),
-                    _ => notify(&ui, "Vyoma couldn't start. Run vyoma-desktop in a terminal to see why".into()),
+                    _ => notify(&ui, format!("Vyoma couldn't start. Run {} in a terminal to see why", if cfg!(target_os = "macos") { "vyoma-mac" } else { "vyoma-desktop" })),
                 }
             });
         }
@@ -424,7 +430,7 @@ fn wire(ui: &MainWindow) {
         let ui = ui.as_weak();
         move || {
             let ui = ui.clone();
-            std::thread::spawn(move || match DbusDaemon::connect().and_then(|d| d.search()) {
+            std::thread::spawn(move || match daemon::connect().and_then(|d| d.search()) {
                 Ok(()) => notify(&ui, "Looking for phones nearby".into()),
                 Err(e) => notify(&ui, format!("{e:#}")),
             });
@@ -439,13 +445,24 @@ fn wire(ui: &MainWindow) {
                 let paths: Vec<String> = files.iter().map(|p| p.to_string_lossy().into_owned()).collect();
                 let n = paths.len();
                 // "Sent" follows once the phone has them (the daemon's FilesSent).
-                match DbusDaemon::connect().and_then(|d| d.send_files(&id, paths)) {
+                match daemon::connect().and_then(|d| d.send_files(&id, paths)) {
                     Ok(()) => notify(&ui, if n == 1 { "Sending 1 file…".into() } else { format!("Sending {n} files…") }),
                     Err(e) => notify(&ui, format!("{e:#}")),
                 }
             });
         }
     });
+}
+
+/// Starts the daemon again: its systemd user unit, or on macOS its LaunchAgent.
+fn start_daemon() -> std::io::Result<std::process::ExitStatus> {
+    if cfg!(target_os = "macos") {
+        let uid = std::process::Command::new("id").arg("-u").output()?;
+        let uid = String::from_utf8_lossy(&uid.stdout).trim().to_owned();
+        std::process::Command::new("launchctl").args(["kickstart", &format!("gui/{uid}/dev.vyoma.desktop")]).status()
+    } else {
+        std::process::Command::new("systemctl").args(["--user", "start", "vyoma-desktop"]).status()
+    }
 }
 
 /// Reads the daemon now, whenever it says something changed, and every [REREAD_EVERY]; shows
@@ -455,7 +472,7 @@ fn watch(ui: slint::Weak<MainWindow>) {
     let told = ui.clone();
     std::thread::spawn(move || {
         loop {
-            if let Ok(d) = DbusDaemon::connect() {
+            if let Ok(d) = daemon::connect() {
                 while let Ok(event) = d.next_event() {
                     match event {
                         Event::Changed => {
@@ -482,11 +499,11 @@ fn watch(ui: slint::Weak<MainWindow>) {
         }
     });
     std::thread::spawn(move || {
-        let mut daemon: Option<DbusDaemon> = None;
+        let mut daemon: Option<Box<dyn Daemon>> = None;
         let mut wall_read: Option<std::time::Instant> = None;
         loop {
             if daemon.is_none() {
-                daemon = DbusDaemon::connect().ok();
+                daemon = daemon::connect().ok();
                 // Back (or there at start): This PC's state, for the sidebar's dot.
                 if daemon.is_some() {
                     read_health(&ui);
@@ -548,7 +565,7 @@ fn show_wallpaper(ui: &MainWindow, wall: Option<look::Wallpaper>) {
 fn read_activity(ui: &slint::Weak<MainWindow>) {
     let ui = ui.clone();
     std::thread::spawn(move || {
-        let list = DbusDaemon::connect().and_then(|d| d.activity());
+        let list = daemon::connect().and_then(|d| d.activity());
         let _ = slint::invoke_from_event_loop(move || {
             if let (Some(win), Ok(list)) = (ui.upgrade(), list) {
                 show_activity(&win, &list, chrono::Local::now());
@@ -615,7 +632,7 @@ pub fn show_activity(ui: &MainWindow, list: &[ActivityEntry], now: chrono::DateT
 fn read_health(ui: &slint::Weak<MainWindow>) {
     let ui = ui.clone();
     std::thread::spawn(move || {
-        let health = DbusDaemon::connect().and_then(|d| d.health());
+        let health = daemon::connect().and_then(|d| d.health());
         let _ = slint::invoke_from_event_loop(move || {
             if let (Some(win), Ok(h)) = (ui.upgrade(), health) {
                 show_health(&win, &h);

@@ -75,9 +75,12 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   Cinnamon/MATE/Xfce session; wlroots (Sway, Hyprland) input still has no path.
 - `desktop/mac` (`vyoma-mac`): the Mac's PC side on vyoma-core (`docs/PLAN.md` section 10, macOS): pairs after a
   dialog with the code, serves ping, battery, find my phone, lock (display sleep), clipboard (pbcopy/pbpaste polled each
-  second), share (files into ~/Downloads); `--install` makes it a LaunchAgent (`launchd.rs`). macOS's own tools only
+  second), share (files into ~/Downloads); `--install` makes it a LaunchAgent (`launchd.rs`). The window reaches it over
+  `control.sock` in ~/Library/Application Support/Vyoma (mode 0600; `VYOMA_SOCKET` overrides): JSON lines, D-Bus method
+  names, `Events` streams changes (`control.rs`; window side `gui/src/socket.rs` behind `daemon::connect()`); methods it
+  lacks answer "Not on the Mac yet". macOS's own tools only
   (`mac.rs`), a device's text goes to `osascript` as argv after our own first word, never as script. Nobody has a
-  Mac: `.github/workflows/macos.yml` builds and tests core + mac on GitHub's runners and keeps a universal binary
+  Mac: `.github/workflows/macos.yml` builds and tests core, mac and the window on GitHub's runners and keeps a universal binary
   as an artifact; it compiles and tests on Linux too (`cd desktop/mac && cargo test --release`). Not yet run on a Mac.
 - `desktop/icon/gen.py`: Vyoma's icon ("Moon": the PC as a white glass orb, the phone as a small orb in a gap of one ring, on a sky tile) for every place from one geometry: Android adaptive layers, monochrome, notification glyph, splash; the desktop's `dist/vyoma.svg` (installed into hicolor) and the window's `ui/icons/vyoma.svg`. Run `python3 desktop/icon/gen.py .` from the repo root after changing it.
 - `desktop/companion`: lib + bin (the session loop is `session.rs`, shared with the desktop app); the bin is the Rust daemon beside stock kdeconnectd, built on `vyoma-core`. Dials only phones kdeconnectd trusts (mDNS), pairs with
