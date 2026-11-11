@@ -16,6 +16,7 @@ mod mac;
 mod media;
 #[cfg(target_os = "macos")]
 mod notify;
+mod vyoma;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -146,6 +147,7 @@ async fn run(dir: PathBuf) -> Result<()> {
     let (media_out_tx, mut media_out) = mpsc::unbounded_channel::<(Option<String>, Value)>();
     tokio::spawn(media::run(media_wanted.clone(), media_rx, media_out_tx));
     let mut pointer = input::Pointer::default();
+    let mut features = vyoma::Vyoma::new(commands.clone());
 
     let send = |id: &str, p: Value| {
         let _ = commands.send(Command::Send(id.to_owned(), p));
@@ -196,6 +198,7 @@ async fn run(dir: PathBuf) -> Result<()> {
                     if let Some(d) = devices.get_mut(&id) {
                         d.linked = false;
                     }
+                    features.gone(&id);
                 }
                 Event::Routes { id, remotes } => {
                     if let Some(d) = devices.get_mut(&id) {
@@ -292,6 +295,11 @@ async fn run(dir: PathBuf) -> Result<()> {
                             }
                         }
                         NOTIFICATION => phone_notification(&id, d, &packet["body"]).await,
+                        kind if vyoma::takes(kind) && d.paired => {
+                            // AppKit tells only this thread where the wallpaper is.
+                            let wallpaper = if kind == vyoma::WALLPAPER_REQUEST { vyoma::wallpaper_path() } else { None };
+                            features.handle(&id, &packet, wallpaper);
+                        }
                         _ => {
                             for reply in on_packet(d, &packet, from, &me, &mut clip, &mut ringer, &found_tx).await {
                                 send(&id, reply);
@@ -470,8 +478,8 @@ fn identity(me: &Identity, name: String, laptop: bool) -> Value {
             "deviceName": name,
             "deviceType": if laptop { "laptop" } else { "desktop" },
             "protocolVersion": 8,
-            "incomingCapabilities": INCOMING,
-            "outgoingCapabilities": OUTGOING,
+            "incomingCapabilities": ([INCOMING, vyoma::INCOMING].concat()),
+            "outgoingCapabilities": ([OUTGOING, vyoma::OUTGOING].concat()),
         }),
     )
 }
@@ -630,7 +638,7 @@ mod tests {
         let me = Identity::load_or_create_in(&dir).unwrap();
         let p = identity(&me, "Sam's MacBook".into(), true);
         assert_eq!(p["body"]["deviceType"], "laptop");
-        assert_eq!(p["body"]["incomingCapabilities"].as_array().unwrap().len(), INCOMING.len());
+        assert_eq!(p["body"]["incomingCapabilities"].as_array().unwrap().len(), INCOMING.len() + vyoma::INCOMING.len());
         assert!(!OUTGOING.contains(&"kdeconnect.lock"), "no lock state it can't know");
         std::fs::remove_dir_all(&dir).unwrap();
     }
