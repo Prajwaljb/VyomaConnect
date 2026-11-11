@@ -113,6 +113,7 @@ import dev.vyoma.connect.gamepad.PadProfile
 import dev.vyoma.connect.gamepad.PadProfiles
 import dev.vyoma.connect.gamepad.Place
 import dev.vyoma.connect.gamepad.UsbAccessoryLink
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.GamepadButton
 import dev.vyoma.connect.protocol.plugin.builtin.GamepadRoute
@@ -188,7 +189,7 @@ class GamepadActivity : ComponentActivity() {
                         d.state.map { st ->
                             val pc = d.identity.featuresOf
                             if (!st.isReachable || pc == null || (wanted != null && pc != wanted)) return@map null
-                            d.plugin<CompanionPlugin>(CompanionPlugin.ID)?.let { it to all[pc]?.identity?.deviceName }
+                            d.plugin<CompanionPlugin>(CompanionPlugin.ID)?.takeIf { it.offers(PcFeature.GAMEPAD) }?.let { it to all[pc]?.identity?.deviceName }
                         }
                     }
                     if (each.isEmpty()) flowOf(null) else combine(each) { found -> found.firstOrNull { it != null } }

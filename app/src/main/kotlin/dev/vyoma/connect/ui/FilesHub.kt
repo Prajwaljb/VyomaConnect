@@ -70,6 +70,7 @@ import dev.vyoma.connect.designsystem.SystemColor
 import dev.vyoma.connect.designsystem.cardSegment
 import dev.vyoma.connect.platform.AndroidShareSink
 import dev.vyoma.connect.platform.AppLock
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import dev.vyoma.connect.protocol.plugin.builtin.Transfer
 import dev.vyoma.connect.protocol.plugin.builtin.Transfers
 import dev.vyoma.connect.service.FileRecord
@@ -86,7 +87,10 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
     val status = LocalStatus.current
     val devices by vm.devices.collectAsStateWithLifecycle()
     val pc = devices.firstOrNull { it.identity.companionOf == null && it.isPaired && it.isReachable }
-    val companion = pc?.let { p -> devices.any { it.identity.featuresOf == p.identity.deviceId && it.isPaired && it.isReachable } } == true
+    // What the PC's Vyoma side serves: folders and its files on Linux; a Mac may not, yet.
+    val vyoma = pc?.let { vm.companionOf(it.identity.deviceId) }
+    val companion = vyoma?.offers(PcFeature.XFER) == true
+    val pcFiles = vyoma?.offers(PcFeature.FILES) == true
     // Over Bluetooth alone nothing can be sent: the tiles stay, dimmed, and say why.
     val bluetooth = pc?.onlyBluetooth == true
     fun send(go: () -> Unit) = if (bluetooth) status.show(NEEDS_WIFI, failure = true) else go()
@@ -121,7 +125,7 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
         // The PC's usual folders, a tap from here (the companion lists and fetches them).
         item(key = "pc-label") { SectionLabel("On the PC", Modifier.animateItem()) }
         item(key = "pc") {
-            if (companion && pc != null) {
+            if (pcFiles && pc != null) {
                 Column(Modifier.animateItem().glassCard(MaterialTheme.shapes.large).padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     PC_FOLDERS.chunked(3).forEach { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -143,6 +147,7 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
                     ListRow(
                         title = "Browse PC files",
                         subtitle = when {
+                            vyoma != null && pc != null -> "Not on ${pc.identity.deviceName} yet"
                             pc != null -> "Needs Vyoma on your PC"
                             devices.any { it.identity.companionOf == null && it.isPaired } -> "When your PC is back"
                             else -> "Pair a PC first"

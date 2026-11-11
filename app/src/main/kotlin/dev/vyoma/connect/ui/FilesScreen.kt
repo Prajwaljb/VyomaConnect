@@ -69,6 +69,7 @@ import dev.vyoma.connect.designsystem.cardSegment
 import dev.vyoma.connect.designsystem.perform
 import dev.vyoma.connect.designsystem.pressable
 import dev.vyoma.connect.platform.AndroidShareSink
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.PcFile
 import dev.vyoma.connect.protocol.plugin.builtin.PcFileEvent
@@ -100,7 +101,7 @@ fun FilesScreen(
     fun moving(go: () -> Unit) = if (bluetooth) status.show(NEEDS_WIFI, failure = true) else go()
     val companion = devices.firstOrNull { it.identity.featuresOf == pcId && it.isPaired && it.isReachable }
     val plugin = remember(companion?.identity?.deviceId, companion?.plugins) {
-        companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
+        companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }?.takeIf { it.offers(PcFeature.FILES) }
     }
 
     LaunchedEffect(plugin, path) { plugin?.listFiles(path) }

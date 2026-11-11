@@ -119,6 +119,7 @@ import dev.vyoma.connect.designsystem.VyomaTheme
 import dev.vyoma.connect.platform.ScreenDecoder
 import dev.vyoma.connect.platform.ViewerTimings
 import dev.vyoma.connect.platform.AppLock
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import dev.vyoma.connect.protocol.plugin.builtin.CaptureState
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.typeable
@@ -219,7 +220,7 @@ class PcScreenActivity : ComponentActivity() {
     private fun findCompanion(): CompanionPlugin? = pcId?.let { id ->
         application.container.hub.value?.devices?.value?.values
             ?.firstOrNull { it.identity.featuresOf == id && it.state.value.isReachable }
-            ?.plugin(CompanionPlugin.ID)
+            ?.plugin<CompanionPlugin>(CompanionPlugin.ID)?.takeIf { it.offers(PcFeature.SCREEN) }
     }
 
     private fun clipboardPlugin() = pcId?.let { id ->

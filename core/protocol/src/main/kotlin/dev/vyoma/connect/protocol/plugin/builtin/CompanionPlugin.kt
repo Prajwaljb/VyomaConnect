@@ -248,6 +248,35 @@ data class AwayRules(val lock: AwayAction? = null, val pause: AwayAction? = null
 /** One thing the PC does once the phone has gone: how long after, and whether it's put back on return. */
 data class AwayAction(val afterSeconds: Int, val undo: Boolean)
 
+/**
+ * One of Vyoma's own PC features, known by the request its PC side takes. Vyoma's Linux app takes
+ * them all; its Mac app a few so far, so the phone offers each only where the PC lists it
+ * ([CompanionPlugin.offers]) rather than a tile that would wait for an answer that never comes.
+ */
+enum class PcFeature(val request: String) {
+    STATS(CompanionPlugin.STATS_REQUEST),
+    SPECS(CompanionPlugin.SPECS_REQUEST),
+    SCREENSHOT(CompanionPlugin.SCREENSHOT_REQUEST),
+    CAMERA(CompanionPlugin.CAMERA_REQUEST),
+    HANDOFF(CompanionPlugin.HANDOFF_REQUEST),
+    FILES(CompanionPlugin.FILES_LIST),
+    /** Resumable sends and whole folders. */
+    XFER(CompanionPlugin.XFER_BEGIN),
+    SCREEN(CompanionPlugin.SCREEN_REQUEST),
+    /** Brightness, each app's volume. */
+    CONTROLS(CompanionPlugin.PC_REQUEST),
+    POWER(CompanionPlugin.PC_POWER),
+    WAKE(CompanionPlugin.PC_WAKE),
+    WALLPAPER(CompanionPlugin.WALLPAPER_REQUEST),
+    GAMEPAD(CompanionPlugin.GAMEPAD_STATE),
+    WEBCAM(CompanionPlugin.WEBCAM),
+    MIRROR(CompanionPlugin.MIRROR),
+    POINTER(CompanionPlugin.POINTER_REQUEST),
+    PASTE(CompanionPlugin.PASTE),
+    AWAY(CompanionPlugin.AWAY),
+    DESKTOP_STEP(CompanionPlugin.DESKTOP_STEP),
+}
+
 enum class PcPower(val wire: String) { SLEEP("sleep"), RESTART("restart"), SHUTDOWN("shutdown"), LOGOUT("logout") }
 
 /** How one attempt at a resumable send ended; [Failed.retry] says whether trying again can help. */
@@ -414,15 +443,16 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
      */
     override suspend fun onLinkAdded() {
         abandonReplies()
-        sendAway()
-        requestWallpaper()
-        requestSpecs()
+        greet()
     }
 
-    override suspend fun onStart() {
-        sendAway()
-        requestWallpaper()
-        requestSpecs()
+    override suspend fun onStart() = greet()
+
+    /** What a PC is told and asked on every link, as far as its Vyoma side takes it. */
+    private suspend fun greet() {
+        if (offers(PcFeature.AWAY)) sendAway()
+        if (offers(PcFeature.WALLPAPER)) requestWallpaper()
+        if (offers(PcFeature.SPECS)) requestSpecs()
     }
 
     /** Tells the PC the current walk-away rules ([away]); sent on every link too, so a restarted companion knows them. */
@@ -812,6 +842,9 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
 
     /** The PC this companion belongs to. */
     val pcId: String? get() = ctx.device.identity.featuresOf
+
+    /** Whether this PC's Vyoma side serves [feature] (see [PcFeature]). */
+    fun offers(feature: PcFeature): Boolean = feature.request in ctx.device.identity.incomingCapabilities
 
     /**
      * Sends [states] to the PC's virtual pad for as long as this runs: every change at once (the flow

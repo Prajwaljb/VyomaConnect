@@ -5,6 +5,7 @@ import dev.vyoma.connect.designsystem.LocalStatus
 import dev.vyoma.connect.designsystem.SmoothCornerShape
 import androidx.compose.material.icons.rounded.Terminal
 import kotlinx.coroutines.flow.MutableStateFlow
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.RemoteCommand
 import dev.vyoma.connect.protocol.plugin.builtin.CaptureState
@@ -231,7 +232,7 @@ fun HomeScreen(
                 }
             }
             // The rest of what you'd adjust on the PC: its screens (each app's sound is the volume card's mixer).
-            if (live) companionPlugin?.let { plugin ->
+            if (live) companionPlugin?.takeIf { it.offers(PcFeature.CONTROLS) }?.let { plugin ->
                 item(key = "levels") { Staggered(3, Modifier.animateItem()) { LevelsCard(plugin) } }
             }
             item(key = "controls") {
@@ -252,7 +253,7 @@ fun HomeScreen(
                 // What the PC's screen and camera sent: one compact row (the full strip is in Files).
                 item(key = "captures") {
                     CapturesRow(
-                        onTake = companionPlugin?.let { c ->
+                        onTake = companionPlugin?.takeIf { it.offers(PcFeature.SCREENSHOT) }?.let { c ->
                             val context = LocalContext.current
                             if (primary.onlyBluetooth) { { status.show(NEEDS_WIFI, failure = true) } }
                             else { { AppLock.ask(context, AppLock.SCREENSHOT) { vm.capture(c.screenshot) } } }

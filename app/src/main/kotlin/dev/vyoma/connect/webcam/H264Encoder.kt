@@ -10,6 +10,7 @@ import android.view.Surface
 import dev.vyoma.connect.protocol.device.DeviceHub
 import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -23,13 +24,13 @@ import kotlinx.coroutines.flow.map
  * to the PC (webcam, mirror) follow. A new link gives a new plugin.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-internal fun companionLink(hub: DeviceHub): Flow<Pair<CompanionPlugin, String>?> =
+internal fun companionLink(hub: DeviceHub, feature: PcFeature): Flow<Pair<CompanionPlugin, String>?> =
     hub.devices.flatMapLatest { all ->
         val each = all.values.map { d ->
             d.state.map { st ->
                 val pc = d.identity.featuresOf ?: return@map null
                 if (!st.isReachable) return@map null
-                d.plugin<CompanionPlugin>(CompanionPlugin.ID)?.let { it to (all[pc]?.identity?.deviceName ?: "the PC") }
+                d.plugin<CompanionPlugin>(CompanionPlugin.ID)?.takeIf { it.offers(feature) }?.let { it to (all[pc]?.identity?.deviceName ?: "the PC") }
             }
         }
         if (each.isEmpty()) flowOf(null) else combine(each) { found -> found.firstOrNull { it != null } }
