@@ -164,11 +164,16 @@ async fn connect(me: &Identity, pinned: &[u8], phone: IpAddr, port: u16) -> Resu
 /// the link slows (Wi-Fi hiccups), seconds behind. With little unsent allowed, a slow link stalls
 /// the writer instead, back up to the encoder, which then drops frames rather than delaying them.
 fn live(tcp: &TcpStream) {
+    // Darwin's netinet/tcp.h has it too, under its own number, which the libc crate doesn't carry.
+    #[cfg(target_os = "macos")]
+    const TCP_NOTSENT_LOWAT: libc::c_int = 0x201;
+    #[cfg(not(target_os = "macos"))]
+    const TCP_NOTSENT_LOWAT: libc::c_int = libc::TCP_NOTSENT_LOWAT;
     use std::os::fd::AsRawFd;
     let lowat: libc::c_int = 16 * 1024;
     // SAFETY: a plain setsockopt on a socket we own, with an int-sized value.
     unsafe {
-        libc::setsockopt(tcp.as_raw_fd(), libc::IPPROTO_TCP, libc::TCP_NOTSENT_LOWAT, (&lowat as *const libc::c_int).cast(), size_of::<libc::c_int>() as libc::socklen_t);
+        libc::setsockopt(tcp.as_raw_fd(), libc::IPPROTO_TCP, TCP_NOTSENT_LOWAT, (&lowat as *const libc::c_int).cast(), size_of::<libc::c_int>() as libc::socklen_t);
     }
 }
 

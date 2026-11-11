@@ -125,9 +125,15 @@ fn keepalive(tcp: &TcpStream) {
         unsafe { libc::setsockopt(fd, level, name, (&value as *const libc::c_int).cast(), size_of::<libc::c_int>() as libc::socklen_t) };
     };
     set(libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1);
+    // The idle time before the first probe: TCP_KEEPIDLE on Linux, TCP_KEEPALIVE on macOS.
+    #[cfg(target_os = "macos")]
+    set(libc::IPPROTO_TCP, libc::TCP_KEEPALIVE, 15);
+    #[cfg(not(target_os = "macos"))]
     set(libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, 15);
     set(libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, 5);
     set(libc::IPPROTO_TCP, libc::TCP_KEEPCNT, 3);
+    // Unsent data gives up after 30 s (Linux only; macOS has no such option, the probes above stand).
+    #[cfg(target_os = "linux")]
     set(libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT, 30_000);
 }
 
