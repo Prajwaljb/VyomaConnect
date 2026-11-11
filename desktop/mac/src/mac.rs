@@ -66,9 +66,13 @@ fn script(lines: &[&str], args: &[&str]) -> Command {
     c
 }
 
-/// A notification. Shown under Script Editor's name for now: macOS credits osascript's
-/// notifications to it until Vyoma ships as an app bundle of its own.
+/// A notification: Vyoma's own from inside Vyoma.app ([crate::notify]), else by osascript, which
+/// macOS credits to Script Editor.
 pub async fn notify(title: &str, body: &str) {
+    #[cfg(target_os = "macos")]
+    if crate::notify::post(title, body) {
+        return;
+    }
     let lines = ["on run argv", "display notification (item 3 of argv) with title (item 2 of argv)", "end run"];
     match script(&lines, &[title, body]).output().await {
         Ok(out) if out.status.success() => {}

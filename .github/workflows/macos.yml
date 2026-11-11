@@ -1,13 +1,14 @@
 # The macOS side, built and tested where there's a Mac: GitHub's macOS runners (Apple silicon).
 # Nobody on the project has a Mac yet, so this is the only place macOS code runs: it builds the
 # shared core, the Mac daemon and Vyoma's window, and runs their tests. It's no stand-in for trying it on a real Mac.
-# The daemon is kept as a download (a universal binary, unsigned) for whoever tries it on one.
+# Vyoma.app (window + daemon, universal, ad-hoc signed) is kept as a download for whoever tries
+# it on one.
 name: macOS
 
 on:
   push:
     branches: [main]
-    paths: ["desktop/**", ".github/workflows/macos.yml"]
+    paths: ["desktop/**", "packaging/bundle-mac.sh", "VERSION", ".github/workflows/macos.yml"]
   workflow_dispatch:
 
 jobs:
@@ -31,22 +32,23 @@ jobs:
         working-directory: desktop/mac
         run: cargo test --release
       # The window talks to vyoma-mac over its socket (gui/src/socket.rs).
-      - name: Test and build the window
+      - name: Test the window
         working-directory: desktop/gui
-        run: |
-          cargo test --release
-          cargo build --release
-      - name: Build a universal vyoma-mac
-        working-directory: desktop/mac
+        run: cargo test --release
+      - name: Build Vyoma.app (universal)
+        working-directory: desktop
         run: |
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
           mkdir -p out
-          lipo -create -output out/vyoma-mac target/aarch64-apple-darwin/release/vyoma-mac target/x86_64-apple-darwin/release/vyoma-mac
-          lipo -info out/vyoma-mac
-          cp ../../LICENSE out/
+          for crate in gui:vyoma mac:vyoma-mac; do
+            dir=${crate%%:*} bin=${crate#*:}
+            (cd $dir && cargo build --release --target aarch64-apple-darwin && cargo build --release --target x86_64-apple-darwin)
+            lipo -create -output out/$bin $dir/target/aarch64-apple-darwin/release/$bin $dir/target/x86_64-apple-darwin/release/$bin
+            lipo -info out/$bin
+          done
+          ../packaging/bundle-mac.sh out/vyoma out/vyoma-mac out
+          ditto -c -k --sequesterRsrc --keepParent out/Vyoma.app out/Vyoma-mac.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: vyoma-mac-universal
-          path: desktop/mac/out/
+          name: Vyoma-mac
+          path: desktop/out/Vyoma-mac.zip

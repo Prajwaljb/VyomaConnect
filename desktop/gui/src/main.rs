@@ -106,6 +106,14 @@ fn main() -> anyhow::Result<()> {
     wire(&ui);
     qr::wire(&ui);
     texts::wire(&ui);
+    // On a Mac, opening the app is what sets Vyoma up: the first open (or the first after the app
+    // moved) starts the background part from inside it, which then starts at login.
+    #[cfg(target_os = "macos")]
+    if daemon::connect().is_err() {
+        std::thread::spawn(|| {
+            let _ = start_daemon();
+        });
+    }
     watch(ui.as_weak());
     if !page.is_empty() {
         open_page(&ui, &page);
@@ -457,6 +465,10 @@ fn wire(ui: &MainWindow) {
 /// Starts the daemon again: its systemd user unit, or on macOS its LaunchAgent.
 fn start_daemon() -> std::io::Result<std::process::ExitStatus> {
     if cfg!(target_os = "macos") {
+        // From Vyoma.app: (re)install the agent from beside this window, so a moved app still starts.
+        if let Some(helper) = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("vyoma-mac"))).filter(|p| p.exists()) {
+            return std::process::Command::new(helper).arg("--install").stdout(std::process::Stdio::null()).status();
+        }
         let uid = std::process::Command::new("id").arg("-u").output()?;
         let uid = String::from_utf8_lossy(&uid.stdout).trim().to_owned();
         std::process::Command::new("launchctl").args(["kickstart", &format!("gui/{uid}/dev.vyoma.desktop")]).status()

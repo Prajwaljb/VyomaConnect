@@ -65,8 +65,9 @@ n = 24 / 70
 open(f"{ROOT}/app/src/main/res/drawable/ic_notification.xml", "w").write(vector(24, 24, solid(geo(n, 12 - 50 * n), "#FFFFFFFF")))
 
 # ---- Desktop SVG ---------------------------------------------------------------------------------
-def svg(tile=True):
-    s, o = (0.92, 4) if tile else (1, 0)
+def svg(tile=True, mac=False):
+    # macOS draws no mask: the tile sits on Apple's 1024 grid (824 body, 100 margin) with its own shadow.
+    s, o = (0.8047, 9.765) if mac else (0.92, 4) if tile else (1, 0)
     g = geo(s, o)
     def orb(x, y, r, big, i):
         stops = ('<stop offset="0" stop-color="#fff"/><stop offset=".55" stop-color="#eef8ff"/><stop offset="1" stop-color="#b9defc"/>' if big
@@ -80,9 +81,27 @@ def svg(tile=True):
                 f'<circle cx="{f(x)}" cy="{f(y)}" r="{f(r - 0.5*s)}" fill="none" stroke="#fff" stroke-opacity=".9" stroke-width="{f(s)}"/>{hi}')
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="256" height="256">'
             f'<defs><linearGradient id="bg" x1="0" y1="0" x2=".4" y2="1"><stop offset="0" stop-color="#5ccbff"/><stop offset="1" stop-color="#1872ea"/></linearGradient>'
-            f'<filter id="sh" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="{f(1.6*s)}" stdDeviation="{f(1.6*s)}" flood-color="#0a3f8f" flood-opacity=".35"/></filter></defs>'
-            f'<rect x="{o}" y="{o}" width="{f(100*s)}" height="{f(100*s)}" rx="{f(23*s)}" fill="url(#bg)"/>'
+            f'<filter id="sh" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="{f(1.6*s)}" stdDeviation="{f(1.6*s)}" flood-color="#0a3f8f" flood-opacity=".35"/></filter>'
+            + (f'<filter id="tile" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="1" stdDeviation="1.2" flood-color="#000" flood-opacity=".3"/></filter>' if mac else '')
+            + f'</defs>'
+            f'<rect x="{o}" y="{o}" width="{f(100*s)}" height="{f(100*s)}" rx="{f(22.4*s if mac else 23*s)}" fill="url(#bg)"{' filter="url(#tile)"' if mac else ''}/>'
             f'<path d="{g["ring"]}" fill="none" stroke="#fff" stroke-opacity=".95" stroke-width="{f(g["w"])}"/>'
             f'{orb(*g["big"], True, 1)}{orb(*g["small"], False, 2)}</svg>\n')
 open(f"{ROOT}/desktop/daemon/dist/vyoma.svg", "w").write(svg())
 open(f"{ROOT}/desktop/gui/ui/icons/vyoma.svg", "w").write(svg())
+
+# ---- macOS: Vyoma.app's icon (icns of PNGs, rendered with resvg) ---------------------------------
+import os, struct, subprocess, tempfile
+mac_svg = f"{ROOT}/desktop/mac/dist/vyoma.svg"
+os.makedirs(os.path.dirname(mac_svg), exist_ok=True)
+open(mac_svg, "w").write(svg(mac=True))
+# Each PNG once per size, in every slot that size fills (1x and the half size's 2x).
+SLOTS = [("icp4", 16), ("ic11", 32), ("icp5", 32), ("ic12", 64), ("ic07", 128), ("ic13", 256), ("ic08", 256), ("ic14", 512), ("ic09", 512), ("ic10", 1024)]
+with tempfile.TemporaryDirectory() as tmp:
+    pngs = {}
+    for size in sorted({n for _, n in SLOTS}):
+        out = f"{tmp}/{size}.png"
+        subprocess.run(["resvg", "-w", str(size), "-h", str(size), mac_svg, out], check=True)
+        pngs[size] = open(out, "rb").read()
+body = b"".join(kind.encode() + struct.pack(">I", 8 + len(pngs[n])) + pngs[n] for kind, n in SLOTS)
+open(f"{ROOT}/desktop/mac/dist/vyoma.icns", "wb").write(b"icns" + struct.pack(">I", 8 + len(body)) + body)

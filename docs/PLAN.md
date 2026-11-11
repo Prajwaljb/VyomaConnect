@@ -374,8 +374,10 @@ explain macOS's one-time Allow in Privacy & Security.
    `control.sock` in its folder (this user only), one JSON line per request with the D-Bus method
    names, plus an `Events` stream (`gui/src/socket.rs`, `mac/src/control.rs`). The Mac answers
    phones, pairing (Accept and Reject in the window too), ring, send files, the QR code; the rest
-   says "Not on the Mac yet" until step 4. Next: an app bundle holding both, so it opens from
-   Launchpad and notifications carry Vyoma's name.
+   says "Not on the Mac yet" until step 4. Vyoma.app holds both (`packaging/bundle-mac.sh`,
+   universal, ad-hoc signed, CI artifact): opening it sets up the login agent from inside the app,
+   and notifications go through UserNotifications under Vyoma's name and icon. The pairing
+   question is still an osascript dialog.
 4. Media and volume (AppleScript / CoreAudio), touchpad and keyboard (CGEvent, needs Accessibility),
    screen viewing (ScreenCaptureKit), run commands, the phone's notifications.
 
