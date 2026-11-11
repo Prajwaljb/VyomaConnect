@@ -141,6 +141,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
     val theme by vm.theme.collectAsStateWithLifecycle()
     val name by vm.deviceName.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val openNotificationAccess = rememberNotificationAccess()
     val status = LocalStatus.current
     var editingName by rememberSaveable { mutableStateOf(false) }
     var showAdbHelp by rememberSaveable { mutableStateOf(false) }
@@ -200,7 +201,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                     showDivider = true,
                     trailing = { RowChevron(if (notifOn) "On" else "Off") },
                     // Off: straight to Android's switch; on: the per-app choices (access is on that page too).
-                    onClick = { if (notifOn) onNotifications() else runCatching { context.startActivity(NotificationBridge.settingsIntent(context)) } },
+                    onClick = { if (notifOn) onNotifications() else openNotificationAccess() },
                 )
                 ListRow(
                     title = "Calls & messages on PC",
