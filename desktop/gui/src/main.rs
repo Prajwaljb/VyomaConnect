@@ -540,7 +540,14 @@ fn watch(ui: slint::Weak<MainWindow>) {
                     });
                 }
             }
-            let phones = daemon.as_ref().map(|d| d.phones());
+            let mut phones = daemon.as_ref().map(|d| d.phones());
+            if matches!(phones, Some(Err(_))) {
+                // One failed read isn't Vyoma gone: "isn't running" would flash up, and a page showing
+                // the pairing code would drop it and fetch a new one. Connect again and ask once more.
+                std::thread::sleep(Duration::from_millis(150));
+                daemon = daemon::connect().ok();
+                phones = daemon.as_ref().map(|d| d.phones());
+            }
             let phones = match phones {
                 Some(Ok(p)) => Some(p),
                 _ => {
