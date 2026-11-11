@@ -1356,6 +1356,7 @@ component PcPage inherits Page {
     in property <bool> updating;
     in property <bool> can-update;
     in property <bool> update-packaged;
+    in property <bool> update-download;
     callback install();
     callback open-firewall();
     callback setup();
@@ -1422,10 +1423,11 @@ component PcPage inherits Page {
             title: "Vyoma " + root.version;
             subtitle: root.updating ? "Updating. Vyoma restarts by itself when it's done."
                 : root.update-latest != "" && root.can-update ? "Vyoma " + root.update-latest + " is out"
+                : root.update-latest != "" && root.update-download ? "Vyoma " + root.update-latest + " is out. Download it; your phones stay paired."
                 : root.update-latest != "" && root.update-packaged ? "Vyoma " + root.update-latest + " is out. Update it with your package manager."
                 : root.update-latest != "" ? "Vyoma " + root.update-latest + " is out. Get it from Vyoma's website; your phones stay paired."
                 : root.update-checks ? "Up to date" : "Not checking for updates";
-            action: root.update-latest != "" && root.can-update && !root.updating ? "Update" : "";
+            action: root.update-latest == "" || root.updating ? "" : root.can-update ? "Update" : root.update-download ? "Download" : "";
             action-prominent: !root.installable;
             act => { root.update(); }
         }
@@ -2938,6 +2940,7 @@ export component MainWindow inherits Window {
     in-out property <bool> updating;
     in property <bool> can-update;
     in property <bool> update-packaged;
+    in property <bool> update-download;
     // The activity (selected: "activity").
     in property <[Day]> days;
     in property <bool> activity-loaded;
@@ -3235,6 +3238,7 @@ export component MainWindow inherits Window {
             updating: root.updating;
             can-update: root.can-update;
             update-packaged: root.update-packaged;
+            update-download: root.update-download;
             install => { root.install(); }
             open-firewall => { root.open-firewall(); }
             setup => { root.setup = true; }

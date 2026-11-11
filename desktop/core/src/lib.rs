@@ -16,6 +16,7 @@ pub mod messages;
 pub mod pairing;
 pub mod payload;
 pub mod permits;
+pub mod release;
 pub mod share;
 pub mod trust;
 pub mod xfer;

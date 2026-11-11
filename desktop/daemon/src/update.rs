@@ -12,8 +12,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
+use vyoma_core::release::is_newer;
 
-pub const REPO: &str = "Prajwaljb/VyomaConnect";
+pub use vyoma_core::release::REPO;
 /// The release this was built from, kept in one file for the phone app and the PC app.
 const VERSION: &str = include_str!("../../../VERSION");
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -196,26 +197,8 @@ async fn tell_updated() {
 
 /// The newest release on GitHub: its version and its page.
 async fn latest() -> Result<(String, String)> {
-    let out = tokio::process::Command::new("curl")
-        .args(["-fsSL", "--max-time", "20", "-H", "Accept: application/vnd.github+json", "-A", "Vyoma"])
-        .arg(format!("https://api.github.com/repos/{REPO}/releases/latest"))
-        .kill_on_drop(true)
-        .output()
-        .await
-        .context("curl isn't installed")?;
-    anyhow::ensure!(out.status.success(), "GitHub didn't answer ({})", out.status);
-    let v: Value = serde_json::from_slice(&out.stdout)?;
-    let tag = v["tag_name"].as_str().context("no release")?;
-    Ok((tag.trim_start_matches('v').to_owned(), v["html_url"].as_str().unwrap_or("").to_owned()))
-}
-
-/// [a] is a later version than [b] ("0.10.0" after "0.9.1"); anything unreadable isn't.
-fn is_newer(a: &str, b: &str) -> bool {
-    let parts = |v: &str| v.trim().trim_start_matches('v').split('.').map(|p| p.parse::<u64>().ok()).collect::<Option<Vec<_>>>();
-    match (parts(a), parts(b)) {
-        (Some(a), Some(b)) if !a.is_empty() && !b.is_empty() => a > b,
-        _ => false,
-    }
+    let r = vyoma_core::release::latest().await?;
+    Ok((r.version, r.page))
 }
 
 fn now_ms() -> i64 {
