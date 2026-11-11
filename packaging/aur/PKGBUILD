@@ -1,6 +1,6 @@
 # Maintainer: Prajwal JB
 pkgname=vyoma
-pkgver=0.9.0
+pkgver=0.10.0
 pkgrel=1
 pkgdesc="Your Android phone and your Linux PC, working as one: files, clipboard, calls, screens and remote control (KDE Connect protocol)"
 arch=('x86_64' 'aarch64')
@@ -21,7 +21,7 @@ optdepends=("purpose: Send to your phone from KDE's Share menu"
             'firewalld: opened for phones automatically when it runs')
 install=vyoma.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('a520484fb2d515b5b857eb402f37657105d467d9d8a33adf6fdbe4c01fab5a95')
+sha256sums=('749ef1c3e0649331fc12e8050921e7b47f0c9d3c96299686ec8a412c4af2ba26')
 
 prepare() {
     cd "VyomaConnect-$pkgver/desktop"

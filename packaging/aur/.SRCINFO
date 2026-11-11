@@ -1,6 +1,6 @@
 pkgbase = vyoma
 	pkgdesc = Your Android phone and your Linux PC, working as one: files, clipboard, calls, screens and remote control (KDE Connect protocol)
-	pkgver = 0.9.0
+	pkgver = 0.10.0
 	pkgrel = 1
 	url = https://github.com/Prajwaljb/VyomaConnect
 	install = vyoma.install
@@ -45,7 +45,7 @@ pkgbase = vyoma
 	optdepends = ddcutil: brightness of external monitors on GNOME
 	optdepends = firewalld: opened for phones automatically when it runs
 	options = !lto
-	source = vyoma-0.9.0.tar.gz::https://github.com/Prajwaljb/VyomaConnect/archive/refs/tags/v0.9.0.tar.gz
-	sha256sums = a520484fb2d515b5b857eb402f37657105d467d9d8a33adf6fdbe4c01fab5a95
+	source = vyoma-0.10.0.tar.gz::https://github.com/Prajwaljb/VyomaConnect/archive/refs/tags/v0.10.0.tar.gz
+	sha256sums = 749ef1c3e0649331fc12e8050921e7b47f0c9d3c96299686ec8a412c4af2ba26
 
 pkgname = vyoma
