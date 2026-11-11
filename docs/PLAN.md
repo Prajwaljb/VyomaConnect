@@ -361,6 +361,20 @@ screen, files both ways, shares, power and wake, webcam, touchpad and controller
 `ClearActivity()`, signal `ActivityChanged`.
 Next: the macOS socket behind the same `Daemon` trait.
 
+macOS (started 2026-11-11, phase 5): nobody on the project has a Mac yet, so macOS code is built and
+tested only on GitHub's macOS runners (`.github/workflows/macos.yml`), and nothing counts as working
+until it has run on a real Mac. Builds are unsigned at first (no Developer ID): the install steps
+explain macOS's one-time Allow in Privacy & Security.
+1. Done: vyoma-core builds and passes its tests on macOS (per-OS keepalive options, SO_REUSEPORT on
+   the shared discovery port).
+2. A Mac daemon (`desktop/mac`, LaunchAgent) on the same core: pairing with a prompt, ping, battery
+   (`pmset`), find my phone, clipboard both ways, shares into ~/Downloads, notifications. The
+   protocol-only parts of the Linux daemon (share and clipboard handling) move into vyoma-core
+   first, so both daemons use one copy.
+3. The window over a local socket behind the `Daemon` trait (Slint runs on macOS as it is).
+4. Media and volume (AppleScript / CoreAudio), touchpad and keyboard (CGEvent, needs Accessibility),
+   screen viewing (ScreenCaptureKit), run commands, the phone's notifications.
+
 X11 (2026-11-11, phase 3 started early): one X11 backend for every X11 desktop rather than Cinnamon alone
 (`companion/src/x11.rs`, daemon `presenter_x11.rs`): clipboard, touchpad and keyboard (XTEST), screen view and
 screenshots (ximagesrc), the presenter's dot, wake, workspace switch and keyboard layout; wallpaper from Cinnamon's,
