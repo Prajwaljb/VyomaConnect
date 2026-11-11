@@ -261,7 +261,7 @@ async fn run(dir: PathBuf) -> Result<()> {
 
     loop {
         tokio::select! {
-            Some(event) = events.recv() => { let _ = changes.send(json!({ "event": "Changed" })); let event_was_link = matches!(event, Event::Linked { .. } | Event::Gone { .. } | Event::Paired { .. } | Event::Unpaired { .. }); match event {
+            Some(event) = events.recv() => { if changes_details(&event) { let _ = changes.send(json!({ "event": "Changed" })); } let event_was_link = matches!(event, Event::Linked { .. } | Event::Gone { .. } | Event::Paired { .. } | Event::Unpaired { .. }); match event {
                 Event::Linked { id, name, paired, incoming, cert, remote, .. } => {
                     let d = devices.entry(id.clone()).or_default();
                     *d = Device { name, paired, linked: true, incoming, cert, remote: Some(remote), battery: d.battery, ..Default::default() };
@@ -435,8 +435,12 @@ async fn run(dir: PathBuf) -> Result<()> {
             }
             Some(req) = requests.recv() => {
                 let answer = window.answer(&req.method, &req.args, &mut devices).await;
+                // Only what the window would show differently: a reread after a read would come
+                // back here as another read, round and round.
+                if answer.is_ok() && CHANGING.contains(&req.method.as_str()) {
+                    let _ = changes.send(json!({ "event": "Changed" }));
+                }
                 let _ = req.reply.send(answer);
-                let _ = changes.send(json!({ "event": "Changed" }));
             }
             Some((id, yes)) = answers.recv() => {
                 prompts.remove(&id);
@@ -724,6 +728,18 @@ fn details(id: &str, d: &Device, permits: &Permits) -> Value {
         v["battery"] = json!({ "charge": charge, "charging": charging, "low": low });
     }
     v
+}
+
+/// The window's requests after which it should read again (the rest only read, or tell by their own events).
+const CHANGING: &[&str] = &["Pair", "Accept", "Reject", "Unpair", "SetPermission", "SaveCommand", "RemoveCommand", "SetUpdateChecks"];
+
+/// Whether [event] changes what the window shows of a device: not the packets passing through,
+/// except the battery it shows.
+fn changes_details(event: &Event) -> bool {
+    match event {
+        Event::Packet { packet, .. } => packet["type"] == BATTERY,
+        _ => true,
+    }
 }
 
 /// A JSON list of strings (the files of a send).
