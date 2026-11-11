@@ -23,10 +23,11 @@ use serde_json::{Value, json};
 use sysinfo::{Components, CpuRefreshKind, Disks, MemoryRefreshKind, RefreshKind, System};
 use tokio::process::Command as Process;
 use tokio::sync::mpsc;
+use vyoma_core::activity::Activity;
 use vyoma_core::device::Command;
 use vyoma_core::identity::Identity;
 use vyoma_core::link::{Sender, packet};
-use vyoma_core::{files, xfer};
+use vyoma_core::{activity, files, xfer};
 
 pub const STATS_REQUEST: &str = "vyoma.stats.request";
 pub const STATS: &str = "vyoma.stats";
@@ -46,7 +47,7 @@ pub const XFER_DATA: &str = "vyoma.xfer.data";
 pub const XFER_END: &str = "vyoma.xfer.end";
 
 pub const INCOMING: &[&str] = &[STATS_REQUEST, SPECS_REQUEST, POWER, WAKE, WALLPAPER_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, XFER_BEGIN, XFER_DATA, XFER_END];
-pub const OUTGOING: &[&str] = &[STATS, SPECS, POWERED, WALLPAPER, "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.xfer.ready", "vyoma.xfer.done"];
+pub const OUTGOING: &[&str] = &[STATS, SPECS, POWERED, WALLPAPER, "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.xfer.ready", "vyoma.xfer.done", vyoma_core::permits::DENIED];
 
 /// The phone's stats come for this long after it last asked (it asks every few seconds while its
 /// Home is on screen), one sample every [STATS_EVERY]: an unwatched Mac samples nothing.
@@ -75,15 +76,16 @@ pub struct Phone<'a> {
 pub struct Vyoma {
     me: Arc<Identity>,
     commands: mpsc::UnboundedSender<Command>,
+    activity: Arc<Activity>,
     streams: HashMap<String, (Arc<Mutex<Instant>>, tokio::task::JoinHandle<()>)>,
     /// A sender per phone for the shared file code; dropping its transfers cancels them.
     links: HashMap<String, (Sender, tokio::task::JoinSet<()>)>,
 }
 
 impl Vyoma {
-    pub fn new(me: Arc<Identity>, commands: mpsc::UnboundedSender<Command>) -> Self {
+    pub fn new(me: Arc<Identity>, commands: mpsc::UnboundedSender<Command>, activity: Arc<Activity>) -> Self {
         files::set_hooks(Box::new(MacFiles));
-        Self { me, commands, streams: HashMap::new(), links: HashMap::new() }
+        Self { me, commands, activity, streams: HashMap::new(), links: HashMap::new() }
     }
 
     /// Phone [id]'s sender and its set of transfers.
@@ -132,6 +134,17 @@ impl Vyoma {
             POWER => {
                 let action = p["body"]["action"].as_str().unwrap_or_default().to_owned();
                 tracing::info!("{id}: asked this Mac to {action}");
+                // Before it's done: a shut down may not leave time after.
+                let what = match action.as_str() {
+                    "sleep" => Some("Put this Mac to sleep"),
+                    "restart" => Some("Restarted this Mac"),
+                    "shutdown" => Some("Shut down this Mac"),
+                    "logout" => Some("Logged out of this Mac"),
+                    _ => None,
+                };
+                if let Some(what) = what {
+                    self.activity.add(id, phone.name, "power", what);
+                }
                 tokio::spawn(async move {
                     let mut out = json!({ "action": action });
                     if let Err(e) = power(&action).await {
@@ -142,6 +155,7 @@ impl Vyoma {
                 });
             }
             WAKE => {
+                self.activity.add(id, phone.name, "power", "Woke this Mac's screen");
                 tokio::spawn(async {
                     if let Err(e) = wake().await {
                         tracing::warn!("couldn't wake the screen: {e:#}");
@@ -172,18 +186,25 @@ impl Vyoma {
         let kind = p["type"].as_str().unwrap_or_default().to_owned();
         if kind == XFER_END {
             if let Some((folder, count)) = xfer::end(&name, &p["body"]) {
-                tracing::info!("{id}: a folder of {count} files came in ({} characters in its name)", folder.chars().count());
+                self.activity.add(id, &name, "files", format!("Sent the folder \u{201c}{folder}\u{201d} to this Mac ({count} {})", if count == 1 { "file" } else { "files" }));
             }
             return;
         }
-        let (sender, tasks) = self.link(id);
+        let (activity, (sender, tasks)) = (self.activity.clone(), self.link(id));
         tasks.spawn(async move {
+            let log = |text: String| activity.add(&phone_id, &name, "files", text);
             let done = match kind.as_str() {
                 FILES_LIST => files::list(&sender, &rel).await,
-                FILES_GET => files::send(&sender, &me, &cert, &rel, &name).await,
-                FILES_PUT => files::receive(&sender, &me, &cert, from, &p, &name).await,
+                FILES_GET => files::send(&sender, &me, &cert, &rel, &name).await.map(|()| log(format!("Copied \u{201c}{}\u{201d} from this Mac", activity::file_name(&rel)))),
+                FILES_PUT => files::receive(&sender, &me, &cert, from, &p, &name)
+                    .await
+                    .map(|()| log(format!("Saved \u{201c}{}\u{201d} to this Mac", activity::file_name(p["body"]["name"].as_str().unwrap_or("a file"))))),
                 XFER_BEGIN => xfer::begin(&sender, &phone_id, &p["body"]).await,
-                _ => xfer::data(&sender, &me, &cert, from, &name, &p).await.map(drop),
+                _ => xfer::data(&sender, &me, &cert, from, &name, &p).await.map(|saved| {
+                    if let Some(file) = saved {
+                        log(format!("Sent \u{201c}{file}\u{201d} to this Mac"));
+                    }
+                }),
             };
             if let Err(e) = done {
                 tracing::warn!("{phone_id}: {kind}: {e:#}");

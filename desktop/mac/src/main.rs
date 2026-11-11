@@ -23,11 +23,12 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
+use vyoma_core::activity::Activity;
 use vyoma_core::clipboard::{CLIPBOARD, CLIPBOARD_CONNECT, Clipboard, MAX_TEXT};
 use vyoma_core::commands::{Commands, RUNCOMMAND, RUNCOMMAND_REQUEST};
 use vyoma_core::device::{Command, Event, Hub};
@@ -36,6 +37,7 @@ use vyoma_core::invite::Invite;
 use vyoma_core::lan::{Lan, Ports, Rules, UDP_PORT};
 use vyoma_core::messages::{self, Store};
 use vyoma_core::link::packet;
+use vyoma_core::permits::{self, Permit, Permits};
 use vyoma_core::share::{self, SHARE, SHARE_UPDATE, Shared};
 use vyoma_core::trust::TrustStore;
 
@@ -69,6 +71,20 @@ const CLIPBOARD_EVERY: Duration = Duration::from_secs(1);
 const BATTERY_EVERY: Duration = Duration::from_secs(60);
 /// How often the screen's lock and unused texts are looked at (texts lock again with the screen).
 const LOCK_EVERY: Duration = Duration::from_secs(3);
+/// The touchpad counts as one use in Activity until it's left alone this long.
+const TOUCHPAD_STRETCH: Duration = Duration::from_secs(10 * 60);
+
+/// The switches this Mac has, in the window's order: what it serves so far.
+const PERMITS: [Permit; 3] = [Permit::Control, Permit::Files, Permit::Power];
+
+/// A switch as the Mac's window shows it: the Linux words, less what a Mac can't do.
+fn permit_words(p: Permit) -> (&'static str, &'static str) {
+    match p {
+        Permit::Control => ("Touchpad and keyboard", "Move the pointer and type"),
+        Permit::Power => ("Wake, sleep and shut down", "Also log out and restart"),
+        other => (other.name(), other.detail()),
+    }
+}
 /// How long a pairing question stays up: the phone gives up after 30 s too.
 const PAIR_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -145,6 +161,19 @@ async fn run(dir: PathBuf) -> Result<()> {
         });
     }
     let run_commands = Commands::new(&dir);
+    // What phones may do here, and what they did.
+    let permits = Arc::new(Permits::load(dir.join("permissions.json")));
+    let activity = Arc::new(Activity::load(dir.join("activity.json")));
+    {
+        let (changes, mut ticks) = (changes.clone(), activity.subscribe());
+        tokio::spawn(async move {
+            while ticks.changed().await.is_ok() {
+                let _ = changes.send(json!({ "event": "ActivityChanged" }));
+            }
+        });
+    }
+    let mut refused: HashMap<(String, Permit), Instant> = HashMap::new();
+    let mut touched: HashMap<String, Instant> = HashMap::new();
     // The phone's texts, in memory only, for the window's Messages page.
     let texts = Arc::new(Store::default());
     {
@@ -155,7 +184,7 @@ async fn run(dir: PathBuf) -> Result<()> {
             }
         });
     }
-    let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone, run: run_commands.clone(), texts: texts.clone() };
+    let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone, run: run_commands.clone(), texts: texts.clone(), permits: permits.clone(), activity: activity.clone() };
 
     // Players and the volume, read while a phone that takes them is linked.
     let media_wanted = Arc::new(AtomicBool::new(false));
@@ -163,7 +192,7 @@ async fn run(dir: PathBuf) -> Result<()> {
     let (media_out_tx, mut media_out) = mpsc::unbounded_channel::<(Option<String>, Value)>();
     tokio::spawn(media::run(media_wanted.clone(), media_rx, media_out_tx));
     let mut pointer = input::Pointer::default();
-    let mut features = vyoma::Vyoma::new(me.clone(), commands.clone());
+    let mut features = vyoma::Vyoma::new(me.clone(), commands.clone(), activity.clone());
 
     let send = |id: &str, p: Value| {
         let _ = commands.send(Command::Send(id.to_owned(), p));
@@ -273,6 +302,7 @@ async fn run(dir: PathBuf) -> Result<()> {
                         d.paired = false;
                     }
                     texts.forget(&id);
+                    permits.forget(&id);
                     mac::notify(&format!("{name} is no longer paired"), "Pair again from the phone to use it with this Mac.").await;
                 }
                 Event::Asked { id, key, .. } => {
@@ -281,11 +311,27 @@ async fn run(dir: PathBuf) -> Result<()> {
                 }
                 Event::Packet { id, packet, from } => {
                     let Some(d) = devices.get_mut(&id) else { continue };
-                    match packet["type"].as_str().unwrap_or("") {
+                    let kind = packet["type"].as_str().unwrap_or("").to_owned();
+                    // Switched off in the window: the phone hears why (once in a while: streams repeat).
+                    if let Some(permit) = Permit::of(&kind).filter(|&p| !permits.allows(&id, p)) {
+                        let now = Instant::now();
+                        let last = refused.insert((id.clone(), permit), now);
+                        if last.is_none_or(|t| now.duration_since(t) > Duration::from_secs(2)) {
+                            tracing::info!("{id}: {kind} refused, {} is off for this phone", permit.key());
+                            activity.add(&id, &d.name, "refused", format!("Refused: \u{201c}{}\u{201d} is off", permit_words(permit).0));
+                            send(&id, permits::denied(permit, &packet));
+                        }
+                        continue;
+                    }
+                    match kind.as_str() {
                         media::MPRIS_REQUEST | media::VOLUME_REQUEST => {
                             let _ = media_tx.send((id, packet));
                         }
                         input::MOUSEPAD_REQUEST => {
+                            let now = Instant::now();
+                            if touched.insert(id.clone(), now).is_none_or(|t| now.duration_since(t) > TOUCHPAD_STRETCH) {
+                                activity.add(&id, &d.name, "touchpad", "Used as touchpad");
+                            }
                             if let Some(echo) = input::echo(&packet["body"]) {
                                 send(&id, echo);
                             }
@@ -309,7 +355,10 @@ async fn run(dir: PathBuf) -> Result<()> {
                             if let Some(key) = body["key"].as_str() {
                                 let ran = run_commands.run(key, |name, why| mac::notify_now(&format!("\u{201c}{name}\u{201d} didn't run"), &format!("{why}. Check it in Vyoma's Commands.")));
                                 match ran {
-                                    Some(name) => tracing::info!("{id}: ran {name}"),
+                                    Some(name) => {
+                                        tracing::info!("{id}: ran a command");
+                                        activity.add(&id, &d.name, "command", format!("Ran \u{201c}{name}\u{201d}"));
+                                    }
                                     None => tracing::info!("{id}: no command {key}"),
                                 }
                             }
@@ -330,7 +379,7 @@ async fn run(dir: PathBuf) -> Result<()> {
                             features.handle(&id, &vyoma::Phone { name: &d.name, cert: &d.cert, from }, &packet, wallpaper);
                         }
                         _ => {
-                            for reply in on_packet(d, &packet, from, &me, &mut clip, &mut ringer, &found_tx).await {
+                            for reply in on_packet(&id, d, &packet, from, &me, &mut clip, &mut ringer, &found_tx, &activity).await {
                                 send(&id, reply);
                             }
                         }
@@ -405,13 +454,15 @@ struct Window {
     everyone: [SocketAddr; 1],
     run: Commands,
     texts: Arc<Store>,
+    permits: Arc<Permits>,
+    activity: Arc<Activity>,
 }
 
 impl Window {
     async fn answer(&self, method: &str, args: &Value, devices: &mut HashMap<String, Device>) -> Result<Value, String> {
         let command = |c: Command| self.commands.send(c).map(|_| Value::Null).map_err(|_| "Vyoma is stopping".to_owned());
         match method {
-            "Phones" => Ok(Value::Array(devices.iter().map(|(id, d)| details(id, d)).collect())),
+            "Phones" => Ok(Value::Array(devices.iter().map(|(id, d)| details(id, d, &self.permits)).collect())),
             "Pair" => command(Command::Pair(control::text(args, 0)?)),
             "Accept" => command(Command::Accept(control::text(args, 0)?)),
             "Reject" => command(Command::Reject(control::text(args, 0)?)),
@@ -475,7 +526,19 @@ impl Window {
                 self.commands_changed(devices);
                 Ok(Value::Null)
             }
-            "Activity" => Ok(json!([])),
+            "Activity" => Ok(Value::Array(self.activity.recent())),
+            "ClearActivity" => {
+                self.activity.clear();
+                Ok(Value::Null)
+            }
+            "SetPermission" => {
+                let (id, key) = (control::text(args, 0)?, control::text(args, 1)?);
+                let on = args[2].as_bool().ok_or("on or off?")?;
+                let p = Permit::from_key(&key).filter(|p| PERMITS.contains(p)).ok_or_else(|| format!("no permission {key}"))?;
+                self.permits.set(&id, p, on).map_err(|e| format!("{e:#}"))?;
+                tracing::info!("{id}: {key} {}", if on { "allowed" } else { "turned off" });
+                Ok(Value::Null)
+            }
             "Conversations" => {
                 let id = control::text(args, 0)?;
                 let d = devices.get(&id).filter(|d| d.takes(messages::REQUEST)).ok_or("This phone doesn't share its texts")?;
@@ -533,14 +596,17 @@ impl Window {
 }
 
 /// A device as the window reads it (the Linux app's `Details`).
-fn details(id: &str, d: &Device) -> Value {
+fn details(id: &str, d: &Device, permits: &Permits) -> Value {
     let mut v = json!({
         "id": id, "name": d.name, "paired": d.paired, "linked": d.linked, "key": d.key, "asking": d.asking,
         "via": if d.linked { "wifi" } else { "" },
         "can": { "share": d.takes(SHARE), "ring": d.takes(FIND), "browse": false, "text": d.takes(messages::REQUEST) },
         // No cable here, so nothing to allow for the clipboard.
         "clipboardSync": "on",
-        "permits": [],
+        "permits": PERMITS.iter().map(|&p| {
+            let (name, detail) = permit_words(p);
+            json!({ "key": p.key(), "name": name, "detail": detail, "on": permits.allows(id, p) })
+        }).collect::<Vec<_>>(),
     });
     if let Some((charge, charging, low)) = d.battery {
         v["battery"] = json!({ "charge": charge, "charging": charging, "low": low });
@@ -610,7 +676,8 @@ async fn phone_notification(id: &str, d: &Device, b: &Value) {
 }
 
 /// Handles one packet from a paired device; what to send back.
-async fn on_packet(d: &mut Device, p: &Value, from: IpAddr, me: &Arc<Identity>, clip: &mut Clipboard, ringer: &mut mac::Ringer, found: &mpsc::UnboundedSender<()>) -> Vec<Value> {
+#[allow(clippy::too_many_arguments)]
+async fn on_packet(id: &str, d: &mut Device, p: &Value, from: IpAddr, me: &Arc<Identity>, clip: &mut Clipboard, ringer: &mut mac::Ringer, found: &mpsc::UnboundedSender<()>, activity: &Arc<Activity>) -> Vec<Value> {
     let body = &p["body"];
     match p["type"].as_str().unwrap_or("") {
         PING => mac::notify(&d.name, body["message"].as_str().unwrap_or("Ping!")).await,
@@ -651,12 +718,13 @@ async fn on_packet(d: &mut Device, p: &Value, from: IpAddr, me: &Arc<Identity>, 
         }
         SHARE => match share::classify(p) {
             Shared::File { name, .. } => {
-                let (me, cert, phone, packet) = (me.clone(), d.cert.clone(), d.name.clone(), p.clone());
+                let (me, cert, phone, packet, activity, id) = (me.clone(), d.cert.clone(), d.name.clone(), p.clone(), activity.clone(), id.to_owned());
                 let from = d.remote.unwrap_or(from);
                 tokio::spawn(async move {
                     match share::receive(&me, &cert, from, &packet, &mac::downloads()).await {
                         Ok(path) => {
                             let saved = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(name);
+                            activity.add(&id, &phone, "share", format!("Shared \u{201c}{saved}\u{201d} with this Mac"));
                             mac::notify(&format!("From {phone}"), &format!("{saved} is in Downloads")).await;
                         }
                         Err(e) => {
@@ -706,11 +774,17 @@ mod tests {
     fn the_window_reads_a_phone_as_on_linux() {
         let mut d = phone(&[SHARE]);
         (d.name, d.key, d.asking, d.battery) = ("Pixel".into(), "1A2B".into(), true, Some((64, false, false)));
-        let v = details("p", &d);
+        let permits = Permits::default();
+        permits.set("p", Permit::Files, false).unwrap();
+        let v = details("p", &d, &permits);
         assert_eq!((v["id"].as_str(), v["key"].as_str(), v["asking"].as_bool()), (Some("p"), Some("1A2B"), Some(true)));
         assert_eq!((v["can"]["share"].as_bool(), v["can"]["ring"].as_bool()), (Some(true), Some(false)), "only what it takes");
         assert_eq!(v["battery"]["charge"], 64);
-        assert!(details("q", &Device::default())["battery"].is_null());
+        assert!(details("q", &Device::default(), &permits)["battery"].is_null());
+        // Only the switches this Mac has, in Mac words.
+        let keys: Vec<(&str, bool)> = v["permits"].as_array().unwrap().iter().map(|p| (p["key"].as_str().unwrap(), p["on"].as_bool().unwrap())).collect();
+        assert_eq!(keys, [("control", true), ("files", false), ("power", true)]);
+        assert_eq!(v["permits"][2]["name"], "Wake, sleep and shut down");
         assert_eq!(url_encode("Sam's Mac"), "Sam%27s%20Mac");
     }
 
