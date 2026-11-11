@@ -141,7 +141,7 @@ import dev.vyoma.connect.protocol.link.TransportKind
 import dev.vyoma.connect.protocol.plugin.builtin.MousePadPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.PointerChannel
 import dev.vyoma.connect.service.BluetoothFallback
-import dev.vyoma.connect.service.BluetoothPointerChannel
+import dev.vyoma.connect.service.PointerRadio
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -188,31 +188,15 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
     remember { BluetoothFallback.init(appContext) }
     val steadier by BluetoothFallback.steadier.collectAsStateWithLifecycle()
     val onCable = target?.transports?.contains(TransportKind.USB) == true
-    var pointer by remember { mutableStateOf<PointerChannel?>(null) }
+    val pointer by PointerRadio.current.collectAsStateWithLifecycle()
     val pageLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(companionPlugin, steadier, onCable) {
         val companion = companionPlugin?.takeIf { it.offers(PcFeature.POINTER) }
         if (companion == null || !steadier || onCable) return@LaunchedEffect
-        // Only while it's on screen: it idles at 10 frames a second, and hidden under the controller
-        // that shares the radio with the controller's own frames.
+        // While it's on screen (it idles at 10 frames a second, and hidden under the controller that
+        // shares the radio with the controller's own frames); kept a while after, resting.
         pageLifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
-            try {
-                while (isActive) {
-                    val opened = companion.openPointer(BluetoothPointerChannel(appContext, companion.pcId))
-                    // The PC said no: don't ask it again every few seconds. Wi-Fi it is, until the page returns.
-                    val channel = opened.getOrElse { break }
-                    if (channel != null) {
-                        pointer = channel
-                        while (channel.alive) delay(250)
-                        pointer = null
-                    }
-                    delay(POINTER_RETRY_MS)
-                }
-            } finally {
-                pointer?.close()
-                pointer = null
-                companion.closePointer()
-            }
+            PointerRadio.hold(appContext, companion)
         }
     }
     // Accumulated motion, flushed by the pump below.
@@ -1004,7 +988,6 @@ private val KEY_HEIGHT = 48.dp
 /** Held arrows and backspace switch from characters to whole words after ~1 s of repeats. */
 private const val WORD_AFTER = 14
 private const val SCROLL_SCALE = 0.35f
-private const val POINTER_RETRY_MS = 5_000L
 
 /** Light pooled under one finger on the touchpad. */
 private class LightPool(var at: Offset, var glow: Float = 0f)

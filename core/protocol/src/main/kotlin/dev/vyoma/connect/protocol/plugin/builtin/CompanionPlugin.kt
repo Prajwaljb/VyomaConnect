@@ -80,7 +80,7 @@ data class GamepadState(
     val my: Int = 0,
 )
 
-private const val ECHO_EVERY = 32
+internal const val ECHO_EVERY = 32
 
 /**
  * Spots a dead adb channel. Writes keep succeeding for over a second after the cable is pulled, until
