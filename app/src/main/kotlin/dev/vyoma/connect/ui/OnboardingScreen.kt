@@ -169,6 +169,7 @@ private val DAY_AT_STEP = floatArrayOf(5f, 5.82f, 6f, 6.6f)
 @Composable
 private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onStep: (Float) -> Unit, onDone: () -> Unit) {
     val context = LocalContext.current
+    val openNotificationAccess = rememberNotificationAccess()
     // Re-read grants when coming back from system pages.
     var tick by remember { mutableIntStateOf(0) }
     LifecycleResumeEffect(Unit) {
@@ -328,7 +329,7 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
                     requestUnrestricted(context)
                 }
                 Step(Icons.Rounded.Notifications, SystemColor.RED, "Notifications on PC", "See, reply to and dismiss them from your PC. You choose which apps", notifOn) {
-                    runCatching { context.startActivity(NotificationBridge.settingsIntent(context)) }
+                    openNotificationAccess()
                 }
                 Step(Icons.Rounded.Sms, SystemColor.GREEN, "Calls & messages", "Text from your PC and see who's calling", phoneOn) {
                     askPhone.launch(PhonePermissions.ask)

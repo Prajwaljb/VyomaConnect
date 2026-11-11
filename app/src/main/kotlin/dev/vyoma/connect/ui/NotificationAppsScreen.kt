@@ -81,6 +81,7 @@ private const val RECENT_MAX = 8
 @Composable
 fun NotificationAppsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val openNotificationAccess = rememberNotificationAccess()
     val filters = remember { NotificationFilters.load(context) }
     val modes by filters.modes.collectAsStateWithLifecycle()
     val recent by filters.recent.collectAsStateWithLifecycle()
@@ -126,7 +127,7 @@ fun NotificationAppsScreen(onBack: () -> Unit) {
                     icon = Icons.Rounded.Notifications,
                     iconTint = SystemColor.RED.color,
                     trailing = { RowChevron(if (access) "On" else "Off") },
-                    onClick = { runCatching { context.startActivity(NotificationBridge.settingsIntent(context)) } },
+                    onClick = { openNotificationAccess() },
                 )
             }
         }
