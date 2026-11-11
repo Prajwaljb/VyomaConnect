@@ -367,10 +367,10 @@ until it has run on a real Mac. Builds are unsigned at first (no Developer ID): 
 explain macOS's one-time Allow in Privacy & Security.
 1. Done: vyoma-core builds and passes its tests on macOS (per-OS keepalive options, SO_REUSEPORT on
    the shared discovery port).
-2. A Mac daemon (`desktop/mac`, LaunchAgent) on the same core: pairing with a prompt, ping, battery
-   (`pmset`), find my phone, clipboard both ways, shares into ~/Downloads, notifications. The
-   protocol-only parts of the Linux daemon (share and clipboard handling) move into vyoma-core
-   first, so both daemons use one copy.
+2. Done (built and tested on CI, not run on a Mac): `desktop/mac` (`vyoma-mac`, a LaunchAgent) on the
+   same core: pairing with a prompt, ping, battery (`pmset`), find my phone, lock, clipboard both
+   ways, shares into ~/Downloads, notifications (osascript, shown under Script Editor's name until
+   it's an app bundle). Sharing and the clipboard's rules moved into vyoma-core first.
 3. The window over a local socket behind the `Daemon` trait (Slint runs on macOS as it is).
 4. Media and volume (AppleScript / CoreAudio), touchpad and keyboard (CGEvent, needs Accessibility),
    screen viewing (ScreenCaptureKit), run commands, the phone's notifications.
