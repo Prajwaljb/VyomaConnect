@@ -1,0 +1,3 @@
+• Widgets fit every home screen: Samsung, Pixel and compact grids, from one row to large tiles
+• Widgets keep their text inside at large font sizes, and their glass follows day and night
+• On the PC: Send to phone in KDE's Share menu (Dolphin, Spectacle, Gwenview, Okular...)
