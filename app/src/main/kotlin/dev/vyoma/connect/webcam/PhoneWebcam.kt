@@ -26,6 +26,7 @@ import android.view.OrientationEventListener
 import android.view.Surface
 import dev.vyoma.connect.container
 import dev.vyoma.connect.protocol.VLog
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.service.LinkService
 import kotlinx.coroutines.CompletableDeferred
@@ -155,7 +156,7 @@ object PhoneWebcam {
 
     private suspend fun follow(app: Context, hd: Boolean) {
         val hub = (app as android.app.Application).container.hub.filterNotNull().first()
-        companionLink(hub).collectLatest { c ->
+        companionLink(hub, PcFeature.WEBCAM).collectLatest { c ->
             if (c == null) {
                 _status.value = _status.value.copy(camera = false, mic = false, pc = null, error = null)
                 return@collectLatest

@@ -1,5 +1,6 @@
 package dev.vyoma.connect.ui
 
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import androidx.compose.ui.platform.LocalContext
 
@@ -190,7 +191,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
     var pointer by remember { mutableStateOf<PointerChannel?>(null) }
     val pageLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(companionPlugin, steadier, onCable) {
-        val companion = companionPlugin
+        val companion = companionPlugin?.takeIf { it.offers(PcFeature.POINTER) }
         if (companion == null || !steadier || onCable) return@LaunchedEffect
         // Only while it's on screen: it idles at 10 frames a second, and hidden under the controller
         // that shares the radio with the controller's own frames.
@@ -326,7 +327,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
         for ((run, keyed) in typingRuns(text)) {
             if (keyed) { type(run); continue }
             target?.let { vm.device(it.identity.deviceId)?.plugin<ClipboardPlugin>(ClipboardPlugin.ID) }?.ignoreIncomingFor(PASTE_ECHO_MS)
-            if (companionPlugin?.preparePaste(run) == true) {
+            if (companionPlugin?.takeIf { it.offers(PcFeature.PASTE) }?.preparePaste(run) == true) {
                 chord("v", ctrl = true)
                 delay(PASTE_SETTLE_MS) // The app fetches the text on its own time; a key sent now could land first.
             } else {
@@ -393,8 +394,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
             ) { Icon(Icons.Rounded.Slideshow, "Presenter") }
             Spacer(Modifier.width(8.dp))
             // The phone as a game controller: the other way to drive the PC by hand (needs the companion).
-            val hasCompanion = target != null && devices.any { it.identity.featuresOf == target.identity.deviceId && it.isReachable }
-            if (hasCompanion) {
+            if (target != null && companionPlugin?.offers(PcFeature.GAMEPAD) == true) {
                 val context = LocalContext.current
                 Box(
                     Modifier.size(48.dp).pressable(glass = true) { GamepadActivity.open(context, target.identity.deviceId) }.glassRaised(CircleShape),
@@ -513,7 +513,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
                                             // Up and down step along the desktop's ladder (desktop, windows,
                                             // overview, grid), one level per swipe, as its own gestures do.
                                             val up = swipe.y < 0f
-                                            val companion = companionPlugin
+                                            val companion = companionPlugin?.takeIf { it.offers(PcFeature.DESKTOP_STEP) }
                                             scope.launch {
                                                 val where = if (companion != null) {
                                                     // The PC asks its desktop where it is (KWin, or GNOME's shell), so
@@ -685,7 +685,7 @@ fun RemoteInputScreen(vm: AppViewModel, deviceId: String?, startWithKeyboard: Bo
         if (keyboard) key(keyboardSession) {
             TypingBar(
                 caretMoved,
-                canPaste = companionPlugin != null,
+                canPaste = companionPlugin?.offers(PcFeature.PASTE) == true,
                 onText = ::sendTyped,
                 onKey = { k -> typing { key(k) } },
                 onRefused = { note("Emoji need Vyoma on your PC") },

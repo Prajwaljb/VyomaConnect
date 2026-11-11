@@ -13,6 +13,7 @@ import android.util.Size
 import android.view.Display
 import dev.vyoma.connect.container
 import dev.vyoma.connect.protocol.VLog
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.service.LinkService
 import dev.vyoma.connect.webcam.H264Encoder
@@ -144,7 +145,7 @@ object PhoneMirror {
 
     private suspend fun follow(app: android.app.Application) {
         val hub = app.container.hub.filterNotNull().first()
-        companionLink(hub).collectLatest { c ->
+        companionLink(hub, PcFeature.MIRROR).collectLatest { c ->
             if (c == null) {
                 _status.value = _status.value.copy(pc = null, open = false)
                 return@collectLatest

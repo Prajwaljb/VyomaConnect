@@ -9,6 +9,7 @@ import dev.vyoma.connect.platform.Handoff
 import dev.vyoma.connect.platform.outgoingFile
 import dev.vyoma.connect.platform.readable
 import dev.vyoma.connect.platform.folderItems
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionUploads
 import dev.vyoma.connect.protocol.plugin.builtin.SendItem
@@ -334,7 +335,7 @@ class LinkService : LifecycleService() {
             val device = hub.device(deviceId) ?: return@launch
             val share = device.plugin<SharePlugin>(SharePlugin.ID)
             // Through the companion when it's there: resumes after drops, takes the cable, carries folders.
-            val uploads = CompanionUploads(device) { companionOf(hub, deviceId) }.takeIf { companionOf(hub, deviceId) != null }
+            val uploads = CompanionUploads(device) { companionOf(hub, deviceId) }.takeIf { companionOf(hub, deviceId)?.offers(PcFeature.XFER) == true }
             if (isFolder) {
                 val tree = uris.firstOrNull() ?: return@launch
                 val (name, items) = withContext(Dispatchers.IO) { contentResolver.folderItems(tree) }

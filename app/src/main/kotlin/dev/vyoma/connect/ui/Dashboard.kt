@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import dev.vyoma.connect.designsystem.GlassDialog
 import dev.vyoma.connect.designsystem.fitTogether
 import dev.vyoma.connect.protocol.link.TransportKind
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import dev.vyoma.connect.protocol.plugin.builtin.RunCommandPlugin
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -387,7 +388,7 @@ fun PcDashboard(
             VolumeBar(
                 sink, onVolume = { vm.setSinkVolume(id, sink.name, it) }, modifier,
                 outputs = pc.sinks.takeIf { it.size > 1 }, onOutput = { vm.makeSinkDefault(id, it.name) },
-                onMixer = mixer?.let { { showMixer = true } },
+                onMixer = mixer?.takeIf { it.offers(PcFeature.CONTROLS) }?.let { { showMixer = true } },
                 // Turned all the way down is as silent as muted, so it reads the same; tapped, it
                 // comes back at a third rather than staying at nothing.
                 onMute = {
@@ -411,10 +412,12 @@ fun PcDashboard(
           val pcCamera = (shots?.stats ?: remember { MutableStateFlow(null) }).collectAsStateWithLifecycle().value
           val cameraOk = pcCamera?.camera != false
           val overBluetooth = state.onlyBluetooth
+          // What this PC's Vyoma side serves: everything on Linux, a few things on a Mac so far.
+          fun has(f: PcFeature) = shots?.offers(f) == true
           var showCommands by rememberSaveable { mutableStateOf(false) }
           if (showCommands) CommandsSheet(vm, id) { showCommands = false }
           var confirmPower by rememberSaveable { mutableStateOf<PcPower?>(null) }
-          confirmPower?.let { action -> shots?.let { PcPowerDialog(it, state.identity.deviceName, action) { confirmPower = null } } }
+          confirmPower?.let { action -> shots?.takeIf { has(PcFeature.POWER) }?.let { PcPowerDialog(it, state.identity.deviceName, action) { confirmPower = null } } }
           CaptureOutcome(shot, "Screenshot")
           CaptureOutcome(photo, "Photo")
           // Live: the Send tile rings with the progress of whatever's moving.
@@ -432,14 +435,14 @@ fun PcDashboard(
                     menu = listOf(
                         MenuItem("Photos and videos", Icons.Rounded.PhotoLibrary) { vm.pickPhotos(context) },
                         // Folders travel through the companion (stock KDE Connect sends files only).
-                        if (shots != null) MenuItem("A folder", Icons.Rounded.DriveFolderUpload) { vm.pickFolder(context) } else null,
+                        if (has(PcFeature.XFER)) MenuItem("A folder", Icons.Rounded.DriveFolderUpload) { vm.pickFolder(context) } else null,
                     ).filterNotNull(),
                 ) { vm.pickFiles(context) },
-                if (shots != null) Control(Icons.Rounded.Folder, "PC files", SystemColor.BLUE, onClick = onBrowseFiles)
+                if (has(PcFeature.FILES)) Control(Icons.Rounded.Folder, "PC files", SystemColor.BLUE, onClick = onBrowseFiles)
                 else Control(Icons.Rounded.Folder, "Files", SystemColor.BLUE, onClick = onFiles),
-                if (shots != null) Control(Icons.Rounded.ScreenShare, "Screen", SystemColor.PINK) { PcScreenActivity.open(context, id) }
+                if (has(PcFeature.SCREEN)) Control(Icons.Rounded.ScreenShare, "Screen", SystemColor.PINK) { PcScreenActivity.open(context, id) }
                 else Control(Icons.Rounded.Sensors, "Ping", SystemColor.CYAN) { vm.ping(id); status.show("Ping sent: it shows as a notification on the PC") },
-                if (shots != null) {
+                if (shots != null && has(PcFeature.CAMERA)) {
                     if (cameraOk) Control(Icons.Rounded.PhotoCamera, "Camera", SystemColor.ORANGE) { AppLock.ask(context, AppLock.CAMERA) { vm.capture(shots.photo) } }
                     else Control(
                         Icons.Rounded.NoPhotography, "Camera", SystemColor.ORANGE, unavailable = true,
@@ -459,21 +462,21 @@ fun PcDashboard(
                 // What the phone can become: all of it hidden behind long presses before, so a tap opens
                 // the menu. Commands used to be here; the capsules below run them, PC details edits them.
                 // Only the presenter works with plain KDE Connect, so without the companion it's just that.
-                if (shots != null) Control(
+                if (has(PcFeature.GAMEPAD) || has(PcFeature.WEBCAM) || has(PcFeature.MIRROR)) Control(
                     Icons.Rounded.Smartphone, "Phone as", SystemColor.CYAN,
                     menuTitle = "Use this phone as", menuOnTap = true,
                     menu = listOfNotNull(
-                        MenuItem("Game controller", Icons.Rounded.SportsEsports) { GamepadActivity.open(context, id) },
+                        if (has(PcFeature.GAMEPAD)) MenuItem("Game controller", Icons.Rounded.SportsEsports) { GamepadActivity.open(context, id) } else null,
                         // Video doesn't fit through Bluetooth.
-                        if (!overBluetooth) MenuItem("Webcam", Icons.Rounded.Videocam) { WebcamActivity.open(context) } else null,
-                        if (!overBluetooth) MenuItem("Phone screen on PC", Icons.Rounded.MobileScreenShare) { MirrorActivity.open(context) } else null,
+                        if (!overBluetooth && has(PcFeature.WEBCAM)) MenuItem("Webcam", Icons.Rounded.Videocam) { WebcamActivity.open(context) } else null,
+                        if (!overBluetooth && has(PcFeature.MIRROR)) MenuItem("Phone screen on PC", Icons.Rounded.MobileScreenShare) { MirrorActivity.open(context) } else null,
                         MenuItem("Presenter", Icons.Rounded.Slideshow, onClick = onPresenter),
                     ),
                 ) {}
                 else Control(Icons.Rounded.Slideshow, "Presenter", SystemColor.CYAN, opens = true, onClick = onPresenter),
                 // Mute's old slot: the mute itself is the speaker on the volume card. Without the
                 // companion, commands are how plain KDE Connect does sleep and shutdown.
-                if (shots != null) Control(
+                if (has(PcFeature.POWER)) Control(
                     Icons.Rounded.PowerSettingsNew, "Power", SystemColor.GRAY,
                     menuTitle = "PC power", menuOnTap = true,
                     menu = PcPower.entries.map { p -> MenuItem(p.label, p.icon) { confirmPower = p } },

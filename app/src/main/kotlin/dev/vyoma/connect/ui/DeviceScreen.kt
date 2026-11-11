@@ -45,6 +45,7 @@ import dev.vyoma.connect.designsystem.CollapsingHeaderScaffold
 import dev.vyoma.connect.designsystem.ListRow
 import dev.vyoma.connect.designsystem.SectionCard
 import dev.vyoma.connect.designsystem.SectionLabel
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import dev.vyoma.connect.protocol.plugin.builtin.BatteryPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.PcSpecs
@@ -76,10 +77,11 @@ fun DeviceScreen(
     var showCommands by rememberSaveable { mutableStateOf(false) }
     val status = LocalStatus.current
     val companion = devices.firstOrNull { it.identity.featuresOf == deviceId && it.isPaired && it.isReachable }
-    val companionOnline = companion != null
     val companionPlugin = remember(companion?.identity?.deviceId, companion?.plugins) {
         companion?.let { vm.device(it.identity.deviceId)?.plugin<CompanionPlugin>(CompanionPlugin.ID) }
     }
+    // Sleep and shut down come from Vyoma's Power tile where the PC serves them; else from commands.
+    val companionOnline = companionPlugin?.offers(PcFeature.POWER) == true
     val pcStats by (companionPlugin?.stats ?: remember { MutableStateFlow(null) }).collectAsState()
     val fingerprint = remember(state?.isReachable, state?.isPaired) { vm.fingerprint(deviceId) }
     val specs = PcSpecsStore.all.collectAsStateWithLifecycle().value[deviceId]

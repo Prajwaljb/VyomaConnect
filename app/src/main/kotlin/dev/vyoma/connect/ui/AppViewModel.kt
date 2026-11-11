@@ -6,6 +6,7 @@ import dev.vyoma.connect.data.LiteGlass
 import dev.vyoma.connect.automation.Action
 import dev.vyoma.connect.automation.Rule
 import dev.vyoma.connect.automation.RunEntry
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
 import dev.vyoma.connect.protocol.plugin.builtin.OutgoingFile
 import androidx.core.content.edit
@@ -135,7 +136,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun lockPc(id: String) = act(id) { it.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(true) }
     fun setPcLocked(id: String, locked: Boolean) = act(id) {
         // Unlocking wakes the screen too: kdeconnectd unlocks but a screen that idled off stays dark.
-        if (!locked) companionOf(id)?.wake()
+        if (!locked) companionOf(id)?.takeIf { it.offers(PcFeature.WAKE) }?.wake()
         it.plugin<LockPlugin>(LockPlugin.ID)?.setLocked(locked)
     }
     fun runCommand(id: String, key: String) {
@@ -248,6 +249,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun continueOnPhone(pcId: String) = viewModelScope.launch {
         val app = getApplication<android.app.Application>()
         val plugin = companionOf(pcId) ?: return@launch toast(app, "Vyoma isn't running on the PC")
+        if (!plugin.offers(PcFeature.HANDOFF)) return@launch toast(app, "This PC can't hand its tabs over yet")
         plugin.handoff().fold(
             onSuccess = { h ->
                 if (!LinkService.looksLikeUrl(h.url)) return@launch toast(app, "No app here can open that link")

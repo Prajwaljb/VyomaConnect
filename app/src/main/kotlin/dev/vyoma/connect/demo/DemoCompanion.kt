@@ -6,6 +6,7 @@ import dev.vyoma.connect.protocol.NetworkPacket
 import dev.vyoma.connect.protocol.crypto.LocalCredentials
 import dev.vyoma.connect.protocol.packet
 import dev.vyoma.connect.protocol.plugin.builtin.CompanionPlugin
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -282,7 +283,7 @@ internal class DemoCompanion(credentials: LocalCredentials, private val pc: Demo
                 CompanionPlugin.STATS_REQUEST, CompanionPlugin.SCREENSHOT_REQUEST, CompanionPlugin.CAMERA_REQUEST, CompanionPlugin.HANDOFF_REQUEST,
                 CompanionPlugin.FILES_LIST, CompanionPlugin.FILES_GET, CompanionPlugin.FILES_PUT, CompanionPlugin.WALLPAPER_REQUEST, CompanionPlugin.SPECS_REQUEST,
                 CompanionPlugin.GAMEPAD_STATE, CompanionPlugin.GAMEPAD_CLOSE,
-            ),
+            ) + PcFeature.entries.map { it.request },
             outgoingCapabilities = setOf(
                 CompanionPlugin.STATS, CompanionPlugin.SCREENSHOT, CompanionPlugin.CAMERA, CompanionPlugin.HANDOFF,
                 CompanionPlugin.FILES_LISTING, CompanionPlugin.FILES_FILE, CompanionPlugin.FILES_SAVED, CompanionPlugin.WALLPAPER, CompanionPlugin.SPECS, CompanionPlugin.GAMEPAD_RUMBLE,

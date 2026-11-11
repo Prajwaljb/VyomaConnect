@@ -13,6 +13,7 @@ import dev.vyoma.connect.AppContainer
 import dev.vyoma.connect.container
 import dev.vyoma.connect.protocol.VLog
 import dev.vyoma.connect.protocol.device.Device
+import dev.vyoma.connect.protocol.plugin.builtin.PcFeature
 import dev.vyoma.connect.protocol.plugin.builtin.AwayAction
 import dev.vyoma.connect.protocol.plugin.builtin.AwayRules
 import dev.vyoma.connect.protocol.plugin.builtin.ClipboardPlugin
@@ -252,7 +253,7 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
                 }
             }
             is Action.PcBrightness -> {
-                val companion = companionOf(pc!!).need("Vyoma on the PC")
+                val companion = vyoma(pc!!, PcFeature.CONTROLS)
                 companion.requestControls()
                 // The undo needs today's levels: wait a moment for the answer before settling for what's known.
                 withTimeoutOrNull(1_500) { companion.controls.drop(1).first() }
@@ -274,9 +275,9 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
                 null
             }
             is Action.MessagePc -> { pc!!.plugin<PingPlugin>(PingPlugin.ID).need("ping").ping(a.text.ifBlank { rule.name }); null }
-            Action.PcScreenshot -> { companionOf(pc!!).need("Vyoma on the PC").screenshot.request(); null }
-            Action.WakePcScreen -> { companionOf(pc!!).need("Vyoma on the PC").wake(); null }
-            Action.SleepPc -> { companionOf(pc!!).need("Vyoma on the PC").power(PcPower.SLEEP).getOrThrow(); null }
+            Action.PcScreenshot -> { vyoma(pc!!, PcFeature.SCREENSHOT).screenshot.request(); null }
+            Action.WakePcScreen -> { vyoma(pc!!, PcFeature.WAKE).wake(); null }
+            Action.SleepPc -> { vyoma(pc!!, PcFeature.POWER).power(PcPower.SLEEP).getOrThrow(); null }
             is Action.NotifyMe -> { Notifications.automation(app, rule.id, rule.name, a.text.ifBlank { rule.summary() }); null }
             is Action.PhoneRinger -> {
                 val want = if (a.mode == RingerMode.VIBRATE) AudioManager.RINGER_MODE_VIBRATE else AudioManager.RINGER_MODE_NORMAL
@@ -334,6 +335,13 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
     private fun companions(): List<CompanionPlugin> = c.hub.value?.devices?.value?.values.orEmpty()
         .filter { it.state.value.identity.featuresOf != null && it.state.value.isReachable }
         .mapNotNull { it.plugin(CompanionPlugin.ID) }
+
+    /** The PC's Vyoma side for [feature], or why not, in the words a rule's outcome shows. */
+    private fun vyoma(pc: Device, feature: PcFeature): CompanionPlugin {
+        val companion = companionOf(pc).need("Vyoma on the PC")
+        if (!companion.offers(feature)) error("${pc.state.value.identity.deviceName} can't do that yet")
+        return companion
+    }
 
     private fun <T> T?.need(what: String): T = this ?: error("$what isn't available")
 
