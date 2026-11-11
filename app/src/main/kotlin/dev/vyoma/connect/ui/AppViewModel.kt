@@ -194,6 +194,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ---- clipboard ----------------------------------------------------------------------------
 
     fun copyClip(text: String) = container.clipboard.copy(text)
+
+    /** The PC copies reach right now (paired and connected), if any. */
+    fun connectedPc(): DeviceState? = devices.value.firstOrNull { it.isPaired && it.isReachable && it.identity.companionOf == null }
+
+    /** Copies [text] and says where it went: only claims the PC when one is connected to take it. */
+    fun copyClipSaying(text: String): String {
+        copyClip(text)
+        return connectedPc()?.let { "Copied, and sent to ${it.identity.deviceName}" } ?: "Copied"
+    }
+
+    /** Why nothing can be sent now: the paired PC is away, or there's none. */
+    fun nothingSentReason(): String =
+        devices.value.firstOrNull { it.isPaired && it.identity.companionOf == null }?.let { "${it.identity.deviceName} is away: nothing sent" }
+            ?: "No PC connected yet"
     fun clearClipHistory() = container.clipboard.clearHistory()
     fun backgroundClipboardSync() = container.clipboard.backgroundSyncAvailable()
     /** Whether copies here are reaching the PC by themselves right now. */

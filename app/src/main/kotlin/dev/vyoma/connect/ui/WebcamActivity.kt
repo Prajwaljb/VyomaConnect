@@ -152,7 +152,11 @@ class WebcamActivity : ComponentActivity() {
                     status.error?.let { err ->
                         item(key = "error") {
                             SectionCard(Modifier.padding(top = 8.dp)) {
-                                ListRow(title = "The PC can't show the camera yet", subtitle = err, icon = Icons.Rounded.VideocamOff, iconTint = MaterialTheme.colorScheme.error)
+                                ListRow(
+                                    title = "The PC can't show the camera yet",
+                                    // The setup steps below say how; the subtitle doesn't repeat them.
+                                    subtitle = if ("one-time setup" in err) "Needs a one-time setup on the PC" else plainReason(err) ?: "Try again, or restart Vyoma on the PC",
+                                    icon = Icons.Rounded.VideocamOff, iconTint = MaterialTheme.colorScheme.error)
                                 if ("one-time setup" in err) SetupSteps()
                             }
                         }
@@ -218,7 +222,7 @@ class WebcamActivity : ComponentActivity() {
 private fun subtitle(s: PhoneWebcam.Status): String = when {
     s.error != null && !s.on -> "Off"
     !s.on -> "Off"
-    s.pc == null -> "Waiting for Vyoma on the PC"
+    s.pc == null -> "Waiting for Vyoma on your PC"
     s.camera -> "Live on ${s.pc}" + (if (s.mic) " · camera and mic" else " · camera")
     else -> "Starting on ${s.pc}…"
 }

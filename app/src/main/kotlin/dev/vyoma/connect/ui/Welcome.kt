@@ -322,7 +322,7 @@ private val SCENE_WORDS = listOf(
     Scene("", ""),
     Scene("Your PC, in your hand", "Watch its screen live, see how it's doing, lock it or put it to sleep from anywhere in the house."),
     Scene("", ""), // says what the chosen mode does
-    Scene("Copy here, paste there", "What you copy lands on the other side by itself. Photos, files and whole folders go both ways."),
+    Scene("Copy here, paste there", "What you copy is ready to paste on the other side. Photos, files and whole folders go both ways."),
     Scene("It looks after itself", "Rules run while you get on with your day. Choose what happens, and when."),
     Scene("Between you and your PC", "No account and no cloud. It's encrypted, and each PC has to match a code on your screen before it's trusted."),
 )

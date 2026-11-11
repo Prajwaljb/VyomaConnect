@@ -57,7 +57,7 @@ when the phone is paired with KDE Connect or GSConnect.</p>
 - **Media controls** with album art, on the phone's lock screen too.
 - **Continue on phone:** the video playing in the PC's browser picks up on the phone at the same moment. *PC app*
 - **Lock, wake, sleep, restart, shut down or log out** the PC; anything drastic asks first. *PC app*
-- **Ring the phone** from the PC to find it, and the PC from the phone.
+- **Ring the phone** from the PC to find it, and ping the PC from the phone.
 
 ## Your phone as a PC accessory
 

@@ -98,7 +98,9 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
 
     CollapsingHeaderScaffold(
         title = "Files",
-        subtitle = pc?.let { "With ${it.identity.deviceName}" } ?: "No PC connected",
+        subtitle = pc?.let { "With ${it.identity.deviceName}" }
+            ?: devices.firstOrNull { it.identity.companionOf == null && it.isPaired }?.let { "${it.identity.deviceName} is away" }
+            ?: "No PC yet",
     ) {
         // Sending is the job people come here for: three big glass tiles, one per kind of thing.
         item(key = "send-label") { SectionLabel(pc?.let { "Send to ${it.identity.deviceName}" } ?: "Send to your PC", Modifier.animateItem()) }
@@ -135,7 +137,7 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
                 SectionCard(Modifier.animateItem()) {
                     ListRow(
                         title = "Browse PC files",
-                        subtitle = if (pc == null) "Connect to your PC first" else "Needs Vyoma on the PC",
+                        subtitle = if (pc == null) "Connect to your PC first" else "Needs Vyoma on your PC",
                         icon = Icons.Rounded.FolderOff,
                         iconTint = SystemColor.GRAY.color,
                     )
@@ -168,8 +170,7 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
                         showDivider = true,
                         trailing = { Icon(Icons.Rounded.ContentCopy, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp)) },
                         onClick = {
-                            vm.copyClip(clip.text)
-                            status.show("Copied, and sent to your PC")
+                            status.show(vm.copyClipSaying(clip.text))
                         },
                     )
                 }
@@ -180,7 +181,7 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
                         else -> "Clipboard history"
                     },
                     subtitle = when {
-                        clips.isEmpty() -> "What you copy here or on the PC shows up here"
+                        clips.isEmpty() -> "Copy something on this phone or your PC"
                         clipsOpen -> null
                         else -> "Asks for your fingerprint first"
                     },

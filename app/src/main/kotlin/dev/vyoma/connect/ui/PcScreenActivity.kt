@@ -231,7 +231,7 @@ class PcScreenActivity : ComponentActivity() {
         val found = findCompanion()
         plugin = found
         if (found == null) {
-            phase.value = Phase.Failed("Vyoma isn't connected on the PC")
+            phase.value = Phase.Failed("Needs Vyoma on your PC")
             return
         }
         phase.value = Phase.Connecting
@@ -244,7 +244,7 @@ class PcScreenActivity : ComponentActivity() {
                     phase.value = Phase.Live(stream.width, stream.height, control = stream.control)
                     play()
                 },
-                onFailure = { phase.value = Phase.Failed(it.message ?: "Couldn't show the PC's screen") },
+                onFailure = { phase.value = Phase.Failed(plainReason(it.message) ?: "Couldn't show the PC's screen. Try again") },
             )
         }
     }
@@ -264,7 +264,7 @@ class PcScreenActivity : ComponentActivity() {
                     if (decoder !== mine) return@runOnUiThread // an older one ending late
                     decoder = null
                     if (phase.value is Phase.Live && !isFinishing && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
-                        phase.value = Phase.Failed(error?.message?.let { "The stream stopped: $it" } ?: "The PC stopped sharing its screen")
+                        phase.value = Phase.Failed(if (error != null) "The picture stopped coming through. Try again" else "The PC stopped sharing its screen")
                     }
                 }
             },
@@ -614,7 +614,8 @@ private fun ScreenView(
             ) {
                 Row(Modifier.chromeFade(this), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     GlassButton(backdrop, "Close", Icons.Rounded.Close, onClick = onClose)
-                    if (live?.showing == true) RateReadout(backdrop, stats)
+                    // Frame rate and bitrate are for development, not for watching the PC.
+                    if (live?.showing == true && dev.vyoma.connect.BuildConfig.DEBUG) RateReadout(backdrop, stats)
                 }
             }
             // How touch control works, for a few seconds after turning it on.

@@ -122,7 +122,8 @@ fun FilesScreen(
                 }
                 is PcFileEvent.Failed -> {
                     haptics.perform(Haptic.Failure)
-                    status.show("Couldn't get ${e.name}: ${e.reason}", failure = true, haptic = false)
+                    val verb = if (e.upload) "Couldn't upload" else "Couldn't get"
+                    status.show(plainReason(e.reason)?.let { "$verb ${e.name}: $it" } ?: "$verb ${e.name}. Try again", failure = true, haptic = false)
                 }
             }
         }
@@ -152,9 +153,10 @@ fun FilesScreen(
         if (plugin == null) {
             item(key = "offline") {
                 SectionCard {
+                    val pcAway = devices.firstOrNull { it.identity.deviceId == pcId }?.isReachable != true
                     ListRow(
-                        title = "Vyoma isn't connected on the PC",
-                        subtitle = "Browsing PC files needs Vyoma running on $pcName",
+                        title = if (pcAway) "$pcName is away" else "Needs Vyoma on $pcName",
+                        subtitle = if (pcAway) "Its files show here when it's back" else "Open Vyoma there, or install it",
                         icon = Icons.Rounded.FolderOff,
                         iconTint = SystemColor.GRAY.color,
                     )
@@ -182,7 +184,7 @@ fun FilesScreen(
                 SectionCard(Modifier.animateItem()) {
                     ListRow(
                         title = "Couldn't open this folder",
-                        subtitle = shown.error,
+                        subtitle = plainReason(shown.error) ?: "The PC wouldn't open it. It may be private, or gone.",
                         icon = Icons.Rounded.FolderOff,
                         iconTint = SystemColor.RED.color,
                     )

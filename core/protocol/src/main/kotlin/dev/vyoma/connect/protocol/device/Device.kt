@@ -297,10 +297,15 @@ class Device internal constructor(
         if (_state.value.pairState == PairState.PAIRED) return@withContext
         val ts = System.currentTimeMillis() / 1000
         pairingTimestamp = ts
-        if (send(packet(PacketTypes.PAIR) { put("pair", true); put("timestamp", ts) })) {
-            setPairState(PairState.REQUESTED_BY_US)
-            armPairTimeout()
-        }
+        // Asking before sending: sending lets go of this dispatcher, and a quick yes must find us asking.
+        setPairState(PairState.REQUESTED_BY_US)
+        armPairTimeout()
+        if (!send(packet(PacketTypes.PAIR) { put("pair", true); put("timestamp", ts) })) unask()
+    }
+
+    /** A request that couldn't be sent: back to unpaired, unless an answer already moved it on. */
+    private fun unask() {
+        if (_state.value.pairState == PairState.REQUESTED_BY_US) setPairState(PairState.UNPAIRED)
     }
 
     /**
@@ -316,9 +321,13 @@ class Device internal constructor(
         val ts = System.currentTimeMillis() / 1000
         pairingTimestamp = ts
         val proof = QrInvite.proof(invite.secret, ts, env.localCertificate.encoded, link.peerCertificate.encoded)
-        if (!send(packet(PacketTypes.PAIR) { put("pair", true); put("timestamp", ts); put(QrInvite.FIELD, proof) })) return@withContext false
+        // Asking before sending, as above: the PC accepts a good proof at once.
         setPairState(PairState.REQUESTED_BY_US)
         armPairTimeout()
+        if (!send(packet(PacketTypes.PAIR) { put("pair", true); put("timestamp", ts); put(QrInvite.FIELD, proof) })) {
+            unask()
+            return@withContext false
+        }
         true
     }
 

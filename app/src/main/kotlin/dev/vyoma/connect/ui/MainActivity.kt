@@ -244,7 +244,7 @@ private fun AppNavigation(backStack: MutableList<Screen>, tabState: MutableState
             is Screen.Files -> "PC files"
             Screen.Clipboard -> "Clipboard"
             Screen.Captures -> "Captures"
-            Screen.Automation -> "Automation"
+            Screen.Automation -> "Rules"
             Screen.Connection -> "Connection"
             Screen.Notifications -> "Notifications"
             is Screen.RuleEditor -> "Rule"

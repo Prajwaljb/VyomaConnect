@@ -93,6 +93,9 @@ interface TextsGuard {
     /** [peerId] locked again (or went). */
     fun close(peerId: String)
 
+    /** Takes back [peerId]'s yes but leaves a question still on screen standing, for a repeat ask. */
+    fun revoke(peerId: String) = close(peerId)
+
     /**
      * Whether [peerId] is held to the lock, given whether its identity [claims] it can ask. A PC that once could
      * stays held, so leaving the capability out of its identity later doesn't get round the lock.
@@ -152,8 +155,9 @@ class SmsPlugin(private val ctx: PluginContext, private val store: SmsStore, pri
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         when (packet.type) {
             PacketTypes.TEXTS_UNLOCK -> {
-                // Asked afresh each time: whoever is at the PC can't ride on an earlier yes.
-                guard.close(peerId)
+                // Asked afresh each time: whoever is at the PC can't ride on an earlier yes. A
+                // prompt already showing stays (a second one would turn the first away).
+                guard.revoke(peerId)
                 guard.ask(peerId, ctx.device.name) { ok ->
                     ctx.scope.launch { ctx.send(packet(PacketTypes.TEXTS_UNLOCKED) { put("ok", ok) }) }
                 }
@@ -177,7 +181,11 @@ class SmsPlugin(private val ctx: PluginContext, private val store: SmsStore, pri
             PacketTypes.SMS_REQUEST_CONVERSATIONS -> ctx.scope.launch(Dispatchers.IO) {
                 markRequested()
                 // One packet per thread so the PC can render progressively.
-                for (m in store.conversations()) ctx.send(messages(listOf(m)))
+                // Stops the moment the PC locks or the yes runs out, not after the last thread.
+                for (m in store.conversations()) {
+                    if (!allowed()) break
+                    ctx.send(messages(listOf(m)))
+                }
             }
             PacketTypes.SMS_REQUEST_CONVERSATION -> {
                 val thread = packet.long("threadID") ?: return true
@@ -185,7 +193,8 @@ class SmsPlugin(private val ctx: PluginContext, private val store: SmsStore, pri
                 val limit = packet.long("numberToRequest")?.takeIf { it >= 0 }?.toInt()
                 ctx.scope.launch(Dispatchers.IO) {
                     markRequested()
-                    ctx.send(messages(store.thread(thread, start, limit)))
+                    val found = store.thread(thread, start, limit)
+                    if (allowed()) ctx.send(messages(found))
                 }
             }
             PacketTypes.SMS_REQUEST -> {

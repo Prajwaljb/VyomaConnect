@@ -174,7 +174,7 @@ fun DeviceScreen(
                     CallsFromPcRow(deviceId)
                     ListRow(
                         title = "Unpair",
-                        subtitle = "Forget this device and its key",
+                        subtitle = "Forget this PC. Pairing again needs its code",
                         icon = Icons.Rounded.LinkOff,
                         iconTint = SystemColor.RED.color,
                         onClick = { confirmUnpair = true },

@@ -247,7 +247,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
             SectionCard {
                 ListRow(
                     title = "Rules",
-                    subtitle = "When this happens, do that: calls, leaving, bedtime…",
+                    subtitle = "When this happens, do that: calls, leaving, bedtime",
                     icon = Icons.Rounded.AutoMode,
                     iconTint = SystemColor.ORANGE.color,
                     trailing = { RowChevron(if (rules.isEmpty()) null else "$on on") },
@@ -321,7 +321,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                 val outdoor by vm.outdoorMode.collectAsStateWithLifecycle()
                 ListRow(
                     title = "Outdoor mode",
-                    subtitle = "Off Wi-Fi with no PC connected, Vyoma stops in the background and starts again on Wi-Fi",
+                    subtitle = "Rests when you're off Wi-Fi with no PC, and wakes when you're back",
                     icon = Icons.Rounded.Park,
                     iconTint = SystemColor.GREEN.color,
                     haptic = if (outdoor) Haptic.ToggleOff else Haptic.ToggleOn,
@@ -358,7 +358,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                     onClick = { PairScanActivity.open(context) },
                 )
                 ListRow(
-                    title = "Add a PC by IP or name",
+                    title = "Add a PC by address",
                     subtitle = "For Tailscale, or when it isn't found",
                     icon = Icons.Rounded.Add,
                     iconTint = SystemColor.BLUE.color,
@@ -367,7 +367,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                     onClick = { addingHost = true },
                 )
                 ListRow(
-                    title = "Over a USB cable",
+                    title = "Connect with a USB cable",
                     subtitle = "Faster and steadier than Wi-Fi",
                     icon = Icons.Rounded.Usb,
                     iconTint = SystemColor.CYAN.color,
@@ -455,7 +455,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: (() -> Unit)? = null, onAutomation:
                 )
                 ListRow(
                     title = "Vyoma",
-                    subtitle = "Version ${context.packageManager.getPackageInfo(context.packageName, 0).versionName} · KDE Connect protocol v8",
+                    subtitle = "Version ${context.packageManager.getPackageInfo(context.packageName, 0).versionName}",
                     icon = Icons.Rounded.Info,
                     iconTint = SystemColor.GRAY.color,
                 )
@@ -770,7 +770,7 @@ private fun SteadierRow(resumeTick: Int) {
     val waiting = when (ready) {
         BluetoothFallback.Readiness.NO_ADAPTER -> "This phone has no Bluetooth."
         BluetoothFallback.Readiness.RADIO_OFF -> "Turn on Bluetooth to use it."
-        BluetoothFallback.Readiness.PC_UNKNOWN -> "Connect once with Vyoma on your PC, so this phone can find it over Bluetooth."
+        BluetoothFallback.Readiness.PC_UNKNOWN -> "Needs Vyoma on your PC: connect to it once over Wi-Fi."
         BluetoothFallback.Readiness.NOT_PAIRED -> "Pair this phone with your PC in Bluetooth settings."
         else -> null
     }
@@ -878,11 +878,11 @@ private fun BluetoothRow(vm: AppViewModel, resumeTick: Int) {
         subtitle = when {
             // Said whether the switch is on or not: without the pairing it can never work.
             pairing -> "Pairing: confirm the code on the phone and on $pcName"
-            needsPairing -> "Not paired with $pcName yet. Tap to pair"
+            needsPairing -> "Tap to pair with $pcName over Bluetooth"
             !on -> "Connect without Wi-Fi or cable"
             ready == BluetoothFallback.Readiness.NO_ADAPTER -> "This phone has no Bluetooth"
             ready == BluetoothFallback.Readiness.RADIO_OFF -> "Turn on Bluetooth to use it"
-            ready == BluetoothFallback.Readiness.PC_UNKNOWN -> "Connect once over Wi-Fi so it can find your PC"
+            ready == BluetoothFallback.Readiness.PC_UNKNOWN -> "Needs Vyoma on your PC: connect to it once over Wi-Fi"
             overRadio -> "Connected to $pcName over Bluetooth"
             else -> "Paired with $pcName, ready if Wi-Fi drops"
         },
@@ -946,7 +946,7 @@ private fun FingerprintLockRow(resumeTick: Int) {
     }
     ListRow(
         title = "Fingerprint lock",
-        subtitle = if (usable) "Unlock, files, screen and more" else "Set a screen lock on this phone to use it",
+        subtitle = if (usable) "Asks before PC unlock, files, screen and controls" else "Set a screen lock on this phone to use it",
         icon = Icons.Rounded.Fingerprint,
         iconTint = SystemColor.MINT.color,
         haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,
@@ -1032,8 +1032,8 @@ private fun UnlockCountsRow() {
         }
     }
     ListRow(
-        title = "Phone unlock counts",
-        subtitle = "No prompt within 30 s of unlocking",
+        title = "Skip after unlocking",
+        subtitle = "No fingerprint for 30 s after you unlock the phone",
         icon = Icons.Rounded.LockOpen,
         iconTint = SystemColor.MINT.color,
         haptic = if (on) Haptic.ToggleOff else Haptic.ToggleOn,

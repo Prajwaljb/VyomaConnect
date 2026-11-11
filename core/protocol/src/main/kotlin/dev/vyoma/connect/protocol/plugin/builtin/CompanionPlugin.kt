@@ -259,7 +259,8 @@ sealed interface XferResult {
 sealed interface PcFileEvent {
     /** [temporary]: fetched only to look at (see [CompanionPlugin.download]), not saved to the user's files. */
     data class Saved(val name: String, val location: String, val temporary: Boolean = false) : PcFileEvent
-    data class Failed(val name: String, val reason: String) : PcFileEvent
+    /** [upload]: it was going to the PC, not coming from it. */
+    data class Failed(val name: String, val reason: String, val upload: Boolean = false) : PcFileEvent
     /** Uploaded into [folder]; [name] is what the PC saved it as (it never overwrites). */
     data class Uploaded(val name: String, val folder: String) : PcFileEvent
 }
@@ -569,7 +570,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
                     else -> answer.second
                 }
                 Transfers.finish(id, ok = error == null)
-                _fileEvents.tryEmit(if (error == null) PcFileEvent.Uploaded(answer!!.first, folder) else PcFileEvent.Failed(file.name, error))
+                _fileEvents.tryEmit(if (error == null) PcFileEvent.Uploaded(answer!!.first, folder) else PcFileEvent.Failed(file.name, error, upload = true))
             }
             if (_folder.value?.path == folder) listFiles(folder)
         }

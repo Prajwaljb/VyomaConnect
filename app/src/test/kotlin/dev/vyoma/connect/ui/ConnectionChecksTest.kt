@@ -25,7 +25,7 @@ class ConnectionChecksTest {
         )
         val radio = facts.check(CheckKind.BLUETOOTH)
         assertEquals(CheckLevel.GOOD, radio.level)
-        assertTrue(radio.detail, radio.detail.startsWith("In use: PC link, Vyoma on the PC, touchpad, controller."))
+        assertTrue(radio.detail, radio.detail.startsWith("In use: the PC, Vyoma on the PC, touchpad, controller."))
         assertEquals(CheckLevel.QUIET, facts.check(CheckKind.WIFI).level)
         assertEquals(CheckLevel.QUIET, facts.check(CheckKind.USB).level)
         assertEquals("Connected over Bluetooth", facts.check(CheckKind.COMPANION).detail)
@@ -34,7 +34,7 @@ class ConnectionChecksTest {
     @Test fun aSideChannelCountsAsBluetoothInUseBesideWifi() {
         val facts = offline.copy(pc = setOf(TransportKind.LAN), touchpadOpen = true)
         assertEquals(CheckLevel.GOOD, facts.check(CheckKind.BLUETOOTH).level)
-        assertEquals("In use: PC link", facts.check(CheckKind.WIFI).detail)
+        assertEquals("In use: the PC", facts.check(CheckKind.WIFI).detail)
     }
 
     @Test fun whatStopsBluetoothIsNamed() {
@@ -56,6 +56,17 @@ class ConnectionChecksTest {
         val away = connectionChecks(offline, away = true)
         assertEquals(listOf(CheckKind.BLUETOOTH), away.map { it.kind })
         assertEquals(CheckLevel.PROBLEM, connectionChecks(offline.copy(bluetooth = BluetoothFallback.Readiness.NOT_PAIRED), away = true).single().level)
+    }
+
+    @Test fun bluetoothBackupOffIsNoProblem() {
+        val off = offline.copy(bluetooth = BluetoothFallback.Readiness.NEEDS_PERMISSION, bluetoothOn = false)
+        assertEquals(CheckLevel.QUIET, off.check(CheckKind.BLUETOOTH).level)
+        assertTrue(connectionChecks(off, away = true).isEmpty())
+    }
+
+    @Test fun idleSideChannelsAreLeftOut() {
+        val kinds = connectionChecks(offline.copy(pc = setOf(TransportKind.LAN))).map { it.kind }
+        assertTrue(CheckKind.CONTROLLER !in kinds && CheckKind.TOUCHPAD !in kinds)
     }
 
     @Test fun nothingConnectedClaimsNoEncryption() {

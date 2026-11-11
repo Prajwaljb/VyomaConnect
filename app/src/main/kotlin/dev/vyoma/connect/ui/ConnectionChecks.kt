@@ -53,7 +53,7 @@ internal enum class CheckKind(val title: String) {
     WIFI("Wi-Fi"),
     USB("USB cable"),
     BLUETOOTH("Bluetooth"),
-    COMPANION("Vyoma on PC"),
+    COMPANION("Vyoma on your PC"),
     ENCRYPTION("Encryption"),
     CONTROLLER("Controller"),
     TOUCHPAD("Touchpad"),
@@ -72,6 +72,8 @@ internal data class LinkFacts(
     /** Vyoma's PC app is its own feature link, so it's the PC link itself, not a second one. */
     val companionIsPc: Boolean = false,
     val bluetooth: BluetoothFallback.Readiness,
+    /** Settings' Bluetooth backup switch: off, what stands in its way isn't a problem. */
+    val bluetoothOn: Boolean = true,
     val controllerRoute: GamepadRoute?,
     val controllerTrip: TripReport?,
     val touchpadOpen: Boolean,
@@ -85,7 +87,7 @@ internal data class LinkFacts(
  */
 internal fun connectionChecks(f: LinkFacts, away: Boolean = false): List<ConnectionCheck> {
     fun users(kind: TransportKind, route: GamepadRoute) = buildList {
-        if (kind in f.pc) add("PC link")
+        if (kind in f.pc) add("the PC")
         if (!f.companionIsPc && f.companion?.contains(kind) == true) add("Vyoma on the PC")
         if (kind == TransportKind.BLUETOOTH && f.touchpadOpen) add("touchpad")
         if (f.controllerRoute == route) add("controller")
@@ -93,7 +95,7 @@ internal fun connectionChecks(f: LinkFacts, away: Boolean = false): List<Connect
     fun inUse(users: List<String>) = "In use: " + users.joinToString(", ")
     fun carried(kind: CheckKind, transport: TransportKind, route: GamepadRoute): ConnectionCheck {
         val users = users(transport, route)
-        return if (users.isEmpty()) ConnectionCheck(kind, "Not in use right now", CheckLevel.QUIET)
+        return if (users.isEmpty()) ConnectionCheck(kind, "Not in use", CheckLevel.QUIET)
         else ConnectionCheck(kind, inUse(users), CheckLevel.GOOD)
     }
     fun timed(via: String, trip: TripReport?) =
@@ -106,22 +108,26 @@ internal fun connectionChecks(f: LinkFacts, away: Boolean = false): List<Connect
             inUse(radioUsers) + ". Android's Bluetooth page only counts calls and audio, so it can still say Disconnected.",
             CheckLevel.GOOD,
         )
+        !f.bluetoothOn -> ConnectionCheck(CheckKind.BLUETOOTH, "Off. Turn it on in Settings to connect without Wi-Fi", CheckLevel.QUIET)
         else -> when (f.bluetooth) {
             BluetoothFallback.Readiness.READY -> ConnectionCheck(CheckKind.BLUETOOTH, "Ready as a backup when Wi-Fi can't reach the PC", CheckLevel.QUIET)
             BluetoothFallback.Readiness.RADIO_OFF -> ConnectionCheck(CheckKind.BLUETOOTH, "Turned off on this phone", CheckLevel.QUIET)
             BluetoothFallback.Readiness.NO_ADAPTER -> ConnectionCheck(CheckKind.BLUETOOTH, "This phone has no Bluetooth", CheckLevel.QUIET)
             BluetoothFallback.Readiness.NEEDS_PERMISSION -> ConnectionCheck(CheckKind.BLUETOOTH, "Vyoma needs the Nearby devices permission", CheckLevel.PROBLEM)
-            BluetoothFallback.Readiness.PC_UNKNOWN -> ConnectionCheck(CheckKind.BLUETOOTH, "Connect once with Vyoma on your PC first", CheckLevel.PROBLEM)
+            BluetoothFallback.Readiness.PC_UNKNOWN -> ConnectionCheck(CheckKind.BLUETOOTH, "Needs Vyoma on your PC: connect to it once over Wi-Fi", CheckLevel.PROBLEM)
             BluetoothFallback.Readiness.NOT_PAIRED -> ConnectionCheck(CheckKind.BLUETOOTH, "Pair this phone with your PC in Bluetooth settings", CheckLevel.PROBLEM)
         }
     }
     val companion = f.companion
-    if (away) return listOf(radio)
-    return listOf(
+    // Away with the backup off, nothing here says anything the card above doesn't.
+    if (away) return listOf(radio).filter { f.bluetoothOn }
+    return listOfNotNull(
         carried(CheckKind.WIFI, TransportKind.LAN, GamepadRoute.WIFI),
         carried(CheckKind.USB, TransportKind.USB, GamepadRoute.USB),
         radio,
         when {
+            // The PC itself is connected, through KDE Connect: Vyoma just isn't on it.
+            companion.isNullOrEmpty() && f.pc.isNotEmpty() -> ConnectionCheck(CheckKind.COMPANION, "Not on this PC: it's using KDE Connect", CheckLevel.QUIET)
             companion.isNullOrEmpty() -> ConnectionCheck(CheckKind.COMPANION, "Not connected", CheckLevel.QUIET)
             else -> ConnectionCheck(CheckKind.COMPANION, "Connected over " + transportName(companion), CheckLevel.GOOD)
         },
@@ -130,12 +136,9 @@ internal fun connectionChecks(f: LinkFacts, away: Boolean = false): List<Connect
             f.paired -> ConnectionCheck(CheckKind.ENCRYPTION, "Encrypted, and the PC's certificate matches", CheckLevel.GOOD)
             else -> ConnectionCheck(CheckKind.ENCRYPTION, "Encrypted, but this PC isn't paired yet", CheckLevel.PROBLEM)
         },
-        when (val route = f.controllerRoute) {
-            null -> ConnectionCheck(CheckKind.CONTROLLER, "Not in use", CheckLevel.QUIET)
-            else -> ConnectionCheck(CheckKind.CONTROLLER, timed(routeName(route), f.controllerTrip), CheckLevel.GOOD)
-        },
-        if (f.touchpadOpen) ConnectionCheck(CheckKind.TOUCHPAD, timed("Bluetooth", f.touchpadTrip), CheckLevel.GOOD)
-        else ConnectionCheck(CheckKind.TOUCHPAD, "Goes over the main connection", CheckLevel.QUIET),
+        // The controller's and touchpad's own channels show only while they're open: idle, they're nothing to check.
+        f.controllerRoute?.let { route -> ConnectionCheck(CheckKind.CONTROLLER, timed(routeName(route), f.controllerTrip), CheckLevel.GOOD) },
+        if (f.touchpadOpen) ConnectionCheck(CheckKind.TOUCHPAD, timed("Bluetooth", f.touchpadTrip), CheckLevel.GOOD) else null,
     )
 }
 
@@ -170,7 +173,9 @@ internal fun rememberBluetoothReadiness(): BluetoothFallback.Readiness {
 
 @Composable
 internal fun ConnectionChecksCard(checks: List<ConnectionCheck>, modifier: Modifier = Modifier) {
+    if (checks.isEmpty()) return
     val dark = isDarkUi
+    val context = LocalContext.current
     SectionCard(modifier) {
         checks.forEachIndexed { i, check ->
             ListRow(
@@ -179,6 +184,13 @@ internal fun ConnectionChecksCard(checks: List<ConnectionCheck>, modifier: Modif
                 icon = check.kind.icon(),
                 iconTint = if (check.level == CheckLevel.QUIET) SystemColor.GRAY.color else check.kind.tint(),
                 showDivider = i < checks.lastIndex,
+                // A Bluetooth problem leads to where it's fixed: the permission, or Bluetooth settings.
+                onClick = if (check.level == CheckLevel.PROBLEM && check.kind == CheckKind.BLUETOOTH) { {
+                    val intent = if (!BluetoothFallback.permitted(context)) {
+                        android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:" + context.packageName))
+                    } else android.content.Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)
+                    runCatching { context.startActivity(intent) }
+                } } else null,
                 trailing = {
                     when (check.level) {
                         CheckLevel.GOOD -> Icon(Icons.Rounded.CheckCircle, "Working", tint = Status.connected(dark))
@@ -218,6 +230,7 @@ internal fun ConnectionChecksScreen(vm: AppViewModel, onBack: () -> Unit) {
     val devices by vm.devices.collectAsStateWithLifecycle()
     val pcs = devices.filter { it.isPaired && it.identity.companionOf == null }
     val bluetooth = rememberBluetoothReadiness()
+    val bluetoothOn by BluetoothFallback.enabled.collectAsStateWithLifecycle()
     CollapsingHeaderScaffold(
         title = "Connection",
         subtitle = "What's working right now",
@@ -253,6 +266,7 @@ internal fun ConnectionChecksScreen(vm: AppViewModel, onBack: () -> Unit) {
                             companion = companion?.transports,
                             companionIsPc = companion?.identity?.deviceId == id,
                             bluetooth = bluetooth,
+                            bluetoothOn = bluetoothOn,
                             controllerRoute = route,
                             controllerTrip = trip,
                             touchpadOpen = pointerOpen,

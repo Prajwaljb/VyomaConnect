@@ -1,5 +1,8 @@
 package dev.vyoma.connect.protocol.plugin.builtin
 
+import kotlin.concurrent.thread
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 import dev.vyoma.connect.protocol.NetworkPacket
 import dev.vyoma.connect.protocol.PacketTypes
 import dev.vyoma.connect.protocol.VLog
@@ -45,32 +48,41 @@ class SftpPlugin(private val ctx: PluginContext, private val server: PhoneFileSe
 
     override suspend fun onPacket(packet: NetworkPacket): Boolean {
         if (packet.bool("startBrowsing") != true) return false
-        peerKey = ctx.device.peerCertificate?.publicKey
-        val reply = server.start(peerKey, ctx.device.addresses).fold(
-            onSuccess = { running ->
-                val at = ctx.device.ourAddress
-                packet(PacketTypes.SFTP) {
-                    // Over the cable alone there's no address to give: the PC reaches the port through adb.
-                    put("ip", at?.hostAddress?.substringBefore('%') ?: "127.0.0.1")
-                    put("port", running.port)
-                    put("user", USER)
-                    put("password", running.password)
-                    put("path", running.roots.singleOrNull()?.first ?: "/")
-                    putStrings("multiPaths", running.roots.map { it.first })
-                    putStrings("pathNames", running.roots.map { it.second })
-                }
-            },
-            onFailure = { e ->
-                VLog.i(TAG, "not browsable: ${e.message}")
-                packet(PacketTypes.SFTP) { put("errorMessage", e.message ?: "Can't share this phone's files") }
-            },
-        )
-        ctx.send(reply)
+        val key = ctx.device.peerCertificate?.publicKey
+        peerKey = key
+        val addresses = ctx.device.addresses
+        val at = ctx.device.ourAddress
+        // Off the device's dispatcher: starting the server binds ports and can take a while, and
+        // every other packet from this PC would wait behind it.
+        ctx.scope.launch(Dispatchers.IO) {
+            val reply = server.start(key, addresses).fold(
+                onSuccess = { running ->
+                    packet(PacketTypes.SFTP) {
+                        // Over the cable alone there's no address to give: the PC reaches the port through adb.
+                        put("ip", at?.hostAddress?.substringBefore('%') ?: "127.0.0.1")
+                        put("port", running.port)
+                        put("user", USER)
+                        put("password", running.password)
+                        put("path", running.roots.singleOrNull()?.first ?: "/")
+                        putStrings("multiPaths", running.roots.map { it.first })
+                        putStrings("pathNames", running.roots.map { it.second })
+                    }
+                },
+                onFailure = { e ->
+                    VLog.i(TAG, "not browsable: ${e.message}")
+                    packet(PacketTypes.SFTP) { put("errorMessage", e.message ?: "Can't share this phone's files") }
+                },
+            )
+            ctx.send(reply)
+        }
         return true
     }
 
     override fun onStop() {
-        if (peerKey != null) server.stop(peerKey, now = !ctx.device.state.value.isPaired)
+        val key = peerKey ?: return
+        val now = !ctx.device.state.value.isPaired
+        // Stopping the server waits for it to close: not on the device's dispatcher.
+        thread(name = "sftp-stop", isDaemon = true) { server.stop(key, now) }
     }
 
     companion object {

@@ -76,7 +76,10 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
         // Clearing can't be undone, so it asks first.
         actions = {
             // Sending by hand stays even with background sync on, in case a copy didn't go.
-            BounceIconButton(onClick = { context.startActivity(ClipboardActivity.intent(context)) }) { Icon(Icons.AutoMirrored.Rounded.Send, "Send what's copied to PC") }
+            BounceIconButton(onClick = {
+                if (vm.connectedPc() == null) status.show(vm.nothingSentReason(), failure = true)
+                else context.startActivity(ClipboardActivity.intent(context))
+            }) { Icon(Icons.AutoMirrored.Rounded.Send, "Send what's copied to PC") }
             if (history.isNotEmpty()) BounceIconButton(onClick = { clearing = true }) { Icon(Icons.Rounded.DeleteSweep, "Clear history") }
         },
     ) {
@@ -98,8 +101,7 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     .then(if (i != last) Modifier.joinNext() else Modifier)
                     .cardSegment(first = i == 0, last = i == last)
                     .pressable {
-                        vm.copyClip(clip.text)
-                        status.show("Copied, and sent to your PC")
+                        status.show(vm.copyClipSaying(clip.text))
                     },
             ) {
                 Row(Modifier.padding(horizontal = 20.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) {
@@ -132,8 +134,8 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
                     val askIn = clipboardAskWait(vm)
                     if (sync == dev.vyoma.connect.platform.AndroidClipboard.SyncState.WAITING) ListRow(
                         title = "Allow log access",
-                        subtitle = if (askIn != null) "Android waits a minute after a no before it asks again. Keep Vyoma open: it asks in $askIn s, then tap Allow one-time access"
-                        else "Tap Ask again, then Allow one-time access, and copies go to your PC by themselves",
+                        subtitle = if (askIn != null) "Android asks again in $askIn s: keep Vyoma open, then tap Allow"
+                        else "Tap Ask again, then Allow, and copies go to your PC by themselves",
                         icon = Icons.Rounded.Sync,
                         iconTint = SystemColor.ORANGE.color,
                         trailing = { RowChevron(if (askIn != null) "$askIn s" else "Ask again") },

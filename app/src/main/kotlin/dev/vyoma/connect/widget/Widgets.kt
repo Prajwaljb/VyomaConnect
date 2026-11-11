@@ -486,7 +486,7 @@ private fun Header(s: WidgetSnapshot, titleSize: TextUnit = 17.sp, modifier: Gla
                 when {
                     s.pcName == null -> "Open Vyoma"
                     s.connected -> "Online"
-                    else -> "Offline"
+                    else -> "Away"
                 },
                 maxLines = 1,
                 style = style(if (compact) 11.sp else 12.sp, if (s.connected) Ink.online else Ink.secondary, FontWeight.Medium),

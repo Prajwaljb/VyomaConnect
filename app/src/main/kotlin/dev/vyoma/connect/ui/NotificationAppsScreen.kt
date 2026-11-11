@@ -114,7 +114,7 @@ fun NotificationAppsScreen(onBack: () -> Unit) {
         subtitle = when {
             !access -> "Access is off"
             changed == 0 -> "All apps on"
-            else -> "$changed changed"
+            else -> if (changed == 1) "1 app changed" else "$changed apps changed"
         },
         navigation = { BounceIconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
     ) {
