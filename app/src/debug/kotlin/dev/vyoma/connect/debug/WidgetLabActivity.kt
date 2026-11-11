@@ -30,10 +30,13 @@ import dev.vyoma.connect.widget.Widgets
 import kotlinx.coroutines.launch
 
 /**
- * Hosts our real widgets at One UI cell sizes (5x6 grid on an S24 FE: w = 71.1n - 13, h = 99.2n - 41 dp)
- * over a busy background, with sample data. Needs `cmd appwidget grantbind --package <pkg>` once.
+ * Hosts our real widgets at a launcher's cell sizes over a busy background, with sample data.
+ * Needs `cmd appwidget grantbind --package <pkg>` once. `--es grid`:
+ *  - `oneui` (default): One UI Home 5x6 on an S24 FE, w = 71.1n - 13, h = 99.2n - 41 dp (58 x 58 a cell)
+ *  - `pixel`: Pixel Launcher / AOSP 4x5 (Android's sizing guide), w = 73n - 16, h = 118n - 16 (57 x 102)
+ *  - `compact`: 4x6 and 5x7 grids (ColorOS, HyperOS, OxygenOS), w = 80n - 12, h = 88n - 18 (68 x 70)
  *
- *   adb shell am start -n dev.vyoma.connect.debug/dev.vyoma.connect.debug.WidgetLabActivity --es widget media --ez art true
+ *   adb shell am start -n dev.vyoma.connect.debug/dev.vyoma.connect.debug.WidgetLabActivity --es widget media --ez art true --es grid pixel
  */
 class WidgetLabActivity : androidx.activity.ComponentActivity() {
     private lateinit var host: AppWidgetHost
@@ -86,13 +89,26 @@ class WidgetLabActivity : androidx.activity.ComponentActivity() {
             }
             return
         }
+        val grid = intent.getStringExtra("grid") ?: "oneui"
+        column.addView(label("grid: $grid, font scale ${resources.configuration.fontScale}"))
         for ((c, r) in sizes) {
-            val w = 71.1f * c - 13f
-            val h = 99.2f * r - 41f
+            val (w, h) = when (grid) {
+                "pixel" -> 73f * c - 16f to 118f * r - 16f
+                "compact" -> 80f * c - 12f to 88f * r - 18f
+                else -> 71.1f * c - 13f to 99.2f * r - 41f
+            }
             val id = host.allocateAppWidgetId()
             if (!manager.bindAppWidgetIdIfAllowed(id, provider)) {
-                column.addView(label("Run: adb shell cmd appwidget grantbind --package $packageName"))
-                host.deleteAppWidgetId(id)
+                // Newer Androids have no `cmd appwidget`: ask once in the system's dialog (tick
+                // "Always allow"), then start the lab again.
+                column.addView(label("Allow binding (tick Always allow), then start the lab again"))
+                @Suppress("DEPRECATION")
+                startActivityForResult(
+                    android.content.Intent(AppWidgetManager.ACTION_APPWIDGET_BIND)
+                        .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                        .putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, provider),
+                    1,
+                )
                 break
             }
             ids += id
