@@ -1,6 +1,6 @@
 # Maintainer: Prajwal JB
 pkgname=vyoma
-pkgver=0.7.0
+pkgver=0.8.0
 pkgrel=1
 pkgdesc="Your Android phone and your Linux PC, working as one: files, clipboard, calls, screens and remote control (KDE Connect protocol)"
 arch=('x86_64' 'aarch64')
@@ -20,7 +20,7 @@ optdepends=('v4l2loopback-dkms: the phone as a webcam (CachyOS kernels already h
             'firewalld: opened for phones automatically when it runs')
 install=vyoma.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('c7b881c0903bfbca1d88fe8b79176f4d8fd44c2ccb25c585398a7ed9d6a295b5')
+sha256sums=('b45a6a6a6dae6124f689379dc1aa3b7f59718bdb3d6fd751af69975389cbcb79')
 
 prepare() {
     cd "VyomaConnect-$pkgver/desktop"
