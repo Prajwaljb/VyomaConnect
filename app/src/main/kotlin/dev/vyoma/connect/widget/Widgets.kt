@@ -196,7 +196,7 @@ object Widgets {
             playing = np?.player?.isPlaying == true,
             // RemoteViews have a hard bitmap budget; 480px is still sharp full-bleed on a 4x2 widget.
             art = np?.art?.let(::widgetArt),
-            clips = if (AppLock.enabled(context)) emptyList() else c.clipboard.history.value.take(4).map { it.text.replace('\n', ' ').take(80) },
+            clips = if (AppLock.enabled(context)) emptyList() else c.clipboard.history.value.take(6).map { it.text.replace('\n', ' ').take(80) },
             clipsHidden = AppLock.enabled(context),
             transferFraction = running.takeIf { it.isNotEmpty() }?.let { list ->
                 val total = list.sumOf { it.totalBytes.coerceAtLeast(0) }
@@ -285,8 +285,10 @@ object Widgets {
 
 // ---- look -------------------------------------------------------------------------------------
 // One UI widgets: launcher-blurred glass, high-contrast type, round glass buttons, accent used
-// sparingly. Measured One UI Home cells (5x6 grid, S24 FE): width 58/129/200/271/342dp for 1..5
-// columns, height 58/157/257/356dp for 1..4 rows. Every layout below is checked at those sizes.
+// sparingly. Layouts follow the real size, not a row count: one row is 58 dp tall on One UI Home
+// (5x6, S24 FE: 58/157/257/356 dp for 1..4 rows), about 70 on 4x6 grids (ColorOS, HyperOS) and
+// 102 on Pixel Launcher (102/220/338). Every layout is checked at all three in the debug widget
+// lab (WidgetLabActivity, --es grid oneui|pixel|compact), and at a large font size.
 
 private object Ink {
     val primary = ColorProvider(day = Color(0xFF0B0B0F), night = Color(0xFFF5F5F7))
@@ -301,8 +303,9 @@ private object Ink {
 
 /** Size classes every widget lays out against (SizeMode.Exact gives the real size). */
 private class Dims(val w: Dp, val h: Dp) {
-    val oneRow = h < 100.dp          // 58dp
-    val oneCol = w < 100.dp          // 58dp
+    /** One row on any launcher (58 to 102 dp): laid out as a single line, centred. */
+    val oneRow = h < 132.dp
+    val oneCol = w < 100.dp          // 57 to 70 dp
     val narrow = w < 160.dp          // 1-2 columns
     val tall = h >= 240.dp           // 3+ rows
     val pad = when {
@@ -312,17 +315,28 @@ private class Dims(val w: Dp, val h: Dp) {
         else -> 16.dp
     }
 
-    /** One-row widgets are only 58dp tall: keep vertical padding tight so two text lines fit. */
-    val padV = if (oneRow || oneCol) 6.dp else pad
+    /** A 58 dp row keeps its vertical padding tight so two text lines fit; taller rows breathe. */
+    val padV = when {
+        h < 90.dp -> 6.dp
+        oneRow || oneCol -> 12.dp
+        else -> pad
+    }
     val innerW = w - pad * 2
     val innerH = h - padV * 2
 
     /** Largest button that fits a one-row widget. */
-    val rowButton = minOf(innerH.value, 40f).dp
+    val rowButton = minOf(innerH.value, 44f).dp
 }
 
 @Composable
 private fun dims() = LocalSize.current.let { Dims(it.width, it.height) }
+
+/**
+ * Text follows the phone's font size up to a point, then stops: a widget's box doesn't grow with
+ * it, so past that a title would be cut off (iOS caps widget text the same way).
+ */
+private const val MAX_TEXT_SCALE = 1.15f
+private val LocalTextScale = compositionLocalOf { 1f }
 
 /**
  * The widget's root, tagged as @android:id/background with a translucent plain colour: One UI Home
@@ -333,19 +347,13 @@ private fun dims() = LocalSize.current.let { Dims(it.width, it.height) }
 @Composable
 private fun Glass(onClick: Action? = null, content: @Composable () -> Unit) {
     val d = dims()
-    val context = LocalContext.current
     val blur = LocalAppWidgetOptions.current.getBoolean("semIsWallpaperBlurSupported", false)
-    val night = (context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
-        android.content.res.Configuration.UI_MODE_NIGHT_YES
-    val tint = when {
-        night && blur -> Color(0x8C141416)
-        night -> Color(0xE6141416)
-        blur -> Color(0xB3F5F5F7)
-        else -> Color(0xEBF5F5F7)
-    }
+    // Day and night both, so the launcher switches it with the theme without waiting for a redraw.
+    val tint = if (blur) ColorProvider(day = Color(0xB3F5F5F7), night = Color(0x8C141416))
+    else ColorProvider(day = Color(0xEBF5F5F7), night = Color(0xE6141416))
     Box(
         GlanceModifier.fillMaxSize().appWidgetBackground().cornerRadius(android.R.dimen.system_app_widget_background_radius)
-            .background(ColorProvider(tint)),
+            .background(tint),
     ) {
         Box(GlanceModifier.fillMaxSize().background(ImageProvider(R.drawable.widget_sheen))) {}
         val inner = GlanceModifier.fillMaxSize().padding(horizontal = d.pad, vertical = d.padV)
@@ -353,8 +361,9 @@ private fun Glass(onClick: Action? = null, content: @Composable () -> Unit) {
     }
 }
 
+@Composable
 private fun style(size: TextUnit, color: ColorProvider, weight: FontWeight = FontWeight.Normal) =
-    TextStyle(fontSize = size, color = color, fontWeight = weight)
+    TextStyle(fontSize = (size.value * LocalTextScale.current).sp, color = color, fontWeight = weight)
 
 @Composable
 private fun HGap(w: Dp) = Spacer(GlanceModifier.width(w))
@@ -508,7 +517,10 @@ abstract class VyomaWidget : GlanceAppWidget() {
     abstract fun Content(context: Context)
 
     override suspend fun provideGlance(context: Context, id: GlanceId) = provideContent {
-        GlanceTheme { Content(context) }
+        val scale = 1f / maxOf(1f, LocalContext.current.resources.configuration.fontScale / MAX_TEXT_SCALE)
+        CompositionLocalProvider(LocalTextScale provides scale) {
+            GlanceTheme { Content(context) }
+        }
     }
 
     override suspend fun providePreview(context: Context, widgetCategory: Int) = provideContent {
@@ -549,10 +561,11 @@ class StatusWidget : VyomaWidget() {
                 }
                 // n x 1: ring, name and status; batteries as chips when wide.
                 d.oneRow -> Row(GlanceModifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                    BatteryRing(null, pc, pcCharging, d.innerH.value.toInt())
+                    BatteryRing(null, pc, pcCharging, minOf(d.innerH.value, if (d.narrow) 44f else 56f).toInt())
                     HGap(10.dp)
                     Header(s, 14.sp, GlanceModifier.defaultWeight(), compact = true)
-                    if (d.innerW >= 160.dp) {
+                    // Below four columns the PC's name needs the room more than the phone's battery.
+                    if (d.innerW >= 190.dp) {
                         HGap(8.dp)
                         BatteryChip(R.drawable.ic_w_phone, s.phoneBattery, s.phoneCharging)
                     }
@@ -581,8 +594,9 @@ class StatusWidget : VyomaWidget() {
                     }
                     Spacer(GlanceModifier.defaultWeight())
                 }
-                // 3-5 x 2: header with battery chips, action row.
-                !d.tall -> Column(GlanceModifier.fillMaxSize()) {
+                // 3-5 x 2 where it's short (One UI, 4x6 grids): header with battery chips, action row.
+                // Taller two-row cells (Pixel's 220 dp) get the rings below instead of a gap.
+                !d.tall && d.innerH < 150.dp -> Column(GlanceModifier.fillMaxSize()) {
                     Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Header(s, modifier = GlanceModifier.defaultWeight())
                         BatteryChip(R.drawable.ic_w_laptop, pc, pcCharging)
@@ -595,11 +609,13 @@ class StatusWidget : VyomaWidget() {
                     val n = (d.innerW.value / 56).toInt().coerceIn(3, 5)
                     ButtonRow(statusActions(context, s, n), size = 44.dp, labels = false)
                 }
-                // 3+ x 3+: big rings, now playing, labelled actions.
+                // Room for rings: big rings, now playing, actions (labelled when there's room).
                 else -> Column(GlanceModifier.fillMaxSize()) {
                     Header(s, 18.sp)
                     Spacer(GlanceModifier.defaultWeight())
-                    val ring = ((d.innerH.value - 40 - 68 - 32) * 0.9f).toInt().coerceIn(44, 84)
+                    val labels = d.innerH >= 200.dp
+                    // Header ~40 dp, a ring's label ~20, the buttons 44 (+20 labelled), gaps ~24.
+                    val ring = (d.innerH.value - 40 - 20 - (if (labels) 64 else 44) - 24).toInt().coerceIn(40, 96)
                     Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         BatteryRing("PC", pc, pcCharging, ring)
                         HGap(16.dp)
@@ -611,7 +627,7 @@ class StatusWidget : VyomaWidget() {
                     }
                     Spacer(GlanceModifier.defaultWeight())
                     val n = (d.innerW.value / 56).toInt().coerceIn(3, 5)
-                    ButtonRow(statusActions(context, s, n), size = 44.dp, labels = true)
+                    ButtonRow(statusActions(context, s, n), size = 44.dp, labels = labels)
                 }
             }
         }
@@ -782,7 +798,8 @@ class MediaWidget : VyomaWidget() {
                 }
                 if (s.title != null) {
                     HGap(6.dp)
-                    Controls(context, s, onArt = false, full = d.innerW >= 240.dp, size = d.rowButton)
+                    // Previous and next only where the title still reads (five columns).
+                    Controls(context, s, onArt = false, full = d.innerW >= 280.dp, size = d.rowButton)
                 }
             }
         }
@@ -897,7 +914,7 @@ class DropWidget : VyomaWidget() {
                     d.oneCol -> Circle(context, fraction, minOf(d.innerW, d.innerH).value.toInt())
                     // One row: circle and label side by side.
                     d.oneRow -> Row(GlanceModifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                        Circle(context, fraction, d.innerH.value.toInt())
+                        Circle(context, fraction, minOf(d.innerH.value, 56f).toInt())
                         HGap(10.dp)
                         if (d.narrow && fraction == null) {
                             // Too narrow for "Send to <pc>": a short two-line label instead.
@@ -909,10 +926,12 @@ class DropWidget : VyomaWidget() {
                             Text(label, maxLines = 1, style = style(13.sp, Ink.white, FontWeight.Bold), modifier = GlanceModifier.defaultWeight())
                         }
                     }
+                    // Bigger tiles get a bigger target and type, not a small icon lost in the middle.
                     else -> Column(horizontalAlignment = Alignment.CenterHorizontally, verticalAlignment = Alignment.CenterVertically) {
-                        Circle(context, fraction, 52)
-                        VGap(8.dp)
-                        Text(label, maxLines = 1, style = style(12.sp, Ink.white, FontWeight.Bold))
+                        val big = minOf(d.innerW, d.innerH) >= 200.dp
+                        Circle(context, fraction, (minOf(d.innerW, d.innerH).value * 0.4f).toInt().coerceIn(52, 96))
+                        VGap(if (big) 12.dp else 8.dp)
+                        Text(label, maxLines = 1, style = style(if (big) 16.sp else 12.sp, Ink.white, FontWeight.Bold))
                     }
                 }
             }
