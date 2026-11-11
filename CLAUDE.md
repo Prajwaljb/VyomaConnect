@@ -34,7 +34,9 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `core/designsystem`: theme, motion, One UI-style components.
 - `app`: Application/AppContainer (manual lazy DI), `LinkService` (single connectedDevice FGS), UI.
 - `desktop/core` (`vyoma-core`): the desktop side's shared protocol core (identity, links, payloads), no desktop
-  calls, so it serves every desktop and macOS: discovery, links, pairing, trust store, the device hub (`device.rs`).
+  calls, so it serves every desktop and macOS: discovery, links, pairing, trust store, the device hub (`device.rs`), and
+  what both PC sides share: `messages` (texts store + lock), `files`/`xfer` (phone file access, behind `files::Hooks`),
+  `permits`, `activity`, `commands`, `release` (GitHub's newest release, `is_newer`).
 - `desktop/daemon` (`vyoma-desktop`): the standalone desktop app growing on that core (`docs/PLAN.md` section 10): pairing
   prompt as a freedesktop notification with Accept/Reject, `dev.vyoma.Desktop1` D-Bus control for the future GUI;
   stock plugins in `plugins.rs`, `clipboard.rs` (wl-clipboard), `share.rs` (files land in XDG Downloads), `media.rs`
@@ -73,8 +75,8 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   (`Xvfb :97 -screen 0 1280x720x24 -nolisten tcp`): `DISPLAY=:97 XDG_SESSION_TYPE=x11 VYOMA_X11_TEST=1 cargo test
   --release --lib x11::` in companion, `... cargo test --release presenter_x11` in daemon. Not yet run on a real
   Cinnamon/MATE/Xfce session; wlroots (Sway, Hyprland) input still has no path.
-- `desktop/mac` (`vyoma-mac`): the Mac's PC side on vyoma-core (`docs/PLAN.md` section 10, macOS): pairs after a
-  dialog with the code, serves ping, battery, find my phone, lock (display sleep), clipboard (pbcopy/pbpaste polled each
+- `desktop/mac` (`vyoma-mac`): the Mac's PC side on vyoma-core (`docs/PLAN.md` section 10, macOS): pairs in Vyoma's
+  window (inside Vyoma.app a request opens it, with a notification; the bare binary asks in a dialog with the code), serves ping, battery, find my phone, lock (display sleep), clipboard (pbcopy/pbpaste polled each
   second), share (files into ~/Downloads); `--install` makes it a LaunchAgent (`launchd.rs`; from Vyoma.app it runs the
   copy inside the app, which the window installs on first open or after the app moved). Vyoma.app
   (`packaging/bundle-mac.sh`: window `vyoma` as the app, `vyoma-mac` beside it, id `dev.vyoma.Vyoma`, icon
@@ -85,7 +87,11 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   lacks answer "Not on the Mac yet". Also: Music and Spotify plus the output volume (`media.rs`, fixed AppleScripts, pgrep
   first so nothing is launched, read every 3 s while a phone listens), touchpad/keyboard (`input.rs`, CGEvent FFI; text as
   Unicode strings, shortcuts as US keys with the phone's Ctrl as Command; asks for Accessibility once), the phone's
-  notifications (replaced/withdrawn by id inside the app), run commands (core `commands`; the agent's PATH adds Homebrew). macOS's own tools only
+  notifications (replaced/withdrawn by id inside the app), run commands (core `commands`; the agent's PATH adds Homebrew).
+  Vyoma's extras (`vyoma.rs`): stats, specs, power, wake, wallpaper; the phone's files (~/Library off limits) and resumable
+  sends; the Messages page (texts lock again when the screen locks); per-phone permits and Activity; a daily update check
+  (`update.rs`: tells when a release carries `Vyoma-mac*.zip`; the window's Download opens the release page, as
+  Health `update.download`). The phone shows only the tiles a PC offers (`PcFeature`, from phone 0.10). macOS's own tools only
   (`mac.rs`), a device's text goes to `osascript` as argv after our own first word, never as script. Nobody has a
   Mac: `.github/workflows/macos.yml` builds and tests core, mac and the window on GitHub's runners and keeps Vyoma.app
   (universal) as an artifact; it compiles and tests on Linux too (`cd desktop/mac && cargo test --release`). Not yet run on a Mac.
