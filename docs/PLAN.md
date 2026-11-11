@@ -378,8 +378,12 @@ explain macOS's one-time Allow in Privacy & Security.
    universal, ad-hoc signed, CI artifact): opening it sets up the login agent from inside the app,
    and notifications go through UserNotifications under Vyoma's name and icon. The pairing
    question is still an osascript dialog.
-4. Media and volume (AppleScript / CoreAudio), touchpad and keyboard (CGEvent, needs Accessibility),
-   screen viewing (ScreenCaptureKit), run commands, the phone's notifications.
+4. Built and tested on CI, not run on a Mac: Music and Spotify and the output volume (AppleScript,
+   no public "now playing" for every app), touchpad and keyboard (CGEvent, asks for Accessibility
+   once), the phone's notifications on the Mac, run commands (the list moved into vyoma-core) with
+   the window's Commands page.
+5. Next: screen viewing (ScreenCaptureKit and VideoToolbox into the phone's viewer), the pairing
+   question in the window instead of a dialog, then a Developer ID if the Mac side gets users.
 
 X11 (2026-11-11, phase 3 started early): one X11 backend for every X11 desktop rather than Cinnamon alone
 (`companion/src/x11.rs`, daemon `presenter_x11.rs`): clipboard, touchpad and keyboard (XTEST), screen view and

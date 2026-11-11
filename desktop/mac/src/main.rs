@@ -1,15 +1,19 @@
 //! Vyoma's PC side on macOS (docs/PLAN.md section 10, phase 5), on the same core as the Linux app:
 //! it finds and links with phones, pairs after asking (a dialog with the code to compare), and
 //! serves the stock plugins: ping, battery both ways, find my phone, the screen lock, the clipboard
-//! both ways and sharing (files into ~/Downloads, links opened, text onto the clipboard).
+//! both ways, sharing (files into ~/Downloads, links opened, text onto the clipboard), Music and
+//! Spotify and the volume ([media]), the touchpad and keyboard ([input]), the phone's
+//! notifications, and the commands set up in the window.
 //!
 //! Vyoma's window talks to it over a local socket ([control]). None of Vyoma's extras yet: to the
 //! phone this is a stock KDE Connect PC.
 //! Built and tested on GitHub's macOS runners only; not yet tried on a real Mac.
 
 mod control;
+mod input;
 mod launchd;
 mod mac;
+mod media;
 #[cfg(target_os = "macos")]
 mod notify;
 
@@ -17,12 +21,14 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
 use vyoma_core::clipboard::{CLIPBOARD, CLIPBOARD_CONNECT, Clipboard, MAX_TEXT};
+use vyoma_core::commands::{Commands, RUNCOMMAND, RUNCOMMAND_REQUEST};
 use vyoma_core::device::{Command, Event, Hub};
 use vyoma_core::identity::Identity;
 use vyoma_core::invite::Invite;
@@ -35,10 +41,18 @@ pub const PING: &str = "kdeconnect.ping";
 pub const BATTERY: &str = "kdeconnect.battery";
 pub const FIND: &str = "kdeconnect.findmyphone.request";
 pub const LOCK_REQUEST: &str = "kdeconnect.lock.request";
+pub const NOTIFICATION: &str = "kdeconnect.notification";
+pub const KEYBOARDSTATE: &str = "kdeconnect.mousepad.keyboardstate";
 
 /// What we take and send. No lock state outward: macOS doesn't tell other apps whether it's locked.
-const INCOMING: &[&str] = &[PING, BATTERY, FIND, LOCK_REQUEST, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE];
-const OUTGOING: &[&str] = &[PING, BATTERY, FIND, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE];
+const INCOMING: &[&str] = &[
+    PING, BATTERY, FIND, LOCK_REQUEST, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE,
+    media::MPRIS_REQUEST, media::VOLUME_REQUEST, RUNCOMMAND_REQUEST, NOTIFICATION, input::MOUSEPAD_REQUEST,
+];
+const OUTGOING: &[&str] = &[
+    PING, BATTERY, FIND, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE,
+    media::MPRIS, media::VOLUME, RUNCOMMAND, input::MOUSEPAD_ECHO, KEYBOARDSTATE,
+];
 
 /// This release, as the Linux app reads it: the repo's one version.
 const VERSION: &str = include_str!("../../../VERSION");
@@ -123,7 +137,15 @@ async fn run(dir: PathBuf) -> Result<()> {
             }
         });
     }
-    let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone };
+    let run_commands = Commands::new(&dir);
+    let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone, run: run_commands.clone() };
+
+    // Players and the volume, read while a phone that takes them is linked.
+    let media_wanted = Arc::new(AtomicBool::new(false));
+    let (media_tx, media_rx) = mpsc::unbounded_channel::<(String, Value)>();
+    let (media_out_tx, mut media_out) = mpsc::unbounded_channel::<(Option<String>, Value)>();
+    tokio::spawn(media::run(media_wanted.clone(), media_rx, media_out_tx));
+    let mut pointer = input::Pointer::default();
 
     let send = |id: &str, p: Value| {
         let _ = commands.send(Command::Send(id.to_owned(), p));
@@ -159,7 +181,7 @@ async fn run(dir: PathBuf) -> Result<()> {
 
     loop {
         tokio::select! {
-            Some(event) = events.recv() => { let _ = changes.send(json!({ "event": "Changed" })); match event {
+            Some(event) = events.recv() => { let _ = changes.send(json!({ "event": "Changed" })); let event_was_link = matches!(event, Event::Linked { .. } | Event::Gone { .. } | Event::Paired { .. } | Event::Unpaired { .. }); match event {
                 Event::Linked { id, name, paired, incoming, cert, remote, .. } => {
                     let d = devices.entry(id.clone()).or_default();
                     *d = Device { name, paired, linked: true, incoming, cert, remote: Some(remote), battery: d.battery, ..Default::default() };
@@ -236,11 +258,59 @@ async fn run(dir: PathBuf) -> Result<()> {
                 }
                 Event::Packet { id, packet, from } => {
                     let Some(d) = devices.get_mut(&id) else { continue };
-                    for reply in on_packet(d, &packet, from, &me, &mut clip, &mut ringer, &found_tx).await {
-                        send(&id, reply);
+                    match packet["type"].as_str().unwrap_or("") {
+                        media::MPRIS_REQUEST | media::VOLUME_REQUEST => {
+                            let _ = media_tx.send((id, packet));
+                        }
+                        input::MOUSEPAD_REQUEST => {
+                            if let Some(echo) = input::echo(&packet["body"]) {
+                                send(&id, echo);
+                            }
+                            if pointer.handle(&input::acts(&packet["body"])).is_err() {
+                                mac::notify(
+                                    "Allow Vyoma to control this Mac",
+                                    "For the touchpad and keyboard: System Settings > Privacy & Security > Accessibility, then turn on Vyoma.",
+                                )
+                                .await;
+                            }
+                        }
+                        RUNCOMMAND_REQUEST => {
+                            let body = &packet["body"];
+                            if body["requestCommandList"].as_bool() == Some(true) {
+                                send(&id, run_commands.list_packet());
+                            }
+                            // The phone's "add command": the editor is Vyoma's window.
+                            if body["setup"].as_bool() == Some(true) {
+                                mac::open_app();
+                            }
+                            if let Some(key) = body["key"].as_str() {
+                                let ran = run_commands.run(key, |name, why| mac::notify_now(&format!("\u{201c}{name}\u{201d} didn't run"), &format!("{why}. Check it in Vyoma's Commands.")));
+                                match ran {
+                                    Some(name) => tracing::info!("{id}: ran {name}"),
+                                    None => tracing::info!("{id}: no command {key}"),
+                                }
+                            }
+                        }
+                        NOTIFICATION => phone_notification(&id, d, &packet["body"]).await,
+                        _ => {
+                            for reply in on_packet(d, &packet, from, &me, &mut clip, &mut ringer, &found_tx).await {
+                                send(&id, reply);
+                            }
+                        }
                     }
                 }
+            }
+            if event_was_link {
+                media_wanted.store(devices.values().any(|d| d.takes(media::MPRIS) || d.takes(media::VOLUME)), Ordering::Relaxed);
             }},
+            Some((to, p)) = media_out.recv() => {
+                let kind = p["type"].as_str().unwrap_or("").to_owned();
+                for (id, d) in &devices {
+                    if d.takes(&kind) && to.as_ref().is_none_or(|t| t == id) {
+                        send(id, p.clone());
+                    }
+                }
+            }
             Some(req) = requests.recv() => {
                 let answer = window.answer(&req.method, &req.args, &mut devices).await;
                 let _ = req.reply.send(answer);
@@ -284,6 +354,7 @@ struct Window {
     commands: mpsc::UnboundedSender<Command>,
     changes: broadcast::Sender<Value>,
     everyone: [SocketAddr; 1],
+    run: Commands,
 }
 
 impl Window {
@@ -342,8 +413,31 @@ impl Window {
                 "features": [], "installable": false, "checks": [], "notes": [],
                 "update": { "current": VERSION.trim(), "checks": false },
             })),
-            "Commands" | "Activity" => Ok(json!([])),
+            "Commands" => Ok(Value::Object(self.run.all().into_iter().collect())),
+            "SaveCommand" => {
+                let flag = |i: usize| args[i].as_bool().unwrap_or(false);
+                let key = self.run.save_one(&control::text(args, 0)?, &control::text(args, 1)?, &control::text(args, 2)?, flag(3), flag(4)).map_err(|e| format!("{e:#}"))?;
+                self.commands_changed(devices);
+                Ok(json!(key))
+            }
+            "RemoveCommand" => {
+                self.run.remove(&control::text(args, 0)?).map_err(|e| format!("{e:#}"))?;
+                self.commands_changed(devices);
+                Ok(Value::Null)
+            }
+            "Activity" => Ok(json!([])),
             _ => Err("Not on the Mac yet".into()),
+        }
+    }
+}
+
+impl Window {
+    /// Phones showing the list get the new one.
+    fn commands_changed(&self, devices: &HashMap<String, Device>) {
+        for (id, d) in devices {
+            if d.takes(RUNCOMMAND) {
+                let _ = self.commands.send(Command::Send(id.clone(), self.run.list_packet()));
+            }
         }
     }
 }
@@ -395,7 +489,34 @@ fn started(d: &Device, battery: Option<mac::Battery>, clip: &Clipboard) -> Vec<V
     if let Some(p) = clip.connect_packet().filter(|_| d.takes(CLIPBOARD_CONNECT)) {
         out.push(p);
     }
+    // The phone's keyboard button: this Mac takes typing.
+    if d.takes(KEYBOARDSTATE) {
+        out.push(packet(KEYBOARDSTATE, json!({ "state": true })));
+    }
     out
+}
+
+/// A notification from the phone, shown as the Mac's own, or taken down when the phone's went.
+/// The backlog the phone sends when asked (`silent`) isn't shown: it would arrive all at once.
+async fn phone_notification(id: &str, d: &Device, b: &Value) {
+    let Some(note) = b["id"].as_str() else { return };
+    // Its own per phone, so two phones' ids never meet.
+    let key = format!("phone-{id}-{note}");
+    if b["isCancel"].as_bool() == Some(true) {
+        mac::withdraw(&key);
+        return;
+    }
+    if b["silent"].as_bool() == Some(true) {
+        return;
+    }
+    let s = |k: &str| b[k].as_str().unwrap_or("").trim().to_owned();
+    let (app, title, text) = (s("appName"), s("title"), s("text"));
+    if title.is_empty() && text.is_empty() {
+        return;
+    }
+    let title = if title.is_empty() { app.clone() } else { title };
+    let from = if app.is_empty() { d.name.clone() } else { format!("{app} \u{b7} {}", d.name) };
+    mac::phone_notification(&key, &from, &title, &text).await;
 }
 
 /// Handles one packet from a paired device; what to send back.

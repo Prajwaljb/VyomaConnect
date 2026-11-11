@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use block2::RcBlock;
 use objc2::rc::autoreleasepool;
 use objc2::runtime::Bool;
-use objc2_foundation::{NSBundle, NSError, NSString};
+use objc2_foundation::{NSArray, NSBundle, NSError, NSString};
 use objc2_user_notifications::{UNAuthorizationOptions, UNMutableNotificationContent, UNNotificationRequest, UNUserNotificationCenter};
 
 const ASKING: u8 = 0;
@@ -60,6 +60,12 @@ pub fn start() {
 
 /// Shows it as Vyoma's; false if it should go another way.
 pub fn post(title: &str, body: &str) -> bool {
+    post_as(None, title, "", body)
+}
+
+/// [post] under [id], which a later one replaces and [withdraw] takes down; [subtitle] under the
+/// title (a phone notification's app).
+pub fn post_as(id: Option<&str>, title: &str, subtitle: &str, body: &str) -> bool {
     start();
     match STATE.load(Ordering::SeqCst) {
         UNAVAILABLE => false,
@@ -69,7 +75,10 @@ pub fn post(title: &str, body: &str) -> bool {
                 let content = UNMutableNotificationContent::new();
                 content.setTitle(&NSString::from_str(title));
                 content.setBody(&NSString::from_str(body));
-                let id = NSString::from_str(&format!("vyoma-{}", NEXT.fetch_add(1, Ordering::Relaxed)));
+                if !subtitle.is_empty() {
+                    content.setSubtitle(&NSString::from_str(subtitle));
+                }
+                let id = NSString::from_str(&id.map(str::to_owned).unwrap_or_else(|| format!("vyoma-{}", NEXT.fetch_add(1, Ordering::Relaxed))));
                 let request = UNNotificationRequest::requestWithIdentifier_content_trigger(&id, &content, None);
                 let done = RcBlock::new(|error: *mut NSError| {
                     if !error.is_null() {
@@ -82,4 +91,15 @@ pub fn post(title: &str, body: &str) -> bool {
             true
         }
     }
+}
+
+/// Takes down what [post_as] showed under [id] (the phone dismissed it).
+pub fn withdraw(id: &str) {
+    if STATE.load(Ordering::SeqCst) != ALLOWED {
+        return;
+    }
+    autoreleasepool(|_| {
+        let id = NSString::from_str(id);
+        UNUserNotificationCenter::currentNotificationCenter().removeDeliveredNotificationsWithIdentifiers(&NSArray::from_slice(&[&*id]));
+    });
 }

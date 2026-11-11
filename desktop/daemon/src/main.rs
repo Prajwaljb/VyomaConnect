@@ -1455,7 +1455,7 @@ impl Desk {
                             tokio::spawn(window::open("commands"));
                         }
                         if let Some(key) = body["key"].as_str() {
-                            match self.run.run(key) {
+                            match self.run.run(key, commands::failed) {
                                 Some(name) => {
                                     tracing::info!("{id}: ran {name}");
                                     self.host.activity.add(&id, &features::phone_name(&device.name), "command", format!("Ran \u{201c}{name}\u{201d}"));
