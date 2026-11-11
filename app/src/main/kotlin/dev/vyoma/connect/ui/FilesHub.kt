@@ -58,6 +58,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.vyoma.connect.data.PcSpecsStore
 import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.CollapsingHeaderScaffold
 import dev.vyoma.connect.designsystem.Glass
@@ -127,7 +128,9 @@ fun FilesHubScreen(vm: AppViewModel, onBrowse: (String, String) -> Unit, onClipb
         item(key = "pc") {
             if (pcFiles && pc != null) {
                 Column(Modifier.animateItem().glassCard(MaterialTheme.shapes.large).padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PC_FOLDERS.chunked(3).forEach { row ->
+                    // A Mac keeps videos in Movies.
+                    val mac = PcSpecsStore.all.collectAsStateWithLifecycle().value[pc.identity.deviceId]?.os?.startsWith("macOS") == true
+                    (if (mac) PC_FOLDERS.map { if (it.path == "Videos") PcFolderLink("Movies", "Movies", it.icon, it.color) else it } else PC_FOLDERS).chunked(3).forEach { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             row.forEach { f -> FolderTile(f, Modifier.weight(1f)) { onBrowse(pc.identity.deviceId, f.path) } }
                         }

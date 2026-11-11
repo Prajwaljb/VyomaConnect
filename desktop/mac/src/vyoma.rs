@@ -1,7 +1,9 @@
 //! Vyoma's own features on this Mac, the ones it has so far: the stats on the phone's Home (while
 //! it's open), what this Mac is (the phone's About this PC), sleep, restart, shut down and log out,
-//! waking the screen, and the wallpaper's colours for the phone's background. The phone offers
-//! only what [INCOMING] lists (its `PcFeature`s), so nothing here can leave a tile waiting.
+//! waking the screen, the wallpaper's colours for the phone's background, and the Mac's files
+//! from the phone (browse, open, upload; resumable sends and whole folders), through the shared
+//! `vyoma_core::files` and `xfer`. The phone offers only what [INCOMING] lists (its `PcFeature`s),
+//! so nothing here can leave a tile waiting.
 //!
 //! macOS's own tools only, with fixed arguments: `system_profiler` and `sw_vers` for what this Mac
 //! is (never its serial number or hardware UUID, which the same report holds), `ioreg` for the
@@ -11,7 +13,8 @@
 //! Built and tested on CI only; not yet run on a real Mac.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::net::IpAddr;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -21,7 +24,9 @@ use sysinfo::{Components, CpuRefreshKind, Disks, MemoryRefreshKind, RefreshKind,
 use tokio::process::Command as Process;
 use tokio::sync::mpsc;
 use vyoma_core::device::Command;
-use vyoma_core::link::packet;
+use vyoma_core::identity::Identity;
+use vyoma_core::link::{Sender, packet};
+use vyoma_core::{files, xfer};
 
 pub const STATS_REQUEST: &str = "vyoma.stats.request";
 pub const STATS: &str = "vyoma.stats";
@@ -33,8 +38,15 @@ pub const WAKE: &str = "vyoma.pc.wake";
 pub const WALLPAPER_REQUEST: &str = "vyoma.wallpaper.request";
 pub const WALLPAPER: &str = "vyoma.wallpaper";
 
-pub const INCOMING: &[&str] = &[STATS_REQUEST, SPECS_REQUEST, POWER, WAKE, WALLPAPER_REQUEST];
-pub const OUTGOING: &[&str] = &[STATS, SPECS, POWERED, WALLPAPER];
+pub const FILES_LIST: &str = "vyoma.files.list";
+pub const FILES_GET: &str = "vyoma.files.get";
+pub const FILES_PUT: &str = "vyoma.files.put";
+pub const XFER_BEGIN: &str = "vyoma.xfer.begin";
+pub const XFER_DATA: &str = "vyoma.xfer.data";
+pub const XFER_END: &str = "vyoma.xfer.end";
+
+pub const INCOMING: &[&str] = &[STATS_REQUEST, SPECS_REQUEST, POWER, WAKE, WALLPAPER_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, XFER_BEGIN, XFER_DATA, XFER_END];
+pub const OUTGOING: &[&str] = &[STATS, SPECS, POWERED, WALLPAPER, "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.xfer.ready", "vyoma.xfer.done"];
 
 /// The phone's stats come for this long after it last asked (it asks every few seconds while its
 /// Home is on screen), one sample every [STATS_EVERY]: an unwatched Mac samples nothing.
@@ -50,20 +62,50 @@ pub fn takes(kind: &str) -> bool {
     INCOMING.contains(&kind)
 }
 
-/// Each linked phone's stats stream, and how to reach it.
+/// The phone a packet came from.
+pub struct Phone<'a> {
+    pub name: &'a str,
+    /// Its certificate, which its payload connections must show.
+    pub cert: &'a [u8],
+    /// Where the packet came from: where its payload is fetched.
+    pub from: IpAddr,
+}
+
+/// Each linked phone's stats stream and file transfers, and how to reach it.
 pub struct Vyoma {
+    me: Arc<Identity>,
     commands: mpsc::UnboundedSender<Command>,
     streams: HashMap<String, (Arc<Mutex<Instant>>, tokio::task::JoinHandle<()>)>,
+    /// A sender per phone for the shared file code; dropping its transfers cancels them.
+    links: HashMap<String, (Sender, tokio::task::JoinSet<()>)>,
 }
 
 impl Vyoma {
-    pub fn new(commands: mpsc::UnboundedSender<Command>) -> Self {
-        Self { commands, streams: HashMap::new() }
+    pub fn new(me: Arc<Identity>, commands: mpsc::UnboundedSender<Command>) -> Self {
+        files::set_hooks(Box::new(MacFiles));
+        Self { me, commands, streams: HashMap::new(), links: HashMap::new() }
+    }
+
+    /// Phone [id]'s sender and its set of transfers.
+    fn link(&mut self, id: &str) -> (Sender, &mut tokio::task::JoinSet<()>) {
+        let (commands, to) = (self.commands.clone(), id.to_owned());
+        let (sender, tasks) = self.links.entry(id.to_owned()).or_insert_with(|| {
+            let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
+            tokio::spawn(async move {
+                while let Some(p) = rx.recv().await {
+                    if commands.send(Command::Send(to.clone(), p)).is_err() {
+                        break;
+                    }
+                }
+            });
+            (Sender::queue(tx), tokio::task::JoinSet::new())
+        });
+        (sender.clone(), tasks)
     }
 
     /// One of [INCOMING] from phone [id]. [wallpaper] is the desktop picture's file, which macOS
     /// only tells the main thread (see `wallpaper_path`).
-    pub fn handle(&mut self, id: &str, p: &Value, wallpaper: Option<std::path::PathBuf>) {
+    pub fn handle(&mut self, id: &str, phone: &Phone, p: &Value, wallpaper: Option<PathBuf>) {
         let reply = {
             let (commands, id) = (self.commands.clone(), id.to_owned());
             move |kind: &str, body: Value| {
@@ -118,15 +160,68 @@ impl Vyoma {
                     reply(WALLPAPER, body);
                 });
             }
+            FILES_LIST | FILES_GET | FILES_PUT | XFER_BEGIN | XFER_DATA | XFER_END => self.file(id, phone, p),
             _ => {}
         }
     }
 
-    /// Phone [id] went: its stream ends.
+    /// The phone's file traffic, as the Linux app's session runs it.
+    fn file(&mut self, id: &str, phone: &Phone, p: &Value) {
+        let (me, cert, from, name, phone_id, p) = (self.me.clone(), phone.cert.to_vec(), phone.from, phone.name.to_owned(), id.to_owned(), p.clone());
+        let rel = p["body"]["path"].as_str().unwrap_or_default().to_owned();
+        let kind = p["type"].as_str().unwrap_or_default().to_owned();
+        if kind == XFER_END {
+            if let Some((folder, count)) = xfer::end(&name, &p["body"]) {
+                tracing::info!("{id}: a folder of {count} files came in ({} characters in its name)", folder.chars().count());
+            }
+            return;
+        }
+        let (sender, tasks) = self.link(id);
+        tasks.spawn(async move {
+            let done = match kind.as_str() {
+                FILES_LIST => files::list(&sender, &rel).await,
+                FILES_GET => files::send(&sender, &me, &cert, &rel, &name).await,
+                FILES_PUT => files::receive(&sender, &me, &cert, from, &p, &name).await,
+                XFER_BEGIN => xfer::begin(&sender, &phone_id, &p["body"]).await,
+                _ => xfer::data(&sender, &me, &cert, from, &name, &p).await.map(drop),
+            };
+            if let Err(e) = done {
+                tracing::warn!("{phone_id}: {kind}: {e:#}");
+            }
+        });
+    }
+
+    /// Phone [id] went: its stream ends, and its transfers with it (a resumable one picks up
+    /// where it stopped when the phone is back).
     pub fn gone(&mut self, id: &str) {
         if let Some((_, task)) = self.streams.remove(id) {
             task.abort();
         }
+        self.links.remove(id);
+    }
+}
+
+/// What this Mac says around the phone's file traffic: a notification when the phone copies
+/// files from it, "Received" for what it sends; sends land in ~/Downloads.
+struct MacFiles;
+
+impl files::Hooks for MacFiles {
+    fn reading(&self, phone: &str, name: &str) {
+        let body = format!("{phone} is copying \u{201c}{name}\u{201d} from this Mac.");
+        tokio::spawn(async move { crate::mac::notify("File read from your phone", &body).await });
+    }
+
+    fn received(&self, phone: &str, path: &Path, count: Option<u64>) {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let body = match count {
+            Some(n) => format!("{name} ({n} file{}) from {phone}, in Downloads", if n == 1 { "" } else { "s" }),
+            None => format!("{name} from {phone}, in Downloads"),
+        };
+        tokio::spawn(async move { crate::mac::notify("Received", &body).await });
+    }
+
+    fn incoming_dir(&self, _: &str) -> PathBuf {
+        crate::mac::downloads()
     }
 }
 
