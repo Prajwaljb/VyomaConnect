@@ -6,7 +6,7 @@ use std::time::Duration;
 use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
 
 use crate::MainWindow;
-use crate::daemon::{Daemon, DbusDaemon};
+use crate::daemon;
 
 /// How often the code on screen is renewed (the daemon's last ten minutes).
 const RENEW: Duration = Duration::from_secs(5 * 60);
@@ -31,7 +31,7 @@ pub fn wire(ui: &MainWindow) {
                     ui.set_pair_code_ready(false);
                 }
                 std::thread::spawn(|| {
-                    let _ = DbusDaemon::connect().and_then(|d| d.end_pairing_code());
+                    let _ = daemon::connect().and_then(|d| d.end_pairing_code());
                 });
             }
         }
@@ -44,7 +44,7 @@ pub fn wire(ui: &MainWindow) {
 
 fn fetch(ui: slint::Weak<MainWindow>) {
     std::thread::spawn(move || {
-        let text = DbusDaemon::connect().and_then(|d| d.pairing_code());
+        let text = daemon::connect().and_then(|d| d.pairing_code());
         let _ = slint::invoke_from_event_loop(move || {
             let Some(win) = ui.upgrade() else { return };
             match text {

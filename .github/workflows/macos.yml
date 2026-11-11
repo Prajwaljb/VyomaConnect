@@ -1,6 +1,6 @@
 # The macOS side, built and tested where there's a Mac: GitHub's macOS runners (Apple silicon).
 # Nobody on the project has a Mac yet, so this is the only place macOS code runs: it builds the
-# shared core and the Mac daemon and runs their tests. It's no stand-in for trying it on a real Mac.
+# shared core, the Mac daemon and Vyoma's window, and runs their tests. It's no stand-in for trying it on a real Mac.
 # The daemon is kept as a download (a universal binary, unsigned) for whoever tries it on one.
 name: macOS
 
@@ -22,13 +22,20 @@ jobs:
             ~/.cargo/git
             desktop/core/target
             desktop/mac/target
-          key: macos-${{ hashFiles('desktop/core/Cargo.toml', 'desktop/mac/Cargo.lock') }}
+            desktop/gui/target
+          key: macos-${{ hashFiles('desktop/core/Cargo.toml', 'desktop/mac/Cargo.lock', 'desktop/gui/Cargo.lock') }}
       - name: Test vyoma-core
         working-directory: desktop/core
         run: cargo test --release
       - name: Test vyoma-mac
         working-directory: desktop/mac
         run: cargo test --release
+      # The window talks to vyoma-mac over its socket (gui/src/socket.rs).
+      - name: Test and build the window
+        working-directory: desktop/gui
+        run: |
+          cargo test --release
+          cargo build --release
       - name: Build a universal vyoma-mac
         working-directory: desktop/mac
         run: |

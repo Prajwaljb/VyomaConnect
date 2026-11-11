@@ -3,9 +3,11 @@
 //! serves the stock plugins: ping, battery both ways, find my phone, the screen lock, the clipboard
 //! both ways and sharing (files into ~/Downloads, links opened, text onto the clipboard).
 //!
-//! No window yet, and none of Vyoma's extras: to the phone this is a stock KDE Connect PC.
+//! Vyoma's window talks to it over a local socket ([control]). None of Vyoma's extras yet: to the
+//! phone this is a stock KDE Connect PC.
 //! Built and tested on GitHub's macOS runners only; not yet tried on a real Mac.
 
+mod control;
 mod launchd;
 mod mac;
 
@@ -17,10 +19,11 @@ use std::time::Duration;
 
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use vyoma_core::clipboard::{CLIPBOARD, CLIPBOARD_CONNECT, Clipboard, MAX_TEXT};
 use vyoma_core::device::{Command, Event, Hub};
 use vyoma_core::identity::Identity;
+use vyoma_core::invite::Invite;
 use vyoma_core::lan::{Lan, Ports, Rules, UDP_PORT};
 use vyoma_core::link::packet;
 use vyoma_core::share::{self, SHARE, SHARE_UPDATE, Shared};
@@ -33,7 +36,11 @@ pub const LOCK_REQUEST: &str = "kdeconnect.lock.request";
 
 /// What we take and send. No lock state outward: macOS doesn't tell other apps whether it's locked.
 const INCOMING: &[&str] = &[PING, BATTERY, FIND, LOCK_REQUEST, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE];
-const OUTGOING: &[&str] = &[PING, BATTERY, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE];
+const OUTGOING: &[&str] = &[PING, BATTERY, FIND, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE];
+
+/// This release, as the Linux app reads it: the repo's one version.
+const VERSION: &str = include_str!("../../../VERSION");
+const REPO: &str = "Prajwaljb/VyomaConnect";
 
 /// How often the clipboard is looked at (macOS sends no change events to a program like this one)
 /// and the battery read.
@@ -63,6 +70,9 @@ struct Device {
     remote: Option<IpAddr>,
     /// Its battery: charge, charging, and whether it said it's low.
     battery: Option<(i64, bool, bool)>,
+    /// The code of a pairing in progress, and whether it's the phone asking (so Accept and Reject).
+    key: String,
+    asking: bool,
 }
 
 impl Device {
@@ -98,6 +108,19 @@ async fn run(dir: PathBuf) -> Result<()> {
     lan.announce(&everyone).await?;
     tracing::info!("vyoma-mac is up as {}", me.device_id);
 
+    // The window's socket.
+    let (requests_tx, mut requests) = mpsc::channel::<control::Request>(16);
+    let (changes, _) = broadcast::channel::<Value>(64);
+    {
+        let (path, changes) = (control::socket_path(&dir), changes.clone());
+        tokio::spawn(async move {
+            if let Err(e) = control::serve(path, requests_tx, changes).await {
+                tracing::warn!("no window socket: {e:#}");
+            }
+        });
+    }
+    let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone };
+
     let send = |id: &str, p: Value| {
         let _ = commands.send(Command::Send(id.to_owned(), p));
     };
@@ -132,10 +155,10 @@ async fn run(dir: PathBuf) -> Result<()> {
 
     loop {
         tokio::select! {
-            Some(event) = events.recv() => match event {
+            Some(event) = events.recv() => { let _ = changes.send(json!({ "event": "Changed" })); match event {
                 Event::Linked { id, name, paired, incoming, cert, remote, .. } => {
                     let d = devices.entry(id.clone()).or_default();
-                    *d = Device { name, paired, linked: true, incoming, cert, remote: Some(remote), battery: d.battery };
+                    *d = Device { name, paired, linked: true, incoming, cert, remote: Some(remote), battery: d.battery, ..Default::default() };
                     tracing::info!("{id}: linked{}", if paired { ", paired" } else { "" });
                     if paired {
                         for p in started(d, battery, &clip) {
@@ -154,6 +177,8 @@ async fn run(dir: PathBuf) -> Result<()> {
                     }
                 }
                 Event::Prompt { id, name, key } => {
+                    let d = devices.entry(id.clone()).or_default();
+                    (d.key, d.asking) = (key.clone(), true);
                     let answers = answers_tx.clone();
                     let asked = id.clone();
                     let text = format!("{name} wants to pair with this Mac.\n\nPair only if the phone shows this same code:\n\n{key}");
@@ -177,10 +202,18 @@ async fn run(dir: PathBuf) -> Result<()> {
                     if let Some(task) = prompts.remove(&id) {
                         task.abort();
                     }
+                    if let Some(d) = devices.get_mut(&id) {
+                        (d.key, d.asking) = (String::new(), false);
+                    }
                 }
                 Event::Paired { id, name, .. } => {
+                    // Answered in the window: the dialog goes.
+                    if let Some(task) = prompts.remove(&id) {
+                        task.abort();
+                    }
                     let d = devices.entry(id.clone()).or_default();
                     d.paired = true;
+                    (d.key, d.asking) = (String::new(), false);
                     d.name = name.clone();
                     mac::notify(&format!("Paired with {name}"), "Your phone and this Mac can now share files, links and the clipboard.").await;
                     for p in started(d, battery, &clip) {
@@ -193,14 +226,22 @@ async fn run(dir: PathBuf) -> Result<()> {
                     }
                     mac::notify(&format!("{name} is no longer paired"), "Pair again from the phone to use it with this Mac.").await;
                 }
-                Event::Asked { .. } => {}
+                Event::Asked { id, key, .. } => {
+                    let d = devices.entry(id).or_default();
+                    (d.key, d.asking) = (key, false);
+                }
                 Event::Packet { id, packet, from } => {
                     let Some(d) = devices.get_mut(&id) else { continue };
                     for reply in on_packet(d, &packet, from, &me, &mut clip, &mut ringer, &found_tx).await {
                         send(&id, reply);
                     }
                 }
-            },
+            }},
+            Some(req) = requests.recv() => {
+                let answer = window.answer(&req.method, &req.args, &mut devices).await;
+                let _ = req.reply.send(answer);
+                let _ = changes.send(json!({ "event": "Changed" }));
+            }
             Some((id, yes)) = answers.recv() => {
                 prompts.remove(&id);
                 let _ = commands.send(if yes { Command::Accept(id) } else { Command::Reject(id) });
@@ -230,6 +271,97 @@ async fn run(dir: PathBuf) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// What the window can ask for (the Linux app's D-Bus methods, the ones a Mac has so far).
+struct Window {
+    me: Arc<Identity>,
+    lan: Arc<Lan>,
+    commands: mpsc::UnboundedSender<Command>,
+    changes: broadcast::Sender<Value>,
+    everyone: [SocketAddr; 1],
+}
+
+impl Window {
+    async fn answer(&self, method: &str, args: &Value, devices: &mut HashMap<String, Device>) -> Result<Value, String> {
+        let command = |c: Command| self.commands.send(c).map(|_| Value::Null).map_err(|_| "Vyoma is stopping".to_owned());
+        match method {
+            "Phones" => Ok(Value::Array(devices.iter().map(|(id, d)| details(id, d)).collect())),
+            "Pair" => command(Command::Pair(control::text(args, 0)?)),
+            "Accept" => command(Command::Accept(control::text(args, 0)?)),
+            "Reject" => command(Command::Reject(control::text(args, 0)?)),
+            "Unpair" => command(Command::Unpair(control::text(args, 0)?)),
+            "Ring" => {
+                let id = control::text(args, 0)?;
+                if !devices.get(&id).is_some_and(|d| d.takes(FIND)) {
+                    return Err("That phone can't be rung right now".into());
+                }
+                command(Command::Send(id, packet(FIND, json!({}))))
+            }
+            "SendFiles" => {
+                let id = control::text(args, 0)?;
+                let d = devices.get(&id).filter(|d| d.takes(SHARE)).ok_or("That phone isn't connected right now")?;
+                let paths: Vec<String> = args[1].as_array().map(|a| a.iter().filter_map(|p| p.as_str().map(str::to_owned)).collect()).unwrap_or_default();
+                let files = share::expand(&paths).map_err(|e| format!("{e:#}"))?;
+                let (me, cert, commands, changes) = (self.me.clone(), d.cert.clone(), self.commands.clone(), self.changes.clone());
+                tokio::spawn(async move {
+                    let count = files.len();
+                    let error = match share::send_files(&commands, &id, &me, &cert, files).await {
+                        Ok(()) => String::new(),
+                        Err(e) => format!("{e:#}"),
+                    };
+                    let _ = changes.send(json!({ "event": "FilesSent", "id": id, "count": count, "error": error }));
+                });
+                Ok(Value::Null)
+            }
+            "Refresh" => self.lan.announce(&self.everyone).await.map(|_| Value::Null).map_err(|e| format!("{e:#}")),
+            "PairingCode" => {
+                // No address, no code: a phone couldn't reach this Mac. The window says so (the error's word).
+                let addresses: Vec<String> = vyoma_core::invite::local_addresses().iter().map(|a| a.to_string()).collect();
+                if addresses.is_empty() {
+                    return Err("offline".into());
+                }
+                let invite = Invite::new(std::time::Instant::now()).ok_or("no randomness")?;
+                let secret = vyoma_core::invite::hex(invite.secret());
+                command(Command::Invite(Some(invite)))?;
+                Ok(json!(format!(
+                    "https://github.com/{REPO}/releases/latest#pair?v=1&id={}&name={}&fp={}&s={secret}&a={}&p={}",
+                    self.me.device_id,
+                    url_encode(&mac::name().await),
+                    vyoma_core::invite::fingerprint(&self.me.cert),
+                    addresses.join(","),
+                    self.lan.tcp_port()
+                )))
+            }
+            "EndPairingCode" => command(Command::Invite(None)),
+            "Health" => Ok(json!({
+                "features": [], "installable": false, "checks": [], "notes": [],
+                "update": { "current": VERSION.trim(), "checks": false },
+            })),
+            "Commands" | "Activity" => Ok(json!([])),
+            _ => Err("Not on the Mac yet".into()),
+        }
+    }
+}
+
+/// A device as the window reads it (the Linux app's `Details`).
+fn details(id: &str, d: &Device) -> Value {
+    let mut v = json!({
+        "id": id, "name": d.name, "paired": d.paired, "linked": d.linked, "key": d.key, "asking": d.asking,
+        "via": if d.linked { "wifi" } else { "" },
+        "can": { "share": d.takes(SHARE), "ring": d.takes(FIND), "browse": false, "text": false },
+        // No cable here, so nothing to allow for the clipboard.
+        "clipboardSync": "on",
+        "permits": [],
+    });
+    if let Some((charge, charging, low)) = d.battery {
+        v["battery"] = json!({ "charge": charge, "charging": charging, "low": low });
+    }
+    v
+}
+
+fn url_encode(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
 fn identity(me: &Identity, name: String, laptop: bool) -> Value {
@@ -353,6 +485,18 @@ mod tests {
         assert_eq!(kinds, [BATTERY, CLIPBOARD_CONNECT]);
         assert!(started(&phone(&[PING]), b, &clip).is_empty(), "only what it takes");
         assert!(started(&Device { paired: false, ..phone(&[BATTERY]) }, b, &clip).is_empty(), "nothing before pairing");
+    }
+
+    #[test]
+    fn the_window_reads_a_phone_as_on_linux() {
+        let mut d = phone(&[SHARE]);
+        (d.name, d.key, d.asking, d.battery) = ("Pixel".into(), "1A2B".into(), true, Some((64, false, false)));
+        let v = details("p", &d);
+        assert_eq!((v["id"].as_str(), v["key"].as_str(), v["asking"].as_bool()), (Some("p"), Some("1A2B"), Some(true)));
+        assert_eq!((v["can"]["share"].as_bool(), v["can"]["ring"].as_bool()), (Some(true), Some(false)), "only what it takes");
+        assert_eq!(v["battery"]["charge"], 64);
+        assert!(details("q", &Device::default())["battery"].is_null());
+        assert_eq!(url_encode("Sam's Mac"), "Sam%27s%20Mac");
     }
 
     #[test]
