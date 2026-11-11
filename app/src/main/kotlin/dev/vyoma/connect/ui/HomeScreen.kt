@@ -157,7 +157,8 @@ fun HomeScreen(
     CollapsingHeaderScaffold(
         title = primary?.identity?.deviceName ?: "Vyoma",
         subtitle = when {
-            primary == null -> "Looking for devices nearby"
+            // The card below says it's looking: the hero just says where things stand.
+            primary == null -> "No PC yet"
             live -> transportLabel(primary)
             seen != null -> "Away · seen ${ago(seen).toString().replaceFirstChar { it.lowercase() }}"
             else -> "Away"
@@ -298,7 +299,7 @@ fun HomeScreen(
         // Other paired PCs that are away (the first one is Home's own).
         val away = offline.filter { it != primary }
         if (away.isNotEmpty()) {
-            item(key = "offline-label") { SectionLabel("Paired · not reachable", Modifier.animateItem()) }
+            item(key = "offline-label") { SectionLabel("Away", Modifier.animateItem()) }
             item(key = "offline") {
                 SectionCard(Modifier.animateItem()) {
                     away.forEachIndexed { i, state ->
@@ -485,12 +486,12 @@ internal fun SearchingCard(vm: AppViewModel, modifier: Modifier = Modifier) {
                     onClick = { others = false; getApp = true },
                 )
                 ListRow(
-                    title = "Enter its address", subtitle = "For Tailscale, or when Wi-Fi hides it",
+                    title = "Add a PC by address", subtitle = "For Tailscale, or when Wi-Fi hides it",
                     icon = Icons.Rounded.Lan, iconTint = SystemColor.BLUE.color, horizontalPadding = 0.dp, showDivider = true,
                     onClick = { others = false; adding = true },
                 )
                 ListRow(
-                    title = "Use a USB cable", subtitle = "No network needed",
+                    title = "Connect with a USB cable", subtitle = "No network needed",
                     icon = Icons.Rounded.Usb, iconTint = SystemColor.GRAY.color, horizontalPadding = 0.dp,
                     onClick = { others = false; usb = true },
                 )
@@ -623,11 +624,21 @@ fun DeviceType.icon(): ImageVector = when (this) {
     DeviceType.TV -> Icons.Rounded.Tv
 }
 
+/**
+ * How a PC is reached, in the words used everywhere: a paired one that can't be reached is "Away";
+ * one not paired yet is only found ("On this Wi-Fi"), never "Connected".
+ */
 fun transportLabel(state: DeviceState): String = when {
+    !state.isPaired -> when {
+        TransportKind.USB in state.transports -> "Over USB"
+        TransportKind.LAN in state.transports -> "On this Wi-Fi"
+        TransportKind.BLUETOOTH in state.transports -> "Nearby over Bluetooth"
+        else -> "Not nearby right now"
+    }
     TransportKind.USB in state.transports -> "Connected via USB"
     TransportKind.LAN in state.transports -> "Connected via Wi-Fi"
     TransportKind.BLUETOOTH in state.transports -> "Connected via Bluetooth"
-    else -> "Not reachable"
+    else -> "Away"
 }
 
 /** MPRIS titles of the same video differ in suffixes (" - YouTube") between the two views of it. */

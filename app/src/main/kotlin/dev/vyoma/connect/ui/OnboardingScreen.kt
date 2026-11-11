@@ -312,11 +312,12 @@ private fun SetupSteps(vm: AppViewModel, backdrop: Backdrop, ripple: Ripple, onS
                                 },
                             )
                         }
-                        if (paired.isEmpty()) Tip("Pairing from this list, check that a code matches on both screens, then accept on the PC.")
+                        if (paired.isEmpty()) Tip("If you pair from this list, check the code matches on both screens, then accept on the PC.")
                     }
                     pairing.isEmpty() -> {
                         SearchingCard(vm)
-                        Tip("Not showing up? Check Vyoma (or KDE Connect) is running on the PC and both are on the same Wi-Fi, or plug the phone in with a cable.")
+                        // The card lists what to check; only what it leaves out is added.
+                        Tip("Using KDE Connect? Make sure it's running on the PC.")
                     }
                 }
             }

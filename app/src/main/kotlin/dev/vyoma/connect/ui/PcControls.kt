@@ -99,7 +99,7 @@ fun PcPowerDialog(plugin: CompanionPlugin, pcName: String, action: PcPower, onDi
     val context = LocalContext.current
     GlassDialog(
         onDismissRequest = onDismiss,
-        title = { Text("${action.label} $pcName?") },
+        title = { Text(if (action == PcPower.LOGOUT) "Log out of $pcName?" else "${action.label} $pcName?") },
         text = { Text(action.warning) },
         confirmButton = {
             DialogButton(destructive = action != PcPower.SLEEP, onClick = {
@@ -109,7 +109,7 @@ fun PcPowerDialog(plugin: CompanionPlugin, pcName: String, action: PcPower, onDi
                     (context.applicationContext as Application).container.appScope.launch(Dispatchers.Main) {
                         plugin.power(action)
                             .onSuccess { status.show(action.done, icon = action.icon) }
-                            .onFailure { status.show(it.message ?: "The PC refused", failure = true) }
+                            .onFailure { status.show(plainReason(it.message) ?: "The PC didn't do it. Try again", failure = true) }
                     }
                 }
             }) { Text(action.label) }

@@ -123,7 +123,7 @@ fun AutomationScreen(vm: AppViewModel, onBack: () -> Unit, onEdit: (String?) -> 
     val initial = remember { rules.map { it.id }.toSet() - arrival }
 
     CollapsingHeaderScaffold(
-        title = "Automation",
+        title = "Rules",
         subtitle = when {
             rules.isEmpty() -> "When this happens, do that"
             on == 0 -> "All rules off"
@@ -396,7 +396,7 @@ fun RuleEditorScreen(vm: AppViewModel, ruleId: String?, onBack: () -> Unit) {
             item(key = "away-note") {
                 Text(
                     "Your phone can't reach the PC once it's gone, so the PC does these itself, through Vyoma on it: " +
-                        "lock, pause and mute. It waits until it hasn't heard from the phone for about half a minute." +
+                        "lock, pause and mute. It waits as long as you chose above, and at least half a minute." +
                         if (!vm.hasCompanion()) " Install Vyoma on your PC for these to work." else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -741,7 +741,7 @@ private fun TuneDialog(vm: AppViewModel, value: Any, onDismiss: () -> Unit, onDo
                 title = { Text("Run a PC command") },
                 text = {
                     if (commands.isEmpty()) {
-                        Text("Connect to your PC and add commands there first (PC details › Commands).")
+                        Text("Add commands on your PC first: on Home, tap ⓘ next to its name, then Commands.")
                     } else {
                         Column(Modifier.heightIn(max = 360.dp).fadingVerticalScroll(rememberScrollState())) {
                             commands.forEachIndexed { i, cmd ->

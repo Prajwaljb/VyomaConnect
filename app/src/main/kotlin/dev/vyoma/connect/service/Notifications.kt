@@ -51,14 +51,14 @@ object Notifications {
                     setShowBadge(false)
                 },
                 NotificationChannel(CH_PAIRING, "Pairing requests", NotificationManager.IMPORTANCE_HIGH),
-                NotificationChannel(CH_EVENTS, "Pings & alerts", NotificationManager.IMPORTANCE_DEFAULT),
+                NotificationChannel(CH_EVENTS, "Pings and alerts", NotificationManager.IMPORTANCE_DEFAULT),
                 NotificationChannel(CH_RULES, "Your automation rules", NotificationManager.IMPORTANCE_DEFAULT),
                 NotificationChannel(CH_MEDIA, "PC media", NotificationManager.IMPORTANCE_LOW).apply {
                     description = "Control what's playing on your PC"
                     setShowBadge(false)
                 },
                 NotificationChannel(CH_TRANSFERS, "File transfers", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) },
-                NotificationChannel(CH_RECEIVED, "Received files & links", NotificationManager.IMPORTANCE_HIGH),
+                NotificationChannel(CH_RECEIVED, "Received files and links", NotificationManager.IMPORTANCE_HIGH),
                 NotificationChannel(CH_RING, "Find my phone", NotificationManager.IMPORTANCE_HIGH).apply {
                     setSound(null, null)
                     setBypassDnd(true)
@@ -73,12 +73,13 @@ object Notifications {
         val mirror = dev.vyoma.connect.mirror.PhoneMirror.status.value
         val title = when {
             mirror.on && webcam.on -> "Screen and camera on ${mirror.pc ?: webcam.pc ?: "your PC"}"
+            mirror.on && !mirror.open -> "Opening on ${mirror.pc ?: "your PC"}"
             mirror.on -> "Screen shown on ${mirror.pc ?: "your PC"}"
             webcam.on -> "Camera${if (webcam.options.mic) " and mic" else ""} on ${webcam.pc ?: "your PC"}"
             else -> when (connected.size) {
             0 -> "Looking for your PC"
             1 -> "Connected to ${connected.first().identity.deviceName}"
-            else -> "Connected to ${connected.size} devices"
+            else -> "Connected to ${connected.size} PCs"
             }
         }
         val sharing = mirror.on || webcam.on
@@ -99,7 +100,7 @@ object Notifications {
                     when {
                         mirror.on && !mirror.open -> "Waiting for the PC to open it"
                         webcam.on && !mirror.on && !webcam.camera && !webcam.mic -> "Ready when an app on the PC uses it"
-                        else -> "Live on your PC"
+                        else -> "Tap to open"
                     },
                 )
                 setShortCriticalText(if (mirror.on) "Screen" else "Camera")
@@ -113,7 +114,7 @@ object Notifications {
                         context, 8, Intent(context, LinkService::class.java).setAction(LinkService.ACTION_MIRROR_STOP),
                         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
                     )
-                    addAction(0, "Stop sharing", stop)
+                    addAction(0, "Stop", stop)
                 }
                 if (webcam.on) {
                     val stop = PendingIntent.getService(
@@ -342,7 +343,7 @@ object Notifications {
         NotificationCompat.Builder(context, CH_EVENTS)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("$deviceName's identity changed")
-            .setContentText("Its security key no longer matches. If its app was reinstalled, unpair and pair again.")
+            .setContentText("Its security key no longer matches. If you reinstalled Vyoma there, unpair and pair again. If you didn't, don't: something may be pretending to be it.")
             .setStyle(NotificationCompat.BigTextStyle())
             .setContentIntent(openApp(context))
             .setAutoCancel(true)

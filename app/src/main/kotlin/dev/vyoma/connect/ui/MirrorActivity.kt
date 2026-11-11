@@ -101,7 +101,7 @@ class MirrorActivity : ComponentActivity() {
             fun openAccessibility() = startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             VyomaTheme(theme) {
                 CollapsingHeaderScaffold(
-                    title = "Phone on PC",
+                    title = "Phone screen on PC",
                     subtitle = subtitle(status),
                     navigation = { BounceIconButton(onClick = ::finish) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
                 ) {
@@ -122,7 +122,7 @@ class MirrorActivity : ComponentActivity() {
                     status.error?.takeIf { !status.on }?.let { err ->
                         item(key = "error") {
                             SectionCard(Modifier.padding(top = 8.dp)) {
-                                ListRow(title = "Couldn't show the screen", subtitle = err, icon = Icons.Rounded.ErrorOutline, iconTint = MaterialTheme.colorScheme.error)
+                                ListRow(title = "Couldn't show the screen", subtitle = plainReason(err) ?: "Try again, or restart Vyoma on the PC", icon = Icons.Rounded.ErrorOutline, iconTint = MaterialTheme.colorScheme.error)
                             }
                         }
                     }
@@ -180,7 +180,7 @@ class MirrorActivity : ComponentActivity() {
 
 private fun subtitle(s: PhoneMirror.Status): String = when {
     !s.on -> "Off"
-    s.pc == null -> "Waiting for Vyoma on the PC"
+    s.pc == null -> "Waiting for Vyoma on your PC"
     s.open -> "Showing on ${s.pc}"
     else -> "Opening on ${s.pc}…"
 }

@@ -48,12 +48,16 @@ interface NotificationSource {
     fun dismiss(id: String)
     fun reply(replyId: String, message: String)
     fun action(id: String, action: String)
+
+    /** Whether notification key or reply id [id] belongs to the texting app, asked of the platform itself. */
+    fun isText(id: String): Boolean = false
 }
 
 class NotificationsPlugin(private val ctx: PluginContext, private val source: NotificationSource, private val guard: TextsGuard = TextsGuard.None) : Plugin {
     /** The texting app's notifications (id → reply id, "" for none): answered only while this PC may have the texts. */
     private val textIds = java.util.concurrent.ConcurrentHashMap<String, String>()
-    private fun isText(id: String) = textIds.containsKey(id) || textIds.containsValue(id)
+    // The source decides as well: this instance only knows the ones it sent (a new link knows none).
+    private fun isText(id: String) = textIds.containsKey(id) || textIds.containsValue(id) || source.isText(id)
     private fun textsLocked() = !guard.lets(ctx.device.id, ctx.device.canAskForTexts)
 
     override suspend fun onStart() {

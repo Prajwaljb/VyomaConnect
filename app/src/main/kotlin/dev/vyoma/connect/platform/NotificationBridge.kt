@@ -125,6 +125,14 @@ object NotificationBridge : NotificationSource {
         runCatching { r.action.actionIntent.send(l, 0, intent) }.onFailure { VLog.w(TAG, "reply failed: ${it.message}") }
     }
 
+    override fun isText(id: String): Boolean {
+        val l = listener ?: return false
+        // A key is "user|package|id|tag|uid"; a reply id stands for its notification's key.
+        val key = replies[id]?.key ?: id
+        val pkg = key.split('|').getOrNull(1) ?: return false
+        return isTextingApp(l, pkg)
+    }
+
     override fun action(id: String, action: String) {
         val match = actionsByKey[id]?.firstOrNull { it.title?.toString() == action } ?: return
         runCatching { match.actionIntent.send() }.onFailure { e -> if (e is PendingIntent.CanceledException) VLog.d(TAG, "action gone") }

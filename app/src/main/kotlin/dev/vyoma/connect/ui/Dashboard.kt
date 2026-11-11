@@ -437,10 +437,14 @@ fun PcDashboard(
                 if (shots != null) Control(Icons.Rounded.Folder, "PC files", SystemColor.BLUE, onClick = onBrowseFiles)
                 else Control(Icons.Rounded.Folder, "Files", SystemColor.BLUE, onClick = onFiles),
                 if (shots != null) Control(Icons.Rounded.ScreenShare, "Screen", SystemColor.PINK) { PcScreenActivity.open(context, id) }
-                else Control(Icons.Rounded.Sensors, "Ping", SystemColor.CYAN) { vm.ping(id); status.show("Pinged: look for it on the PC") },
+                else Control(Icons.Rounded.Sensors, "Ping", SystemColor.CYAN) { vm.ping(id); status.show("Ping sent: it shows as a notification on the PC") },
                 if (shots != null) {
                     if (cameraOk) Control(Icons.Rounded.PhotoCamera, "Camera", SystemColor.ORANGE) { AppLock.ask(context, AppLock.CAMERA) { vm.capture(shots.photo) } }
-                    else Control(Icons.Rounded.NoPhotography, "Camera", SystemColor.ORANGE, unavailable = true) {
+                    else Control(
+                        Icons.Rounded.NoPhotography, "Camera", SystemColor.ORANGE, unavailable = true,
+                        // The phone's own camera stands in, as its webcam (video doesn't fit through Bluetooth).
+                        onHold = if (!overBluetooth) { { WebcamActivity.open(context) } } else null,
+                    ) {
                         status.show(noCameraMessage(pcCamera?.cameraLid), icon = Icons.Rounded.NoPhotography, failure = true)
                     }
                 }
@@ -449,7 +453,7 @@ fun PcDashboard(
                 // With background sync, copies go by themselves: the tile opens what was copied instead.
                 if (clipSync == AndroidClipboard.SyncState.ON) Control(Icons.Rounded.ContentPaste, "Clipboard", SystemColor.TEAL, opens = true, onClick = onClipboard)
                 else Control(Icons.Rounded.ContentPasteGo, "Send clip", SystemColor.TEAL, onHold = onClipboard) {
-                    if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied to send", failure = true)
+                    if (vm.sendClipboard() != null) status.show("Clipboard sent") else status.show("Nothing copied yet", failure = true)
                 },
                 // What the phone can become: all of it hidden behind long presses before, so a tap opens
                 // the menu. Commands used to be here; the capsules below run them, PC details edits them.
@@ -461,7 +465,7 @@ fun PcDashboard(
                         MenuItem("Game controller", Icons.Rounded.SportsEsports) { GamepadActivity.open(context, id) },
                         // Video doesn't fit through Bluetooth.
                         if (!overBluetooth) MenuItem("Webcam", Icons.Rounded.Videocam) { WebcamActivity.open(context) } else null,
-                        if (!overBluetooth) MenuItem("Mirror on the PC", Icons.Rounded.MobileScreenShare) { MirrorActivity.open(context) } else null,
+                        if (!overBluetooth) MenuItem("Phone screen on PC", Icons.Rounded.MobileScreenShare) { MirrorActivity.open(context) } else null,
                         MenuItem("Presenter", Icons.Rounded.Slideshow, onClick = onPresenter),
                     ),
                 ) {}
@@ -515,7 +519,7 @@ private fun CaptureOutcome(state: CaptureState, what: String) {
             }
             is CaptureState.Failed -> if (System.currentTimeMillis() - state.at < 5_000) {
                 haptics.perform(Haptic.Failure)
-                status.show("$what failed: ${state.reason}", failure = true, haptic = false)
+                status.show(plainReason(state.reason)?.let { "$what failed: $it" } ?: "$what failed. Try again, or check Vyoma on the PC", failure = true, haptic = false)
             }
             else -> Unit
         }
@@ -1014,7 +1018,8 @@ private fun PcStatus(battery: BatteryState?, stale: Boolean, stats: PcStats?, sh
             // A cached reading shows dimmed until the PC sends a fresh one.
             Box(Modifier.graphicsLayer { alpha = if (stale) 0.5f else 1f }) {
                 Gauge(
-                    if (stale) "Battery" else if (battery.charging) "Charging" else if (plugged) "Plugged in" else "Battery", "${battery.charge}", "%",
+                    // Without the meters, the words beside it carry the state: the ring stays "Battery".
+                    if (stale || !showLoad) "Battery" else if (battery.charging) "Charging" else if (plugged) "Plugged in" else "Battery", "${battery.charge}", "%",
                     battery.charge / 100f, color, Modifier, size = 80.dp, stroke = 7.dp,
                     valueStyle = MaterialTheme.typography.headlineSmall,
                 )
@@ -1035,8 +1040,8 @@ private fun PcStatus(battery: BatteryState?, stale: Boolean, stats: PcStats?, sh
                     },
                     style = MaterialTheme.typography.titleMedium,
                 )
-                Text(
-                    if (stale) "Updates when it's back" else "PC battery",
+                if (stale) Text(
+                    "Updates when it's back",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1230,5 +1235,5 @@ internal fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) 
 
 /** Why the Camera tile can't take a photo. An older companion doesn't say, and only ever meant the lid. */
 internal fun noCameraMessage(behindLid: Boolean?): String =
-    if (behindLid == false) "This PC has no camera. Hold for the phone as webcam"
-    else "The laptop's lid is closed. Hold for the phone as webcam"
+    if (behindLid == false) "This PC has no camera. Hold to use this phone as its webcam"
+    else "The laptop's lid is closed. Hold to use this phone as its webcam"

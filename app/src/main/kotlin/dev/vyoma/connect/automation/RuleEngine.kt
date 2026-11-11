@@ -222,7 +222,11 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
             if (a.onPc && pc == null) { failed += "$name (PC wasn't connected)"; continue }
             val result = runCatching { act(a, pc, rule) }
             result.onSuccess { undo -> ran += name; undo?.let(undos::add) }
-                .onFailure { e -> failed += "$name (${e.message ?: "failed"})"; VLog.w(TAG, "${rule.name}: $name failed", e) }
+                .onFailure { e ->
+                    // Stopped (the test's screen closed): not a failure of the action.
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    failed += "$name (${e.message ?: "failed"})"; VLog.w(TAG, "${rule.name}: $name failed", e)
+                }
         }
         return Triple(ran, failed, undos)
     }
@@ -305,7 +309,7 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
                     Undo.PhoneMedia -> mediaKey(audio, KeyEvent.KEYCODE_MEDIA_PLAY)
                 }
                 done++
-            }.onFailure { VLog.w(TAG, "$name: undo failed", it) }
+            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; VLog.w(TAG, "$name: undo failed", it) }
         }
         if (waiting.isNotEmpty()) owed[id] = Owed(name, owed[id]?.undos.orEmpty() + waiting)
         if (done > 0) store.record(RunEntry(id, name, System.currentTimeMillis(), label, false))

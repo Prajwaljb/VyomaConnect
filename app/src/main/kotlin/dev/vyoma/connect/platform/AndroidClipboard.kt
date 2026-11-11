@@ -39,6 +39,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
 import java.io.File
+import kotlinx.coroutines.sync.withLock
 
 /**
  * The phone clipboard, synced with paired PCs, plus a short history.
@@ -63,10 +64,21 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
 
     private var watcher: Job? = null
 
+    /** Done once the saved history is in memory: nothing is written before, so a copy picked up at start can't overwrite it. */
+    private val loaded = kotlinx.coroutines.CompletableDeferred<Unit>()
+    /** One write at a time, each of the history as it is then, so an older one can't land last. */
+    private val writing = kotlinx.coroutines.sync.Mutex()
+
     init {
         scope.launch(Dispatchers.IO) {
-            _history.value = runCatching { decode(historyFile.readText()) }.getOrNull().orEmpty()
+            val saved = if (clearedEarly) emptyList() else runCatching { decode(historyFile.readText()) }.getOrNull().orEmpty()
+            // Copies recorded while it loaded stay on top of what was saved.
+            _history.update { early ->
+                val keys = early.map { sameText(it.text) }.toSet()
+                (early + saved.filterNot { sameText(it.text) in keys }).take(HISTORY_SIZE)
+            }
             if (_current.value == null) _current.value = _history.value.firstOrNull()
+            loaded.complete(Unit)
         }
         main.post { cm.addPrimaryClipChangedListener { readNow() } }
     }
@@ -97,7 +109,10 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
         main.post { runCatching { cm.setPrimaryClip(ClipData.newPlainText("Vyoma", text)) } }
     }
 
+    @Volatile private var clearedEarly = false
+
     fun clearHistory() {
+        if (!loaded.isCompleted) clearedEarly = true
         _history.value = emptyList()
         persist()
     }
@@ -114,12 +129,14 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
     }
 
     private fun persist() {
-        val snapshot = encode(_history.value)
         scope.launch(Dispatchers.IO) {
-            runCatching {
-                val tmp = File(historyFile.path + ".tmp")
-                tmp.writeText(snapshot)
-                tmp.renameTo(historyFile)
+            loaded.await()
+            writing.withLock {
+                runCatching {
+                    val tmp = File(historyFile.path + ".tmp")
+                    tmp.writeText(encode(_history.value))
+                    tmp.renameTo(historyFile)
+                }
             }
         }
     }

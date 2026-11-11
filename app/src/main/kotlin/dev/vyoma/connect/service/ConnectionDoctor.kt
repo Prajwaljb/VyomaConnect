@@ -63,7 +63,7 @@ object ConnectionDoctor {
         )
         when (f.probe) {
             Probe.ANSWERS -> add(Finding("${f.pcName} answers: connecting", "Not connected in a few seconds? Open Vyoma on the PC."))
-            Probe.REFUSED -> add(Finding("Vyoma isn't running on ${f.pcName}", "The PC is on and on this Wi-Fi, but Vyoma isn't answering there. Open Vyoma on the PC to start it again."))
+            Probe.REFUSED -> add(Finding("Vyoma isn't running on ${f.pcName}", "${f.pcName} is on and on this Wi-Fi. Open Vyoma on it to start it again."))
             else -> Unit
         }
         if (f.sameNetwork == false && f.probe != Probe.ANSWERS && f.probe != Probe.REFUSED) add(

@@ -32,7 +32,8 @@ object TextsLock : TextsGuard {
     /** A yes lasts at most this long on the phone's own clock, whatever the PC says (it locks it sooner). */
     private const val GRANT_MS = 60 * 60_000L
     /** Asks closer together than this are one: anything on the PC could otherwise flood the phone with them. */
-    private const val ASK_GAP_MS = 3_000L
+    /** How long a question stays standing (its notification's life): a repeat ask meanwhile joins it. */
+    private const val ASK_GAP_MS = 120_000L
 
     private lateinit var app: Context
     /** PC → when its owner said yes (elapsed realtime). */
@@ -84,11 +85,12 @@ object TextsLock : TextsGuard {
             return
         }
         val now = SystemClock.elapsedRealtime()
-        val last = askedAt.put(peerId, now)
+        val last = askedAt[peerId]
         if (last != null && now - last < ASK_GAP_MS && waiting.containsKey(peerId)) {
             waiting[peerId] = answer
             return
         }
+        askedAt[peerId] = now
         waiting[peerId] = answer
         VLog.i(TAG, "a PC asks for the texts")
         // Straight to the prompt only when there's a fingerprint or PIN to ask for: with no screen lock, the
@@ -99,6 +101,10 @@ object TextsLock : TextsGuard {
         } else {
             notifyAsk(peerId, peerName)
         }
+    }
+
+    override fun revoke(peerId: String) {
+        grants.remove(peerId)
     }
 
     override fun close(peerId: String) {
@@ -123,7 +129,8 @@ object TextsLock : TextsGuard {
     }
 
     private fun notifyAsk(peerId: String, peerName: String) {
-        if (!Notifications.allowed(app)) return
+        // Nowhere to ask: say no now, rather than leave the PC waiting on a question nobody sees.
+        if (!Notifications.allowed(app)) return answered(peerId, false)
         val open = PendingIntent.getActivity(
             app, notificationId(peerId), TextsUnlockActivity.intent(app, peerId, peerName),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
