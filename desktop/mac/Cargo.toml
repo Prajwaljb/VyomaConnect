@@ -13,6 +13,14 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 vyoma-core = { path = "../core" }
 
+# Notifications under Vyoma's own name when it runs from Vyoma.app (macOS's UserNotifications).
+# objc2 crates: MIT, or Zlib/Apache-2.0/MIT.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSError", "NSString"] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger", "UNUserNotificationCenter"] }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

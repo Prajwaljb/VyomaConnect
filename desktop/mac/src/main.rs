@@ -10,6 +10,8 @@
 mod control;
 mod launchd;
 mod mac;
+#[cfg(target_os = "macos")]
+mod notify;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -87,6 +89,8 @@ async fn run(dir: PathBuf) -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "vyoma_mac=info,vyoma_core=info".into()))
         .init();
     vyoma_core::identity::use_dir(dir.clone());
+    #[cfg(target_os = "macos")]
+    notify::start();
     let me = Arc::new(Identity::load_or_create_in(&dir)?);
     let trust = TrustStore::open(&dir)?;
     let mut devices: HashMap<String, Device> = trust

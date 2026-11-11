@@ -1,6 +1,9 @@
-//! Running at login, as a LaunchAgent: `vyoma-mac --install` copies the binary into
-//! ~/Library/Application Support/Vyoma/bin, writes ~/Library/LaunchAgents/dev.vyoma.desktop.plist
-//! and starts it; `--uninstall` stops it and removes the plist (the identity and pairings stay).
+//! Running at login, as a LaunchAgent: `vyoma-mac --install` writes
+//! ~/Library/LaunchAgents/dev.vyoma.desktop.plist and starts it; `--uninstall` stops it and removes
+//! the plist (the identity and pairings stay). From Vyoma.app the agent runs the copy inside the
+//! app (the window installs it when it opens, again if the app moved), so its notifications are
+//! Vyoma's and an updated app updates it; a bare binary is copied into
+//! ~/Library/Application Support/Vyoma/bin first.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -8,6 +11,8 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 pub const LABEL: &str = "dev.vyoma.desktop";
+/// Vyoma.app's identifier, which macOS's Login Items shows the agent under.
+pub const BUNDLE_ID: &str = "dev.vyoma.Vyoma";
 
 /// Where Vyoma keeps its identity, pairings and binary on a Mac.
 pub fn support_dir() -> PathBuf {
@@ -22,8 +27,21 @@ fn log_path() -> PathBuf {
     crate::mac::home().join("Library/Logs/Vyoma.log")
 }
 
+/// The app [exe] is in, if it's Vyoma.app's own helper (`….app/Contents/MacOS/vyoma-mac`).
+pub fn app_of(exe: &Path) -> Option<&Path> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let app = contents.parent()?;
+    (macos.file_name()? == "MacOS" && contents.file_name()? == "Contents" && app.extension()? == "app").then_some(app)
+}
+
 /// The agent: started at login and kept running (restarted if it stops), its output in [log].
 pub fn plist(program: &Path, log: &Path) -> String {
+    let bundled = if app_of(program).is_some() {
+        format!("\n\t<key>AssociatedBundleIdentifiers</key>\n\t<array>\n\t\t<string>{BUNDLE_ID}</string>\n\t</array>")
+    } else {
+        String::new()
+    };
     let program = xml(&program.to_string_lossy());
     let log = xml(&log.to_string_lossy());
     format!(
@@ -46,7 +64,7 @@ pub fn plist(program: &Path, log: &Path) -> String {
 	<key>StandardOutPath</key>
 	<string>{log}</string>
 	<key>StandardErrorPath</key>
-	<string>{log}</string>
+	<string>{log}</string>{bundled}
 </dict>
 </plist>
 "#
@@ -67,11 +85,12 @@ fn uid() -> Result<String> {
 }
 
 pub fn install() -> Result<()> {
-    let bin = support_dir().join("bin");
-    std::fs::create_dir_all(&bin).with_context(|| format!("couldn't make {}", bin.display()))?;
-    let target = bin.join("vyoma-mac");
     let me = std::env::current_exe().context("can't tell where this program is")?;
+    let me = me.canonicalize().unwrap_or(me);
+    let bin = support_dir().join("bin");
+    let target = if app_of(&me).is_some() { me.clone() } else { bin.join("vyoma-mac") };
     if me.canonicalize().ok() != target.canonicalize().ok() {
+        std::fs::create_dir_all(&bin).with_context(|| format!("couldn't make {}", bin.display()))?;
         // To a new file then over the old one, so a running copy keeps its own.
         let fresh = bin.join(".vyoma-mac.new");
         std::fs::copy(&me, &fresh).with_context(|| format!("couldn't copy to {}", fresh.display()))?;
@@ -89,7 +108,7 @@ pub fn install() -> Result<()> {
         bail!("launchctl couldn't start it");
     }
     println!("Vyoma is running and starts with your Mac.");
-    println!("If macOS asks whether vyoma-mac may find devices on your local network, or accept incoming connections, allow it: that's how your phone reaches it.");
+    println!("If macOS asks whether Vyoma (or vyoma-mac) may find devices on your local network, or accept incoming connections, allow it: that's how your phone reaches it.");
     println!("Then on the phone, open Vyoma and pair with this Mac. Logs: {}", log_path().display());
     Ok(())
 }
@@ -116,6 +135,18 @@ mod tests {
         assert!(p.contains("<string>/Users/sam/Library/Application Support/Vyoma/bin/vyoma-mac</string>"));
         assert!(p.contains("<key>RunAtLoad</key>\n\t<true/>"));
         assert!(p.contains("<key>KeepAlive</key>\n\t<true/>"));
+        assert!(!p.contains("AssociatedBundleIdentifiers"), "a bare binary isn't the app");
+    }
+
+    #[test]
+    fn inside_the_app_it_runs_in_place_under_its_name() {
+        let exe = Path::new("/Applications/Vyoma.app/Contents/MacOS/vyoma-mac");
+        assert_eq!(app_of(exe), Some(Path::new("/Applications/Vyoma.app")));
+        assert_eq!(app_of(Path::new("/Users/sam/Downloads/vyoma-mac")), None);
+        assert_eq!(app_of(Path::new("/x/Contents/MacOS/vyoma-mac")), None, "not in an .app");
+        let p = plist(exe, Path::new("/tmp/log"));
+        assert!(p.contains("<string>/Applications/Vyoma.app/Contents/MacOS/vyoma-mac</string>"));
+        assert!(p.contains(&format!("<key>AssociatedBundleIdentifiers</key>\n\t<array>\n\t\t<string>{BUNDLE_ID}</string>")));
     }
 
     #[test]
