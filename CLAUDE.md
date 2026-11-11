@@ -73,6 +73,12 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   (`Xvfb :97 -screen 0 1280x720x24 -nolisten tcp`): `DISPLAY=:97 XDG_SESSION_TYPE=x11 VYOMA_X11_TEST=1 cargo test
   --release --lib x11::` in companion, `... cargo test --release presenter_x11` in daemon. Not yet run on a real
   Cinnamon/MATE/Xfce session; wlroots (Sway, Hyprland) input still has no path.
+- `desktop/mac` (`vyoma-mac`): the Mac's PC side on vyoma-core (`docs/PLAN.md` section 10, macOS): pairs after a
+  dialog with the code, serves ping, battery, find my phone, lock (display sleep), clipboard (pbcopy/pbpaste polled each
+  second), share (files into ~/Downloads); `--install` makes it a LaunchAgent (`launchd.rs`). macOS's own tools only
+  (`mac.rs`), a device's text goes to `osascript` as argv after our own first word, never as script. Nobody has a
+  Mac: `.github/workflows/macos.yml` builds and tests core + mac on GitHub's runners and keeps a universal binary
+  as an artifact; it compiles and tests on Linux too (`cd desktop/mac && cargo test --release`). Not yet run on a Mac.
 - `desktop/icon/gen.py`: Vyoma's icon ("Moon": the PC as a white glass orb, the phone as a small orb in a gap of one ring, on a sky tile) for every place from one geometry: Android adaptive layers, monochrome, notification glyph, splash; the desktop's `dist/vyoma.svg` (installed into hicolor) and the window's `ui/icons/vyoma.svg`. Run `python3 desktop/icon/gen.py .` from the repo root after changing it.
 - `desktop/companion`: lib + bin (the session loop is `session.rs`, shared with the desktop app); the bin is the Rust daemon beside stock kdeconnectd, built on `vyoma-core`. Dials only phones kdeconnectd trusts (mDNS), pairs with
   no prompt via `CompanionProof` (signed with kdeconnectd's key; phone verifies against the pinned PC cert), speaks
