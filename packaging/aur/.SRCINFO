@@ -46,6 +46,6 @@ pkgbase = vyoma
 	optdepends = firewalld: opened for phones automatically when it runs
 	options = !lto
 	source = vyoma-0.10.0.tar.gz::https://github.com/Prajwaljb/VyomaConnect/archive/refs/tags/v0.10.0.tar.gz
-	sha256sums = 749ef1c3e0649331fc12e8050921e7b47f0c9d3c96299686ec8a412c4af2ba26
+	sha256sums = f01bc917ffef1b8e5e563e4c09a4ede08b96ff2e7180e26d05238d65318572b7
 
 pkgname = vyoma
