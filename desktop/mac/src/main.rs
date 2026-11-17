@@ -3,10 +3,11 @@
 //! serves the stock plugins: ping, battery both ways, find my phone, the screen lock, the clipboard
 //! both ways, sharing (files into ~/Downloads, links opened, text onto the clipboard), Music and
 //! Spotify and the volume ([media]), the touchpad and keyboard ([input]), the phone's
-//! notifications, and the commands set up in the window.
+//! notifications, and the commands set up in the window. Vyoma's extras: [vyoma] (stats, power,
+//! files), [screen] (screenshots, the live screen on the phone), [mirror] (the phone's screen in a
+//! window here), paste, the Spaces gestures, and the USB cable ([usb]).
 //!
-//! Vyoma's window talks to it over a local socket ([control]). None of Vyoma's extras yet: to the
-//! phone this is a stock KDE Connect PC.
+//! Vyoma's window talks to it over a local socket ([control]).
 //! Built and tested on GitHub's macOS runners only; not yet tried on a real Mac.
 
 mod control;
@@ -15,9 +16,12 @@ mod input;
 mod launchd;
 mod mac;
 mod media;
+mod mirror;
 #[cfg(target_os = "macos")]
 mod notify;
+mod screen;
 mod update;
+mod usb;
 mod vyoma;
 
 use std::collections::HashMap;
@@ -77,12 +81,26 @@ const LOCK_EVERY: Duration = Duration::from_secs(3);
 const TOUCHPAD_STRETCH: Duration = Duration::from_secs(10 * 60);
 
 /// The switches this Mac has, in the window's order: what it serves so far.
-const PERMITS: [Permit; 3] = [Permit::Control, Permit::Files, Permit::Power];
+const PERMITS: [Permit; 4] = [Permit::Screen, Permit::Control, Permit::Files, Permit::Power];
+
+/// Text for a paste the phone types (emoji, other scripts): put on the clipboard for its Ctrl+V,
+/// and what was there before comes back a moment later.
+const PASTE: &str = "vyoma.paste";
+const PASTE_READY: &str = "vyoma.paste.ready";
+const PASTE_RESTORE: Duration = Duration::from_millis(1200);
+/// The touchpad's three-finger gestures: up is Mission Control (and down leaves it), sideways the next Space.
+const DESKTOP_STEP: &str = "vyoma.desktop.step";
+const DESKTOP_STEPPED: &str = "vyoma.desktop.stepped";
+const DESKTOP_SWITCH: &str = "vyoma.desktop.switch";
+/// Mission Control left open this long has probably been closed some other way.
+const MISSION_STALE: Duration = Duration::from_secs(20);
+const DESK_INCOMING: &[&str] = &[PASTE, DESKTOP_STEP, DESKTOP_SWITCH];
+const DESK_OUTGOING: &[&str] = &[PASTE_READY, DESKTOP_STEPPED];
 
 /// A switch as the Mac's window shows it: the Linux words, less what a Mac can't do.
 fn permit_words(p: Permit) -> (&'static str, &'static str) {
     match p {
-        Permit::Control => ("Touchpad and keyboard", "Move the pointer and type"),
+        Permit::Control => ("Touchpad and keyboard", "Move the pointer, type, paste, switch Spaces"),
         Permit::Power => ("Wake, sleep and shut down", "Also log out and restart"),
         other => (other.name(), other.detail()),
     }
@@ -103,6 +121,7 @@ fn main() -> Result<()> {
             launchd::uninstall()
         }
         Some(SEND_ANY) => send_any(std::env::args().skip(2).collect()),
+        Some(mirror::WINDOW_ARG) => mirror::window(&std::env::args().skip(2).collect::<Vec<_>>()),
         Some(other) => bail!("unknown option {other}: try --install or --uninstall"),
         None => run(std::env::var_os("VYOMA_DIR").map(PathBuf::from).unwrap_or_else(launchd::support_dir)),
     }
@@ -226,6 +245,20 @@ async fn run(dir: PathBuf) -> Result<()> {
     // When the phone was last told that macOS hasn't allowed the touchpad.
     let mut untrusted_told: Option<Instant> = None;
     let mut features = vyoma::Vyoma::new(me.clone(), commands.clone(), activity.clone());
+    let mut screens = screen::Screens::new(me.clone(), commands.clone(), activity.clone());
+    let mut mirrors = mirror::Mirrors::new(me.clone(), commands.clone());
+    // When Mission Control was opened from the phone (macOS doesn't say whether it's showing).
+    let mut mission: Option<Instant> = None;
+    let mut switches = permits.subscribe();
+    // The USB cable: phones plugged in with USB debugging get the adb tunnel and grants.
+    usb::start(lan.tcp_port());
+    clip_load(&dir);
+    {
+        let changes = changes.clone();
+        vyoma_core::adb::on_clipboard_change(Box::new(move || {
+            let _ = changes.send(json!({ "event": "Changed" }));
+        }));
+    }
 
     let send = |id: &str, p: Value| {
         let _ = commands.send(Command::Send(id.to_owned(), p));
@@ -280,11 +313,13 @@ async fn run(dir: PathBuf) -> Result<()> {
                         d.linked = false;
                     }
                     features.gone(&id);
+                    screens.gone(&id);
+                    mirrors.gone(&id);
                     texts.gone(&id);
                 }
                 Event::Routes { id, remotes } => {
                     if let Some(d) = devices.get_mut(&id) {
-                        d.remote = remotes.last().copied();
+                        d.remote = best(&remotes, !vyoma_core::adb::cable_ports().is_empty());
                     }
                 }
                 Event::Prompt { id, name, key } => {
@@ -421,6 +456,45 @@ async fn run(dir: PathBuf) -> Result<()> {
                                 send(&id, p);
                             }
                         }
+                        kind if screen::takes(kind) && d.paired => screens.handle(&id, &vyoma::Phone { name: &d.name, cert: &d.cert, from }, &packet),
+                        kind if mirror::takes(kind) && d.paired => mirrors.handle(&id, &vyoma::Phone { name: &d.name, cert: &d.cert, from }, &packet),
+                        PASTE if d.paired => {
+                            if let Some(text) = packet["body"]["text"].as_str() {
+                                let (text, commands, id) = (text.to_owned(), commands.clone(), id.clone());
+                                tokio::spawn(async move {
+                                    let body = match paste(&text).await {
+                                        Ok(()) => json!({}),
+                                        Err(e) => json!({ "error": format!("{e:#}") }),
+                                    };
+                                    let _ = commands.send(Command::Send(id, vyoma_core::link::packet(PASTE_READY, body)));
+                                });
+                            }
+                        }
+                        DESKTOP_STEP if d.paired => {
+                            let up = packet["body"]["up"].as_bool().unwrap_or(true);
+                            let open = mission.is_some_and(|t| t.elapsed() < MISSION_STALE);
+                            let (press, view) = match (up, open) {
+                                (true, false) => (true, "overview"),
+                                (true, true) => (false, "overview"),
+                                (false, true) => (true, "windows"),
+                                (false, false) => (false, "windows"),
+                            };
+                            // Control+Up opens Mission Control, and again closes it.
+                            let body = if !press || press_key(126, input::CONTROL | ARROW) {
+                                if press {
+                                    mission = (view == "overview").then(Instant::now);
+                                }
+                                json!({ "view": view })
+                            } else {
+                                json!({ "error": input::ALLOW_SHORT })
+                            };
+                            send(&id, vyoma_core::link::packet(DESKTOP_STEPPED, body));
+                        }
+                        DESKTOP_SWITCH if d.paired => {
+                            // Control+Left / Right: the Space beside this one.
+                            let right = packet["body"]["right"].as_bool().unwrap_or(true);
+                            press_key(if right { 124 } else { 123 }, input::CONTROL | ARROW);
+                        }
                         kind if vyoma::takes(kind) && d.paired => {
                             // AppKit tells only this thread where the wallpaper is.
                             let wallpaper = if kind == vyoma::WALLPAPER_REQUEST { vyoma::wallpaper_path() } else { None };
@@ -459,6 +533,15 @@ async fn run(dir: PathBuf) -> Result<()> {
                 let _ = commands.send(if yes { Command::Accept(id) } else { Command::Reject(id) });
             }
             Some(()) = found.recv() => ringer.stop(),
+            Ok(()) = switches.changed() => {
+                // Turned off: the screen stops showing now, and the phone hears why.
+                for id in devices.keys() {
+                    if !permits.allows(id, Permit::Screen) && screens.stop(id) {
+                        tracing::info!("{id}: screen turned off, stopped");
+                        send(id, permits::denied(Permit::Screen, &json!({ "type": "" })));
+                    }
+                }
+            }
             Some(text) = copies.recv() => {
                 if let Some(p) = clip.changed(text) {
                     for (id, d) in &devices {
@@ -526,7 +609,10 @@ impl Window {
     async fn answer(&self, method: &str, args: &Value, devices: &mut HashMap<String, Device>) -> Result<Value, String> {
         let command = |c: Command| self.commands.send(c).map(|_| Value::Null).map_err(|_| "Vyoma is stopping".to_owned());
         match method {
-            "Phones" => Ok(Value::Array(devices.iter().map(|(id, d)| details(id, d, &self.permits)).collect())),
+            "Phones" => {
+                let linked = devices.values().filter(|d| d.paired && d.linked).count();
+                Ok(Value::Array(devices.iter().map(|(id, d)| details(id, d, &self.permits, linked)).collect()))
+            }
             "Pair" => command(Command::Pair(control::text(args, 0)?)),
             "Accept" => command(Command::Accept(control::text(args, 0)?)),
             "Reject" => command(Command::Reject(control::text(args, 0)?)),
@@ -604,13 +690,34 @@ impl Window {
                 "features": [], "installable": false, "checks": checks(), "notes": [],
                 "update": self.updates.status(),
             })),
-            "FixCheck" => {
-                if control::text(args, 0)? != TOUCHPAD_CHECK {
-                    return Err("Not on the Mac yet".into());
+            "FixCheck" => match control::text(args, 0)?.as_str() {
+                TOUCHPAD_CHECK => {
+                    input::ask();
+                    mac::open(input::ACCESSIBILITY);
+                    tokio::spawn(restart_once_trusted());
+                    Ok(Value::Null)
                 }
-                input::ask();
-                mac::open(input::ACCESSIBILITY);
-                tokio::spawn(restart_once_trusted());
+                SCREEN_CHECK => {
+                    screen::allowed(true);
+                    mac::open(screen::SCREEN_RECORDING);
+                    Ok(Value::Null)
+                }
+                CABLE_CHECK => {
+                    let changes = self.changes.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = usb::fetch_adb().await {
+                            tracing::warn!("no adb: {e:#}");
+                            mac::notify("Couldn't get adb", &format!("{e:#}")).await;
+                        }
+                        let _ = changes.send(json!({ "event": "Changed" }));
+                    });
+                    Ok(Value::Null)
+                }
+                _ => Err("Not on the Mac yet".into()),
+            },
+            "AllowClipboardSync" => {
+                let done = vyoma_core::adb::allow_clipboard().await.map_err(|e| format!("{e:#}"))?;
+                tracing::info!("background clipboard sync allowed for {done} app(s)");
                 Ok(Value::Null)
             }
             "SetUpdateChecks" => {
@@ -771,14 +878,14 @@ impl Window {
     }
 }
 
-/// A device as the window reads it (the Linux app's `Details`).
-fn details(id: &str, d: &Device, permits: &Permits) -> Value {
+/// A device as the window reads it (the Linux app's `Details`). [linked]: how many paired phones are linked.
+fn details(id: &str, d: &Device, permits: &Permits, linked: usize) -> Value {
+    let via = via(d);
     let mut v = json!({
         "id": id, "name": d.name, "paired": d.paired, "linked": d.linked, "key": d.key, "asking": d.asking,
-        "via": if d.linked { "wifi" } else { "" },
+        "via": via,
         "can": { "share": d.takes(SHARE), "ring": d.takes(FIND), "browse": false, "text": d.takes(messages::REQUEST) },
-        // No cable here, so nothing to allow for the clipboard.
-        "clipboardSync": "on",
+        "clipboardSync": clipboard_sync(id, d.paired && d.linked && (via == "cable" || linked == 1)),
         "permits": PERMITS.iter().map(|&p| {
             let (name, detail) = permit_words(p);
             json!({ "key": p.key(), "name": name, "detail": detail, "on": permits.allows(id, p) })
@@ -788,6 +895,88 @@ fn details(id: &str, d: &Device, permits: &Permits) -> Value {
         v["battery"] = json!({ "charge": charge, "charging": charging, "low": low });
     }
     v
+}
+
+/// How a linked phone is reached: loopback is the USB cable (the Mac has no Bluetooth link).
+fn via(d: &Device) -> &'static str {
+    match d.remote.filter(|_| d.linked) {
+        None => "",
+        Some(r) if r.is_loopback() => "cable",
+        Some(_) => "wifi",
+    }
+}
+
+/// The link to use of [routes], newest first among equals: the [cable] while one's plugged in
+/// (loopback; steadier than Wi-Fi), else Wi-Fi.
+fn best(routes: &[IpAddr], cable: bool) -> Option<IpAddr> {
+    let newest = |wired: bool| routes.iter().rev().find(|r| r.is_loopback() == wired).copied();
+    if cable { newest(true).or(newest(false)) } else { newest(false).or(newest(true)) }
+}
+
+/// Phones whose background clipboard sync was seen granted: it lasts until the app's uninstalled,
+/// and the cable (the only place it shows) is usually out.
+static CLIP_ON: std::sync::OnceLock<(PathBuf, std::sync::Mutex<std::collections::BTreeSet<String>>)> = std::sync::OnceLock::new();
+
+fn clip_load(dir: &std::path::Path) {
+    let file = dir.join("clipboard-sync.json");
+    let ids = std::fs::read_to_string(&file).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let _ = CLIP_ON.set((file, std::sync::Mutex::new(ids)));
+}
+
+/// "on", "ask" (on the cable, waiting for Allow) or "plug" (unknown until it's plugged in), as on
+/// Linux. [on_cable]: this phone is the one on the cable (linked by it, or the only one linked).
+fn clipboard_sync(id: &str, on_cable: bool) -> &'static str {
+    let plugged = vyoma_core::adb::clipboard();
+    if on_cable && !plugged.is_empty() {
+        if !plugged.iter().any(|c| c.granted()) {
+            return "ask";
+        }
+        if let Some((file, ids)) = CLIP_ON.get() {
+            let mut ids = ids.lock().unwrap();
+            if ids.insert(id.to_owned()) {
+                let _ = std::fs::write(file, serde_json::to_string(&*ids).unwrap_or_default());
+            }
+        }
+        return "on";
+    }
+    if CLIP_ON.get().is_some_and(|(_, ids)| ids.lock().unwrap().contains(id)) { "on" } else { "plug" }
+}
+
+/// The flags macOS gives the arrow keys (kCGEventFlagMaskSecondaryFn | NumericPad): its own
+/// shortcuts on them (Mission Control, Spaces) only answer a press that carries them.
+const ARROW: u64 = 0x80_0000 | 0x20_0000;
+
+/// Presses a key the agent itself sends (the Spaces gestures); false while macOS doesn't allow it.
+fn press_key(code: u16, flags: u64) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        input::post_key(code, flags)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (code, flags);
+        true
+    }
+}
+
+/// Puts [text] on the clipboard for the phone's paste, and what was there before back a moment
+/// later, unless something newer was copied meanwhile.
+async fn paste(text: &str) -> Result<()> {
+    static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let before = mac::clipboard().await;
+    mac::set_clipboard(text).await?;
+    let mine = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    let text = text.to_owned();
+    tokio::spawn(async move {
+        tokio::time::sleep(PASTE_RESTORE).await;
+        if GENERATION.load(Ordering::Relaxed) == mine
+            && mac::clipboard().await.as_deref() == Some(text.as_str())
+            && let Some(before) = before
+        {
+            let _ = mac::set_clipboard(&before).await;
+        }
+    });
+    Ok(())
 }
 
 /// The window's requests after which it should read again (the rest only read, or tell by their own events).
@@ -816,18 +1005,41 @@ async fn restart_once_trusted() {
     std::process::exit(0);
 }
 
-/// This Mac's checks for the window's This Mac page: the Accessibility Allow the touchpad needs.
+/// This Mac's checks for the window's This Mac page: the Accessibility Allow the touchpad needs,
+/// Screen Recording for the screen on the phone, and adb for the USB cable.
 fn checks() -> Value {
-    let ok = input::trusted();
-    json!([{
-        "name": TOUCHPAD_CHECK,
-        "state": if ok { "ok" } else { "warn" },
-        "detail": if ok { "Allowed in Accessibility" } else { "macOS hasn't allowed Vyoma in Accessibility yet. After an update, remove the old Vyoma there and turn the new one on" },
-        "action": if ok { "" } else { "Open Settings" },
-    }])
+    let touch = input::trusted();
+    let screen = screen::allowed(false);
+    let adb = vyoma_core::adb::find_adb().is_some();
+    json!([
+        {
+            "name": TOUCHPAD_CHECK,
+            "state": if touch { "ok" } else { "warn" },
+            "detail": if touch { "Allowed in Accessibility" } else { "macOS hasn't allowed Vyoma in Accessibility yet. After an update, remove the old Vyoma there and turn the new one on" },
+            "action": if touch { "" } else { "Open Settings" },
+        },
+        {
+            "name": SCREEN_CHECK,
+            "state": if screen { "ok" } else { "warn" },
+            "detail": if screen { "Allowed in Screen Recording: the phone can show this screen and take screenshots" } else { "For the screen on the phone and screenshots: allow Vyoma in Screen Recording" },
+            "action": if screen { "" } else { "Open Settings" },
+        },
+        {
+            "name": CABLE_CHECK,
+            "state": if adb { "ok" } else { "warn" },
+            "detail": if adb {
+                if usb::plugged() > 0 { "A phone is plugged in" } else { "Plug the phone in with USB debugging on, and they link over the cable" }
+            } else {
+                "Linking over the cable needs adb, Google's Android platform tools. Get adb downloads them from Google into Vyoma's folder"
+            },
+            "action": if adb { "" } else { "Get adb" },
+        },
+    ])
 }
 
 const TOUCHPAD_CHECK: &str = "Touchpad and keyboard";
+const SCREEN_CHECK: &str = "Screen";
+const CABLE_CHECK: &str = "USB cable";
 
 /// Mac → phone: `{number}`, call it (Messages); the phone checks it all again (see the Linux app's telephony.rs).
 const DIAL: &str = "vyoma.call.dial";
@@ -881,8 +1093,8 @@ fn identity(me: &Identity, name: String, laptop: bool) -> Value {
             "deviceName": name,
             "deviceType": if laptop { "laptop" } else { "desktop" },
             "protocolVersion": 8,
-            "incomingCapabilities": ([INCOMING, vyoma::INCOMING].concat()),
-            "outgoingCapabilities": ([OUTGOING, vyoma::OUTGOING].concat()),
+            "incomingCapabilities": ([INCOMING, vyoma::INCOMING, screen::INCOMING, mirror::INCOMING, DESK_INCOMING].concat()),
+            "outgoingCapabilities": ([OUTGOING, vyoma::OUTGOING, screen::OUTGOING, mirror::OUTGOING, DESK_OUTGOING].concat()),
         }),
     )
 }
@@ -1031,16 +1243,31 @@ mod tests {
         (d.name, d.key, d.asking, d.battery) = ("Pixel".into(), "1A2B".into(), true, Some((64, false, false)));
         let permits = Permits::default();
         permits.set("p", Permit::Files, false).unwrap();
-        let v = details("p", &d, &permits);
+        let v = details("p", &d, &permits, 1);
         assert_eq!((v["id"].as_str(), v["key"].as_str(), v["asking"].as_bool()), (Some("p"), Some("1A2B"), Some(true)));
         assert_eq!((v["can"]["share"].as_bool(), v["can"]["ring"].as_bool()), (Some(true), Some(false)), "only what it takes");
         assert_eq!(v["battery"]["charge"], 64);
-        assert!(details("q", &Device::default(), &permits)["battery"].is_null());
+        assert!(details("q", &Device::default(), &permits, 1)["battery"].is_null());
         // Only the switches this Mac has, in Mac words.
         let keys: Vec<(&str, bool)> = v["permits"].as_array().unwrap().iter().map(|p| (p["key"].as_str().unwrap(), p["on"].as_bool().unwrap())).collect();
-        assert_eq!(keys, [("control", true), ("files", false), ("power", true)]);
-        assert_eq!(v["permits"][2]["name"], "Wake, sleep and shut down");
+        assert_eq!(keys, [("screen", true), ("control", true), ("files", false), ("power", true)]);
+        assert_eq!(v["permits"][3]["name"], "Wake, sleep and shut down");
         assert_eq!(url_encode("Sam's Mac"), "Sam%27s%20Mac");
+    }
+
+    #[test]
+    fn the_cable_wins_while_its_in() {
+        let (wifi, cable): (IpAddr, IpAddr) = ("192.168.1.5".parse().unwrap(), "127.0.0.1".parse().unwrap());
+        assert_eq!(best(&[cable, wifi], true), Some(cable));
+        assert_eq!(best(&[cable, wifi], false), Some(wifi));
+        assert_eq!(best(&[cable], false), Some(cable), "whatever there is");
+        let mut d = phone(&[]);
+        d.remote = Some(cable);
+        assert_eq!(via(&d), "cable");
+        d.remote = Some(wifi);
+        assert_eq!(via(&d), "wifi");
+        d.linked = false;
+        assert_eq!(via(&d), "");
     }
 
     #[test]
@@ -1049,7 +1276,12 @@ mod tests {
         let me = Identity::load_or_create_in(&dir).unwrap();
         let p = identity(&me, "Sam's MacBook".into(), true);
         assert_eq!(p["body"]["deviceType"], "laptop");
-        assert_eq!(p["body"]["incomingCapabilities"].as_array().unwrap().len(), INCOMING.len() + vyoma::INCOMING.len());
+        let incoming = p["body"]["incomingCapabilities"].as_array().unwrap();
+        assert_eq!(incoming.len(), INCOMING.len() + vyoma::INCOMING.len() + screen::INCOMING.len() + mirror::INCOMING.len() + DESK_INCOMING.len());
+        // What the phone looks for before it shows a tile (its PcFeatures).
+        for offered in ["vyoma.screenshot.request", "vyoma.screen.request", "vyoma.mirror", "vyoma.paste", "vyoma.desktop.step"] {
+            assert!(incoming.iter().any(|t| t == offered), "{offered}");
+        }
         assert!(!OUTGOING.contains(&"kdeconnect.lock"), "no lock state it can't know");
         std::fs::remove_dir_all(&dir).unwrap();
     }

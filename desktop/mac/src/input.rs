@@ -37,6 +37,8 @@ pub enum Button {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Act {
     Move(f64, f64),
+    /// To a point on the screen being cast, 0..1 across and down it ([Pointer::cast_on]).
+    At(f64, f64),
     /// Positive: down and right, as a wheel turned towards you.
     Scroll(f64, f64),
     Button(Button, bool),
@@ -153,6 +155,61 @@ pub fn acts(b: &Value) -> Vec<Act> {
     Vec::new()
 }
 
+/// A touch on this Mac's screen as the phone shows it (`vyoma.screen.input`, a line of the touch
+/// stream): x, y 0..1 across the picture. Kinds: "click", "right", "down" / "move" / "up" (a
+/// left-button drag), "scroll" (dx, dy in pixels, positive down), "scrollend"; typing as "text"
+/// and "key" (BackSpace, Return, Escape, Tab, Delete, Home, End, arrows, PageUp/PageDown, Super, or
+/// one character, with `mods` ctrl/alt/super/shift: the phone's Ctrl is Command, as on the touchpad).
+pub fn touch_acts(i: &Value) -> Vec<Act> {
+    let at = || Act::At(i["x"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0), i["y"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0));
+    match i["kind"].as_str().unwrap_or("") {
+        "click" => vec![at(), Act::Button(Button::Left, true), Act::Button(Button::Left, false)],
+        "right" => vec![at(), Act::Button(Button::Right, true), Act::Button(Button::Right, false)],
+        "down" => vec![at(), Act::Button(Button::Left, true)],
+        "move" => vec![at()],
+        "up" => vec![at(), Act::Button(Button::Left, false)],
+        "scroll" => vec![at(), Act::Scroll(i["dx"].as_f64().unwrap_or(0.0), i["dy"].as_f64().unwrap_or(0.0))],
+        "text" => {
+            let text: String = i["text"].as_str().unwrap_or("").chars().take(4096).collect();
+            acts(&json!({ "key": text }))
+        }
+        "key" => {
+            let flags = i["mods"].as_array().into_iter().flatten().filter_map(|m| match m.as_str()? {
+                "ctrl" => Some(COMMAND),
+                "alt" => Some(OPTION),
+                "super" => Some(CONTROL),
+                "shift" => Some(SHIFT),
+                _ => None,
+            });
+            let flags = flags.fold(0, |all, f| all | f);
+            let code = match i["key"].as_str().unwrap_or("") {
+                "BackSpace" => 51,
+                "Tab" => TAB,
+                "Return" => RETURN,
+                "Escape" => 53,
+                "Delete" => 117,
+                "Home" => 115,
+                "End" => 119,
+                "Left" => 123,
+                "Right" => 124,
+                "Up" => 126,
+                "Down" => 125,
+                "PageUp" => 116,
+                "PageDown" => 121,
+                // The PC's launcher key: Spotlight.
+                "Super" => return vec![Act::Key(49, COMMAND)],
+                one if one.chars().count() == 1 => match one.chars().next().and_then(key_of) {
+                    Some(code) => code,
+                    None => return Vec::new(),
+                },
+                _ => return Vec::new(),
+            };
+            vec![Act::Key(code, flags)]
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// The echo a device asks for with `sendAck`.
 pub fn echo(b: &Value) -> Option<Value> {
     if b["sendAck"].as_bool() != Some(true) {
@@ -166,6 +223,8 @@ pub fn echo(b: &Value) -> Option<Value> {
 
 #[cfg(target_os = "macos")]
 pub use mac::{Pointer, ask, trusted};
+#[cfg(target_os = "macos")]
+pub(crate) use mac::post_key;
 
 /// Where macOS lets apps control the Mac.
 pub const ACCESSIBILITY: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
@@ -188,6 +247,8 @@ impl Pointer {
     pub fn handle(&mut self, _: &[Act]) -> Result<(), NotAllowed> {
         Ok(())
     }
+
+    pub fn cast_on(&mut self, _display: u32) {}
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -236,6 +297,24 @@ mod mac {
         fn CGEventPost(tap: u32, event: Ref);
         fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
         fn CGDisplayBounds(display: u32) -> Rect;
+    }
+
+    /// Presses [code] with [flags] held, if macOS allows it (for a key the agent presses itself).
+    pub(crate) fn post_key(code: u16, flags: u64) -> bool {
+        if !allowed(false) {
+            return false;
+        }
+        // SAFETY: CoreGraphics events made here, each released after posting.
+        unsafe {
+            for down in [true, false] {
+                let e = CGEventCreateKeyboardEvent(std::ptr::null_mut(), code, down);
+                if !e.is_null() {
+                    CGEventSetFlags(e, flags);
+                }
+                post(e);
+            }
+        }
+        true
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -315,6 +394,11 @@ mod mac {
     pub struct Pointer {
         holding: bool,
         asked: bool,
+        /// The display a cast shows, for [Act::At].
+        display: Option<u32>,
+        /// Where the last [Act::At] put the pointer: the clicks after it go there (the pointer's own
+        /// position may not have caught up yet).
+        at: Option<Point>,
     }
 
     impl Pointer {
@@ -328,6 +412,16 @@ mod mac {
                 unsafe { self.one(a) }
             }
             Ok(())
+        }
+
+        /// [Act::At] is across [display] (a CGDirectDisplayID).
+        pub fn cast_on(&mut self, display: u32) {
+            self.display = Some(display);
+        }
+
+        /// Where buttons press: the last [Act::At], else the pointer.
+        unsafe fn spot(&self) -> Point {
+            self.at.unwrap_or_else(|| unsafe { Self::here() })
         }
 
         unsafe fn here() -> Point {
@@ -366,8 +460,17 @@ mod mac {
             unsafe {
                 match a {
                     Act::Move(dx, dy) => {
+                        self.at = None;
                         let at = Self::here();
                         let to = Self::on_screen(Point { x: at.x + dx, y: at.y + dy });
+                        let kind = if self.holding { LEFT_DRAGGED } else { MOVED };
+                        post(CGEventCreateMouseEvent(std::ptr::null_mut(), kind, to, 0));
+                    }
+                    Act::At(x, y) => {
+                        let Some(display) = self.display else { return };
+                        let r = CGDisplayBounds(display);
+                        let to = Point { x: r.origin.x + x * (r.size.x - 1.0).max(0.0), y: r.origin.y + y * (r.size.y - 1.0).max(0.0) };
+                        self.at = Some(to);
                         let kind = if self.holding { LEFT_DRAGGED } else { MOVED };
                         post(CGEventCreateMouseEvent(std::ptr::null_mut(), kind, to, 0));
                     }
@@ -387,10 +490,10 @@ mod mac {
                         if *b == Button::Left {
                             self.holding = *down;
                         }
-                        post(CGEventCreateMouseEvent(std::ptr::null_mut(), kind, Self::here(), button));
+                        post(CGEventCreateMouseEvent(std::ptr::null_mut(), kind, self.spot(), button));
                     }
                     Act::Double => {
-                        let at = Self::here();
+                        let at = self.spot();
                         for kind in [LEFT_DOWN, LEFT_UP] {
                             let e = CGEventCreateMouseEvent(std::ptr::null_mut(), kind, at, 0);
                             if !e.is_null() {
@@ -455,6 +558,21 @@ mod tests {
         assert_eq!(acts(&json!({ "specialKey": 12 })), [Act::Key(RETURN, 0)]);
         assert_eq!(acts(&json!({ "specialKey": 4, "shift": true })), [Act::Key(123, SHIFT)], "Shift+Left selects");
         assert!(acts(&json!({ "specialKey": 99 })).is_empty(), "unknown keys press nothing");
+    }
+
+    #[test]
+    fn touches_on_the_cast_screen() {
+        let t = |v: Value| touch_acts(&v);
+        assert_eq!(t(json!({ "kind": "click", "x": 0.5, "y": 0.25 })), [Act::At(0.5, 0.25), Act::Button(Button::Left, true), Act::Button(Button::Left, false)]);
+        assert_eq!(t(json!({ "kind": "move", "x": 2.0, "y": -1.0 })), [Act::At(1.0, 0.0)], "kept on the screen");
+        assert_eq!(t(json!({ "kind": "up", "x": 0.1, "y": 0.1 }))[1], Act::Button(Button::Left, false));
+        assert_eq!(t(json!({ "kind": "scroll", "x": 0.0, "y": 0.0, "dx": 0.0, "dy": 30.0 }))[1], Act::Scroll(0.0, 30.0));
+        assert_eq!(t(json!({ "kind": "key", "key": "s", "mods": ["ctrl"] })), [Act::Key(1, COMMAND)], "Ctrl+S saves");
+        assert_eq!(t(json!({ "kind": "key", "key": "Left", "mods": ["shift"] })), [Act::Key(123, SHIFT)]);
+        assert_eq!(t(json!({ "kind": "key", "key": "Super" })), [Act::Key(49, COMMAND)], "Spotlight");
+        assert_eq!(t(json!({ "kind": "text", "text": "hi\n" })), [Act::Text("hi".into()), Act::Key(RETURN, 0)]);
+        assert!(t(json!({ "kind": "scrollend" })).is_empty());
+        assert!(t(json!({ "kind": "key", "key": "F13" })).is_empty());
     }
 
     #[test]

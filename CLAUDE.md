@@ -36,7 +36,10 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `desktop/core` (`vyoma-core`): the desktop side's shared protocol core (identity, links, payloads), no desktop
   calls, so it serves every desktop and macOS: discovery, links, pairing, trust store, the device hub (`device.rs`), and
   what both PC sides share: `messages` (texts store + lock), `files`/`xfer` (phone file access, behind `files::Hooks`),
-  `permits`, `activity`, `commands`, `release` (GitHub's newest release, `is_newer`).
+  `permits`, `activity`, `commands`, `release` (GitHub's newest release, `is_newer`), `adb` (the USB cable for every PC
+  side: when a phone with USB debugging appears (each side feeds a watch of plugged adb interfaces: sysfs on Linux,
+  `companion/src/usb.rs`; IOKit on the Mac, `mac/src/usb.rs`) the reverse tunnel, payload ports both ways, and the clipboard
+  grants once the person allows the APK's signing key (`set_asker`: a notification on Linux, a dialog on the Mac)).
 - `desktop/daemon` (`vyoma-desktop`): the standalone desktop app growing on that core (`docs/PLAN.md` section 10): pairing
   prompt as a freedesktop notification with Accept/Reject, `dev.vyoma.Desktop1` D-Bus control for the future GUI;
   stock plugins in `plugins.rs`, `clipboard.rs` (wl-clipboard), `share.rs` (files land in XDG Downloads), `media.rs`
@@ -88,6 +91,20 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   first so nothing is launched, read every 3 s while a phone listens), touchpad/keyboard (`input.rs`, CGEvent FFI; text as
   Unicode strings, shortcuts as US keys with the phone's Ctrl as Command; asks for Accessibility once), the phone's
   notifications (replaced/withdrawn by id inside the app), run commands (core `commands`; the agent's PATH adds Homebrew).
+  Screen (`screen.rs`): screenshots (`screencapture`, PNG) and the live screen on the phone: ScreenCaptureKit (dlopened,
+  macOS 12.3+, so older Macs still start) into VideoToolbox's real-time H.264, framed as Linux's (avc4, parameter sets before
+  keyframes, VYTS stamps), frames skipped before encoding while the link is behind; the phone's touches as absolute
+  CGEvents on that display (`input::touch_acts`, `Act::At`); needs Screen Recording (a This Mac check). Mirror (`mirror.rs`):
+  the phone's screen in a window, `vyoma-mac --mirror-window <name>` as a child (AppKit window, AVSampleBufferDisplayLayer
+  decoding the Annex-B stdin, mouse/trackpad/keys as JSON lines on stdout: Command+C/X/A/V, Option/Command+arrows, Escape or
+  right click Back, middle click Home, Command+W closes); the phone's sound as PCM (it says `sound: []`) through an
+  AudioQueue with a small jitter buffer; copy onto the Mac's clipboard, volume keys via osascript. Paste (`vyoma.paste`,
+  the old clipboard back after 1.2 s) and the three-finger gestures (Control+Up Mission Control, Control+Left/Right Spaces,
+  with the arrow keys' fn/number-pad flags). The USB cable (`usb.rs`): IOKit notifications feed core `adb`; adb from
+  Android Studio, Homebrew, or the USB cable check's Get adb (Google's platform tools into Vyoma's folder); the window's
+  Clipboard card and `via: cable` as on Linux. Switches: screen, control, files, power. Type-check it on Linux with a
+  scratch rustup (`rustup target add aarch64-apple-darwin`, `cargo check --target aarch64-apple-darwin`; ring's C needs a stub
+  TargetConditionals.h and `-nostdlibinc` with tiny string.h/assert.h stubs in CFLAGS_aarch64_apple_darwin).
   Vyoma's extras (`vyoma.rs`): stats, specs, power, wake, wallpaper; the phone's files (~/Library off limits) and resumable
   sends; the Messages page (texts lock again when the screen locks); per-phone permits and Activity; a daily update check
   (`update.rs`: tells when a release carries `Vyoma-mac*.zip`; the window's Download opens the release page, as

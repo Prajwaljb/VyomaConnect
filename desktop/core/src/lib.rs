@@ -3,6 +3,7 @@
 //! builds and tests the same on any Linux desktop and on macOS (see docs/PLAN.md section 10).
 
 pub mod activity;
+pub mod adb;
 pub mod cert;
 pub mod clipboard;
 pub mod commands;

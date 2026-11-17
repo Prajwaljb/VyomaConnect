@@ -14,6 +14,8 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # The phone's Home stats and About this PC (MIT), the wallpaper's small PNG (MIT/Apache-2.0).
 sysinfo = "0.40.0"
 png = "0.17"
+# dlopen: ScreenCaptureKit is loaded when first used (macOS 12.3+), so older Macs still start.
+libc = "0.2"
 vyoma-core = { path = "../core" }
 
 # Notifications under Vyoma's own name when it runs from Vyoma.app (macOS's UserNotifications).
@@ -21,10 +23,15 @@ vyoma-core = { path = "../core" }
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSError", "NSString", "NSURL"] }
-# Where the desktop picture is (NSWorkspace).
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSScreen", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSError", "NSGeometry", "NSObject", "NSString", "NSURL"] }
+# Where the desktop picture is (NSWorkspace), and the phone's screen in a window (NSWindow, NSView).
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSApplication", "NSEvent", "NSGraphics", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow", "NSWorkspace"] }
 objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger", "UNUserNotificationCenter"] }
+# The screen to the phone (ScreenCaptureKit, loaded at run time; H.264 in hardware through VideoToolbox), and the phone's
+# screen in a window here (AVSampleBufferDisplayLayer decodes it) with its sound (AudioQueue): those C APIs are
+# declared where they're used; these give CoreMedia's CMTime and the dispatch queues.
+objc2-core-media = { version = "0.3", default-features = false, features = ["std", "objc2", "CMTime"] }
+dispatch2 = { version = "0.3", default-features = false, features = ["std", "alloc", "block2", "objc2"] }
 
 [profile.release]
 lto = "thin"

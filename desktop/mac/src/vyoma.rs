@@ -65,6 +65,20 @@ pub fn takes(kind: &str) -> bool {
     INCOMING.contains(&kind)
 }
 
+/// A sender whose packets go to phone [id] (through the hub), for the shared payload code.
+pub fn sender(commands: &mpsc::UnboundedSender<Command>, id: &str) -> Sender {
+    let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
+    let (commands, to) = (commands.clone(), id.to_owned());
+    tokio::spawn(async move {
+        while let Some(p) = rx.recv().await {
+            if commands.send(Command::Send(to.clone(), p)).is_err() {
+                break;
+            }
+        }
+    });
+    Sender::queue(tx)
+}
+
 /// The phone a packet came from.
 pub struct Phone<'a> {
     pub name: &'a str,
@@ -92,18 +106,8 @@ impl Vyoma {
 
     /// Phone [id]'s sender and its set of transfers.
     fn link(&mut self, id: &str) -> (Sender, &mut tokio::task::JoinSet<()>) {
-        let (commands, to) = (self.commands.clone(), id.to_owned());
-        let (sender, tasks) = self.links.entry(id.to_owned()).or_insert_with(|| {
-            let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
-            tokio::spawn(async move {
-                while let Some(p) = rx.recv().await {
-                    if commands.send(Command::Send(to.clone(), p)).is_err() {
-                        break;
-                    }
-                }
-            });
-            (Sender::queue(tx), tokio::task::JoinSet::new())
-        });
+        let commands = &self.commands;
+        let (sender, tasks) = self.links.entry(id.to_owned()).or_insert_with(|| (sender(commands, id), tokio::task::JoinSet::new()));
         (sender.clone(), tasks)
     }
 
