@@ -447,9 +447,9 @@ fun PcDashboard(
                     else Control(
                         Icons.Rounded.NoPhotography, "Camera", SystemColor.ORANGE, unavailable = true,
                         // The phone's own camera stands in, as its webcam (video doesn't fit through Bluetooth).
-                        onHold = if (!overBluetooth) { { WebcamActivity.open(context) } } else null,
+                        onHold = if (!overBluetooth && has(PcFeature.WEBCAM)) { { WebcamActivity.open(context) } } else null,
                     ) {
-                        status.show(noCameraMessage(pcCamera?.cameraLid), icon = Icons.Rounded.NoPhotography, failure = true)
+                        status.show(noCameraMessage(pcCamera?.cameraLid, webcam = has(PcFeature.WEBCAM)), icon = Icons.Rounded.NoPhotography, failure = true)
                     }
                 }
                 else Control(Icons.Rounded.TouchApp, "Touchpad", SystemColor.ORANGE, opens = true, onClick = onTouchpad),
@@ -1240,7 +1240,11 @@ internal fun CommandsSheet(vm: AppViewModel, id: String, onDismiss: () -> Unit) 
     )
 }
 
-/** Why the Camera tile can't take a photo. An older companion doesn't say, and only ever meant the lid. */
-internal fun noCameraMessage(behindLid: Boolean?): String =
-    if (behindLid == false) "This PC has no camera. Hold to use this phone as its webcam"
-    else "The laptop's lid is closed. Hold to use this phone as its webcam"
+/**
+ * Why the Camera tile can't take a photo. An older companion doesn't say, and only ever meant the lid.
+ * Holding offers this phone as the webcam only where the PC can take one ([webcam]; not a Mac yet).
+ */
+internal fun noCameraMessage(behindLid: Boolean?, webcam: Boolean = true): String {
+    val why = if (behindLid == false) "This PC has no camera" else "The laptop's lid is closed"
+    return if (webcam) "$why. Hold to use this phone as its webcam" else why
+}

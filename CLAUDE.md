@@ -102,7 +102,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   the old clipboard back after 1.2 s) and the three-finger gestures (Control+Up Mission Control, Control+Left/Right Spaces,
   with the arrow keys' fn/number-pad flags). The USB cable (`usb.rs`): IOKit notifications feed core `adb`; adb from
   Android Studio, Homebrew, or the USB cable check's Get adb (Google's platform tools into Vyoma's folder); the window's
-  Clipboard card and `via: cable` as on Linux. Switches: screen, control, files, power. Type-check it on Linux with a
+  Clipboard card and `via: cable` as on Linux. Camera (`camera.rs`): a photo for the phone's Camera tile through AVFoundation's photo output (JPEG, after a short warm-up), a notification each time; macOS's camera Allow needs Vyoma.app (`NSCameraUsageDescription`), the bare binary refuses; stats say `camera`/`cameraLid` (clamshell from ioreg); a This Mac check. Switches: screen, control, files, camera, power. Type-check it on Linux with a
   scratch rustup (`rustup target add aarch64-apple-darwin`, `cargo check --target aarch64-apple-darwin`; ring's C needs a stub
   TargetConditionals.h and `-nostdlibinc` with tiny string.h/assert.h stubs in CFLAGS_aarch64_apple_darwin).
   Vyoma's extras (`vyoma.rs`): stats, specs, power, wake, wallpaper; the phone's files (~/Library off limits) and resumable

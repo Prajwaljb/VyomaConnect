@@ -19,6 +19,7 @@ mod media;
 mod mirror;
 #[cfg(target_os = "macos")]
 mod notify;
+mod camera;
 mod screen;
 mod update;
 mod usb;
@@ -81,7 +82,7 @@ const LOCK_EVERY: Duration = Duration::from_secs(3);
 const TOUCHPAD_STRETCH: Duration = Duration::from_secs(10 * 60);
 
 /// The switches this Mac has, in the window's order: what it serves so far.
-const PERMITS: [Permit; 4] = [Permit::Screen, Permit::Control, Permit::Files, Permit::Power];
+const PERMITS: [Permit; 5] = [Permit::Screen, Permit::Control, Permit::Files, Permit::Camera, Permit::Power];
 
 /// Text for a paste the phone types (emoji, other scripts): put on the clipboard for its Ctrl+V,
 /// and what was there before comes back a moment later.
@@ -102,6 +103,7 @@ fn permit_words(p: Permit) -> (&'static str, &'static str) {
     match p {
         Permit::Control => ("Touchpad and keyboard", "Move the pointer, type, paste, switch Spaces"),
         Permit::Power => ("Wake, sleep and shut down", "Also log out and restart"),
+        Permit::Camera => ("Take photos with this Mac's camera", "Photos land on the phone"),
         other => (other.name(), other.detail()),
     }
 }
@@ -246,6 +248,7 @@ async fn run(dir: PathBuf) -> Result<()> {
     let mut untrusted_told: Option<Instant> = None;
     let mut features = vyoma::Vyoma::new(me.clone(), commands.clone(), activity.clone());
     let mut screens = screen::Screens::new(me.clone(), commands.clone(), activity.clone());
+    let mut photos = camera::Photos::new(me.clone(), commands.clone(), activity.clone());
     let mut mirrors = mirror::Mirrors::new(me.clone(), commands.clone());
     // When Mission Control was opened from the phone (macOS doesn't say whether it's showing).
     let mut mission: Option<Instant> = None;
@@ -314,6 +317,7 @@ async fn run(dir: PathBuf) -> Result<()> {
                     }
                     features.gone(&id);
                     screens.gone(&id);
+                    photos.stop(&id);
                     mirrors.gone(&id);
                     texts.gone(&id);
                 }
@@ -456,6 +460,7 @@ async fn run(dir: PathBuf) -> Result<()> {
                                 send(&id, p);
                             }
                         }
+                        camera::CAMERA_REQUEST if d.paired => photos.handle(&id, &vyoma::Phone { name: &d.name, cert: &d.cert, from }, &packet),
                         kind if screen::takes(kind) && d.paired => screens.handle(&id, &vyoma::Phone { name: &d.name, cert: &d.cert, from }, &packet),
                         kind if mirror::takes(kind) && d.paired => mirrors.handle(&id, &vyoma::Phone { name: &d.name, cert: &d.cert, from }, &packet),
                         PASTE if d.paired => {
@@ -539,6 +544,10 @@ async fn run(dir: PathBuf) -> Result<()> {
                     if !permits.allows(id, Permit::Screen) && screens.stop(id) {
                         tracing::info!("{id}: screen turned off, stopped");
                         send(id, permits::denied(Permit::Screen, &json!({ "type": "" })));
+                    }
+                    if !permits.allows(id, Permit::Camera) && photos.stop(id) {
+                        tracing::info!("{id}: camera turned off, photo dropped");
+                        send(id, permits::denied(Permit::Camera, &json!({ "type": camera::CAMERA_REQUEST })));
                     }
                 }
             }
@@ -700,6 +709,23 @@ impl Window {
                 SCREEN_CHECK => {
                     screen::allowed(true);
                     mac::open(screen::SCREEN_RECORDING);
+                    Ok(Value::Null)
+                }
+                CAMERA_CHECK => {
+                    if camera::access() == camera::Access::NotAsked {
+                        let changes = self.changes.clone();
+                        tokio::spawn(async move {
+                            let answer = camera::ask().await;
+                            tracing::info!("camera: {answer:?}");
+                            if answer == camera::Access::NotAsked {
+                                // Not from Vyoma.app, or no answer: Settings is where it's turned on.
+                                mac::open(camera::CAMERA_SETTINGS);
+                            }
+                            let _ = changes.send(json!({ "event": "Changed" }));
+                        });
+                    } else {
+                        mac::open(camera::CAMERA_SETTINGS);
+                    }
                     Ok(Value::Null)
                 }
                 CABLE_CHECK => {
@@ -1006,10 +1032,11 @@ async fn restart_once_trusted() {
 }
 
 /// This Mac's checks for the window's This Mac page: the Accessibility Allow the touchpad needs,
-/// Screen Recording for the screen on the phone, and adb for the USB cable.
+/// Screen Recording for the screen on the phone, the camera's Allow for photos, and adb for the USB cable.
 fn checks() -> Value {
     let touch = input::trusted();
     let screen = screen::allowed(false);
+    let camera = camera::access();
     let adb = vyoma_core::adb::find_adb().is_some();
     json!([
         {
@@ -1023,6 +1050,20 @@ fn checks() -> Value {
             "state": if screen { "ok" } else { "warn" },
             "detail": if screen { "Allowed in Screen Recording: the phone can show this screen and take screenshots" } else { "For the screen on the phone and screenshots: allow Vyoma in Screen Recording" },
             "action": if screen { "" } else { "Open Settings" },
+        },
+        {
+            "name": CAMERA_CHECK,
+            "state": if camera == camera::Access::Allowed { "ok" } else { "warn" },
+            "detail": match camera {
+                camera::Access::Allowed => "Allowed: the phone can take photos with this Mac's camera",
+                camera::Access::NotAsked => "For photos from the phone: macOS asks once whether Vyoma may use the camera",
+                camera::Access::Refused => "Turned off for Vyoma in Camera settings, so the phone can't take photos",
+            },
+            "action": match camera {
+                camera::Access::Allowed => "",
+                camera::Access::NotAsked => "Allow",
+                camera::Access::Refused => "Open Settings",
+            },
         },
         {
             "name": CABLE_CHECK,
@@ -1039,6 +1080,7 @@ fn checks() -> Value {
 
 const TOUCHPAD_CHECK: &str = "Touchpad and keyboard";
 const SCREEN_CHECK: &str = "Screen";
+const CAMERA_CHECK: &str = "Camera";
 const CABLE_CHECK: &str = "USB cable";
 
 /// Mac → phone: `{number}`, call it (Messages); the phone checks it all again (see the Linux app's telephony.rs).
@@ -1093,8 +1135,8 @@ fn identity(me: &Identity, name: String, laptop: bool) -> Value {
             "deviceName": name,
             "deviceType": if laptop { "laptop" } else { "desktop" },
             "protocolVersion": 8,
-            "incomingCapabilities": ([INCOMING, vyoma::INCOMING, screen::INCOMING, mirror::INCOMING, DESK_INCOMING].concat()),
-            "outgoingCapabilities": ([OUTGOING, vyoma::OUTGOING, screen::OUTGOING, mirror::OUTGOING, DESK_OUTGOING].concat()),
+            "incomingCapabilities": ([INCOMING, vyoma::INCOMING, screen::INCOMING, camera::INCOMING, mirror::INCOMING, DESK_INCOMING].concat()),
+            "outgoingCapabilities": ([OUTGOING, vyoma::OUTGOING, screen::OUTGOING, camera::OUTGOING, mirror::OUTGOING, DESK_OUTGOING].concat()),
         }),
     )
 }
@@ -1250,8 +1292,9 @@ mod tests {
         assert!(details("q", &Device::default(), &permits, 1)["battery"].is_null());
         // Only the switches this Mac has, in Mac words.
         let keys: Vec<(&str, bool)> = v["permits"].as_array().unwrap().iter().map(|p| (p["key"].as_str().unwrap(), p["on"].as_bool().unwrap())).collect();
-        assert_eq!(keys, [("screen", true), ("control", true), ("files", false), ("power", true)]);
-        assert_eq!(v["permits"][3]["name"], "Wake, sleep and shut down");
+        assert_eq!(keys, [("screen", true), ("control", true), ("files", false), ("camera", true), ("power", true)]);
+        assert_eq!(v["permits"][3]["name"], "Take photos with this Mac's camera");
+        assert_eq!(v["permits"][4]["name"], "Wake, sleep and shut down");
         assert_eq!(url_encode("Sam's Mac"), "Sam%27s%20Mac");
     }
 
@@ -1277,9 +1320,9 @@ mod tests {
         let p = identity(&me, "Sam's MacBook".into(), true);
         assert_eq!(p["body"]["deviceType"], "laptop");
         let incoming = p["body"]["incomingCapabilities"].as_array().unwrap();
-        assert_eq!(incoming.len(), INCOMING.len() + vyoma::INCOMING.len() + screen::INCOMING.len() + mirror::INCOMING.len() + DESK_INCOMING.len());
+        assert_eq!(incoming.len(), INCOMING.len() + vyoma::INCOMING.len() + screen::INCOMING.len() + camera::INCOMING.len() + mirror::INCOMING.len() + DESK_INCOMING.len());
         // What the phone looks for before it shows a tile (its PcFeatures).
-        for offered in ["vyoma.screenshot.request", "vyoma.screen.request", "vyoma.mirror", "vyoma.paste", "vyoma.desktop.step"] {
+        for offered in ["vyoma.screenshot.request", "vyoma.camera.request", "vyoma.screen.request", "vyoma.mirror", "vyoma.paste", "vyoma.desktop.step"] {
             assert!(incoming.iter().any(|t| t == offered), "{offered}");
         }
         assert!(!OUTGOING.contains(&"kdeconnect.lock"), "no lock state it can't know");

@@ -15,4 +15,10 @@ class NoCameraMessageTest {
         assertTrue(noCameraMessage(behindLid = true).contains("lid"))
         assertTrue(noCameraMessage(behindLid = null).contains("lid"))
     }
+
+    @Test fun theWebcamIsOfferedOnlyWhereThePcTakesOne() {
+        assertTrue(noCameraMessage(behindLid = false).contains("webcam"))
+        assertFalse(noCameraMessage(behindLid = false, webcam = false).contains("webcam"))
+        assertFalse(noCameraMessage(behindLid = true, webcam = false).contains("Hold"))
+    }
 }

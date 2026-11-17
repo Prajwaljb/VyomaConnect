@@ -278,6 +278,12 @@ async fn stream_stats(lease: Arc<Mutex<Instant>>, reply: impl Fn(&str, Value)) {
         if let Some(ac) = on_ac().await {
             body["ac"] = json!(ac);
         }
+        // So the phone can say "Camera unavailable" up front instead of after a tap.
+        let (camera, lid) = crate::camera::state().await;
+        body["camera"] = json!(camera);
+        if !camera {
+            body["cameraLid"] = json!(lid);
+        }
         reply(STATS, body);
     }
 }
