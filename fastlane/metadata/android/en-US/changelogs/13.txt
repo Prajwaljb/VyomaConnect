@@ -1,0 +1,5 @@
+• New widgets: PC, Shortcuts, Now playing and Clipboard
+• Messages on the PC: search, contacts, and calls placed from the PC
+• Saves battery: the phone stops calling a PC that's switched off
+• Mac: its screen on your phone with touch, screenshots, camera photos, your phone's screen in a Mac window, and the USB cable
+• Sync when closed answers every tap
