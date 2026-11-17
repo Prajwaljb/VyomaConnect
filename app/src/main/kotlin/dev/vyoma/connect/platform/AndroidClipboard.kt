@@ -169,6 +169,10 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
     /** When the current reader started (0 = none), and whether it has read a line (Android said yes). */
     @Volatile private var readerAt = 0L
     @Volatile private var readable = false
+    /** Vyoma lost focus while the reader waited for an answer: Android's question showed (or Vyoma was left). */
+    @Volatile private var questionShown = false
+    /** When Vyoma last gained focus (elapsedRealtime). */
+    @Volatile private var focusAt = 0L
     /** Android turned a reader down (no line came), and until when it turns new ones down without asking. */
     @Volatile private var refused = false
     @Volatile private var quietUntil = 0L
@@ -180,7 +184,12 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
     /** Vyoma's window gained or lost focus. */
     fun front(focus: Boolean) {
         inFront.value = focus
-        if (focus) checkRefused()
+        if (focus) {
+            focusAt = SystemClock.elapsedRealtime()
+            checkRefused()
+        } else if (readerAt != 0L && !readable) {
+            questionShown = true
+        }
     }
 
     /**
@@ -215,6 +224,7 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
         _askAt.value = 0L
         watcher?.cancel()
         readerAt = 0L
+        questionShown = false
         refused = false
         _asking.value = true
         _syncState.value = SyncState.WAITING
@@ -268,18 +278,25 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
     }
 
     /**
-     * A reader that has had Vyoma in front a while (asked and answered, or turned down without
-     * asking) and still read nothing was turned down.
+     * A reader that still read nothing was turned down: a while after Vyoma got the focus back from
+     * Android's question (its no, or it was dismissed), or, when no question took the focus, a good
+     * while after it started (turned down without asking). Android's question can take over a second
+     * to come up on a busy phone, so the second wait is long: judged at 1.5 s it was taken for a no
+     * while still on its way, and the minute Vyoma then waited ran out before Android's did, so the
+     * next ask was turned down silently, again and again, and no question ever showed.
      */
     private fun checkRefused() {
         if (readerAt == 0L || readable) return
         scope.launch {
-            delay(REFUSAL_SEEN_MS)
+            delay(if (questionShown) REFUSAL_SEEN_MS else SILENT_REFUSAL_MS)
             val now = SystemClock.elapsedRealtime()
-            if (readerAt == 0L || readable || !inFront.value || now - readerAt < REFUSAL_SEEN_MS || _syncState.value != SyncState.WAITING) return@launch
+            if (readerAt == 0L || readable || !inFront.value || _syncState.value != SyncState.WAITING) return@launch
+            // Android's minute starts at its no: when its question went (Vyoma's focus came back), or at the ask.
+            val since = if (questionShown) maxOf(focusAt, readerAt) else readerAt
+            if (now - since < (if (questionShown) REFUSAL_SEEN_MS else SILENT_REFUSAL_MS)) return@launch
             if (!refused || now >= quietUntil) {
-                if (now >= quietUntil) quietUntil = now + REFUSED_FOR_MS
-                if (!refused) VLog.i(TAG, "Android turned log access down")
+                quietUntil = maxOf(quietUntil, since + REFUSED_FOR_MS)
+                if (!refused) VLog.i(TAG, "Android turned log access down" + if (questionShown) "" else " without asking")
                 refused = true
                 _asking.value = false
             }
@@ -334,8 +351,10 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
         private const val SETTLE_MS = 1_000L
         /** How long the finger must rest before Android's question may pop up. */
         private const val QUIET_TOUCH_MS = 1_200L
-        /** In front this long with nothing read: turned down. */
+        /** Back in front this long after Android's question with nothing read: turned down. */
         private const val REFUSAL_SEEN_MS = 1_500L
+        /** In front this long with no question and nothing read: turned down without asking. */
+        private const val SILENT_REFUSAL_MS = 6_000L
         /** Android's memory of a "no" (LogcatManagerService: 60 s), plus a little. */
         private const val REFUSED_FOR_MS = 62_000L
         const val HISTORY_SIZE = 30
