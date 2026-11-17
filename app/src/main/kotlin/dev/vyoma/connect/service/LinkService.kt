@@ -293,7 +293,8 @@ class LinkService : LifecycleService() {
                 val total = running.sumOf { it.totalBytes.coerceAtLeast(0) }
                 running.size to if (total > 0) running.sumOf { it.doneBytes } * 20 / total else 0L
             }
-            val shown = combine(transfers, container.clipboard.history.map { it.take(4) }) { running, clips -> running to clips }
+            // A PC saying it's going (or back) changes what they say about it, with no link change.
+            val shown = combine(transfers, container.clipboard.history.map { it.take(4) }, hub.resting) { running, clips, resting -> Triple(running, clips, resting) }
             combine(connectedFlow, container.media.nowPlaying, shown, pcBattery, container.battery.state) { c, np, others, pc, phone ->
                 listOf(c.map(::summary), np?.let { Triple(it.player.title, it.player.isPlaying, it.art) }, others, pc, phone)
             }

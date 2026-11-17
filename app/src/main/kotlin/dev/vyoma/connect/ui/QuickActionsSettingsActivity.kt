@@ -18,15 +18,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.unit.dp
-import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.vyoma.connect.container
 import dev.vyoma.connect.designsystem.BounceIconButton
@@ -36,9 +35,9 @@ import dev.vyoma.connect.designsystem.SectionCard
 import dev.vyoma.connect.designsystem.SectionLabel
 import dev.vyoma.connect.designsystem.ThemeSettings
 import dev.vyoma.connect.designsystem.VyomaTheme
-import dev.vyoma.connect.widget.ActionsWidget
 import dev.vyoma.connect.widget.QuickAction
 import dev.vyoma.connect.widget.QuickActionStore
+import dev.vyoma.connect.widget.Widgets
 import kotlinx.coroutines.launch
 
 /**
@@ -61,13 +60,11 @@ class QuickActionsSettingsActivity : ComponentActivity() {
             fun save(list: List<QuickAction>) {
                 picked = list
                 QuickActionStore.set(this, widgetId, list)
-                scope.launch {
-                    runCatching { ActionsWidget().update(this@QuickActionsSettingsActivity, GlanceAppWidgetManager(this@QuickActionsSettingsActivity).getGlanceIdBy(widgetId)) }
-                }
+                scope.launch { Widgets.redrawShortcuts(this@QuickActionsSettingsActivity, widgetId) }
             }
             VyomaTheme(theme) {
                 CollapsingHeaderScaffold(
-                    title = "Quick actions",
+                    title = "Shortcuts",
                     subtitle = "Pick the buttons and their order. Bigger widgets show more of them.",
                     navigation = { BounceIconButton(onClick = ::finish) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back") } },
                     actions = {

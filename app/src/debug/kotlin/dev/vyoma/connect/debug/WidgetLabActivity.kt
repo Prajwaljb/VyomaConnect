@@ -1,6 +1,5 @@
 package dev.vyoma.connect.debug
 
-import android.app.Activity
 import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
@@ -20,11 +19,11 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.lifecycle.lifecycleScope
-import dev.vyoma.connect.widget.ActionsWidgetReceiver
-import dev.vyoma.connect.widget.ClipboardWidgetReceiver
-import dev.vyoma.connect.widget.DropWidgetReceiver
-import dev.vyoma.connect.widget.MediaWidgetReceiver
-import dev.vyoma.connect.widget.StatusWidgetReceiver
+import dev.vyoma.connect.widget.ClipsWidgetReceiver
+import dev.vyoma.connect.widget.NowPlayingWidgetReceiver
+import dev.vyoma.connect.widget.PcLink
+import dev.vyoma.connect.widget.PcWidgetReceiver
+import dev.vyoma.connect.widget.ShortcutsWidgetReceiver
 import dev.vyoma.connect.widget.WidgetSnapshot
 import dev.vyoma.connect.widget.Widgets
 import kotlinx.coroutines.launch
@@ -36,7 +35,11 @@ import kotlinx.coroutines.launch
  *  - `pixel`: Pixel Launcher / AOSP 4x5 (Android's sizing guide), w = 73n - 16, h = 118n - 16 (57 x 102)
  *  - `compact`: 4x6 and 5x7 grids (ColorOS, HyperOS, OxygenOS), w = 80n - 12, h = 88n - 18 (68 x 70)
  *
- *   adb shell am start -n dev.vyoma.connect.debug/dev.vyoma.connect.debug.WidgetLabActivity --es widget media --ez art true --es grid pixel
+ * `--es widget pc|shortcuts|media|clips`, `--es link connected|away|off|none`, `--ez art`, `--ez playing`,
+ * `--ez nothing` (no music, no copies), `--ez locked` (app lock on), `--ez transfer`, `--ez dark`. Start it
+ * with `-S` each time: a running lab keeps its first intent.
+ *
+ *   adb shell am start -S -n dev.vyoma.connect.debug/dev.vyoma.connect.debug.WidgetLabActivity --es widget media --es grid pixel
  */
 class WidgetLabActivity : androidx.activity.ComponentActivity() {
     private lateinit var host: AppWidgetHost
@@ -48,16 +51,18 @@ class WidgetLabActivity : androidx.activity.ComponentActivity() {
         setReceiversEnabled(true)
         host = AppWidgetHost(this, HOST_ID)
         host.deleteHost() // clear widgets left from an earlier run
-        val which = intent.getStringExtra("widget") ?: "status"
+        val which = intent.getStringExtra("widget") ?: "pc"
         val art = intent.getBooleanExtra("art", true)
         val dark = intent.getBooleanExtra("dark", false)
+        val nothing = intent.getBooleanExtra("nothing", false)
+        val locked = intent.getBooleanExtra("locked", false)
         val receiver = when (which) {
-            "actions" -> ActionsWidgetReceiver::class.java
-            "media" -> MediaWidgetReceiver::class.java
-            "clipboard" -> ClipboardWidgetReceiver::class.java
-            "drop" -> DropWidgetReceiver::class.java
-            else -> StatusWidgetReceiver::class.java
+            "shortcuts" -> ShortcutsWidgetReceiver::class.java
+            "media" -> NowPlayingWidgetReceiver::class.java
+            "clips" -> ClipsWidgetReceiver::class.java
+            else -> PcWidgetReceiver::class.java
         }
+        val previewName = mapOf("media" to "now_playing").getOrDefault(which, which)
         val sizes = (intent.getStringExtra("sizes") ?: "1x1,2x1,3x1,4x1,5x1,2x2,3x2,4x2,5x2,2x3,4x3,5x4")
             .split(',').map { it.split('x').let { (c, r) -> c.toInt() to r.toInt() } }
 
@@ -82,7 +87,7 @@ class WidgetLabActivity : androidx.activity.ComponentActivity() {
         if (intent.getBooleanExtra("preview", false)) {
             for (slot in listOf("tiny", "small", "wide_small", "medium", "large")) {
                 @Suppress("DiscouragedApi")
-                val layout = resources.getIdentifier("widget_preview_${which}_$slot", "layout", packageName)
+                val layout = resources.getIdentifier("widget_preview_${previewName}_$slot", "layout", packageName)
                 if (layout == 0) continue
                 column.addView(label("$slot preview"))
                 column.addView(FrameLayout(this).apply { addView(layoutInflater.inflate(layout, this, false)) })
@@ -90,7 +95,8 @@ class WidgetLabActivity : androidx.activity.ComponentActivity() {
             return
         }
         val grid = intent.getStringExtra("grid") ?: "oneui"
-        column.addView(label("grid: $grid, font scale ${resources.configuration.fontScale}"))
+        val link = PcLink.valueOf((intent.getStringExtra("link") ?: "connected").uppercase())
+        column.addView(label("grid: $grid, font scale ${resources.configuration.fontScale}, ${link.name.lowercase()}"))
         for ((c, r) in sizes) {
             val (w, h) = when (grid) {
                 "pixel" -> 73f * c - 16f to 118f * r - 16f
@@ -128,11 +134,15 @@ class WidgetLabActivity : androidx.activity.ComponentActivity() {
             Widgets.showSample(
                 this@WidgetLabActivity,
                 WidgetSnapshot(
-                    pcName = "vyoma", connected = true, pcBattery = 82, pcCharging = false,
+                    pcName = if (link == PcLink.NONE) null else "Workstation", link = link,
+                    offWhy = "sleep", since = System.currentTimeMillis() - 47 * 60_000,
+                    pcBattery = 82, pcCharging = false,
                     phoneBattery = 64, phoneCharging = true,
-                    title = "Midnight City (Extended Mix)", artist = "M83", playing = true,
+                    title = "Evening Tide (Extended Mix)".takeUnless { nothing }, artist = "Sample Artist",
+                    playing = intent.getBooleanExtra("playing", true),
                     art = if (art) sampleArt() else null,
-                    clips = listOf("https://kde.org/connect", "Meeting moved to 4:30 tomorrow", "Wi-Fi: hunter2", "git rebase -i HEAD~3"),
+                    clips = if (nothing || locked) emptyList() else listOf("https://example.org/notes", "Meeting moved to 4:30 tomorrow", "Order 4471-22", "git rebase -i HEAD~3"),
+                    clipsHidden = locked,
                     transferFraction = if (intent.getBooleanExtra("transfer", false)) 0.42f else null,
                     transferLabel = "photos.zip",
                 ),
@@ -164,16 +174,18 @@ class WidgetLabActivity : androidx.activity.ComponentActivity() {
 
     private fun dp(v: Number) = (v.toFloat() * resources.displayMetrics.density).toInt()
 
+    /** A made-up cover: a warm sunset over a deep sea, so the palette and the fade have something to work on. */
     private fun sampleArt(): Bitmap = Bitmap.createBitmap(480, 480, Bitmap.Config.ARGB_8888).also {
-        val p = Paint().apply { shader = LinearGradient(0f, 0f, 480f, 480f, 0xFFE94057.toInt(), 0xFF4A00E0.toInt(), Shader.TileMode.CLAMP) }
-        Canvas(it).drawRect(0f, 0f, 480f, 480f, p)
+        val c = Canvas(it)
+        c.drawRect(0f, 0f, 480f, 300f, Paint().apply { shader = LinearGradient(0f, 0f, 0f, 300f, 0xFFFF8A3D.toInt(), 0xFFFFC46B.toInt(), Shader.TileMode.CLAMP) })
+        c.drawCircle(240f, 300f, 90f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFF1C9.toInt() })
+        c.drawRect(0f, 300f, 480f, 480f, Paint().apply { shader = LinearGradient(0f, 300f, 0f, 480f, 0xFF1F4E6B.toInt(), 0xFF0B2233.toInt(), Shader.TileMode.CLAMP) })
     }
 
     private companion object {
         const val HOST_ID = 7701
         val RECEIVERS = listOf(
-            StatusWidgetReceiver::class.java, ActionsWidgetReceiver::class.java, MediaWidgetReceiver::class.java,
-            ClipboardWidgetReceiver::class.java, DropWidgetReceiver::class.java,
+            PcWidgetReceiver::class.java, ShortcutsWidgetReceiver::class.java, NowPlayingWidgetReceiver::class.java, ClipsWidgetReceiver::class.java,
         )
     }
 }

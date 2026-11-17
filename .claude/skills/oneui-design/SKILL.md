@@ -425,9 +425,23 @@ and wobbles out on an underdamped spring (`SQUASH_K` 260, `SQUASH_C` 9 in TabBar
 held or settling. The touchpad's glass lights under the finger: an accent pool that flows after it (eased each
 frame) and brightens the dot grid nearby; nothing runs at rest.
 
-## Widgets (Glance, Phase 1)
-Same palette tokens; system widget corner radius; never show a spinner forever. Render cached state and an
-"offline" look when the PC is away.
+## Widgets (Glance; `widget/WidgetViews.kt`, planned anew 2026-11)
+Four, one job each (the old Device / Quick actions / PC media / Clipboard / File drop set was removed: white slabs,
+grey rings, generic round buttons): **PC** (battery rings as on Home: green, red ≤15% unless charging; a ring with
+the device glyph inside and the reading beside it at 4x2), **Shortcuts** (Home's filled tiles, per-widget picks via
+`QuickActionsSettingsActivity`; labelled tiles ≥ 76x60 dp else glyph-only; Send files rings with a transfer's
+progress; at 1x1 the first pick IS the widget, which replaced File drop), **Now playing** (the media card: the
+cover's Palette dark-muted colour as the card, luminance ≤ 0.06, the cover fading into it from 40% across; words start
+where it's ~16% visible; play/pause a filled white circle, prev/next plain glyphs), **Clipboard** (newest copies,
+teal Send capsule; hidden behind the app lock: "Locked").
+- Tile fills: the system colours darkened (same hue/saturation) until white ink keeps 3.5:1, in BOTH themes
+  (dark mode's mint stayed bright and white on it was unreadable). Previews use the same rule (`scripts/gen_widget_previews.py`).
+- The PC away/off is said in words with a clock time ("Away since 5:59 PM", "Asleep since…", "Switched off since…";
+  a relative time would go stale on a widget): rings turn grey, tiles and Send fade, media controls go. Never a spinner.
+- Every size works on One UI (58 dp rows), Pixel (102) and 4x6 grids (70), at font scale 1.3 (text caps at 1.15x):
+  check each in WidgetLabActivity (`am start -S ... --es widget pc|shortcuts|media|clips --es grid ... --es link
+  away|off --ez nothing|locked|transfer`, `cmd uimode night yes` for dark; `--ez preview true` for the picker
+  previews). No name at 2x1 PC, no words at 2x1 media: what fits, not ellipses.
 
 ## Copy
 Short, friendly, specific ("Connected via Wi-Fi", "Make sure this code matches on both screens"). No exclamation spam.

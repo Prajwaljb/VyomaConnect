@@ -233,16 +233,16 @@
             <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
         </service>
 
-        <!-- Home screen widgets -->
-        <receiver android:name=".widget.StatusWidgetReceiver" android:exported="true" android:label="@string/widget_status">
+        <!-- Home screen widgets (planned anew 2026-11: PC, Shortcuts, Now playing, Clipboard) -->
+        <receiver android:name=".widget.PcWidgetReceiver" android:exported="true" android:label="@string/widget_pc">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_status" />
-            <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_status_colorful" />
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_pc" />
+            <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_pc_colorful" />
         </receiver>
-        <receiver android:name=".widget.ActionsWidgetReceiver" android:exported="true" android:label="@string/widget_actions">
+        <receiver android:name=".widget.ShortcutsWidgetReceiver" android:exported="true" android:label="@string/widget_shortcuts">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_actions" />
-            <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_actions_colorful" />
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_shortcuts" />
+            <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_shortcuts_colorful" />
             <!-- One UI reads this for the widget's long-press "Settings". -->
             <meta-data android:name="android.appwidget.provider.semConfigureActivity" android:value="dev.vyoma.connect.ui.QuickActionsSettingsActivity" />
         </receiver>
@@ -255,20 +255,15 @@
             android:theme="@style/Theme.Vyoma">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" /></intent-filter>
         </activity>
-        <receiver android:name=".widget.MediaWidgetReceiver" android:exported="true" android:label="@string/widget_media">
+        <receiver android:name=".widget.NowPlayingWidgetReceiver" android:exported="true" android:label="@string/widget_now_playing">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_media" />
-            <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_media_colorful" />
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_now_playing" />
+            <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_now_playing_colorful" />
         </receiver>
-        <receiver android:name=".widget.ClipboardWidgetReceiver" android:exported="true" android:label="@string/widget_clipboard">
+        <receiver android:name=".widget.ClipsWidgetReceiver" android:exported="true" android:label="@string/widget_clips">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_clipboard" />
-            <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_clipboard_colorful" />
-        </receiver>
-        <receiver android:name=".widget.DropWidgetReceiver" android:exported="true" android:label="@string/widget_drop">
-            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
-            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_drop" />
-            <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_drop_colorful" />
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_clips" />
+            <meta-data android:name="samsung.appwidget.colorful.info" android:resource="@xml/widget_clips_colorful" />
         </receiver>
 
         <service
