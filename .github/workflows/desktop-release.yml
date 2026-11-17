@@ -1,7 +1,8 @@
 # The PC app, ready-made, for each release: pushing a v* tag builds it for x86_64 and aarch64 on
 # Debian 12 (so it runs on any distro as new as that) and attaches it to that tag's release, with
 # SHA256SUMS and the one-line installer (packaging/get.sh as install.sh). The release is created as
-# a draft when there isn't one yet; publishing it stays a person's job.
+# a draft when there isn't one yet; publishing it stays a person's job. Then the Mac's Vyoma.app is
+# built from the same tag and attached too (macos.yml).
 name: PC app release build
 
 on:
@@ -104,3 +105,12 @@ jobs:
           gh release view "$TAG" >/dev/null 2>&1 ||
             gh release create "$TAG" --draft --verify-tag --title "Vyoma ${TAG#v}" --notes "Release notes to come."
           gh release upload "$TAG" dist/vyoma-desktop-*.tar.gz dist/SHA256SUMS dist/install.sh --clobber
+
+  mac:
+    needs: release
+    permissions:
+      contents: write
+    uses: ./.github/workflows/macos.yml
+    with:
+      release: ${{ inputs.tag || github.ref_name }}
+    secrets: inherit

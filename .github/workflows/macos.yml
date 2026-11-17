@@ -2,7 +2,8 @@
 # Nobody on the project has a Mac yet, so this is the only place macOS code runs: it builds the
 # shared core, the Mac daemon and Vyoma's window, and runs their tests. It's no stand-in for trying it on a real Mac.
 # Vyoma.app (window + daemon, universal, signed with Vyoma's own key or ad-hoc) is kept as a download for whoever tries
-# it on one.
+# it on one. For a release (called by desktop-release.yml after it makes the draft, or run by hand with
+# `release`), it builds that tag and attaches Vyoma-mac-<version>.zip and its .sha256 to the release.
 name: macOS
 
 on:
@@ -10,12 +11,26 @@ on:
     branches: [main]
     paths: ["desktop/**", "packaging/bundle-mac.sh", "VERSION", ".github/workflows/macos.yml"]
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Release tag to build and attach Vyoma.app to (e.g. v0.11.0); empty for a plain build"
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      release:
+        type: string
+        required: true
 
 jobs:
   build:
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release || github.ref }}
       - uses: actions/cache@v4
         with:
           path: |
@@ -70,3 +85,16 @@ jobs:
         with:
           name: Vyoma-mac
           path: desktop/out/Vyoma-mac.zip
+      - name: Attach to the release
+        if: inputs.release
+        working-directory: desktop/out
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release }}
+        run: |
+          version=${TAG#v}
+          [ "$(tr -d '[:space:]' < ../../VERSION)" = "$version" ] || { echo "VERSION isn't $version"; exit 1; }
+          cp Vyoma-mac.zip "Vyoma-mac-$version.zip"
+          shasum -a 256 "Vyoma-mac-$version.zip" > "Vyoma-mac-$version.zip.sha256"
+          cat "Vyoma-mac-$version.zip.sha256"
+          gh release upload "$TAG" "Vyoma-mac-$version.zip" "Vyoma-mac-$version.zip.sha256" --clobber

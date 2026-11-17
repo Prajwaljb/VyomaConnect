@@ -83,7 +83,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   second), share (files into ~/Downloads); `--install` makes it a LaunchAgent (`launchd.rs`; from Vyoma.app it runs the
   copy inside the app, which the window installs on first open or after the app moved). Vyoma.app
   (`packaging/bundle-mac.sh`: window `vyoma` as the app, `vyoma-mac` beside it, id `dev.vyoma.Vyoma`, icon
-  `desktop/mac/dist/vyoma.icns` from `gen.py`, ad-hoc signed) is the CI artifact `Vyoma-mac`; inside it notifications go
+  `desktop/mac/dist/vyoma.icns` from `gen.py`, ad-hoc signed) is the CI artifact `Vyoma-mac`, and on a `v*` tag desktop-release.yml has macos.yml attach it to the release as `Vyoma-mac-<version>.zip` + `.sha256` (by hand: `gh workflow run macos.yml -f release=vX.Y.Z`); inside it notifications go
   through UserNotifications under Vyoma's name (`notify.rs`, osascript outside the app or if macOS refuses). The window reaches it over
   `control.sock` in ~/Library/Application Support/Vyoma (mode 0600; `VYOMA_SOCKET` overrides): JSON lines, D-Bus method
   names, `Events` streams changes (`control.rs`; window side `gui/src/socket.rs` behind `daemon::connect()`); methods it
@@ -157,7 +157,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   check reads firewalld (`--query-port`) or ufw's rules file and offers Let phones through (D-Bus `OpenFirewall`, pkexec,
   `FirewallDone`), also on an away phone's page (`--scene away`).
 - Releasing: bump `VERSION` and `versionCode`, add the changelog, push the tag `vX.Y.Z`: CI makes the draft release with the
-  PC builds; build the APK and `gh release upload` `vyoma-X.Y.Z.apk` + `.sha256` and the notes to it (the user publishes
+  PC builds and the Mac zip; build the APK and `gh release upload` `vyoma-X.Y.Z.apk` + `.sha256` and the notes to it (the user publishes
   the draft), then the PKGBUILD's pkgver and sha256 (`makepkg -g`) and `makepkg --printsrcinfo > .SRCINFO`.
 
 ## Conventions
