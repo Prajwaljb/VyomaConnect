@@ -165,7 +165,18 @@ pub fn echo(b: &Value) -> Option<Value> {
 }
 
 #[cfg(target_os = "macos")]
-pub use mac::Pointer;
+pub use mac::{Pointer, ask, trusted};
+
+/// Where macOS lets apps control the Mac.
+pub const ACCESSIBILITY: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+
+/// The phone's word for it, short enough for its status bubble.
+pub const ALLOW_SHORT: &str = "The Mac hasn't allowed Vyoma yet: on the Mac, System Settings > Privacy & Security > Accessibility, turn on Vyoma";
+
+/// What to do when macOS hasn't allowed it, for the Mac's notification and the phone. macOS ties the
+/// Allow to the exact app, so an older Vyoma's switch can look on while this one isn't.
+pub const ALLOW_HOW: &str = "On the Mac: System Settings > Privacy & Security > Accessibility, turn on Vyoma (it can show as vyoma-mac). \
+If it's on already from an older Vyoma, select it, remove it with \u{2212}, then turn the new one on.";
 
 /// Elsewhere (this crate's tests on Linux) nothing moves.
 #[cfg(not(target_os = "macos"))]
@@ -179,7 +190,15 @@ impl Pointer {
     }
 }
 
-/// macOS hasn't let Vyoma control this Mac yet; said once, the first time.
+#[cfg(not(target_os = "macos"))]
+pub fn trusted() -> bool {
+    true
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn ask() {}
+
+/// macOS hasn't let Vyoma control this Mac (yet): nothing was done.
 #[derive(Debug)]
 pub struct NotAllowed;
 
@@ -247,7 +266,18 @@ mod mac {
     const CLICK_STATE: u32 = 1;
     const PIXELS: u32 = 0;
 
-    /// Whether macOS lets Vyoma move the pointer and type. The first time it isn't, macOS is asked
+    /// Whether macOS lets Vyoma move the pointer and type, without asking.
+    pub fn trusted() -> bool {
+        // SAFETY: a plain ApplicationServices call.
+        unsafe { AXIsProcessTrusted() }
+    }
+
+    /// Has macOS show its Allow (it adds Vyoma to the Accessibility list).
+    pub fn ask() {
+        allowed(true);
+    }
+
+    /// Whether macOS lets Vyoma move the pointer and type. When it isn't and [prompt], macOS is asked
     /// to show its Allow (it opens Accessibility in System Settings with Vyoma listed).
     fn allowed(prompt: bool) -> bool {
         // SAFETY: plain CoreFoundation/ApplicationServices calls; the dictionary is released.
@@ -288,10 +318,10 @@ mod mac {
     }
 
     impl Pointer {
-        /// Does [acts]; [super::NotAllowed] the first time macOS won't let it.
+        /// Does [acts], or [super::NotAllowed] while macOS won't let it (asking macOS once to show its Allow).
         pub fn handle(&mut self, acts: &[Act]) -> Result<(), super::NotAllowed> {
-            if !allowed(!self.asked) {
-                return if std::mem::replace(&mut self.asked, true) { Ok(()) } else { Err(super::NotAllowed) };
+            if !allowed(!std::mem::replace(&mut self.asked, true)) {
+                return Err(super::NotAllowed);
             }
             for a in acts {
                 // SAFETY: CoreGraphics event calls on events made here, each released after posting.

@@ -161,6 +161,10 @@ impl Daemon for SocketDaemon {
         self.unit("OpenFirewall", json!([]))
     }
 
+    fn fix_check(&self, name: &str) -> Result<()> {
+        self.unit("FixCheck", json!([name]))
+    }
+
     fn update(&self) -> Result<()> {
         self.unit("Update", json!([]))
     }

@@ -1,7 +1,7 @@
 # The macOS side, built and tested where there's a Mac: GitHub's macOS runners (Apple silicon).
 # Nobody on the project has a Mac yet, so this is the only place macOS code runs: it builds the
 # shared core, the Mac daemon and Vyoma's window, and runs their tests. It's no stand-in for trying it on a real Mac.
-# Vyoma.app (window + daemon, universal, ad-hoc signed) is kept as a download for whoever tries
+# Vyoma.app (window + daemon, universal, signed with Vyoma's own key or ad-hoc) is kept as a download for whoever tries
 # it on one.
 name: macOS
 
@@ -35,6 +35,24 @@ jobs:
       - name: Test the window
         working-directory: desktop/gui
         run: cargo test --release
+      # Vyoma's own signing key, if the repo has it (packaging/mac-signing-key.sh), in a keychain of
+      # its own for this run.
+      - name: Signing key
+        env:
+          P12: ${{ secrets.MAC_SIGN_P12 }}
+          PASSWORD: ${{ secrets.MAC_SIGN_PASSWORD }}
+        run: |
+          [ -n "$P12" ] || { echo "no signing key: ad-hoc"; exit 0; }
+          kc=$RUNNER_TEMP/vyoma.keychain-db kcpw=$(openssl rand -hex 16)
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/vyoma.p12"
+          security create-keychain -p "$kcpw" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$kcpw" "$kc"
+          security import "$RUNNER_TEMP/vyoma.p12" -k "$kc" -P "$PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpw" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/vyoma.p12"
+          echo "VYOMA_SIGN_IDENTITY=Vyoma Mac Signing" >> "$GITHUB_ENV"
       - name: Build Vyoma.app (universal)
         working-directory: desktop
         run: |

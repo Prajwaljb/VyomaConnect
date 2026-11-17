@@ -344,6 +344,8 @@ pub trait Daemon: Send + Sync {
     fn install(&self) -> Result<()>;
     /// Opens Vyoma's ports in the firewall; [Event::FirewallDone] follows.
     fn open_firewall(&self) -> Result<()>;
+    /// What a check's button on This PC does, by the check's name (the Mac's Accessibility, say).
+    fn fix_check(&self, name: &str) -> Result<()>;
     /// Updates the PC app to the newest release; the daemon restarts when it's done.
     fn update(&self) -> Result<()>;
     fn set_update_checks(&self, on: bool) -> Result<()>;
@@ -453,6 +455,10 @@ impl Daemon for DbusDaemon {
 
     fn open_firewall(&self) -> Result<()> {
         self.call("OpenFirewall", &())
+    }
+
+    fn fix_check(&self, name: &str) -> Result<()> {
+        self.call("FixCheck", &(name,))
     }
 
     fn update(&self) -> Result<()> {

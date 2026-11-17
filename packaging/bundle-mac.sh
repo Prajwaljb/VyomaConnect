@@ -1,7 +1,7 @@
 #!/bin/sh
 # Vyoma.app for macOS: the window (vyoma, what opens) and the background part (vyoma-mac, which
 # the window sets up as a login agent on first open) in one app, with Vyoma's icon and name.
-# Unsigned for now (ad-hoc signed where codesign exists), so the first open needs macOS's Allow in
+# No Developer ID (signed with Vyoma's own key, else ad-hoc), so the first open needs macOS's Allow in
 # System Settings > Privacy & Security.
 #   packaging/bundle-mac.sh <vyoma binary> <vyoma-mac binary> <out dir>
 set -eu
@@ -56,10 +56,20 @@ cat > "$app/Contents/Info.plist" <<EOF
 EOF
 
 if command -v plutil >/dev/null; then plutil -lint "$app/Contents/Info.plist"; fi
-# Ad-hoc: no Developer ID, but the app is sealed as one (Apple silicon runs nothing unsigned).
+# No Developer ID. VYOMA_SIGN_IDENTITY (Vyoma's own self-signed key, packaging/mac-signing-key.sh) keeps
+# the same identity every build, so macOS keeps the Accessibility Allow across updates; without it,
+# ad-hoc (Apple silicon runs nothing unsigned), a new identity each build.
 if command -v codesign >/dev/null; then
-	codesign --force --sign - "$app/Contents/MacOS/vyoma-mac"
-	codesign --force --sign - "$app"
+	sign() {
+		codesign --force --sign "$1" --identifier dev.vyoma.Vyoma.agent "$app/Contents/MacOS/vyoma-mac" &&
+			codesign --force --sign "$1" "$app"
+	}
+	identity=${VYOMA_SIGN_IDENTITY:--}
+	if ! sign "$identity"; then
+		echo "warning: couldn't sign as $identity, signing ad-hoc" >&2
+		sign -
+	fi
 	codesign --verify --strict --verbose=2 "$app"
+	codesign --display --requirements - "$app/Contents/MacOS/vyoma-mac" 2>&1 | tail -1
 fi
 echo "$app"

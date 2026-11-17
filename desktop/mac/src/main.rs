@@ -223,6 +223,8 @@ async fn run(dir: PathBuf) -> Result<()> {
     let (media_out_tx, mut media_out) = mpsc::unbounded_channel::<(Option<String>, Value)>();
     tokio::spawn(media::run(media_wanted.clone(), media_rx, media_out_tx));
     let mut pointer = input::Pointer::default();
+    // When the phone was last told that macOS hasn't allowed the touchpad.
+    let mut untrusted_told: Option<Instant> = None;
     let mut features = vyoma::Vyoma::new(me.clone(), commands.clone(), activity.clone());
 
     let send = |id: &str, p: Value| {
@@ -372,11 +374,20 @@ async fn run(dir: PathBuf) -> Result<()> {
                                 send(&id, echo);
                             }
                             if pointer.handle(&input::acts(&packet["body"])).is_err() {
-                                mac::notify(
-                                    "Allow Vyoma to control this Mac",
-                                    "For the touchpad and keyboard: System Settings > Privacy & Security > Accessibility, then turn on Vyoma.",
-                                )
-                                .await;
+                                // Said on the phone (every so often: moves stream) and once a run on the Mac,
+                                // then watched, so the agent picks the Allow up by itself.
+                                let now = Instant::now();
+                                if untrusted_told.is_none_or(|t| now.duration_since(t) > Duration::from_secs(15)) {
+                                    let first = untrusted_told.is_none();
+                                    untrusted_told = Some(now);
+                                    let mut no = permits::denied(Permit::Control, &packet);
+                                    no["body"]["reason"] = json!(input::ALLOW_SHORT);
+                                    send(&id, no);
+                                    if first {
+                                        mac::notify("Allow Vyoma to control this Mac", input::ALLOW_HOW).await;
+                                        tokio::spawn(restart_once_trusted());
+                                    }
+                                }
                             }
                         }
                         RUNCOMMAND_REQUEST => {
@@ -580,9 +591,18 @@ impl Window {
             }
             "EndPairingCode" => command(Command::Invite(None)),
             "Health" => Ok(json!({
-                "features": [], "installable": false, "checks": [], "notes": [],
+                "features": [], "installable": false, "checks": checks(), "notes": [],
                 "update": self.updates.status(),
             })),
+            "FixCheck" => {
+                if control::text(args, 0)? != TOUCHPAD_CHECK {
+                    return Err("Not on the Mac yet".into());
+                }
+                input::ask();
+                mac::open(input::ACCESSIBILITY);
+                tokio::spawn(restart_once_trusted());
+                Ok(Value::Null)
+            }
             "SetUpdateChecks" => {
                 self.updates.set_checks(args[0].as_bool().ok_or("on or off?")?);
                 Ok(Value::Null)
@@ -741,6 +761,33 @@ fn changes_details(event: &Event) -> bool {
         _ => true,
     }
 }
+
+/// Once macOS allows Vyoma in Accessibility, starts the agent again: macOS often lets a process
+/// that started without the Allow keep posting into nothing. launchd starts it again at once.
+async fn restart_once_trusted() {
+    if std::env::var_os("XPC_SERVICE_NAME").is_none() {
+        return; // Not launchd's: nobody would start it again.
+    }
+    while !input::trusted() {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    tracing::info!("allowed in Accessibility: starting again so the touchpad works");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    std::process::exit(0);
+}
+
+/// This Mac's checks for the window's This Mac page: the Accessibility Allow the touchpad needs.
+fn checks() -> Value {
+    let ok = input::trusted();
+    json!([{
+        "name": TOUCHPAD_CHECK,
+        "state": if ok { "ok" } else { "warn" },
+        "detail": if ok { "Allowed in Accessibility" } else { "macOS hasn't allowed Vyoma in Accessibility yet. After an update, remove the old Vyoma there and turn the new one on" },
+        "action": if ok { "" } else { "Open Settings" },
+    }])
+}
+
+const TOUCHPAD_CHECK: &str = "Touchpad and keyboard";
 
 /// A JSON list of strings (the files of a send).
 fn strings(v: &Value) -> Vec<String> {

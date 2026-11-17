@@ -1359,6 +1359,8 @@ component PcPage inherits Page {
     in property <bool> update-download;
     callback install();
     callback open-firewall();
+    /// A check's button on This PC (by the check's name).
+    callback check-act(string);
     callback setup();
     callback update();
     callback update-checks-toggled(bool);
@@ -1389,7 +1391,7 @@ component PcPage inherits Page {
             subtitle: c.detail;
             action: c.action;
             last: i == root.checks.length - 1;
-            act => { root.open-firewall(); }
+            act => { root.check-act(c.name); }
         }
     }
 
@@ -3032,6 +3034,8 @@ export component MainWindow inherits Window {
     // This PC's firewall may keep phones out, and Let phones through opens it.
     in property <bool> firewall-fix;
     callback open-firewall();
+    /// A check's button on This PC (by the check's name).
+    callback check-act(string);
     callback update();
     callback update-checks-toggled(bool);
     callback finish-setup();
@@ -3241,6 +3245,7 @@ export component MainWindow inherits Window {
             update-download: root.update-download;
             install => { root.install(); }
             open-firewall => { root.open-firewall(); }
+            check-act(name) => { root.check-act(name); }
             setup => { root.setup = true; }
             update => { root.update(); }
             update-checks-toggled(on) => { root.update-checks-toggled(on); }

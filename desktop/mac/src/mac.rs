@@ -241,43 +241,6 @@ impl Ringer {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_battery_from_pmset() {
-        let charging = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=4653155)\t87%; charging; 1:02 remaining present: true\n";
-        assert_eq!(parse_battery(charging), Some(Battery { charge: 87, charging: true }));
-        let on_battery = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=4653155)\t5%; discharging; 0:20 remaining present: true\n";
-        assert_eq!(parse_battery(on_battery), Some(Battery { charge: 5, charging: false }));
-        let full = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t100%; charged; 0:00 remaining present: true\n";
-        assert_eq!(parse_battery(full), Some(Battery { charge: 100, charging: false }));
-        let held = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t80%; AC attached; not charging present: true\n";
-        assert_eq!(parse_battery(held), Some(Battery { charge: 80, charging: false }));
-        let finishing = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t98%; finishing charge; 0:05 remaining present: true\n";
-        assert_eq!(parse_battery(finishing), Some(Battery { charge: 98, charging: true }));
-        assert_eq!(parse_battery("Now drawing from 'AC Power'\n"), None, "a Mac without a battery");
-    }
-
-    #[test]
-    fn only_the_yes_button_is_yes() {
-        assert!(answered_yes(b"Accept\n", "Accept"));
-        assert!(!answered_yes(b"Reject\n", "Accept"));
-        assert!(!answered_yes(b"\n", "Accept"), "it gave up");
-        assert!(!answered_yes(b"", "Accept"), "closed or failed");
-    }
-
-    #[test]
-    fn device_text_is_passed_as_arguments_never_as_script() {
-        let evil = "\" & (do shell script \"touch /tmp/x\") & \"";
-        let c = script(&["on run argv", "return item 2 of argv", "end run"], &["-x", evil]);
-        let args: Vec<_> = c.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
-        // The scripts are ours alone; the device's text comes after our own first word, untouched.
-        assert_eq!(args, ["-e", "on run argv", "-e", "return item 2 of argv", "-e", "end run", FIRST, "-x", evil]);
-    }
-}
-
 /// Whether the screen is locked, from the login session's own record (CoreGraphics'
 /// `CGSSessionScreenIsLocked`, there only while it's locked); None outside a login session.
 #[cfg(target_os = "macos")]
@@ -320,3 +283,39 @@ pub fn screen_locked() -> Option<bool> {
     None
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_battery_from_pmset() {
+        let charging = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=4653155)\t87%; charging; 1:02 remaining present: true\n";
+        assert_eq!(parse_battery(charging), Some(Battery { charge: 87, charging: true }));
+        let on_battery = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=4653155)\t5%; discharging; 0:20 remaining present: true\n";
+        assert_eq!(parse_battery(on_battery), Some(Battery { charge: 5, charging: false }));
+        let full = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t100%; charged; 0:00 remaining present: true\n";
+        assert_eq!(parse_battery(full), Some(Battery { charge: 100, charging: false }));
+        let held = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t80%; AC attached; not charging present: true\n";
+        assert_eq!(parse_battery(held), Some(Battery { charge: 80, charging: false }));
+        let finishing = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t98%; finishing charge; 0:05 remaining present: true\n";
+        assert_eq!(parse_battery(finishing), Some(Battery { charge: 98, charging: true }));
+        assert_eq!(parse_battery("Now drawing from 'AC Power'\n"), None, "a Mac without a battery");
+    }
+
+    #[test]
+    fn only_the_yes_button_is_yes() {
+        assert!(answered_yes(b"Accept\n", "Accept"));
+        assert!(!answered_yes(b"Reject\n", "Accept"));
+        assert!(!answered_yes(b"\n", "Accept"), "it gave up");
+        assert!(!answered_yes(b"", "Accept"), "closed or failed");
+    }
+
+    #[test]
+    fn device_text_is_passed_as_arguments_never_as_script() {
+        let evil = "\" & (do shell script \"touch /tmp/x\") & \"";
+        let c = script(&["on run argv", "return item 2 of argv", "end run"], &["-x", evil]);
+        let args: Vec<_> = c.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        // The scripts are ours alone; the device's text comes after our own first word, untouched.
+        assert_eq!(args, ["-e", "on run argv", "-e", "return item 2 of argv", "-e", "end run", FIRST, "-x", evil]);
+    }
+}

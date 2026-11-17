@@ -297,6 +297,18 @@ fn wire(ui: &MainWindow) {
             });
         }
     });
+    ui.on_check_act({
+        let ui = ui.as_weak();
+        move |name| {
+            let ui = ui.clone();
+            std::thread::spawn(move || {
+                let done = daemon::connect().and_then(|d| if name == "Firewall" { d.open_firewall() } else { d.fix_check(&name) });
+                if let Err(e) = done {
+                    notify(&ui, format!("{e:#}"));
+                }
+            });
+        }
+    });
     ui.on_install({
         let ui = ui.as_weak();
         move || {
