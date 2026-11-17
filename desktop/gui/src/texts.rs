@@ -4,8 +4,8 @@
 use chrono::{DateTime, Datelike, Local, TimeZone};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use crate::daemon::{self, Inbox, ThreadData};
-use crate::{Bubble, Chat, MainWindow, breakable, notify};
+use crate::daemon::{self, Conversation, Found, Inbox, People, Person, ThreadData};
+use crate::{Bubble, Chat, Contact, MainWindow, breakable, notify};
 
 /// The page's id in `selected`.
 pub const MESSAGES: &str = "messages";
@@ -27,6 +27,12 @@ pub fn wire(ui: &MainWindow) {
             }
             win.set_thread("".into());
             win.set_draft("".into());
+            win.set_texts_query("".into());
+            win.set_texts_tab("chats".into());
+            win.set_found_chats(ModelRc::default());
+            win.set_found_people(ModelRc::default());
+            win.set_people(ModelRc::default());
+            win.set_people_loaded(false);
             win.set_texts_phone(win.get_current().name);
             win.set_texts_linked(win.get_current().linked);
             win.set_selected(MESSAGES.into());
@@ -54,6 +60,49 @@ pub fn wire(ui: &MainWindow) {
             win.set_thread(thread);
             read(&ui);
             unlock(&ui, win.get_current().id.to_string());
+        }
+    });
+    ui.on_search_texts({
+        let ui = ui.as_weak();
+        move |_| read(&ui)
+    });
+    ui.on_show_contacts({
+        let ui = ui.as_weak();
+        move || read(&ui)
+    });
+    ui.on_message_person({
+        let ui = ui.as_weak();
+        move |number, name| {
+            let Some(win) = ui.upgrade() else { return };
+            let id = win.get_current().id.to_string();
+            let ui = ui.clone();
+            std::thread::spawn(move || match daemon::connect().and_then(|d| d.thread_for(&id, &number)) {
+                Ok(thread) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        let Some(win) = ui.upgrade() else { return };
+                        win.set_thread_name(breakable(&name).into());
+                        win.set_thread_number(number.clone());
+                        win.set_thread_call("".into());
+                        win.set_bubbles(ModelRc::default());
+                        win.set_draft("".into());
+                        win.set_thread(thread.to_string().into());
+                        read(&ui);
+                    });
+                }
+                Err(e) => notify(&ui, format!("Couldn't open your texts with {name}: {e:#}")),
+            });
+        }
+    });
+    ui.on_call_person({
+        let ui = ui.as_weak();
+        move |number, name| {
+            let Some(win) = ui.upgrade() else { return };
+            let (id, phone) = (win.get_current().id.to_string(), win.get_texts_phone().to_string());
+            let ui = ui.clone();
+            std::thread::spawn(move || match daemon::connect().and_then(|d| d.call_number(&id, &number)) {
+                Ok(()) => notify(&ui, format!("Calling {name} on {phone}\u{2026}")),
+                Err(e) => notify(&ui, format!("Couldn't call {name}: {e:#}")),
+            });
         }
     });
     ui.on_send_text({
@@ -111,10 +160,14 @@ pub fn read(ui: &slint::Weak<MainWindow>) {
         }
         let (id, thread) = (win.get_current().id.to_string(), win.get_thread().parse::<i64>().ok());
         let linked = win.get_current().linked;
+        let query = win.get_texts_query().to_string();
+        let contacts = win.get_texts_tab() == "contacts";
         std::thread::spawn(move || {
             let d = daemon::connect();
             let inbox = d.as_ref().map_err(|e| anyhow::anyhow!("{e:#}")).and_then(|d| d.conversations(&id));
             let texts = thread.and_then(|t| d.as_ref().ok().and_then(|d| d.thread(&id, t).ok()));
+            let found = (!query.trim().is_empty()).then(|| d.as_ref().ok().and_then(|d| d.search_texts(&id, &query).ok())).flatten();
+            let people = contacts.then(|| d.as_ref().ok().and_then(|d| d.contacts(&id).ok())).flatten();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(win) = ui.upgrade() else { return };
                 if win.get_selected() != MESSAGES || win.get_current().id != id.as_str() {
@@ -123,10 +176,17 @@ pub fn read(ui: &slint::Weak<MainWindow>) {
                 let now = Local::now();
                 match inbox {
                     Ok(inbox) => show_inbox(&win, &inbox, linked, now),
-                    Err(_) => show_inbox(&win, &Inbox { state: if linked { "silent" } else { "away" }.into(), list: Vec::new() }, linked, now),
+                    Err(_) => show_inbox(&win, &Inbox { state: if linked { "silent" } else { "away" }.into(), list: Vec::new(), can_call: false, call_here: false }, linked, now),
                 }
                 if let Some(t) = texts.filter(|_| win.get_thread().parse::<i64>().ok() == thread) {
                     show_thread(&win, &t, now);
+                }
+                // Only what's still asked for: the words may have changed while this was out.
+                if let Some(found) = found.filter(|_| win.get_texts_query() == query.as_str()) {
+                    show_found(&win, &found, now);
+                }
+                if let Some(people) = people {
+                    show_people(&win, &people);
                 }
                 if win.get_texts_state() == "loading" {
                     let ui = win.as_weak();
@@ -145,20 +205,44 @@ pub fn show_inbox(ui: &MainWindow, inbox: &Inbox, linked: bool, now: DateTime<Lo
         ui.set_thread("".into());
         ui.set_draft("".into());
     }
-    let chats: Vec<Chat> = inbox
-        .list
+    let chats: Vec<Chat> = inbox.list.iter().map(|c| chat(c, now)).collect();
+    ui.set_chats(ModelRc::new(VecModel::from(chats)));
+    ui.set_can_call(inbox.can_call);
+    ui.set_call_here(inbox.call_here);
+}
+
+fn chat(c: &Conversation, now: DateTime<Local>) -> Chat {
+    Chat {
+        thread: c.thread.to_string().into(),
+        name: breakable(&c.name).into(),
+        initial: initial(&c.name).into(),
+        hue: hue(&c.name),
+        snippet: if c.mine { format!("You: {}", one_line(&c.snippet)) } else { one_line(&c.snippet) }.into(),
+        meta: when(c.date, now).into(),
+        unread: c.unread,
+    }
+}
+
+/// A row per number: a contact with two numbers shows twice, each with its own.
+fn contacts(people: &[Person]) -> ModelRc<Contact> {
+    let rows: Vec<Contact> = people
         .iter()
-        .map(|c| Chat {
-            thread: c.thread.to_string().into(),
-            name: breakable(&c.name).into(),
-            initial: initial(&c.name).into(),
-            hue: hue(&c.name),
-            snippet: if c.mine { format!("You: {}", one_line(&c.snippet)) } else { one_line(&c.snippet) }.into(),
-            meta: when(c.date, now).into(),
-            unread: c.unread,
+        .flat_map(|p| {
+            p.numbers.iter().map(move |n| Contact { name: breakable(&p.name).into(), number: n.clone().into(), initial: initial(&p.name).into(), hue: hue(&p.name) })
         })
         .collect();
-    ui.set_chats(ModelRc::new(VecModel::from(chats)));
+    ModelRc::new(VecModel::from(rows))
+}
+
+pub fn show_found(ui: &MainWindow, found: &Found, now: DateTime<Local>) {
+    let chats: Vec<Chat> = found.chats.iter().map(|c| chat(c, now)).collect();
+    ui.set_found_chats(ModelRc::new(VecModel::from(chats)));
+    ui.set_found_people(contacts(&found.people));
+}
+
+pub fn show_people(ui: &MainWindow, people: &People) {
+    ui.set_people(contacts(&people.list));
+    ui.set_people_loaded(people.state == "ready" || !people.list.is_empty());
 }
 
 pub fn show_thread(ui: &MainWindow, t: &ThreadData, now: DateTime<Local>) {
@@ -166,6 +250,7 @@ pub fn show_thread(ui: &MainWindow, t: &ThreadData, now: DateTime<Local>) {
         ui.set_thread_name(breakable(&t.name).into());
     }
     ui.set_thread_number(t.number.clone().into());
+    ui.set_thread_call(t.call.clone().into());
     let today = now.date_naive();
     let day_of = |ms: i64| Local.timestamp_millis_opt(ms).single().map(|d| d.date_naive());
     let mut out: Vec<Bubble> = Vec::with_capacity(t.texts.len());

@@ -247,13 +247,15 @@ fn messages(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>)
     let ms = |mins_ago: i64| (noon - chrono::Duration::minutes(mins_ago)).timestamp_millis();
     let chat = |thread: i64, name: &str, snippet: &str, mins: i64, mine: bool, unread: bool| Conversation { thread, name: name.into(), snippet: snippet.into(), date: ms(mins), mine, unread };
     let inbox = match scene {
-        "messages-silent" => Inbox { state: "silent".into(), list: vec![] },
-        "messages-loading" => Inbox { state: "loading".into(), list: vec![] },
-        "messages-asking" => Inbox { state: "asking".into(), list: vec![] },
-        "messages-declined" => Inbox { state: "declined".into(), list: vec![] },
-        "messages-locked" => Inbox { state: "locked".into(), list: vec![] },
+        "messages-silent" => Inbox { state: "silent".into(), list: vec![], can_call: false, call_here: true },
+        "messages-loading" => Inbox { state: "loading".into(), list: vec![], can_call: false, call_here: true },
+        "messages-asking" => Inbox { state: "asking".into(), list: vec![], can_call: false, call_here: true },
+        "messages-declined" => Inbox { state: "declined".into(), list: vec![], can_call: false, call_here: true },
+        "messages-locked" => Inbox { state: "locked".into(), list: vec![], can_call: false, call_here: true },
         _ => Inbox {
             state: "ready".into(),
+            can_call: true,
+            call_here: true,
             list: vec![
                 chat(1, "Maya Fernandes", "Running 10 minutes late, save me a seat!", 3, false, true),
                 chat(2, "Dad", "Call me when you're free", 52, false, true),
@@ -266,7 +268,21 @@ fn messages(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>)
         },
     };
     crate::texts::show_inbox(ui, &inbox, true, noon);
-    if scene == "messages-thread" {
+    let person = |name: &str, numbers: &[&str]| crate::daemon::Person { name: name.into(), numbers: numbers.iter().map(|n| n.to_string()).collect() };
+    if scene == "messages-contacts" {
+        ui.set_texts_tab("contacts".into());
+        let list = vec![person("Arjun", &["+1 415 555 0177"]), person("Dad", &["+1 415 555 0102", "+1 650 555 0110"]), person("Maya Fernandes", &["+1 415 555 0101"]), person("Priya Raman", &["+1 415 555 0123"])];
+        crate::texts::show_people(ui, &crate::daemon::People { state: "ready".into(), list });
+    }
+    if scene == "messages-search" {
+        ui.set_texts_query("dinner".into());
+        let found = crate::daemon::Found {
+            chats: vec![chat(1, "Maya Fernandes", "Are we still on for dinner tomorrow?", 60 * 24 + 40, false, false), chat(3, "Arjun", "Dinner was great, thanks again", 60 * 24 * 4, false, false)],
+            people: vec![],
+        };
+        crate::texts::show_found(ui, &found, noon);
+    }
+    if scene == "messages-thread" || scene == "messages-call" {
         ui.invoke_open_thread("1".into());
         let text = |mins: i64, mine: bool, body: &str| TextData { body: body.into(), date: ms(mins), mine, failed: false, sending: false };
         let mut texts = vec![
@@ -278,8 +294,13 @@ fn messages(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>)
             text(3, false, "Running 10 minutes late, save me a seat!"),
         ];
         texts.push(TextData { body: "No rush, I'm here".into(), date: ms(0), mine: true, failed: false, sending: true });
-        crate::texts::show_thread(ui, &ThreadData { name: "Maya Fernandes".into(), number: "+1 415 555 0101".into(), texts }, noon);
+        crate::texts::show_thread(ui, &ThreadData { name: "Maya Fernandes".into(), number: "+1 415 555 0101".into(), call: "+14155550101".into(), texts }, noon);
         ui.set_draft("".into());
+    }
+    if scene == "messages-call" {
+        ui.set_call_name("Maya Fernandes".into());
+        ui.set_call_number("+1 415 555 0101".into());
+        ui.set_confirm_call(true);
     }
 }
 

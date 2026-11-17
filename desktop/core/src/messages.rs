@@ -32,6 +32,11 @@ pub const UNLOCKED: &str = "vyoma.texts.unlocked";
 /// Phone → PC: a request was refused, as it's locked for us.
 pub const LOCKED: &str = "vyoma.texts.locked";
 
+/// How many conversations a search asks the phone for the texts of (the newest ones not loaded yet).
+const SEARCH_LOADS: usize = 40;
+/// At most this many contacts and conversations come back from a search.
+const SEARCH_MOST: usize = 50;
+
 /// How many of a thread's newest texts are asked for.
 const THREAD_TEXTS: u64 = 200;
 /// No answer after this: the phone isn't sharing its texts (or has none).
@@ -77,6 +82,8 @@ struct Thread {
     asked: bool,
     /// Sent from here, not yet back from the phone.
     pending: Vec<(String, Instant)>,
+    /// A new conversation started here (a negative id): who it's to, until the phone has its first text.
+    to: Vec<String>,
 }
 
 #[derive(Default)]
@@ -84,6 +91,10 @@ struct Inbox {
     threads: HashMap<i64, Thread>,
     /// Phone number's last digits to the contact's name.
     contacts: HashMap<String, String>,
+    /// The phone's contacts by their uid: name and numbers.
+    people: BTreeMap<String, (String, Vec<String>)>,
+    /// A conversation started here (negative id) to the phone's own thread for it, once its first text is back.
+    moved: HashMap<i64, i64>,
     /// When the conversations were asked for on this link; None until the page opens.
     asked: Option<Instant>,
     /// Anything came back since.
@@ -173,6 +184,7 @@ impl Store {
         if inbox.guarded && inbox.gate != Gate::Open {
             return (json!({ "name": "", "number": "", "texts": [] }).to_string(), Vec::new());
         }
+        let thread = inbox.moved.get(&thread).copied().unwrap_or(thread);
         let t = inbox.threads.entry(thread).or_default();
         let mut ask = Vec::new();
         if !t.asked {
@@ -184,7 +196,112 @@ impl Store {
         texts.extend(t.pending.iter().map(|(body, _)| json!({ "body": body, "date": now_ms(), "mine": true, "failed": false, "sending": true })));
         let t = &inbox.threads[&thread];
         let number = addresses(t).join(", ");
-        (json!({ "name": inbox.name_of(t), "number": number, "texts": texts }).to_string(), ask)
+        // One person: the window offers to call them.
+        let call = match addresses(t).as_slice() {
+            [one] => dialable(one).unwrap_or_default(),
+            _ => String::new(),
+        };
+        (json!({ "name": inbox.name_of(t), "number": number, "call": call, "texts": texts }).to_string(), ask)
+    }
+
+    /// The phone's contacts with a number, by name: `{state, list: [{name, numbers}]}` (state as [Self::conversations]'s),
+    /// and what to ask the phone first.
+    pub fn contacts(&self, id: &str, guarded: bool) -> (String, Vec<Value>) {
+        let (inbox_state, ask) = self.conversations(id, guarded);
+        let state = serde_json::from_str::<Value>(&inbox_state).ok().and_then(|v| v["state"].as_str().map(str::to_owned)).unwrap_or_default();
+        let all = self.inboxes.lock().unwrap();
+        let mut list: Vec<&(String, Vec<String>)> = all.get(id).map(|i| i.people.values().filter(|(_, n)| !n.is_empty()).collect()).unwrap_or_default();
+        list.sort_by_key(|(name, _)| name.to_lowercase());
+        let list: Vec<Value> = list.into_iter().map(|(name, numbers)| json!({ "name": name, "numbers": numbers })).collect();
+        (json!({ "state": state, "list": list }).to_string(), ask)
+    }
+
+    /// Conversations and contacts matching [query] (a name, a number, or words in a text): `{chats: [...], people: [...]}`,
+    /// chats as [Self::conversations] lists them, with the matching text as the snippet. Only texts on this PC can match,
+    /// so a search also asks the phone for the texts of the newest conversations not loaded yet: the results grow as they come.
+    pub fn search(&self, id: &str, query: &str, guarded: bool) -> (String, Vec<Value>) {
+        let empty = || json!({ "chats": [], "people": [] }).to_string();
+        let query = query.trim().to_lowercase();
+        let mut all = self.inboxes.lock().unwrap();
+        let inbox = all.entry(id.to_owned()).or_default();
+        inbox.guarded |= guarded;
+        if query.is_empty() || (inbox.guarded && inbox.gate != Gate::Open) {
+            return (empty(), Vec::new());
+        }
+        if inbox.guarded {
+            inbox.used = Some(Instant::now());
+        }
+        let digits: String = query.chars().filter(char::is_ascii_digit).collect();
+        // A number matches by its digits ("555 0100" finds "+1 (555) 010-0123"), words by their letters.
+        let number_like = digits.len() >= 3 && query.chars().all(|c| c.is_ascii_digit() || " +-().".contains(c));
+        let hits_number = |n: &str| number_like && n.chars().filter(char::is_ascii_digit).collect::<String>().contains(&digits);
+        let hits = |text: &str| text.to_lowercase().contains(&query);
+        let mut chats: Vec<(i64, Value)> = Vec::new();
+        for (thread, t) in &inbox.threads {
+            let name = inbox.name_of(t);
+            let who = hits(&name) || addresses(t).iter().any(|a| hits_number(a));
+            let text = t.texts.values().rev().find(|m| hits(&m.body));
+            let shown = match (text, t.texts.values().next_back()) {
+                (Some(m), _) => m,
+                (None, Some(last)) if who => last,
+                _ => continue,
+            };
+            let unread = t.texts.values().next_back().is_some_and(|l| !l.mine && !l.read);
+            chats.push((shown.date, json!({ "thread": thread, "name": name, "snippet": shown.body, "date": shown.date, "mine": shown.mine, "unread": unread })));
+        }
+        chats.sort_by(|a, b| b.0.cmp(&a.0));
+        chats.truncate(SEARCH_MOST);
+        let mut people: Vec<&(String, Vec<String>)> =
+            inbox.people.values().filter(|(name, numbers)| !numbers.is_empty() && (hits(name) || numbers.iter().any(|n| hits_number(n)))).collect();
+        people.sort_by_key(|(name, _)| name.to_lowercase());
+        people.truncate(SEARCH_MOST);
+        let people: Vec<Value> = people.into_iter().map(|(name, numbers)| json!({ "name": name, "numbers": numbers })).collect();
+        let mut newest: Vec<(i64, i64)> = inbox.threads.iter().filter(|(id, t)| **id > 0 && !t.asked).map(|(id, t)| (t.texts.values().next_back().map_or(0, |m| m.date), *id)).collect();
+        newest.sort_by(|a, b| b.0.cmp(&a.0));
+        let mut ask = Vec::new();
+        for (_, thread) in newest.into_iter().take(SEARCH_LOADS) {
+            inbox.threads.get_mut(&thread).expect("listed").asked = true;
+            ask.push(packet(REQUEST_CONVERSATION, json!({ "threadID": thread, "rangeStartTimestamp": -1, "numberToRequest": THREAD_TEXTS })));
+        }
+        let chats: Vec<Value> = chats.into_iter().map(|(_, v)| v).collect();
+        (json!({ "chats": chats, "people": people }).to_string(), ask)
+    }
+
+    /// The conversation with [number]: the phone's own if there's one with just them, else a new one started here
+    /// (a negative id) that [Self::send] can text.
+    pub fn thread_for(&self, id: &str, number: &str, guarded: bool) -> Result<i64, String> {
+        let number = number.trim();
+        if number.is_empty() {
+            return Err("No number".into());
+        }
+        let mut all = self.inboxes.lock().unwrap();
+        let inbox = all.entry(id.to_owned()).or_default();
+        inbox.guarded |= guarded;
+        if inbox.guarded && inbox.gate != Gate::Open {
+            return Err("Messages is locked: confirm on your phone first".into());
+        }
+        let want = key(number);
+        if let Some((thread, _)) = inbox.threads.iter().filter(|(_, t)| !t.texts.is_empty() || !t.to.is_empty()).find(|(_, t)| matches!(addresses(t).as_slice(), [one] if key(one) == want)) {
+            return Ok(*thread);
+        }
+        let thread = inbox.threads.keys().copied().min().unwrap_or(0).min(0) - 1;
+        inbox.threads.insert(thread, Thread { asked: true, to: vec![number.to_owned()], ..Thread::default() });
+        Ok(thread)
+    }
+
+    /// Whether the window may ask [id]'s phone to call someone: only while its texts are open (the owner confirmed on
+    /// the phone, which checks that again itself).
+    pub fn may_call(&self, id: &str, guarded: bool) -> Result<(), String> {
+        let mut all = self.inboxes.lock().unwrap();
+        let inbox = all.entry(id.to_owned()).or_default();
+        inbox.guarded |= guarded;
+        if inbox.guarded {
+            if inbox.gate != Gate::Open {
+                return Err("Messages is locked: confirm on your phone first".into());
+            }
+            inbox.used = Some(Instant::now());
+        }
+        Ok(())
     }
 
     /// Sends [body] to [thread]'s people: the packet for the phone, or why it can't.
@@ -202,6 +319,7 @@ impl Store {
             }
             inbox.used = Some(Instant::now());
         }
+        let thread = inbox.moved.get(&thread).copied().unwrap_or(thread);
         let t = inbox.threads.get_mut(&thread).ok_or("That conversation isn't loaded")?;
         let to = addresses(t);
         if to.is_empty() {
@@ -241,6 +359,9 @@ impl Store {
                 inbox.heard = true;
                 for m in b["messages"].as_array().into_iter().flatten() {
                     let Some((thread, text)) = parse_text(m) else { continue };
+                    if text.mine {
+                        inbox.adopt(thread, &text);
+                    }
                     let t = inbox.threads.entry(thread).or_default();
                     if text.mine
                         && let Some(i) = t.pending.iter().position(|(body, _)| *body == text.body)
@@ -260,9 +381,10 @@ impl Store {
             CONTACTS_VCARDS_REPLY => {
                 for uid in b["uids"].as_array().into_iter().flatten().filter_map(Value::as_str) {
                     if let Some((name, numbers)) = b[uid].as_str().and_then(vcard) {
-                        for n in numbers {
-                            inbox.contacts.insert(key(&n), name.clone());
+                        for n in &numbers {
+                            inbox.contacts.insert(key(n), name.clone());
                         }
+                        inbox.people.insert(uid.to_owned(), (name, numbers));
                     }
                 }
             }
@@ -362,6 +484,18 @@ impl Inbox {
         stale
     }
 
+    /// The phone's [thread] has [text], sent from here: if it began as a conversation started here, that one is now
+    /// [thread] (its pending texts go with it, and the window's open page follows it there).
+    fn adopt(&mut self, thread: i64, text: &Text) {
+        let Some(started) = self.threads.iter().find(|(id, t)| **id < 0 && t.pending.iter().any(|(body, _)| *body == text.body) && t.to.iter().any(|a| text.addresses.iter().any(|b| key(a) == key(b)))).map(|(id, _)| *id) else {
+            return;
+        };
+        let old = self.threads.remove(&started).expect("found");
+        let t = self.threads.entry(thread).or_default();
+        t.pending.extend(old.pending);
+        self.moved.insert(started, thread);
+    }
+
     /// Locked: nothing of the texts or the contacts stays.
     fn lock(&mut self) {
         *self = Inbox { guarded: self.guarded, ..Inbox::default() };
@@ -374,9 +508,26 @@ impl Inbox {
     }
 }
 
-/// Everyone in the thread, from its newest text that names them.
+/// Everyone in the thread, from its newest text that names them (a conversation started here: who it's to).
 fn addresses(t: &Thread) -> Vec<String> {
-    t.texts.values().rev().find(|m| !m.addresses.is_empty()).map(|m| m.addresses.clone()).unwrap_or_default()
+    t.texts.values().rev().find(|m| !m.addresses.is_empty()).map(|m| m.addresses.clone()).unwrap_or_else(|| t.to.clone())
+}
+
+/// [number] as a phone can call it (digits, a leading +), or None. Only a plain number: never the * and # of codes
+/// that change the phone's settings (call forwarding...), nor pauses, letters or anything else.
+pub fn dialable(number: &str) -> Option<String> {
+    let number = number.trim();
+    let mut out = String::new();
+    for (i, c) in number.chars().enumerate() {
+        match c {
+            '0'..='9' => out.push(c),
+            '+' if i == 0 => out.push(c),
+            ' ' | '-' | '(' | ')' | '.' => {}
+            _ => return None,
+        }
+    }
+    let digits = out.trim_start_matches('+').len();
+    (3..=20).contains(&digits).then_some(out)
 }
 
 /// A text from `kdeconnect.sms.messages`: its thread, and the text.
@@ -523,6 +674,74 @@ mod tests {
         s.on_packet("p", &texts(json!([sms(1, 1, 1, 1, "hi", "09845012345")])));
         let v: Value = serde_json::from_str(&s.conversations("p", false).0).unwrap();
         assert_eq!(v["list"][0]["name"], "Sam Lee");
+    }
+
+    #[test]
+    fn only_plain_numbers_can_be_called() {
+        assert_eq!(dialable(" +1 (555) 010-0123 "), Some("+15550100123".into()));
+        assert_eq!(dialable("112"), Some("112".into()));
+        for code in ["*21*5550100#", "*#06#", "555,123", "555;1", "1-800-FLOWERS", "5+55", "12", ""] {
+            assert_eq!(dialable(code), None, "{code}");
+        }
+    }
+
+    fn card(s: &Store, uid: &str, name: &str, tel: &str) {
+        s.on_packet("p", &json!({ "type": CONTACTS_VCARDS_REPLY, "body": { "uids": [uid], uid: format!("BEGIN:VCARD\nFN:{name}\nTEL:{tel}\nEND:VCARD") } }));
+    }
+
+    #[test]
+    fn searches_names_numbers_and_words_and_loads_more_to_search() {
+        let s = Store::default();
+        s.conversations("p", false);
+        card(&s, "a", "Sam Lee", "+1 555 0100");
+        card(&s, "b", "Ana", "555 0199");
+        s.on_packet("p", &texts(json!([sms(1, 1, 100, 1, "the pizza place", "+1 555 0100"), sms(2, 2, 200, 1, "hello", "555 0177")])));
+        let find = |q: &str| -> (Value, usize) {
+            let (json, ask) = s.search("p", q, false);
+            (serde_json::from_str(&json).unwrap(), ask.len())
+        };
+        let (v, asked) = find("PIZZA");
+        assert_eq!((v["chats"][0]["thread"].as_i64(), v["chats"][0]["snippet"].as_str()), (Some(1), Some("the pizza place")));
+        assert_eq!(asked, 2, "the first search loads the conversations' texts");
+        assert_eq!(find("pizza").1, 0, "once");
+        let (v, _) = find("555 01");
+        assert_eq!(v["people"].as_array().unwrap().len(), 2);
+        assert_eq!(find("0100").0["chats"][0]["thread"], 1, "by its number");
+        assert_eq!(find("sam").0["people"][0]["name"], "Sam Lee");
+        assert_eq!(find("  ").0["chats"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn texts_someone_new_and_follows_the_phone_to_its_thread() {
+        let s = Store::default();
+        s.conversations("p", false);
+        s.on_packet("p", &texts(json!([sms(7, 1, 100, 1, "hi", "+1 415 555 0100")])));
+        assert_eq!(s.thread_for("p", "415-555-0100", false), Ok(7), "their conversation");
+        let new = s.thread_for("p", "+1 415 555 0142", false).unwrap();
+        assert!(new < 0);
+        let sent = s.send("p", new, "hello there", false).unwrap();
+        assert_eq!(sent["body"]["addresses"][0]["address"], "+1 415 555 0142");
+        let v: Value = serde_json::from_str(&s.conversations("p", false).0).unwrap();
+        assert_eq!(v["list"][0]["snippet"], "hello there");
+        s.on_packet("p", &texts(json!([sms(9, 2, 300, 2, "hello there", "+14155550142")])));
+        let t: Value = serde_json::from_str(&s.thread("p", new, false).0).unwrap();
+        assert_eq!((t["texts"].as_array().unwrap().len(), t["call"].as_str()), (1, Some("+14155550142")));
+        assert_eq!(s.thread_for("p", "4155550142", false), Ok(9));
+    }
+
+    #[test]
+    fn contacts_and_calls_wait_for_the_owner() {
+        let s = Store::default();
+        assert!(s.may_call("p", true).is_err());
+        assert_eq!(serde_json::from_str::<Value>(&s.contacts("p", true).0).unwrap()["state"], "locked");
+        s.unlock("p");
+        s.on_packet("p", &json!({ "type": UNLOCKED, "body": { "ok": true } }));
+        assert!(s.may_call("p", true).is_ok());
+        card(&s, "b", "ana", "1");
+        card(&s, "a", "Bo", "2");
+        card(&s, "c", "No number", "");
+        let v: Value = serde_json::from_str(&s.contacts("p", true).0).unwrap();
+        assert_eq!(v["list"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect::<Vec<_>>(), ["ana", "Bo"]);
     }
 
     #[test]

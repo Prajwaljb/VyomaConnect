@@ -49,6 +49,8 @@ object PacketTypes {
 
     /** Phone → PC: `{action, error?}`, how that went. */
     const val CALL_DONE = "vyoma.call.done"
+    /** PC → phone: `{number}`, call it (the PC's Messages page); answered with [CALL_DONE] `action: dial`. */
+    const val CALL_DIAL = "vyoma.call.dial"
 
     /** PC → phone: someone opened Messages on the PC; ask the owner (fingerprint) before texts go there. */
     const val TEXTS_UNLOCK = "vyoma.texts.unlock"

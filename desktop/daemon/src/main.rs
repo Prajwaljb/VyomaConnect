@@ -111,6 +111,8 @@ type Devices = Arc<Mutex<HashMap<String, DeviceView>>>;
 /// What the D-Bus side asks of the main loop beyond the hub's commands.
 enum Ask {
     StopRinging,
+    /// Calls a number from the phone (Messages).
+    Dial(String, String),
     /// Opens the phone's files, mounting them first.
     Browse(String),
 }
@@ -494,7 +496,11 @@ impl Control {
         for p in ask {
             self.command(Command::Send(id.clone(), p))?;
         }
-        Ok(json)
+        // Whether the window offers to call: a phone that takes calls from here.
+        let can_call = self.devices.lock().unwrap().get(&id).is_some_and(|d| plugins::takes(d, telephony::DIAL));
+        let mut v: Value = serde_json::from_str(&json).map_err(|e| fdo::Error::Failed(e.to_string()))?;
+        v["canCall"] = json!(can_call);
+        Ok(v.to_string())
     }
 
     /// One conversation's texts as JSON, oldest first.
@@ -515,6 +521,47 @@ impl Control {
         let p = self.texts.send(&id, thread, &text, self.texts_guarded(&id)).map_err(fdo::Error::Failed)?;
         tracing::info!("{id}: sending a text");
         self.command(Command::Send(id, p))
+    }
+
+    /// The phone's contacts with a number, by name, as JSON (`{state, list: [{name, numbers}]}`).
+    fn contacts(&self, id: String) -> fdo::Result<String> {
+        self.texts_ready(&id)?;
+        let (json, ask) = self.texts.contacts(&id, self.texts_guarded(&id));
+        for p in ask {
+            self.command(Command::Send(id.clone(), p))?;
+        }
+        Ok(json)
+    }
+
+    /// Conversations and contacts matching [query] as JSON (`{chats, people}`); it also loads more texts to search,
+    /// so it's worth asking again on `MessagesChanged`.
+    fn search_texts(&self, id: String, query: String) -> fdo::Result<String> {
+        self.texts_ready(&id)?;
+        let (json, ask) = self.texts.search(&id, &query, self.texts_guarded(&id));
+        for p in ask {
+            self.command(Command::Send(id.clone(), p))?;
+        }
+        Ok(json)
+    }
+
+    /// The conversation with [number] (a contact's), started here if there's none yet: its thread id for `Thread`.
+    fn thread_for(&self, id: String, number: String) -> fdo::Result<i64> {
+        self.texts_ready(&id)?;
+        self.texts.thread_for(&id, &number, self.texts_guarded(&id)).map_err(fdo::Error::Failed)
+    }
+
+    /// Calls [number] from the phone, its sound on this PC once it starts (as for a call answered here). Only while
+    /// Messages is open (the phone checks that again, and takes only a plain number, never an emergency one).
+    fn call(&self, id: String, number: String) -> fdo::Result<()> {
+        let can = self.devices.lock().unwrap().get(&id).map(|d| (d.linked, plugins::takes(d, telephony::DIAL)));
+        match can {
+            Some((true, true)) => {}
+            Some((true, false)) => return Err(fdo::Error::NotSupported("Update Vyoma on the phone to call from here".into())),
+            _ => return Err(fdo::Error::Failed("The phone isn't connected".into())),
+        }
+        let number = messages::dialable(&number).ok_or_else(|| fdo::Error::InvalidArgs("That isn't a number to call".into()))?;
+        self.texts.may_call(&id, self.texts_guarded(&id)).map_err(fdo::Error::Failed)?;
+        self.asks.send(Ask::Dial(id, number)).map_err(|_| fdo::Error::Failed("Vyoma is stopping".into()))
     }
 
     /// The Messages page was opened, a conversation picked or a text sent: a phone with the texts lock is asked to
@@ -574,6 +621,12 @@ impl Control {
 
 impl Control {
     /// The phone holds its texts behind Vyoma's texts lock.
+    /// The phone shares its texts (Messages works with it).
+    fn texts_ready(&self, id: &str) -> fdo::Result<()> {
+        let takes = self.devices.lock().unwrap().get(id).is_some_and(|d| plugins::takes(d, messages::REQUEST));
+        if takes { Ok(()) } else { Err(fdo::Error::NotSupported("This phone doesn't share its texts".into())) }
+    }
+
     fn texts_guarded(&self, id: &str) -> bool {
         self.devices.lock().unwrap().get(id).is_some_and(|d| plugins::takes(d, messages::UNLOCK))
     }
@@ -1001,6 +1054,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
             Some(ask) = asks.recv() => match ask {
                 Ask::StopRinging => plugins::stop_ringing(&desk.notifier, &mut desk.ringer, &mut desk.ring_notice).await,
                 Ask::Browse(id) => desk.browse(id),
+                Ask::Dial(id, number) => desk.dial(id, number),
             },
             Some((id, result)) = mounts_done.recv() => desk.on_mounted(id, result).await,
             _ = mounts_tick.tick() => desk.check_mounts().await,
@@ -1675,6 +1729,9 @@ impl Desk {
         }
         let Some(call) = call else { return };
         let body = call.body(phone);
+        if steps.take_audio {
+            self.take_audio(line);
+        }
         if steps.show_talking {
             line.talking_title = call.talking_title();
             self.show_talking(id, phone, line).await;
@@ -1732,6 +1789,13 @@ impl Desk {
         self.calls.insert(id, line);
     }
 
+    /// Asks the phone to call [number]; the call's notification and sound come here once it starts.
+    fn dial(&mut self, id: String, number: String) {
+        tracing::info!("{id}: asking the phone to make a call");
+        self.calls.entry(id.clone()).or_default().dialled = true;
+        self.send(&id, packet(telephony::DIAL, json!({ "number": number })));
+    }
+
     /// Connects this PC as the phone's headset for the call, in the background.
     fn take_audio(&self, line: &mut telephony::Line) {
         if line.audio.is_some() {
@@ -1766,6 +1830,11 @@ impl Desk {
         let action = b["action"].as_str().unwrap_or("");
         let Some(error) = b["error"].as_str() else { return };
         tracing::info!("{id}: the phone couldn't {action} the call");
+        if let Some(line) = self.calls.get_mut(id)
+            && action == "dial"
+        {
+            line.dialled = false;
+        }
         if action == "answer"
             && let Some(line) = self.calls.get_mut(id)
         {

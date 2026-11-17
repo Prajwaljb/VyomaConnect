@@ -35,7 +35,7 @@ pub const OUTGOING: &[&str] = &[
     PING, BATTERY, FIND, LOCK, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, MPRIS, VOLUME, RUNCOMMAND,
     NOTIFICATION_REQUEST, NOTIFICATION_REPLY, NOTIFICATION_ACTION, MOUSEPAD_ECHO, MOUSEPAD_KEYBOARDSTATE, MUTE, telephony::REQUEST, SFTP_REQUEST,
     messages::REQUEST, messages::REQUEST_CONVERSATIONS, messages::REQUEST_CONVERSATION, messages::CONTACTS_UIDS, messages::CONTACTS_VCARDS, messages::UNLOCK, messages::LOCK,
-    crate::power::LEAVING,
+    crate::power::LEAVING, telephony::DIAL,
 ];
 
 /// Whether [device] is paired and its identity says it takes [kind].

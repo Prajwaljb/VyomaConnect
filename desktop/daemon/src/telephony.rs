@@ -19,6 +19,10 @@ pub const MUTE: &str = "kdeconnect.telephony.request_mute";
 pub const REQUEST: &str = "vyoma.call.request";
 /// Phone → PC: `{action, error?}`.
 pub const DONE: &str = "vyoma.call.done";
+/// PC → phone: `{number}`, call it from the window's Messages page. The phone allows it only while it has let this PC
+/// see its texts (its owner's fingerprint), only for a plain number, and never an emergency number; it answers with
+/// [DONE] (`action: dial`).
+pub const DIAL: &str = "vyoma.call.dial";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
@@ -121,6 +125,8 @@ pub struct Line {
     pub talking_title: String,
     /// Answer was pressed here: the call gets its notification here once it's on.
     pub answered: bool,
+    /// Called from here: like [answered], and its sound comes here when it starts.
+    pub dialled: bool,
     /// Decline was pressed here: the phone reports a missed call, which it isn't.
     pub declined: bool,
     /// The ringing call's facts, as the phone last said them.
@@ -141,6 +147,8 @@ pub struct Steps {
     pub show_talking: bool,
     /// The call's over: give its sound back to the phone.
     pub release: bool,
+    /// A call made here started: take its sound (unless the phone has a headset of its own).
+    pub take_audio: bool,
     pub pause: bool,
     pub resume: bool,
 }
@@ -162,7 +170,8 @@ impl Line {
             }
             (Kind::Talking, false) => {
                 s.close.extend(self.ringing.take());
-                s.show_talking = self.answered && self.talking.is_none();
+                s.show_talking = (self.answered || self.dialled) && self.talking.is_none();
+                s.take_audio = self.dialled && self.talking.is_none() && !call.headset;
                 s.pause = !self.on;
                 self.on = true;
             }
@@ -182,7 +191,7 @@ impl Line {
         s.release = self.audio.is_some();
         s.resume = self.on;
         // [declined] stays: the phone says "missed" after "ringing ended".
-        (self.on, self.answered) = (false, false);
+        (self.on, self.answered, self.dialled) = (false, false, false);
     }
 
     /// The phone's gone: nothing will say the call ended.
@@ -217,6 +226,7 @@ pub fn failed_title(action: &str) -> &'static str {
     match action {
         "answer" => "Couldn't answer the call",
         "decline" => "Couldn't decline the call",
+        "dial" => "Couldn't make the call",
         _ => "Couldn't hang up",
     }
 }
@@ -317,6 +327,22 @@ mod tests {
         // Answered on the phone: nothing new here.
         line.on_call(&call("ringing", false));
         assert!(!line.on_call(&call("talking", false)).show_talking);
+    }
+
+    #[test]
+    fn a_call_made_here_takes_its_sound_once_it_starts() {
+        let mut line = Line { dialled: true, ..Line::default() };
+        let s = line.on_call(&call("talking", false));
+        assert_eq!((s.show_talking, s.take_audio, s.pause), (true, true, true));
+        line.talking = Some(3);
+        assert!(!line.on_call(&call("talking", false)).take_audio, "once");
+        line.on_call(&call("talking", true));
+        assert!(!line.dialled, "over");
+        // The phone's own headset keeps it.
+        let mut line = Line { dialled: true, ..Line::default() };
+        let mut with_headset = call("talking", false);
+        with_headset.headset = true;
+        assert!(!line.on_call(&with_headset).take_audio);
     }
 
     #[test]

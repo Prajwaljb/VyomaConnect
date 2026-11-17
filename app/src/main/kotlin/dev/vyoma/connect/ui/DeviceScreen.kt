@@ -265,7 +265,7 @@ internal fun diskSize(bytes: Long): String {
     }
 }
 
-/** Whether this PC may answer, decline and hang up the phone's calls; letting it again asks for the owner. */
+/** Whether this PC may answer, decline, hang up and make the phone's calls; letting it again asks for the owner. */
 @Composable
 private fun CallsFromPcRow(deviceId: String) {
     val context = LocalContext.current
@@ -284,15 +284,15 @@ private fun CallsFromPcRow(deviceId: String) {
             dev.vyoma.connect.platform.CallsFromPc.set(deviceId, false)
             on = false
         } else {
-            dev.vyoma.connect.platform.AppLock.confirm(context, "To let this PC answer your calls") {
+            dev.vyoma.connect.platform.AppLock.confirm(context, "To let this PC answer and make your calls") {
                 dev.vyoma.connect.platform.CallsFromPc.set(deviceId, true)
                 on = true
             }
         }
     }
     ListRow(
-        title = "Answer calls from this PC",
-        subtitle = if (phoneOn) "Answer, decline and hang up there" else "Needs Vyoma's calls and contacts access. Tap to allow",
+        title = "Calls from this PC",
+        subtitle = if (phoneOn) "Answer and hang up there, and call people from its Messages" else "Needs Vyoma's calls and contacts access. Tap to allow",
         icon = Icons.Rounded.Call,
         iconTint = SystemColor.GREEN.color,
         showDivider = true,

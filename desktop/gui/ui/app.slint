@@ -103,6 +103,14 @@ export struct Chat {
     unread: bool,
 }
 
+// A contact's number in Messages (one row per number). [initial] and [hue] as a Chat's.
+export struct Contact {
+    name: string,
+    number: string,
+    initial: string,
+    hue: int,
+}
+
 // One text. [day]: a day label above it where a day starts ("Today"); [meta]: under it, at the end
 // of a run ("14:32", "Sending…", "Not sent").
 export struct Bubble {
@@ -1627,6 +1635,179 @@ component ChatRow inherits Rectangle {
     }
 }
 
+// A round tinted button with a glyph, for a row's quick actions.
+component RoundButton inherits Rectangle {
+    in property <image> icon;
+    callback clicked;
+    width: 36px;
+    height: 36px;
+    border-radius: 18px;
+    background: Theme.accent.with-alpha(touch.pressed ? 0.24 : touch.has-hover ? 0.18 : 0.12);
+    animate background { duration: 140ms; }
+    Glyph {
+        source: root.icon;
+        tint: Theme.accent;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A contact's number: who and the number; tapping it (or the bubble) opens your texts with them, the
+// phone calls them.
+component ContactRow inherits Rectangle {
+    in property <Contact> person;
+    in property <bool> first;
+    in property <bool> last;
+    in property <bool> can-call;
+    callback message;
+    callback call;
+    border-top-left-radius: first ? 26px : 0px;
+    border-top-right-radius: first ? 26px : 0px;
+    border-bottom-left-radius: last ? 26px : 0px;
+    border-bottom-right-radius: last ? 26px : 0px;
+    background: touch.pressed ? Theme.pressed : touch.has-hover ? Theme.hover : transparent;
+    animate background { duration: 120ms; }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.message(); }
+    }
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 14px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 13px;
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                letter: root.person.initial;
+                hue: root.person.hue;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.person.name;
+                color: Theme.text;
+                font-size: 15px;
+                font-weight: 500;
+                overflow: elide;
+            }
+            Text {
+                text: root.person.number;
+                color: Theme.muted;
+                font-size: 13px;
+                overflow: elide;
+            }
+        }
+        HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            VerticalLayout {
+                alignment: center;
+                RoundButton {
+                    icon: @image-url("icons/chat.svg");
+                    clicked => { root.message(); }
+                }
+            }
+            if root.can-call: VerticalLayout {
+                alignment: center;
+                RoundButton {
+                    icon: @image-url("icons/call.svg");
+                    clicked => { root.call(); }
+                }
+            }
+        }
+    }
+    Rectangle {
+        x: 67px;
+        y: parent.height - 1px;
+        width: parent.width - self.x;
+        height: 1px;
+        background: Theme.divider;
+        visible: !root.last;
+    }
+}
+
+// The search capsule: the glass field with a magnifier, its words cleared by the cross or Escape.
+component SearchField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    callback edited(string);
+    height: 44px;
+    border-radius: 22px;
+    background: Theme.card;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : Theme.rim;
+    animate border-color { duration: 160ms; }
+    TouchArea {
+        mouse-cursor: MouseCursor.text;
+        clicked => { input.focus(); }
+    }
+    Glyph {
+        x: 16px;
+        source: @image-url("icons/search.svg");
+        tint: Theme.muted;
+    }
+    if root.text == "": Text {
+        x: 44px;
+        width: parent.width - 60px;
+        height: parent.height;
+        text: root.placeholder;
+        color: Theme.muted.transparentize(30%);
+        font-size: 15px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    FocusScope {
+        x: 44px;
+        width: parent.width - 88px;
+        height: parent.height;
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape && root.text != "" {
+                root.text = "";
+                root.edited("");
+                return EventResult.accept;
+            }
+            EventResult.reject
+        }
+        input := TextInput {
+            text <=> root.text;
+            color: Theme.text;
+            font-size: 15px;
+            single-line: true;
+            vertical-alignment: center;
+            selection-background-color: Theme.accent.with-alpha(0.3);
+            edited => { root.edited(self.text); }
+        }
+    }
+    if root.text != "": Rectangle {
+        x: parent.width - self.width - 10px;
+        width: 26px;
+        height: 26px;
+        border-radius: 13px;
+        background: clear.pressed ? Theme.pressed : Theme.raised;
+        Glyph {
+            source: @image-url("icons/close.svg");
+            tint: Theme.muted;
+            width: 14px;
+            height: 14px;
+        }
+        clear := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.text = "";
+                root.edited("");
+                input.focus();
+            }
+        }
+    }
+}
+
 // A phone's text conversations, newest first.
 component MessagesPage inherits Page {
     in property <string> phone-name;
@@ -1634,8 +1815,22 @@ component MessagesPage inherits Page {
     // "asking" (waiting for the fingerprint on the phone) or "declined".
     in property <string> state;
     in property <[Chat]> chats;
+    // The search's words, and what it found; the contacts (tab "contacts").
+    in-out property <string> query;
+    in-out property <string> tab: "chats";
+    in property <[Chat]> found-chats;
+    in property <[Contact]> found-people;
+    in property <[Contact]> people;
+    in property <bool> people-loaded;
+    // The phone takes calls from here.
+    in property <bool> can-call;
     callback open(string);
     callback unlock();
+    callback search(string);
+    callback show-tab(string);
+    callback message(Contact);
+    callback call(Contact);
+    property <bool> unlocked: root.state == "ready" || (root.state == "loading" && root.chats.length > 0);
     title: "Messages";
     subtitle: root.phone-name;
     glyph: @image-url("icons/chat.svg");
@@ -1692,7 +1887,26 @@ component MessagesPage inherits Page {
             }
         }
     }
-    if root.chats.length > 0: Glass {
+    if root.unlocked: SearchField {
+        text <=> root.query;
+        placeholder: "Search texts and contacts";
+        edited(q) => { root.search(q); }
+    }
+    if root.unlocked && root.query == "": HorizontalLayout {
+        alignment: center;
+        spacing: 8px;
+        PillButton {
+            text: "Conversations";
+            prominent: root.tab == "chats";
+            clicked => { root.show-tab("chats"); }
+        }
+        PillButton {
+            text: "Contacts";
+            prominent: root.tab == "contacts";
+            clicked => { root.show-tab("contacts"); }
+        }
+    }
+    if root.query == "" && root.tab == "chats" && root.chats.length > 0: Glass {
         for c[i] in root.chats: ChatRow {
             chat: c;
             first: i == 0;
@@ -1700,7 +1914,61 @@ component MessagesPage inherits Page {
             clicked => { root.open(c.thread); }
         }
     }
-    if root.chats.length > 0: Text {
+    if root.unlocked && root.query == "" && root.tab == "contacts" && root.people.length > 0: Glass {
+        for p[i] in root.people: ContactRow {
+            person: p;
+            first: i == 0;
+            last: i == root.people.length - 1;
+            can-call: root.can-call;
+            message => { root.message(p); }
+            call => { root.call(p); }
+        }
+    }
+    if root.unlocked && root.query == "" && root.tab == "contacts" && root.people.length == 0: Text {
+        text: root.people-loaded ? "No contacts with a number came from the phone." : "Getting the contacts from your phone…";
+        color: Theme.muted;
+        font-size: 15px;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+        min-height: self.preferred-height;
+    }
+    if root.unlocked && root.query != "" && root.found-chats.length > 0: Section {
+        label: "Conversations";
+        for c[i] in root.found-chats: ChatRow {
+            chat: c;
+            first: i == 0;
+            last: i == root.found-chats.length - 1;
+            clicked => { root.open(c.thread); }
+        }
+    }
+    if root.unlocked && root.query != "" && root.found-people.length > 0: Section {
+        label: "Contacts";
+        for p[i] in root.found-people: ContactRow {
+            person: p;
+            first: i == 0;
+            last: i == root.found-people.length - 1;
+            can-call: root.can-call;
+            message => { root.message(p); }
+            call => { root.call(p); }
+        }
+    }
+    if root.unlocked && root.query != "" && root.found-chats.length == 0 && root.found-people.length == 0: Text {
+        text: "Nothing found for \u{201C}" + root.query + "\u{201D}.";
+        color: Theme.muted;
+        font-size: 15px;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+        min-height: self.preferred-height;
+    }
+    if root.unlocked && root.query != "": Text {
+        text: "Searches the texts this PC has from the phone; more come in as you search.";
+        color: Theme.muted;
+        font-size: 12px;
+        wrap: word-wrap;
+        min-height: self.preferred-height;
+        horizontal-alignment: center;
+    }
+    if root.query == "" && root.tab == "chats" && root.chats.length > 0: Text {
         text: "Texts (SMS) only. RCS chats and other apps' messages stay on the phone.";
         color: Theme.muted;
         font-size: 12px;
@@ -1743,6 +2011,11 @@ component ThreadPage inherits Page {
     in property <string> name;
     in property <string> number;
     in property <[Bubble]> bubbles;
+    // The one person's number to call, "" for none (a group, or a phone that can't call from here).
+    in property <string> call-number;
+    callback call();
+    action: root.call-number != "" ? "Call" : "";
+    act => { root.call(); }
     title: root.name;
     subtitle: root.number != root.name ? root.number : "";
     has-glyph: false;
@@ -2797,6 +3070,7 @@ component Dialog inherits Rectangle {
     in property <string> title;
     in property <string> body;
     in property <string> confirm;
+    in property <bool> destructive: true;
     callback confirmed();
     callback cancelled();
     opacity: shown ? 1 : 0;
@@ -2852,7 +3126,8 @@ component Dialog inherits Rectangle {
                 }
                 PillButton {
                     text: root.confirm;
-                    destructive: true;
+                    destructive: root.destructive;
+                    prominent: !root.destructive;
                     clicked => { root.confirmed(); }
                 }
             }
@@ -2958,6 +3233,20 @@ export component MainWindow inherits Window {
     in property <string> thread-number;
     in property <[Bubble]> bubbles;
     in-out property <string> draft;
+    // Messages' search, its finds, the contacts, and the number the open conversation can call.
+    in-out property <string> texts-query;
+    in-out property <string> texts-tab: "chats";
+    in property <[Chat]> found-chats;
+    in property <[Contact]> found-people;
+    in property <[Contact]> people;
+    in property <bool> people-loaded;
+    in property <bool> can-call;
+    in property <bool> call-here: true;
+    in property <string> thread-call;
+    // A call asked for, waiting on the dialog's yes.
+    in-out property <bool> confirm-call;
+    in-out property <string> call-name;
+    in-out property <string> call-number;
     // Commands phones can run (selected: "commands"), and ready-made ones not added yet.
     in property <[Command]> commands;
     in property <[Command]> suggestions;
@@ -3023,6 +3312,10 @@ export component MainWindow inherits Window {
     callback open-thread(string);
     callback send-text(string, string);
     callback unlock-texts();
+    callback search-texts(string);
+    callback show-contacts();
+    callback message-person(string, string);
+    callback call-person(string, string);
     // key ("" for new), name, command line, fingerprint, every time.
     callback save-command(string, string, string, bool, bool);
     callback remove-command(string);
@@ -3047,15 +3340,17 @@ export component MainWindow inherits Window {
             if event.text == Key.Escape {
                 if root.confirm-unpair { root.confirm-unpair = false; return EventResult.accept; }
                 if root.confirm-clear { root.confirm-clear = false; return EventResult.accept; }
+                if root.confirm-call { root.confirm-call = false; return EventResult.accept; }
                 if root.moment-on { root.moment-on = false; return EventResult.accept; }
                 return EventResult.reject;
             }
             if event.text == Key.Return {
                 if root.confirm-unpair { root.confirm-unpair = false; root.unpair(root.current.id); return EventResult.accept; }
                 if root.confirm-clear { root.confirm-clear = false; root.clear-activity(); return EventResult.accept; }
+                if root.confirm-call { root.confirm-call = false; root.call-person(root.call-number, root.call-name); return EventResult.accept; }
                 return EventResult.reject;
             }
-            if root.setup || root.confirm-unpair || root.confirm-clear || root.editing { return EventResult.reject; }
+            if root.setup || root.confirm-unpair || root.confirm-clear || root.confirm-call || root.editing { return EventResult.reject; }
             if event.text == Key.Escape && root.selected == "messages" && root.thread != "" { root.thread = ""; return EventResult.accept; }
             if event.text == Key.UpArrow { root.step(-1); return EventResult.accept; }
             if event.text == Key.DownArrow { root.step(1); return EventResult.accept; }
@@ -3279,14 +3574,38 @@ export component MainWindow inherits Window {
             phone-name: root.texts-phone;
             state: root.texts-state;
             chats: root.chats;
+            query <=> root.texts-query;
+            tab <=> root.texts-tab;
+            found-chats: root.found-chats;
+            found-people: root.found-people;
+            people: root.people;
+            people-loaded: root.people-loaded;
+            can-call: root.can-call;
             open(t) => { root.open-thread(t); }
             unlock => { root.unlock-texts(); }
+            search(q) => { root.search-texts(q); }
+            show-tab(t) => {
+                root.texts-tab = t;
+                if t == "contacts" { root.show-contacts(); }
+            }
+            message(p) => { root.message-person(p.number, p.name); }
+            call(p) => {
+                root.call-name = p.name;
+                root.call-number = p.number;
+                root.confirm-call = true;
+            }
         }
         if root.selected == "messages" && root.daemon-ok && root.thread != "": ThreadPage {
             name: root.thread-name;
             number: root.thread-number;
             bubbles: root.bubbles;
+            call-number: root.can-call ? root.thread-call : "";
             go-back => { root.thread = ""; }
+            call => {
+                root.call-name = root.thread-name;
+                root.call-number = root.thread-call;
+                root.confirm-call = true;
+            }
         }
         if root.selected == "messages" && root.daemon-ok && root.thread != "": Composer {
             x: (parent.width - self.width) / 2;
@@ -3401,6 +3720,18 @@ export component MainWindow inherits Window {
         confirmed => {
             root.confirm-unpair = false;
             root.unpair(root.current.id);
+        }
+    }
+    Dialog {
+        shown: root.confirm-call;
+        title: "Call " + root.call-name + "?";
+        body: (root.call-name != root.call-number ? root.call-number + ", from " : "From ") + root.texts-phone + (root.call-here ? ". The call's sound comes to this PC; you can move it back to the phone." : ". Talk on the phone.");
+        confirm: "Call";
+        destructive: false;
+        cancelled => { root.confirm-call = false; }
+        confirmed => {
+            root.confirm-call = false;
+            root.call-person(root.call-number, root.call-name);
         }
     }
     Dialog {

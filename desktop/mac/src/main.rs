@@ -60,7 +60,7 @@ const OUTGOING: &[&str] = &[
     PING, BATTERY, FIND, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE,
     media::MPRIS, media::VOLUME, RUNCOMMAND, input::MOUSEPAD_ECHO, KEYBOARDSTATE,
     messages::REQUEST, messages::REQUEST_CONVERSATIONS, messages::REQUEST_CONVERSATION, messages::CONTACTS_UIDS, messages::CONTACTS_VCARDS,
-    messages::UNLOCK, messages::LOCK,
+    messages::UNLOCK, messages::LOCK, DIAL,
 ];
 
 /// This release, as the Linux app reads it: the repo's one version.
@@ -650,10 +650,40 @@ impl Window {
                 let id = control::text(args, 0)?;
                 let d = devices.get(&id).filter(|d| d.takes(messages::REQUEST)).ok_or("This phone doesn't share its texts")?;
                 let (json, ask) = self.texts.conversations(&id, d.takes(messages::UNLOCK));
+                let can_call = d.takes(DIAL);
+                for p in ask {
+                    command(Command::Send(id.clone(), p))?;
+                }
+                let mut v: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+                // Calls go through the phone, their sound staying there: a Mac can't be its headset.
+                (v["canCall"], v["callHere"]) = (json!(can_call), json!(false));
+                Ok(v)
+            }
+            "Contacts" | "SearchTexts" => {
+                let id = control::text(args, 0)?;
+                let d = devices.get(&id).filter(|d| d.takes(messages::REQUEST)).ok_or("This phone doesn't share its texts")?;
+                let guarded = d.takes(messages::UNLOCK);
+                let (json, ask) = if method == "Contacts" { self.texts.contacts(&id, guarded) } else { self.texts.search(&id, &control::text(args, 1)?, guarded) };
                 for p in ask {
                     command(Command::Send(id.clone(), p))?;
                 }
                 serde_json::from_str(&json).map_err(|e| e.to_string())
+            }
+            "ThreadFor" => {
+                let id = control::text(args, 0)?;
+                let d = devices.get(&id).filter(|d| d.takes(messages::REQUEST)).ok_or("This phone doesn't share its texts")?;
+                Ok(json!(self.texts.thread_for(&id, &control::text(args, 1)?, d.takes(messages::UNLOCK))?))
+            }
+            "Call" => {
+                let id = control::text(args, 0)?;
+                let d = devices.get(&id).filter(|d| d.linked).ok_or("The phone isn't connected")?;
+                if !d.takes(DIAL) {
+                    return Err("Update Vyoma on the phone to call from here".into());
+                }
+                let number = messages::dialable(&control::text(args, 1)?).ok_or("That isn't a number to call")?;
+                self.texts.may_call(&id, d.takes(messages::UNLOCK))?;
+                tracing::info!("{id}: asking the phone to make a call");
+                command(Command::Send(id, packet(DIAL, json!({ "number": number }))))
             }
             "Thread" => {
                 let id = control::text(args, 0)?;
@@ -798,6 +828,9 @@ fn checks() -> Value {
 }
 
 const TOUCHPAD_CHECK: &str = "Touchpad and keyboard";
+
+/// Mac → phone: `{number}`, call it (Messages); the phone checks it all again (see the Linux app's telephony.rs).
+const DIAL: &str = "vyoma.call.dial";
 
 /// A JSON list of strings (the files of a send).
 fn strings(v: &Value) -> Vec<String> {

@@ -10,7 +10,7 @@ use anyhow::Result;
 use anyhow::Context;
 #[cfg(target_os = "linux")]
 use futures_util::StreamExt;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// The daemon of this system: D-Bus on Linux, the socket elsewhere.
 pub fn connect() -> Result<Box<dyn Daemon>> {
@@ -251,6 +251,10 @@ pub struct Conversation {
 pub struct Inbox {
     pub state: String,
     pub list: Vec<Conversation>,
+    /// The phone takes calls from here.
+    pub can_call: bool,
+    /// A call's sound comes to this computer (not on the Mac, which can't be the phone's headset).
+    pub call_here: bool,
 }
 
 impl Inbox {
@@ -265,7 +269,7 @@ impl Inbox {
             mine: c["mine"].as_bool().unwrap_or(false),
             unread: c["unread"].as_bool().unwrap_or(false),
         });
-        Inbox { state: v["state"].as_str().unwrap_or("loading").to_owned(), list: list.collect() }
+        Inbox { state: v["state"].as_str().unwrap_or("loading").to_owned(), list: list.collect(), can_call: v["canCall"].as_bool().unwrap_or(false), call_here: v["callHere"].as_bool().unwrap_or(true) }
     }
 }
 
@@ -285,6 +289,8 @@ pub struct TextData {
 pub struct ThreadData {
     pub name: String,
     pub number: String,
+    /// The one person's number to call, "" for a group (or one that can't be called).
+    pub call: String,
     pub texts: Vec<TextData>,
 }
 
@@ -299,7 +305,56 @@ impl ThreadData {
             failed: flag(t, "failed"),
             sending: flag(t, "sending"),
         });
-        ThreadData { name: v["name"].as_str().unwrap_or("").to_owned(), number: v["number"].as_str().unwrap_or("").to_owned(), texts: texts.collect() }
+        let text = |k: &str| v[k].as_str().unwrap_or("").to_owned();
+        ThreadData { name: text("name"), number: text("number"), call: text("call"), texts: texts.collect() }
+    }
+}
+
+/// A contact on the phone with a number.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Person {
+    pub name: String,
+    pub numbers: Vec<String>,
+}
+
+impl Person {
+    fn list(v: &Value) -> Vec<Person> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| Person {
+                name: p["name"].as_str().unwrap_or("").to_owned(),
+                numbers: p["numbers"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect(),
+            })
+            .collect()
+    }
+}
+
+/// The phone's contacts, by name; [state] as [Inbox]'s.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct People {
+    pub state: String,
+    pub list: Vec<Person>,
+}
+
+impl People {
+    /// From the daemon's `Contacts` JSON.
+    pub fn from_json(v: &Value) -> Self {
+        People { state: v["state"].as_str().unwrap_or("loading").to_owned(), list: Person::list(&v["list"]) }
+    }
+}
+
+/// What a search of the texts found.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Found {
+    pub chats: Vec<Conversation>,
+    pub people: Vec<Person>,
+}
+
+impl Found {
+    /// From the daemon's `SearchTexts` JSON.
+    pub fn from_json(v: &Value) -> Self {
+        Found { chats: Inbox::from_json(&json!({ "list": v["chats"] })).list, people: Person::list(&v["people"]) }
     }
 }
 
@@ -362,6 +417,14 @@ pub trait Daemon: Send + Sync {
     fn send_text(&self, id: &str, thread: i64, text: &str) -> Result<()>;
     /// Asks the phone to let its texts in (its owner confirms there), or keeps them open if they are.
     fn unlock_texts(&self, id: &str) -> Result<()>;
+    /// The phone's contacts with a number.
+    fn contacts(&self, id: &str) -> Result<People>;
+    /// Conversations and contacts matching [query]; more texts load to search as it's asked again.
+    fn search_texts(&self, id: &str, query: &str) -> Result<Found>;
+    /// The conversation with [number], started here if there's none.
+    fn thread_for(&self, id: &str, number: &str) -> Result<i64>;
+    /// Calls [number] from the phone.
+    fn call_number(&self, id: &str, number: &str) -> Result<()>;
     /// Blocks until the daemon says something (an error once it's gone away).
     fn next_event(&self) -> Result<Event>;
 }
@@ -525,6 +588,24 @@ impl Daemon for DbusDaemon {
 
     fn unlock_texts(&self, id: &str) -> Result<()> {
         self.call("UnlockTexts", &(id,))
+    }
+
+    fn contacts(&self, id: &str) -> Result<People> {
+        let json: String = self.call("Contacts", &(id,))?;
+        Ok(People::from_json(&serde_json::from_str(&json)?))
+    }
+
+    fn search_texts(&self, id: &str, query: &str) -> Result<Found> {
+        let json: String = self.call("SearchTexts", &(id, query))?;
+        Ok(Found::from_json(&serde_json::from_str(&json)?))
+    }
+
+    fn thread_for(&self, id: &str, number: &str) -> Result<i64> {
+        self.call("ThreadFor", &(id, number))
+    }
+
+    fn call_number(&self, id: &str, number: &str) -> Result<()> {
+        self.call("Call", &(id, number))
     }
 
     fn next_event(&self) -> Result<Event> {

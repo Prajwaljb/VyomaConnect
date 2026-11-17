@@ -17,7 +17,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use crate::daemon::{ActivityEntry, CommandData, Daemon, Event, Health, Inbox, Permission, PhoneData, ThreadData};
+use crate::daemon::{ActivityEntry, CommandData, Daemon, Event, Found, Health, Inbox, People, Permission, PhoneData, ThreadData};
 
 const NOT_RUNNING: &str = "Vyoma isn't running here right now. It restarts by itself; if it doesn't, use Start Vyoma";
 /// A call the daemon takes longer than this over has hung.
@@ -204,6 +204,22 @@ impl Daemon for SocketDaemon {
 
     fn unlock_texts(&self, id: &str) -> Result<()> {
         self.unit("UnlockTexts", json!([id]))
+    }
+
+    fn contacts(&self, id: &str) -> Result<People> {
+        self.json("Contacts", json!([id]), People::from_json)
+    }
+
+    fn search_texts(&self, id: &str, query: &str) -> Result<Found> {
+        self.json("SearchTexts", json!([id, query]), Found::from_json)
+    }
+
+    fn thread_for(&self, id: &str, number: &str) -> Result<i64> {
+        self.json("ThreadFor", json!([id, number]), |v| v.as_i64().unwrap_or(0))
+    }
+
+    fn call_number(&self, id: &str, number: &str) -> Result<()> {
+        self.unit("Call", json!([id, number]))
     }
 
     fn next_event(&self) -> Result<Event> {

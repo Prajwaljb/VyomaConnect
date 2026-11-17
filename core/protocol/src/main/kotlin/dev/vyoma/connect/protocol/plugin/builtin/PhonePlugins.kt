@@ -286,6 +286,31 @@ interface CallSource {
 
     /** What the PC needs to know with each call, read when it's sent. */
     fun facts(): CallFacts = CallFacts()
+
+    /** Calls [number] (already [Dialing.plain]); why it couldn't, or null once the call is placed. Blocks. */
+    fun dial(number: String): String? = "This phone can't make calls for a PC"
+}
+
+/** Which numbers a PC may have the phone call. */
+object Dialing {
+    /**
+     * [number] as digits with an optional leading +, or null: never the * and # of codes that change the phone's
+     * settings (call forwarding, say), nor pauses, letters or anything else; 3 to 20 digits. The PC's own rule
+     * (`vyoma_core::messages::dialable`) is the same; this one is what counts.
+     */
+    fun plain(number: String): String? {
+        val out = StringBuilder()
+        number.trim().forEachIndexed { i, c ->
+            when {
+                c in '0'..'9' -> out.append(c)
+                c == '+' && i == 0 -> out.append(c)
+                c in " -()." -> Unit
+                else -> return null
+            }
+        }
+        val digits = out.trimStart('+').length
+        return if (digits in 3..20) out.toString() else null
+    }
 }
 
 object CallAction {
@@ -302,8 +327,17 @@ object CallAction {
  */
 data class CallFacts(val canAct: Boolean = false, val headset: Boolean = false, val bluetoothName: String? = null)
 
-/** [allowed]: whether this PC may answer, decline and hang up, the owner's choice per PC (on unless turned off). */
-class TelephonyPlugin(private val ctx: PluginContext, private val source: CallSource, private val allowed: (String) -> Boolean = { true }) : Plugin {
+/**
+ * [allowed]: whether this PC may answer, decline, hang up and call, the owner's choice per PC (on unless turned off).
+ * [mayDial]: whether the owner has let this PC see the texts just now (a fingerprint on the phone), which calling
+ * from its Messages page needs too, so whoever sits at an unlocked PC can't run up calls.
+ */
+class TelephonyPlugin(
+    private val ctx: PluginContext,
+    private val source: CallSource,
+    private val allowed: (String) -> Boolean = { true },
+    private val mayDial: (String) -> Boolean = { false },
+) : Plugin {
     override suspend fun onStart() {
         ctx.scope.launch {
             source.events.collect { event ->
@@ -352,6 +386,22 @@ class TelephonyPlugin(private val ctx: PluginContext, private val source: CallSo
                     })
                 }
             }
+            PacketTypes.CALL_DIAL -> {
+                val number = Dialing.plain(packet.string("number").orEmpty())
+                ctx.scope.launch(Dispatchers.IO) {
+                    val error = when {
+                        !allowed(ctx.device.id) -> "Calls from this PC are off on the phone"
+                        !mayDial(ctx.device.id) -> "Open Messages here and confirm on the phone first"
+                        number == null -> "That isn't a number to call"
+                        else -> runCatching { source.dial(number) }.getOrElse { it.message ?: "Didn't work" }
+                    }
+                    VLog.i(TAG, "PC asked to make a call: ${error ?: "placed"}")
+                    ctx.send(packet(PacketTypes.CALL_DONE) {
+                        put("action", "dial")
+                        error?.let { put("error", it) }
+                    })
+                }
+            }
         }
         return true
     }
@@ -360,11 +410,11 @@ class TelephonyPlugin(private val ctx: PluginContext, private val source: CallSo
         const val ID = "telephony"
         private const val TAG = "Calls"
 
-        fun spec(source: CallSource, allowed: (String) -> Boolean = { true }) = PluginSpec(
+        fun spec(source: CallSource, allowed: (String) -> Boolean = { true }, mayDial: (String) -> Boolean = { false }) = PluginSpec(
             ID,
-            incoming = setOf(PacketTypes.TELEPHONY_REQUEST_MUTE, PacketTypes.CALL_REQUEST),
+            incoming = setOf(PacketTypes.TELEPHONY_REQUEST_MUTE, PacketTypes.CALL_REQUEST, PacketTypes.CALL_DIAL),
             outgoing = setOf(PacketTypes.TELEPHONY, PacketTypes.CALL_DONE),
-        ) { TelephonyPlugin(it, source, allowed) }
+        ) { TelephonyPlugin(it, source, allowed, mayDial) }
     }
 }
 

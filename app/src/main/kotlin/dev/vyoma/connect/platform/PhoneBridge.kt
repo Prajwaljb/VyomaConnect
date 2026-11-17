@@ -14,6 +14,7 @@ import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.media.AudioManager
 import android.net.Uri
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.ContactsContract
@@ -58,6 +59,8 @@ object PhonePermissions {
         Manifest.permission.READ_CONTACTS,
         // Answer, decline and hang up from the PC.
         Manifest.permission.ANSWER_PHONE_CALLS,
+        // Call someone from the PC's Messages page.
+        Manifest.permission.CALL_PHONE,
     )
 
     /** Asked together with [all], but optional: it tells the PC whether headphones already take the call, and finds this phone among the PC's Bluetooth devices. */
@@ -369,6 +372,20 @@ class CallMonitor(private val context: Context, private val contacts: AndroidCon
         if (!appCall) return TURN_ON
         if (NotificationBridge.pressCall(context, action, appOnly = true)) return null
         return if (NotificationBridge.isEnabled(context)) "The call's app has no button for that" else TURN_ON
+    }
+
+    @SuppressLint("MissingPermission")
+    override fun dial(number: String): String? {
+        val emergency = runCatching { context.getSystemService(TelephonyManager::class.java).isEmergencyNumber(number) }.getOrDefault(true)
+        if (emergency) return "Emergency numbers are called from the phone itself"
+        if (!PhonePermissions.granted(context, Manifest.permission.CALL_PHONE)) return TURN_ON
+        return runCatching {
+            context.getSystemService(TelecomManager::class.java).placeCall(Uri.fromParts("tel", number, null), Bundle())
+            null
+        }.getOrElse {
+            VLog.w("Calls", "Telecom wouldn't place the call: ${it.message}")
+            "The phone didn't let Vyoma make the call"
+        }
     }
 
     override fun muteRinger() {
