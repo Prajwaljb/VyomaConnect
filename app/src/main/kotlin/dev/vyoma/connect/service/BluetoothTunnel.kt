@@ -17,6 +17,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -198,7 +200,9 @@ class BluetoothTunnel(private val context: Context, private val hub: DeviceHub, 
         job = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 runCatching { tick() }.onFailure { VLog.w(TAG, "tick failed", it) }
-                delay(TICK_MS)
+                // Switched off it only learns the PCs' addresses, which change rarely; switched on, at once.
+                if (BluetoothFallback.enabled.value) delay(TICK_MS)
+                else withTimeoutOrNull(IDLE_TICK_MS) { BluetoothFallback.enabled.first { it } }
             }
         }
     }
@@ -239,6 +243,8 @@ class BluetoothTunnel(private val context: Context, private val hub: DeviceHub, 
                 if (state.transports == setOf(TransportKind.BLUETOOTH) && state.identity.featuresOf != pcId) linkCompanion(pcId, address, adapter)
                 continue
             }
+            // It said it's shutting down or going to sleep: it's not there to answer.
+            if (pcId in hub.resting.value) continue
             val since = offlineSince.getOrPut(pcId) { now() }
             // Let Wi-Fi and the cable have their go first.
             if (now() - since < GRACE_MS || now() < (nextTry[pcId] ?: 0L)) continue
@@ -347,6 +353,7 @@ class BluetoothTunnel(private val context: Context, private val hub: DeviceHub, 
         val SERVICE: UUID = UUID.fromString("6f1d3e52-8a47-4c1b-9d06-2be7a5c4f801")
         val COMPANION_SERVICE: UUID = UUID.fromString("6f1d3e52-8a47-4c1b-9d06-2be7a5c4f802")
         const val TICK_MS = 5_000L
+        const val IDLE_TICK_MS = 60_000L
         /** The PC is known to be there, and its side may need a moment to notice Wi-Fi went. */
         const val COMPANION_RETRY_MS = 10_000L
         const val GRACE_MS = 15_000L

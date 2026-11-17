@@ -64,6 +64,8 @@ interface DeviceEnvironment {
     fun onUnpaired(deviceId: String) {}
     /** Whether [deviceId] is linked over the USB tunnel right now. */
     fun usbTunnelUp(deviceId: String): Boolean = false
+    /** PC [deviceId] said it's going away ([why]: shutdown, sleep, stop): no point dialling it until it's back. */
+    fun onLeaving(deviceId: String, why: String) {}
 }
 
 /**
@@ -216,6 +218,9 @@ class Device internal constructor(
     }
 
     private var linger: Job? = null
+
+    /** This PC (or the PC this companion belongs to) said it's going away: see [DeviceEnvironment.onLeaving]. */
+    fun leaving(why: String) = env.onLeaving(_state.value.identity.companionOf ?: id, why)
 
     private fun transports(): Set<TransportKind> = links.filterNot { it.isClosed }.mapTo(mutableSetOf()) { it.transport }
 

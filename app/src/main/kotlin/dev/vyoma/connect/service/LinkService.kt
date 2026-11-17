@@ -15,6 +15,7 @@ import dev.vyoma.connect.protocol.plugin.builtin.CompanionUploads
 import dev.vyoma.connect.protocol.plugin.builtin.SendItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
@@ -62,6 +63,7 @@ class LinkService : LifecycleService() {
     private var mdns: MdnsDiscovery? = null
     private var usb: UsbLink? = null
     private var bluetooth: BluetoothTunnel? = null
+    private val screen by lazy { ScreenOn(this) }
     private var lastConnected: List<dev.vyoma.connect.protocol.device.DeviceState> = emptyList()
 
     override fun onCreate() {
@@ -173,6 +175,8 @@ class LinkService : LifecycleService() {
             container.uiVisible.collect { visible ->
                 if (visible) {
                     network.acquireMulticast()
+                    // Opening Vyoma looks for every PC, even one that said it was going away.
+                    hub.stopResting()
                     hub.refresh()
                 } else {
                     network.releaseMulticast()
@@ -250,16 +254,24 @@ class LinkService : LifecycleService() {
             }
         }
 
-        // Keep trying paired devices that are offline: fast at first, then every minute.
+        // Keep trying paired PCs that are offline and didn't say they were going away: every 5 s at
+        // first, backing off to a minute while the screen is on. With it off, to every 15 minutes:
+        // a PC announces itself when it starts or wakes, so a sleeping phone needn't keep calling a
+        // PC that's off all night. The screen coming on tries again at once.
+        screen.start()
         lifecycleScope.launch {
-            var wait = 5_000L
+            var wait = RETRY_FIRST_MS
             while (true) {
-                delay(wait)
+                val screenCameOn = withTimeoutOrNull(wait) {
+                    screen.on.first { !it }
+                    screen.on.first { it }
+                } != null
+                if (screenCameOn) wait = RETRY_FIRST_MS
                 if (hub.anyPairedOffline()) {
                     hub.refresh()
-                    wait = (wait * 2).coerceAtMost(60_000)
+                    wait = (wait * 2).coerceAtMost(if (screen.on.value) RETRY_SCREEN_ON_MS else RETRY_SCREEN_OFF_MS)
                 } else {
-                    wait = 5_000
+                    wait = RETRY_FIRST_MS
                 }
             }
         }
@@ -300,6 +312,8 @@ class LinkService : LifecycleService() {
     private fun watchOutdoors(anyConnected: Flow<Boolean>) {
         val onLan = MutableStateFlow(network.onLan())
         network.watchLan { onLan.value = it }
+        // Back on Wi-Fi (maybe another one, where the PC still is): look for them all again.
+        lifecycleScope.launch { onLan.drop(1).collect { if (it) hub?.stopResting() } }
         lifecycleScope.launch {
             val sharing = combine(PhoneWebcam.status, PhoneMirror.status) { camera, mirror -> camera.on || mirror.on }
             val staying = combine(anyConnected, container.uiVisible, usb?.cable ?: flowOf(false), BluetoothFallback.enabled, sharing) { connected, visible, cable, radio, shared ->
@@ -378,6 +392,7 @@ class LinkService : LifecycleService() {
     private fun summary(s: DeviceState) = Triple(s.identity.deviceId, s.identity.deviceName, s.transports.contains(TransportKind.USB))
 
     override fun onDestroy() {
+        screen.stop()
         network.unwatchLan()
         mediaSession?.stop()
         mdns?.stop()
@@ -423,6 +438,9 @@ class LinkService : LifecycleService() {
                 .putExtra(EXTRA_CAMERA, camera).putExtra(EXTRA_MIC, mic)
             runCatching { context.startService(intent) }.onFailure { VLog.w("LinkService", "media: ${it.message}") }
         }
+        private const val RETRY_FIRST_MS = 5_000L
+        private const val RETRY_SCREEN_ON_MS = 60_000L
+        private const val RETRY_SCREEN_OFF_MS = 15 * 60_000L
         /** Off Wi-Fi this long, with nothing connected, before outdoor mode pauses (a lift, a tunnel). */
         private const val OUTDOOR_GRACE_MS = 60_000L
         /** With ACTION_SEND: the one URI is a folder tree to send whole. */

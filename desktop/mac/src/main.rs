@@ -250,6 +250,7 @@ async fn run(dir: PathBuf) -> Result<()> {
         }
     });
     let mut clip = Clipboard::default();
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut battery_tick = tokio::time::interval(BATTERY_EVERY);
     battery_tick.tick().await;
     let mut lock_tick = tokio::time::interval(LOCK_EVERY);
@@ -491,8 +492,17 @@ async fn run(dir: PathBuf) -> Result<()> {
                 }
             }
             _ = tokio::signal::ctrl_c() => break,
+            _ = terminate.recv() => break,
         }
     }
+    // Quitting, or the Mac shutting down (launchd stops agents with SIGTERM): phones stop looking
+    // for this Mac until it announces itself again.
+    for (id, d) in &devices {
+        if d.takes(vyoma::LEAVING) {
+            send(id, packet(vyoma::LEAVING, json!({ "why": "stop" })));
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(400)).await;
     Ok(())
 }
 

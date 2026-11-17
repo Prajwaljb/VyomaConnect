@@ -1330,6 +1330,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
             if (waiting != null) { pendingPaste = null; waiting.complete(packet.string("error")) }
             else if (packet.string("error") != null) _typingFailed.tryEmit(Unit)
         }
+        if (packet.type == PC_LEAVING) ctx.device.leaving(packet.string("why") ?: "stop")
         if (packet.type == PC_POWERED) pendingPower?.also { pendingPower = null }?.complete(packet.string("error"))
         if (packet.type == STATS) {
             _stats.value = PcStats(
@@ -1392,6 +1393,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         const val PC_POWER = "vyoma.pc.power"
         const val PC_POWERED = "vyoma.pc.powered"
         const val PC_WAKE = "vyoma.pc.wake"
+        /** PC → phone, just before it shuts down, sleeps or quits: `why` = shutdown | sleep | stop. */
+        const val PC_LEAVING = "vyoma.pc.leaving"
         const val AWAY = "vyoma.away"
         const val GAMEPAD_STATE = "vyoma.gamepad.state"
         const val GAMEPAD_CLOSE = "vyoma.gamepad.close"
@@ -1444,7 +1447,7 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         private val IMAGE_FORMATS = setOf("png", "webp", "jpg")
         fun spec(sink: ShareSink) = PluginSpec(
             ID,
-            incoming = setOf(POINTER_READY, BLUETOOTH, PASTE_READY, STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, XFER_READY, XFER_DONE, WALLPAPER, SPECS, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED, WEBCAM_STATE, MIRROR_INPUT, MIRROR_STATE, DENIED, ECHO_REQUEST),
+            incoming = setOf(POINTER_READY, BLUETOOTH, PASTE_READY, STATS, SCREENSHOT, CAMERA, HANDOFF, FILES_LISTING, FILES_FILE, FILES_SAVED, SCREEN, PC, PC_POWERED, PC_LEAVING, XFER_READY, XFER_DONE, WALLPAPER, SPECS, GAMEPAD_RUMBLE, GAMEPAD_UDP, DESKTOP_STEPPED, WEBCAM_STATE, MIRROR_INPUT, MIRROR_STATE, DENIED, ECHO_REQUEST),
             outgoing = setOf(POINTER_REQUEST, POINTER_CLOSE, PASTE, STATS_REQUEST, SCREENSHOT_REQUEST, CAMERA_REQUEST, HANDOFF_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, SCREEN_REQUEST, SCREEN_STOP, SCREEN_INPUT, SCREEN_TOUCH, PC_REQUEST, PC_SET, PC_POWER, PC_WAKE, AWAY, XFER_BEGIN, XFER_DATA, XFER_END, WALLPAPER_REQUEST, SPECS_REQUEST, GAMEPAD_STATE, GAMEPAD_CLOSE, DESKTOP_STEP, DESKTOP_SWITCH, USB_ACCESSORY, WEBCAM, WEBCAM_MIC, WEBCAM_TURN, MIRROR, MIRROR_AUDIO, MIRROR_COPY, MIRROR_VOLUME, ECHO),
         ) { CompanionPlugin(it, sink) }
     }

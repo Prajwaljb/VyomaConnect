@@ -61,6 +61,24 @@ class DeviceHub(
     private val _devices = MutableStateFlow<Map<String, Device>>(emptyMap())
     val devices: StateFlow<Map<String, Device>> = _devices.asStateFlow()
 
+    private val _resting = MutableStateFlow<Map<String, String>>(emptyMap())
+    /**
+     * PCs that said they were going away (shutting down, going to sleep, quitting), with why. They're
+     * not dialled until they're back: a PC announces itself when it starts or wakes (to this phone's
+     * last address too), so looking for it meanwhile only spends the phone's battery.
+     */
+    val resting: StateFlow<Map<String, String>> = _resting.asStateFlow()
+
+    override fun onLeaving(deviceId: String, why: String) {
+        VLog.i(TAG, "a PC is going away ($why): not looking for it until it's back")
+        _resting.update { it + (deviceId to why) }
+    }
+
+    /** Looks for resting PCs again (the user asked, or the phone is on another network now). */
+    fun stopResting() {
+        if (_resting.value.isNotEmpty()) _resting.value = emptyMap()
+    }
+
     private val _events = MutableSharedFlow<HubEvent>(extraBufferCapacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val events: SharedFlow<HubEvent> = _events.asSharedFlow()
 
@@ -117,8 +135,9 @@ class DeviceHub(
         lan.broadcastIdentity()
         val trusted = trustStore.all()
         val onCable = onCableAddresses()
+        val resting = _resting.value
         for (trusted in trusted) {
-            if (linkedWell(trusted.deviceId)) continue
+            if (linkedWell(trusted.deviceId) || trusted.deviceId in resting) continue
             // Companions have no listener; they always dial us. Their address + 1716 is kdeconnectd.
             if (trusted.companionOf != null) continue
             val address = trusted.lastAddress ?: continue
@@ -183,7 +202,11 @@ class DeviceHub(
     }
 
     /** True while some paired device isn't on Wi-Fi or the cable; the service uses it to keep retrying. */
-    fun anyPairedOffline(): Boolean = trustStore.all().any { !linkedWell(it.deviceId) }
+    /** Some paired device is offline without having said it's going away. */
+    fun anyPairedOffline(): Boolean {
+        val resting = _resting.value
+        return trustStore.all().any { !linkedWell(it.deviceId) && it.deviceId !in resting && it.companionOf !in resting }
+    }
 
     /**
      * Linked over something other than Bluetooth. A PC ignores broadcasts from a device it's linked
@@ -235,6 +258,8 @@ class DeviceHub(
             link.close()
             return
         }
+        // It's back (it called, or answered our call).
+        if (_resting.value.isNotEmpty()) _resting.update { it - id - (link.identity.companionOf ?: id) }
         var device: Device? = null
         _devices.update { map ->
             if (map.containsKey(id)) {

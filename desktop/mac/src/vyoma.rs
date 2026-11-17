@@ -47,7 +47,9 @@ pub const XFER_DATA: &str = "vyoma.xfer.data";
 pub const XFER_END: &str = "vyoma.xfer.end";
 
 pub const INCOMING: &[&str] = &[STATS_REQUEST, SPECS_REQUEST, POWER, WAKE, WALLPAPER_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, XFER_BEGIN, XFER_DATA, XFER_END];
-pub const OUTGOING: &[&str] = &[STATS, SPECS, POWERED, WALLPAPER, "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.xfer.ready", "vyoma.xfer.done", vyoma_core::permits::DENIED];
+/// Mac → phone just before the agent stops (`why`: stop): the phone stops looking for it.
+pub const LEAVING: &str = "vyoma.pc.leaving";
+pub const OUTGOING: &[&str] = &[LEAVING, STATS, SPECS, POWERED, WALLPAPER, "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.xfer.ready", "vyoma.xfer.done", vyoma_core::permits::DENIED];
 
 /// The phone's stats come for this long after it last asked (it asks every few seconds while its
 /// Home is on screen), one sample every [STATS_EVERY]: an unwatched Mac samples nothing.

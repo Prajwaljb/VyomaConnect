@@ -21,6 +21,7 @@ use vyoma_core::messages;
 mod notifications;
 mod notify;
 mod plugins;
+mod power;
 mod gvfs;
 mod hfp;
 mod phonefiles;
@@ -658,6 +659,10 @@ struct Desk {
     /// Device id to the echo it was last sent and when, for the window's response time.
     echoes: HashMap<String, (u64, std::time::Instant)>,
     echo_n: u64,
+    /// Vyoma's window is open (the only place response times show).
+    window_open: Arc<std::sync::atomic::AtomicBool>,
+    /// Each paired phone's last Wi-Fi address, told directly when this PC starts or wakes.
+    addresses: power::Addresses,
 }
 
 /// A file fetched from a device, or why not.
@@ -919,6 +924,8 @@ async fn daemon(dir: PathBuf) -> Result<()> {
         sessions: HashMap::new(),
         echoes: HashMap::new(),
         echo_n: 0,
+        window_open: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        addresses: power::Addresses::load(&dir),
         me: me.clone(),
         conn: conn.clone(),
         clipboard: Clipboard::default(),
@@ -953,7 +960,13 @@ async fn daemon(dir: PathBuf) -> Result<()> {
         battery: system::battery(),
     };
 
-    lan.announce(&targets).await?;
+    tokio::spawn(window::follow(desk.window_open.clone()));
+    let (power_tx, mut power_changes) = mpsc::unbounded_channel();
+    tokio::spawn(power::watch(power_tx));
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    // Here: to the network, and straight to each phone (a sleeping one's Wi-Fi drops broadcasts).
+    let everywhere = |desk: &Desk| [targets.clone(), desk.addresses.targets(UDP_PORT)].concat();
+    lan.announce(&everywhere(&desk)).await?;
     tracing::info!("{} is up as {}", env!("CARGO_PKG_NAME"), me.device_id);
     phonefiles::tidy(&dir).await;
     if beside_kde {
@@ -1018,9 +1031,21 @@ async fn daemon(dir: PathBuf) -> Result<()> {
                     }
                 }
             }
+            Some(change) = power_changes.recv() => match change {
+                power::Change::Leaving(why) => desk.leaving(why),
+                power::Change::Back => {
+                    if let Err(e) = lan.announce(&everywhere(&desk)).await {
+                        tracing::warn!("can't announce after waking: {e:#}");
+                    }
+                }
+            },
             _ = tokio::signal::ctrl_c() => break,
+            _ = terminate.recv() => break,
         }
     }
+    // Quitting (or the session ending): phones stop looking for this PC until it announces itself.
+    desk.leaving("stop");
+    tokio::time::sleep(power::FLUSH).await;
     for n in desk.prompts.values() {
         desk.notifier.close(*n).await;
     }
@@ -1059,8 +1084,17 @@ impl Desk {
         self.start_features(id, &device);
     }
 
-    /// Times each linked phone's link that answers echoes: one at a time, every [ECHO_EVERY].
+    /// Tells every phone this PC is going away ([why]: shutdown, sleep, stop), so it stops looking.
+    fn leaving(&self, why: &str) {
+        self.broadcast(power::LEAVING, packet(power::LEAVING, json!({ "why": why })));
+    }
+
+    /// Times each linked phone's link that answers echoes: one at a time, every [ECHO_EVERY], while
+    /// the window (which shows it) is open. Each wakes the phone's radio, so never otherwise.
     fn send_echoes(&mut self) {
+        if !self.window_open.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
         let due: Vec<String> = self.devices.lock().unwrap().iter().filter(|(_, d)| d.linked && plugins::takes(d, ECHO_REQUEST)).map(|(id, _)| id.clone()).collect();
         for id in due {
             self.echo_n += 1;
@@ -1373,6 +1407,7 @@ impl Desk {
                 self.start(&id);
             }
             Event::Unpaired { id, name } => {
+                self.addresses.forget(&id);
                 self.sessions.remove(&id);
                 self.texts.forget(&id);
                 self.host.permits.forget(&id);
@@ -1557,7 +1592,8 @@ impl Desk {
     /// [id] is linked again or its best route changed: a kept mount that ended remounts. One that
     /// still works stays on its route, however good the new one: swapping it under an open file
     /// manager window leaves that window empty.
-    fn route_changed(&mut self, id: &str, _remote: IpAddr) {
+    fn route_changed(&mut self, id: &str, remote: IpAddr) {
+        self.addresses.seen(id, remote);
         if self.kept.contains(id) && !self.mounts.get_mut(id).is_some_and(|m| m.alive()) {
             self.remount(id);
         }
