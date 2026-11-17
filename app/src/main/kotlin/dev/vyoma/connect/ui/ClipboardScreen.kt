@@ -131,15 +131,14 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
             item(key = "bg") {
                 SectionCard(Modifier.padding(top = 8.dp)) {
                     // Set up already: only Android's log question, asked again on each restart of the app, is missing.
-                    val askIn = clipboardAskWait(vm)
+                    val ask = clipboardAsk(vm)
                     if (sync == dev.vyoma.connect.platform.AndroidClipboard.SyncState.WAITING) ListRow(
                         title = "Allow log access",
-                        subtitle = if (askIn != null) "Android asks again in $askIn s: keep Vyoma open, then tap Allow"
-                        else "Tap Ask again, then Allow, and copies go to your PC by themselves",
+                        subtitle = ask.words,
                         icon = Icons.Rounded.Sync,
                         iconTint = SystemColor.ORANGE.color,
-                        trailing = { RowChevron(if (askIn != null) "$askIn s" else "Ask again") },
-                        onClick = { vm.retryClipboardSync() },
+                        trailing = { RowChevron(ask.state) },
+                        onClick = { if (ask.canTap) vm.retryClipboardSync() },
                     ) else ListRow(
                         title = "Sync when closed",
                         subtitle = "Optional: set up once over a USB cable",
@@ -161,6 +160,20 @@ fun ClipboardScreen(vm: AppViewModel, onBack: (() -> Unit)? = null) {
             confirmButton = { DialogButton(onClick = { vm.clearClipHistory(); clearing = false }, destructive = true) { Text("Clear") } },
             dismissButton = { DialogButton(onClick = { clearing = false }) { Text("Cancel") } },
         )
+    }
+}
+
+/** Where Android's log-access question is, said once: [state] at the row's end (the countdown), [words] beneath the title. */
+internal class ClipboardAsk(val state: String, val words: String, val canTap: Boolean)
+
+@Composable
+internal fun clipboardAsk(vm: AppViewModel): ClipboardAsk {
+    val askIn = clipboardAskWait(vm)
+    val asking by vm.clipboardAsking.collectAsStateWithLifecycle()
+    return when {
+        askIn != null -> ClipboardAsk("$askIn s", "Android asks again when this runs out. Keep Vyoma open, then tap Allow", canTap = false)
+        asking -> ClipboardAsk("Asking", "Tap Allow when Android asks. It takes a moment", canTap = false)
+        else -> ClipboardAsk("Ask again", "Tap Ask again, then Allow, and copies go to your PC by themselves", canTap = true)
     }
 }
 

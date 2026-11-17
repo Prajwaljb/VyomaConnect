@@ -221,6 +221,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun retryClipboardSync() = container.clipboard.startBackgroundSync(again = true)
     /** When a waiting Ask again runs (elapsedRealtime), 0 = none: Android refuses new asks for a minute after a no. */
     val clipboardAskAt get() = container.clipboard.askAt
+    /** Android's log-access question is on its way or showing. */
+    val clipboardAsking get() = container.clipboard.asking
     fun clipboardFocus(focus: Boolean) = container.clipboard.front(focus)
     fun touched() = container.clipboard.touched()
 

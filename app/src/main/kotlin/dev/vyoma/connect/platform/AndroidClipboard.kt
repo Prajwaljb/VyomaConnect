@@ -159,6 +159,10 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
     private val _askAt = MutableStateFlow(0L)
     val askAt: StateFlow<Long> = _askAt.asStateFlow()
 
+    /** Android's question is on its way or showing: another tap would throw it away (Android takes that as a no). */
+    private val _asking = MutableStateFlow(false)
+    val asking: StateFlow<Boolean> = _asking.asStateFlow()
+
     /** Vyoma's window has focus: Android asks only an app in front, and its question takes the focus while it shows. */
     private val inFront = MutableStateFlow(false)
     @Volatile private var lastTouch = 0L
@@ -193,6 +197,8 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
             return
         }
         if (_syncState.value == SyncState.ON || (!again && (watcher?.isActive == true || refused))) return
+        // Asked already and not turned down: let that question come and be answered.
+        if (again && watcher?.isActive == true && !refused) return
         val now = SystemClock.elapsedRealtime()
         if (now < quietUntil) {
             if (again && askLater?.isActive != true) {
@@ -209,6 +215,8 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
         _askAt.value = 0L
         watcher?.cancel()
         readerAt = 0L
+        refused = false
+        _asking.value = true
         _syncState.value = SyncState.WAITING
         watcher = scope.launch(Dispatchers.IO) {
             // In front, settled (on a cold start Android counted Vyoma as in front a moment late), finger at rest.
@@ -239,6 +247,7 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
                     for (line in lines) {
                         if (!isActive) break
                         readable = true
+                        _asking.value = false
                         if (_syncState.value != SyncState.ON) {
                             _syncState.value = SyncState.ON
                             VLog.i(TAG, "background clipboard sync on: the system log is readable")
@@ -250,6 +259,7 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
                 process.destroy()
                 if (watcher == coroutineContext[Job]) {
                     readerAt = 0L
+                    _asking.value = false
                     _syncState.value = if (backgroundSyncAvailable()) SyncState.WAITING else SyncState.NEEDS_GRANT
                 }
                 VLog.i(TAG, "background clipboard sync stopped")
@@ -271,6 +281,7 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
                 if (now >= quietUntil) quietUntil = now + REFUSED_FOR_MS
                 if (!refused) VLog.i(TAG, "Android turned log access down")
                 refused = true
+                _asking.value = false
             }
         }
     }
