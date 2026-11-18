@@ -262,7 +262,7 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
                             _syncState.value = SyncState.ON
                             VLog.i(TAG, "background clipboard sync on: the system log is readable")
                         }
-                        if (marker in line) main.post(::grabFocusAndRead)
+                        if (marker in line) main.post(::onCopySeen)
                     }
                 }
             } finally {
@@ -305,6 +305,38 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
 
     private var overlay: View? = null
     private var focused = false
+    private var openedAt = 0L
+    /** Something else was copied while the reading window was up: read once more after it. */
+    private var copiedAgain = false
+    private var retriesUsed = 0
+    private val retry = Runnable { grabFocusAndRead() }
+
+    /** On the main thread, for each line saying something was copied. */
+    private fun onCopySeen() {
+        if (overlay != null) {
+            // Android logs one copy more than once, moments apart.
+            if (SystemClock.elapsedRealtime() - openedAt > SAME_COPY_MS) copiedAgain = true
+            return
+        }
+        main.removeCallbacks(retry)
+        retriesUsed = 0
+        grabFocusAndRead()
+    }
+
+    /**
+     * The reading window got no focus, so the copy is still unread: the app in front may hide
+     * overlays (Android lets it, and password or banking apps do), or the phone is busy. Without
+     * this the copy waited for the next one, or for Vyoma to be opened.
+     */
+    private fun retryLater() {
+        copiedAgain = false
+        val wait = RETRY_MS.getOrNull(retriesUsed++)
+        if (wait == null) {
+            VLog.w(TAG, "copy seen, gave up reading it for now")
+            return
+        }
+        main.postDelayed(retry, wait)
+    }
 
     /** A 1px, invisible, focusable overlay: focus is what the clipboard check wants. */
     @SuppressLint("ClickableViewAccessibility")
@@ -312,6 +344,7 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
         if (overlay != null || !canDrawOverlays()) return
         val wm = context.getSystemService(WindowManager::class.java)
         focused = false
+        openedAt = SystemClock.elapsedRealtime()
         val view = object : View(context) {
             override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
                 super.onWindowFocusChanged(hasWindowFocus)
@@ -320,7 +353,14 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
                     if (readNow() == null) VLog.i(TAG, "copy seen, focus came, nothing new to send")
                     // Not from inside this callback: the framework is still dispatching the focus
                     // change and touches the view right after we return, which crashed the app.
-                    main.post { removeOverlay(wm) }
+                    main.post {
+                        removeOverlay(wm)
+                        retriesUsed = 0
+                        if (copiedAgain) {
+                            copiedAgain = false
+                            grabFocusAndRead()
+                        }
+                    }
                 }
             }
         }
@@ -334,10 +374,16 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
             overlay = view
             // Never linger if focus doesn't come.
             main.postDelayed({
-                if (overlay === view && !focused) VLog.w(TAG, "copy seen, but Android gave the reading window no focus")
-                removeOverlay(wm)
-            }, 600)
-        }.onFailure { VLog.w(TAG, "copy seen, but the reading window couldn't open: ${it.message}") }
+                if (overlay === view && !focused) {
+                    VLog.w(TAG, "copy seen, but Android gave the reading window no focus")
+                    removeOverlay(wm)
+                    retryLater()
+                }
+            }, FOCUS_WAIT_MS)
+        }.onFailure {
+            VLog.w(TAG, "copy seen, but the reading window couldn't open: ${it.message}")
+            retryLater()
+        }
     }
 
     private fun removeOverlay(wm: WindowManager) {
@@ -357,6 +403,12 @@ class AndroidClipboard(private val context: Context, private val scope: Coroutin
         private const val SILENT_REFUSAL_MS = 6_000L
         /** Android's memory of a "no" (LogcatManagerService: 60 s), plus a little. */
         private const val REFUSED_FOR_MS = 62_000L
+        /** How long the reading window waits for focus. */
+        private const val FOCUS_WAIT_MS = 1_200L
+        /** Log lines this close to the reading window's opening are the copy it opened for. */
+        private const val SAME_COPY_MS = 250L
+        /** When to try an unread copy again: soon, then less often, about half a minute in all. */
+        private val RETRY_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 16_000).asList()
         const val HISTORY_SIZE = 30
         const val MAX_STORED_CHARS = 20_000
 
