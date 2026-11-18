@@ -31,7 +31,7 @@ pub fn socket_path(dir: &Path) -> PathBuf {
 /// Listens on [path] for as long as the daemon runs. Changes sent on [changes] reach every
 /// connection that asked for events.
 pub async fn serve(path: PathBuf, requests: mpsc::Sender<Request>, changes: broadcast::Sender<Value>) -> Result<()> {
-    // A socket left from a run that crashed; a second daemon fails earlier, at the network ports.
+    // A socket left from a run that crashed; a second agent stopped earlier, at launchd::lock.
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path).with_context(|| format!("couldn't listen on {}", path.display()))?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;

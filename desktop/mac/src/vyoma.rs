@@ -459,6 +459,14 @@ pub fn wallpaper_path() -> Option<std::path::PathBuf> {
     None
 }
 
+/// The desktop picture's colours for Vyoma's window, as the phone gets them. [path] comes from
+/// [wallpaper_path], on the main thread.
+pub async fn window_wallpaper(path: Option<std::path::PathBuf>) -> Result<Value, String> {
+    let path = path.ok_or("couldn't find this Mac's wallpaper")?;
+    let colors = colors(&path).await.map_err(|e| format!("{e:#}"))?;
+    Ok(json!({ "cols": COLS, "rows": ROWS, "colors": colors }))
+}
+
 /// The picture averaged down to [COLS]×[ROWS]: sips makes a small PNG of it (it reads HEIC, which
 /// macOS's own wallpapers are), and its blocks are averaged here.
 async fn colors(path: &Path) -> Result<Vec<[u8; 3]>> {

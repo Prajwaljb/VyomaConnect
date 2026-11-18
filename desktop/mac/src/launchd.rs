@@ -5,6 +5,7 @@
 //! Vyoma's and an updated app updates it; a bare binary is copied into
 //! ~/Library/Application Support/Vyoma/bin first.
 
+use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -91,6 +92,23 @@ fn uid() -> Result<String> {
     Ok(uid)
 }
 
+/// Takes this Mac's one-agent lock, kept for as long as the returned file stays open (the system
+/// lets go when the process ends, however it ends); None while another agent holds it.
+pub fn lock(dir: &Path) -> Result<Option<File>> {
+    std::fs::create_dir_all(dir).with_context(|| format!("couldn't make {}", dir.display()))?;
+    let path = dir.join("agent.lock");
+    let file = File::options().create(true).truncate(false).write(true).open(&path).with_context(|| format!("couldn't open {}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        // A disk without locks shouldn't stop Vyoma from running.
+        Err(TryLockError::Error(e)) => {
+            tracing::warn!("couldn't lock {}: {e}", path.display());
+            Ok(Some(file))
+        }
+    }
+}
+
 pub fn install() -> Result<()> {
     let me = std::env::current_exe().context("can't tell where this program is")?;
     let me = me.canonicalize().unwrap_or(me);
@@ -155,6 +173,17 @@ mod tests {
         let p = plist(exe, Path::new("/tmp/log"));
         assert!(p.contains("<string>/Applications/Vyoma.app/Contents/MacOS/vyoma-mac</string>"));
         assert!(p.contains(&format!("<key>AssociatedBundleIdentifiers</key>\n\t<array>\n\t\t<string>{BUNDLE_ID}</string>")));
+    }
+
+    #[test]
+    fn only_one_agent_holds_the_lock() {
+        let dir = std::env::temp_dir().join(format!("vyoma-lock-{}", std::process::id()));
+        let first = lock(&dir).unwrap();
+        assert!(first.is_some());
+        assert!(lock(&dir).unwrap().is_none(), "a second agent has to wait");
+        drop(first);
+        assert!(lock(&dir).unwrap().is_some(), "free again once the first is gone");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

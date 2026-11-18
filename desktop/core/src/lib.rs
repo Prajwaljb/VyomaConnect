@@ -4,6 +4,7 @@
 
 pub mod activity;
 pub mod adb;
+pub mod away;
 pub mod cert;
 pub mod clipboard;
 pub mod commands;
@@ -19,5 +20,6 @@ pub mod payload;
 pub mod permits;
 pub mod release;
 pub mod share;
+pub mod telephony;
 pub mod trust;
 pub mod xfer;

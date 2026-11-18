@@ -218,6 +218,37 @@ fn player_scripts(p: Player, body: &Value) -> Vec<(String, Option<String>)> {
 #[cfg(target_os = "macos")]
 use mac::{apply_player, apply_sound, players, sound};
 
+/// Pauses what's playing, and says which players that was, to [resume] them.
+pub async fn pause_playing() -> Vec<Player> {
+    let mut paused = Vec::new();
+    for (p, track) in players().await {
+        if track.playing {
+            apply_player(p, &json!({ "action": "Pause" })).await;
+            paused.push(p);
+        }
+    }
+    paused
+}
+
+pub async fn resume(players: &[Player]) {
+    for &p in players {
+        apply_player(p, &json!({ "action": "Play" })).await;
+    }
+}
+
+pub async fn set_muted(muted: bool) {
+    apply_sound(&json!({ "name": SINK, "muted": muted })).await;
+}
+
+/// Mutes the sound; true if that changed anything.
+pub async fn mute_if_on() -> bool {
+    let on = sound().await.is_some_and(|s| !s.muted);
+    if on {
+        set_muted(true).await;
+    }
+    on
+}
+
 /// Elsewhere (this crate's tests on Linux) there are no players.
 #[cfg(not(target_os = "macos"))]
 mod elsewhere {

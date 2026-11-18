@@ -145,6 +145,21 @@ pub struct Health {
     pub checks: Vec<Check>,
     pub notes: Vec<String>,
     pub update: Update,
+    /// The running daemon's own version, where it says (the Mac's, from 0.11.1).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub version: String,
+}
+
+/// Whether a running daemon of [running] is behind this window's [mine]. One that doesn't say is
+/// from before it could; [mine] unreadable proves nothing.
+#[cfg(any(target_os = "macos", test))]
+pub fn behind(running: &str, mine: &str) -> bool {
+    let parts = |v: &str| v.trim().split('.').map(|p| p.parse::<u64>().ok()).collect::<Option<Vec<_>>>();
+    match (parts(running), parts(mine)) {
+        (_, None) => false,
+        (None, Some(_)) => true,
+        (Some(running), Some(mine)) => running < mine,
+    }
 }
 
 /// The PC app's version and whether a newer one is out.
@@ -181,6 +196,7 @@ impl Health {
                 .collect(),
             installable: v["installable"].as_bool().unwrap_or(false),
             installing: v["installing"].as_bool().unwrap_or(false),
+            version: v["version"].as_str().unwrap_or("").to_owned(),
             checks: list("checks")
                 .iter()
                 .map(|c| Check {
@@ -678,6 +694,16 @@ mod tests {
             println!("paired {} linked {} via {:?} battery {} can ring/browse/share {}/{}/{}", p.paired, p.linked, p.via, p.battery.is_some(), p.can_ring, p.can_browse, p.can_share);
         }
         assert!(!phones.is_empty());
+    }
+
+    #[test]
+    fn a_daemon_older_than_the_window_is_behind() {
+        assert!(behind("", "0.11.1"), "too old to say");
+        assert!(behind("0.11.0", "0.11.1"));
+        assert!(behind("0.9.9", "0.10.0"), "numbers, not text");
+        assert!(!behind("0.11.1", "0.11.1\n"));
+        assert!(!behind("0.12.0", "0.11.1"), "an older copy of the app leaves a newer daemon alone");
+        assert!(!behind("0.11.0", "unknown"));
     }
 
     #[test]

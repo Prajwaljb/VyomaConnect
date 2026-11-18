@@ -10,6 +10,9 @@
 //! Vyoma's window talks to it over a local socket ([control]).
 //! Built and tested on GitHub's macOS runners only; not yet tried on a real Mac.
 
+mod away;
+mod brightness;
+mod calls;
 mod control;
 mod finder;
 mod input;
@@ -19,6 +22,7 @@ mod media;
 mod mirror;
 #[cfg(target_os = "macos")]
 mod notify;
+mod presenter;
 mod camera;
 mod screen;
 mod update;
@@ -59,6 +63,7 @@ pub const KEYBOARDSTATE: &str = "kdeconnect.mousepad.keyboardstate";
 const INCOMING: &[&str] = &[
     PING, BATTERY, FIND, LOCK_REQUEST, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE,
     media::MPRIS_REQUEST, media::VOLUME_REQUEST, RUNCOMMAND_REQUEST, NOTIFICATION, input::MOUSEPAD_REQUEST,
+    vyoma_core::telephony::TELEPHONY, presenter::PRESENTER, vyoma_core::away::AWAY,
     messages::MESSAGES, messages::CONTACTS_UIDS_REPLY, messages::CONTACTS_VCARDS_REPLY, messages::UNLOCKED, messages::LOCKED,
 ];
 const OUTGOING: &[&str] = &[
@@ -70,6 +75,8 @@ const OUTGOING: &[&str] = &[
 
 /// This release, as the Linux app reads it: the repo's one version.
 const VERSION: &str = include_str!("../../../VERSION");
+const AGENT_LOCK_TRIES: u32 = 24;
+const AGENT_LOCK_WAIT: Duration = Duration::from_millis(250);
 use vyoma_core::release::REPO;
 
 /// How often the clipboard is looked at (macOS sends no change events to a program like this one)
@@ -124,6 +131,7 @@ fn main() -> Result<()> {
         }
         Some(SEND_ANY) => send_any(std::env::args().skip(2).collect()),
         Some(mirror::WINDOW_ARG) => mirror::window(&std::env::args().skip(2).collect::<Vec<_>>()),
+        Some(presenter::WINDOW_ARG) => presenter::window(),
         Some(other) => bail!("unknown option {other}: try --install or --uninstall"),
         None => run(std::env::var_os("VYOMA_DIR").map(PathBuf::from).unwrap_or_else(launchd::support_dir)),
     }
@@ -152,12 +160,26 @@ impl Device {
     }
 }
 
+/// Waits for this Mac's one-agent lock. Two agents would both answer the phone under one identity,
+/// each with its own idea of who is paired, and the network doesn't stop them: the second simply
+/// listens on the next port. The wait covers an agent still saying goodbye after a restart.
+async fn only_agent(dir: &std::path::Path) -> Result<std::fs::File> {
+    for _ in 0..AGENT_LOCK_TRIES {
+        if let Some(lock) = launchd::lock(dir)? {
+            return Ok(lock);
+        }
+        tokio::time::sleep(AGENT_LOCK_WAIT).await;
+    }
+    bail!("Vyoma is already running on this Mac")
+}
+
 #[tokio::main]
 async fn run(dir: PathBuf) -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "vyoma_mac=info,vyoma_core=info".into()))
         .init();
     vyoma_core::identity::use_dir(dir.clone());
+    let _only_agent = only_agent(&dir).await?;
     #[cfg(target_os = "macos")]
     notify::start();
     let me = Arc::new(Identity::load_or_create_in(&dir)?);
@@ -206,6 +228,10 @@ async fn run(dir: PathBuf) -> Result<()> {
     }
     let mut refused: HashMap<(String, Permit), Instant> = HashMap::new();
     let mut touched: HashMap<String, Instant> = HashMap::new();
+    let calls = calls::start();
+    let walk_away = Arc::new(away::Away::default());
+    let brightness = brightness::start(commands.clone());
+    let mut pointer_dot = presenter::Presenter::default();
     // The phone's texts, in memory only, for the window's Messages page.
     let texts = Arc::new(Store::default());
     {
@@ -305,6 +331,8 @@ async fn run(dir: PathBuf) -> Result<()> {
                     let d = devices.entry(id.clone()).or_default();
                     *d = Device { name, paired, linked: true, incoming, cert, remote: Some(remote), battery: d.battery, ..Default::default() };
                     tracing::info!("{id}: linked{}", if paired { ", paired" } else { "" });
+                    let (back, phone) = (walk_away.clone(), id.clone());
+                    tokio::spawn(async move { back.linked(&phone).await });
                     if paired {
                         for p in started(d, battery, &clip) {
                             send(&id, p);
@@ -320,6 +348,9 @@ async fn run(dir: PathBuf) -> Result<()> {
                     photos.stop(&id);
                     mirrors.gone(&id);
                     texts.gone(&id);
+                    pointer_dot.stop();
+                    walk_away.unlinked(&id);
+                    let _ = calls.send(calls::Order::Gone(id));
                 }
                 Event::Routes { id, remotes } => {
                     if let Some(d) = devices.get_mut(&id) {
@@ -460,6 +491,14 @@ async fn run(dir: PathBuf) -> Result<()> {
                                 send(&id, p);
                             }
                         }
+                        vyoma_core::telephony::TELEPHONY if d.paired => {
+                            let _ = calls.send(calls::Order::Packet { id, phone: d.name.clone(), packet });
+                        }
+                        vyoma_core::away::AWAY if d.paired => walk_away.configure(&id, &packet["body"]),
+                        presenter::PRESENTER if d.paired => pointer_dot.on_packet(&packet["body"]),
+                        kind if brightness::takes(kind) && d.paired => {
+                            let _ = brightness.send((id, packet));
+                        }
                         camera::CAMERA_REQUEST if d.paired => photos.handle(&id, &vyoma::Phone { name: &d.name, cert: &d.cert, from }, &packet),
                         kind if screen::takes(kind) && d.paired => screens.handle(&id, &vyoma::Phone { name: &d.name, cert: &d.cert, from }, &packet),
                         kind if mirror::takes(kind) && d.paired => mirrors.handle(&id, &vyoma::Phone { name: &d.name, cert: &d.cert, from }, &packet),
@@ -525,6 +564,14 @@ async fn run(dir: PathBuf) -> Result<()> {
                 }
             }
             Some(req) = requests.recv() => {
+                // sips takes a moment, and only this thread can ask AppKit where the picture is.
+                if req.method == "Wallpaper" {
+                    let path = vyoma::wallpaper_path();
+                    tokio::spawn(async move {
+                        let _ = req.reply.send(vyoma::window_wallpaper(path).await);
+                    });
+                    continue;
+                }
                 let answer = window.answer(&req.method, &req.args, &mut devices).await;
                 // Only what the window would show differently: a reread after a read would come
                 // back here as another read, round and round.
@@ -697,7 +744,7 @@ impl Window {
             "EndPairingCode" => command(Command::Invite(None)),
             "Health" => Ok(json!({
                 "features": [], "installable": false, "checks": checks(), "notes": [],
-                "update": self.updates.status(),
+                "update": self.updates.status(), "version": VERSION.trim(),
             })),
             "FixCheck" => match control::text(args, 0)?.as_str() {
                 TOUCHPAD_CHECK => {
@@ -1135,8 +1182,8 @@ fn identity(me: &Identity, name: String, laptop: bool) -> Value {
             "deviceName": name,
             "deviceType": if laptop { "laptop" } else { "desktop" },
             "protocolVersion": 8,
-            "incomingCapabilities": ([INCOMING, vyoma::INCOMING, screen::INCOMING, camera::INCOMING, mirror::INCOMING, DESK_INCOMING].concat()),
-            "outgoingCapabilities": ([OUTGOING, vyoma::OUTGOING, screen::OUTGOING, camera::OUTGOING, mirror::OUTGOING, DESK_OUTGOING].concat()),
+            "incomingCapabilities": ([INCOMING, vyoma::INCOMING, screen::INCOMING, camera::INCOMING, mirror::INCOMING, DESK_INCOMING, brightness::incoming()].concat()),
+            "outgoingCapabilities": ([OUTGOING, vyoma::OUTGOING, screen::OUTGOING, camera::OUTGOING, mirror::OUTGOING, DESK_OUTGOING, brightness::outgoing()].concat()),
         }),
     )
 }
@@ -1322,7 +1369,7 @@ mod tests {
         let incoming = p["body"]["incomingCapabilities"].as_array().unwrap();
         assert_eq!(incoming.len(), INCOMING.len() + vyoma::INCOMING.len() + screen::INCOMING.len() + camera::INCOMING.len() + mirror::INCOMING.len() + DESK_INCOMING.len());
         // What the phone looks for before it shows a tile (its PcFeatures).
-        for offered in ["vyoma.screenshot.request", "vyoma.camera.request", "vyoma.screen.request", "vyoma.mirror", "vyoma.paste", "vyoma.desktop.step"] {
+        for offered in ["vyoma.away", "kdeconnect.telephony", "kdeconnect.presenter", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.screen.request", "vyoma.mirror", "vyoma.paste", "vyoma.desktop.step"] {
             assert!(incoming.iter().any(|t| t == offered), "{offered}");
         }
         assert!(!OUTGOING.contains(&"kdeconnect.lock"), "no lock state it can't know");

@@ -234,7 +234,7 @@ fn health(missing: bool) -> Health {
         notes.push("PC screen on the phone needs your graphics card's video driver for hardware encoding. Your system's driver settings can add it.".into());
     }
     let update = crate::daemon::Update { current: "0.3.0".into(), latest: missing.then(|| "0.4.0".into()), checks: true, can_update: true, ..Default::default() };
-    Health { features, installable: missing, installing: false, checks, notes, update }
+    Health { features, installable: missing, installing: false, checks, notes, update, version: String::new() }
 }
 
 /// Made-up texts: messages (the list), messages-thread, messages-silent, messages-loading, and the phone's texts

@@ -23,6 +23,8 @@ slint::include_modules!();
 
 /// How long a notice stays, and how often the window rereads the daemon without being told to
 /// (a battery that moved without a change signal, a daemon that restarted).
+#[cfg(target_os = "macos")]
+const VERSION: &str = include_str!("../../../VERSION");
 const NOTICE_FOR: Duration = Duration::from_millis(3200);
 const REREAD_EVERY: Duration = Duration::from_secs(5);
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
@@ -107,13 +109,19 @@ fn main() -> anyhow::Result<()> {
     qr::wire(&ui);
     texts::wire(&ui);
     // On a Mac, opening the app is what sets Vyoma up: the first open (or the first after the app
-    // moved) starts the background part from inside it, which then starts at login.
+    // moved) starts the background part from inside it, which then starts at login. After an update
+    // the old background part is still running from before, and the phone and this window would
+    // only get what it knew: it's replaced with the one in this app.
     #[cfg(target_os = "macos")]
-    if daemon::connect().is_err() {
-        std::thread::spawn(|| {
+    std::thread::spawn(|| {
+        let start = match daemon::connect() {
+            Err(_) => true,
+            Ok(d) => d.health().is_ok_and(|h| daemon::behind(&h.version, VERSION)),
+        };
+        if start {
             let _ = start_daemon();
-        });
-    }
+        }
+    });
     watch(ui.as_weak());
     if !page.is_empty() {
         open_page(&ui, &page);

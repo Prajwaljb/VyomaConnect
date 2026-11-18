@@ -36,7 +36,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `desktop/core` (`vyoma-core`): the desktop side's shared protocol core (identity, links, payloads), no desktop
   calls, so it serves every desktop and macOS: discovery, links, pairing, trust store, the device hub (`device.rs`), and
   what both PC sides share: `messages` (texts store + lock), `files`/`xfer` (phone file access, behind `files::Hooks`),
-  `permits`, `activity`, `commands`, `release` (GitHub's newest release, `is_newer`), `adb` (the USB cable for every PC
+  `permits`, `activity`, `commands`, `telephony`, `away`, `release` (GitHub's newest release, `is_newer`), `adb` (the USB cable for every PC
   side: when a phone with USB debugging appears (each side feeds a watch of plugged adb interfaces: sysfs on Linux,
   `companion/src/usb.rs`; IOKit on the Mac, `mac/src/usb.rs`) the reverse tunnel, payload ports both ways, and the clipboard
   grants once the person allows the APK's signing key (`set_asker`: a notification on Linux, a dialog on the Mac)).
@@ -81,7 +81,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `desktop/mac` (`vyoma-mac`): the Mac's PC side on vyoma-core (`docs/PLAN.md` section 10, macOS): pairs in Vyoma's
   window (inside Vyoma.app a request opens it, with a notification; the bare binary asks in a dialog with the code), serves ping, battery, find my phone, lock (display sleep), clipboard (pbcopy/pbpaste polled each
   second), share (files into ~/Downloads); `--install` makes it a LaunchAgent (`launchd.rs`; from Vyoma.app it runs the
-  copy inside the app, which the window installs on first open or after the app moved). Vyoma.app
+  copy inside the app, which the window installs on first open, after the app moved, or when the running agent is older than the window (Health `version`: replacing the app leaves the old agent running); one agent at a time, `agent.lock`). Vyoma.app
   (`packaging/bundle-mac.sh`: window `vyoma` as the app, `vyoma-mac` beside it, id `dev.vyoma.Vyoma`, icon
   `desktop/mac/dist/vyoma.icns` from `gen.py`, ad-hoc signed) is the CI artifact `Vyoma-mac`, and on a `v*` tag desktop-release.yml has macos.yml attach it to the release as `Vyoma-mac-<version>.zip` + `.sha256` (by hand: `gh workflow run macos.yml -f release=vX.Y.Z`); inside it notifications go
   through UserNotifications under Vyoma's name (`notify.rs`, osascript outside the app or if macOS refuses). The window reaches it over
@@ -102,7 +102,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   the old clipboard back after 1.2 s) and the three-finger gestures (Control+Up Mission Control, Control+Left/Right Spaces,
   with the arrow keys' fn/number-pad flags). The USB cable (`usb.rs`): IOKit notifications feed core `adb`; adb from
   Android Studio, Homebrew, or the USB cable check's Get adb (Google's platform tools into Vyoma's folder); the window's
-  Clipboard card and `via: cable` as on Linux. Camera (`camera.rs`): a photo for the phone's Camera tile through AVFoundation's photo output (JPEG, after a short warm-up), a notification each time; macOS's camera Allow needs Vyoma.app (`NSCameraUsageDescription`), the bare binary refuses; stats say `camera`/`cameraLid` (clamshell from ioreg); a This Mac check. Switches: screen, control, files, camera, power. Type-check it on Linux with a
+  Clipboard card and `via: cable` as on Linux. Camera (`camera.rs`): a photo for the phone's Camera tile through AVFoundation's photo output (JPEG, after a short warm-up), a notification each time; macOS's camera Allow needs Vyoma.app (`NSCameraUsageDescription`), the bare binary refuses; stats say `camera`/`cameraLid` (clamshell from ioreg); a This Mac check. Calls (`calls.rs`, core `telephony`): who is ringing and missed calls as notifications, Music and Spotify paused for the call; answering stays on the phone. Walk-away rules (`away.rs`, core `away`): pause, mute, display off. Brightness of the built-in display (`brightness.rs`, DisplayServices dlopened; `vyoma.pc` offered only where there is one, no per-app volumes). The presenter dot (`presenter.rs`: `vyoma-mac --presenter-window` as a child, an AppKit window above everything, lines on stdin). The window's wallpaper look (`Wallpaper`). Switches: screen, control, files, camera, power. Type-check it on Linux with a
   scratch rustup (`rustup target add aarch64-apple-darwin`, `cargo check --target aarch64-apple-darwin`; ring's C needs a stub
   TargetConditionals.h and `-nostdlibinc` with tiny string.h/assert.h stubs in CFLAGS_aarch64_apple_darwin).
   Vyoma's extras (`vyoma.rs`): stats, specs, power, wake, wallpaper; the phone's files (~/Library off limits) and resumable
