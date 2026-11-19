@@ -115,7 +115,7 @@ impl Dot {
         }
         let (mx, my, mw, mh) = self.monitor;
         self.spot = self.spot.moved(dx, dy, (mw, mh));
-        let (x, y) = self.spot.corner((mw, mh));
+        let (x, y) = self.spot.corner((mw, mh), SIZE);
         self.conn.configure_window(self.window, &ConfigureWindowAux::new().x(mx + x).y(my + y).stack_mode(StackMode::ABOVE))?;
         self.draw()
     }

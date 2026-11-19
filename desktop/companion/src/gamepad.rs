@@ -25,20 +25,17 @@
 
 use std::collections::HashMap;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+#[cfg(test)]
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use serde_json::json;
 use tokio::io::unix::AsyncFd;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
 
 use crate::link::Sender;
 pub use vyoma_core::gamepad::{Button, DATAGRAM_LEN, ECHO_EVERY, Fast, Kind, Order, State, read_frames, serve_wired};
-use crate::packet;
-
-/// Without a state (or the heartbeat) for this long the phone has gone: let everything go.
-const IDLE: Duration = Duration::from_secs(4);
+pub(crate) use vyoma_engine::gamepad::Gaps;
+use vyoma_engine::gamepad::{GyroMouse, Pads, VirtualPad};
 
 /// What this pad does with the shared [Kind].
 trait PadKind {
@@ -425,44 +422,6 @@ impl Drop for Mouse {
     }
 }
 
-/// Stutter on the side channels: they repeat at least every 100 ms, so a longer silence is the
-/// route's fault, not an idle thumb.
-pub(crate) struct Gaps {
-    started: std::time::Instant,
-    last: Option<std::time::Instant>,
-    frames: u64,
-    long: u64,
-    longest: Duration,
-}
-
-impl Gaps {
-    const LONG: Duration = Duration::from_millis(150);
-
-    pub(crate) fn new() -> Gaps {
-        Gaps { started: std::time::Instant::now(), last: None, frames: 0, long: 0, longest: Duration::ZERO }
-    }
-
-    pub(crate) fn frame(&mut self) {
-        let now = std::time::Instant::now();
-        if let Some(last) = self.last {
-            let gap = now - last;
-            self.longest = self.longest.max(gap);
-            self.long += (gap > Self::LONG) as u64;
-        }
-        self.last = Some(now);
-        self.frames += 1;
-    }
-
-    pub(crate) fn report(&self, name: &str) {
-        if self.frames > 0 {
-            info!(
-                "{name}: controller frames: {} in {} s, {} gaps over {} ms, longest {} ms",
-                self.frames, self.started.elapsed().as_secs(), self.long, Self::LONG.as_millis(), self.longest.as_millis()
-            );
-        }
-    }
-}
-
 /// However the pad ends (aborted with the link, too): a phone switched to USB accessory mode for
 /// this gets its USB back.
 struct ReleaseAccessory;
@@ -473,119 +432,48 @@ impl Drop for ReleaseAccessory {
     }
 }
 
+impl VirtualPad for Pad {
+    fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    fn apply(&mut self, s: State) -> Result<()> {
+        Pad::apply(self, s)
+    }
+
+    async fn rumble(&mut self) -> Result<(u16, u16, u16)> {
+        Pad::rumble(self).await
+    }
+}
+
+impl GyroMouse for Mouse {
+    fn moved(&mut self, dx: i32, dy: i32) -> Result<()> {
+        Mouse::moved(self, dx, dy)
+    }
+}
+
+/// uinput's pads; the accessory's USB is given back when they're done.
+struct Uinput(#[allow(dead_code)] ReleaseAccessory);
+
+impl Pads for Uinput {
+    type Pad = Pad;
+    type Mouse = Mouse;
+
+    async fn pad(&mut self, kind: Kind) -> Result<Pad> {
+        Pad::create(kind)
+    }
+
+    fn mouse(&mut self) -> Result<Mouse> {
+        Mouse::create()
+    }
+}
+
 /// The session's controller input (the engine's).
 pub use vyoma_engine::GamepadInput as Input;
 
 /// Runs the pad for one phone while it sends states; returns when it closes or goes quiet.
-pub async fn run(mut input: mpsc::Receiver<Input>, sender: Sender, name: String) {
-    let _accessory = ReleaseAccessory;
-    // Only the phone's own new states count: a rumbling game or a replayed datagram wakes this loop
-    // too, and mustn't keep a held button down for ever.
-    let mut quiet_at = tokio::time::Instant::now() + IDLE;
-    let mut pad: Option<Pad> = None;
-    let mut mouse: Option<Mouse> = None;
-    let mut fast: Option<Fast> = None;
-    let mut order = Order::default();
-    // The gyro mouse's totals last seen (a fresh stream starts its own from anywhere).
-    let mut moved: Option<(u32, i32, i32)> = None;
-    let mut over_udp = false;
-    let mut gaps = Gaps::new();
-    loop {
-        let rumble = async {
-            match pad.as_mut() {
-                Some(p) => p.rumble().await,
-                None => std::future::pending().await,
-            }
-        };
-        let datagram = async {
-            match fast.as_mut() {
-                Some(f) => f.next().await,
-                None => std::future::pending().await,
-            }
-        };
-        let state = tokio::select! {
-            got = tokio::time::timeout_at(quiet_at, input.recv()) => match got {
-                Ok(Some(Input::State(s))) => s,
-                Ok(Some(Input::Close)) | Ok(None) | Err(_) => {
-                    if pad.take().is_some() {
-                        info!("{name}: controller disconnected");
-                    }
-                    gaps.report(&name);
-                    return;
-                }
-            },
-            (s, wired) = datagram => {
-                gaps.frame();
-                if !wired && !over_udp {
-                    over_udp = true;
-                    info!("{name}: controller input arriving over UDP");
-                }
-                s
-            }
-            r = rumble => {
-                match r {
-                    Ok((strong, weak, ms)) => {
-                        let _ = sender.send(&packet("vyoma.gamepad.rumble", json!({ "strong": strong, "weak": weak, "ms": ms }))).await;
-                    }
-                    Err(e) => {
-                        warn!("{name}: controller feedback failed: {e:#}");
-                        return;
-                    }
-                }
-                continue;
-            }
-        };
-        if !order.fresh(&state) {
-            continue;
-        }
-        quiet_at = tokio::time::Instant::now() + IDLE;
-        // A different pad asked for: the old one goes (letting go of everything) and the new one comes.
-        if pad.as_ref().is_some_and(|p| p.kind() != state.kind) {
-            pad = None;
-        }
-        if pad.is_none() {
-            match Pad::create(state.kind) {
-                Ok(p) => {
-                    info!("{name}: controller connected ({:?})", state.kind);
-                    pad = Some(p);
-                }
-                Err(e) => {
-                    warn!("{name}: no virtual controller: {e:#}");
-                    let _ = sender.send(&packet("vyoma.gamepad.rumble", json!({ "error": format!("{e:#}") }))).await;
-                    return;
-                }
-            }
-            if fast.is_none() {
-                match Fast::open().await {
-                    Ok((f, port, key)) => {
-                        fast = Some(f);
-                        let _ = sender.send(&packet("vyoma.gamepad.udp", json!({ "port": port, "key": key }))).await;
-                    }
-                    Err(e) => warn!("{name}: controller stays on the link (no UDP port: {e:#})"),
-                }
-            }
-        }
-        if let Some(p) = pad.as_mut() && let Err(e) = p.apply(state) {
-            warn!("{name}: controller input failed: {e:#}");
-        }
-        let sid = state.order.map_or(0, |o| o.0);
-        let (dx, dy) = match moved {
-            Some((s, x, y)) if s == sid => (state.mx.wrapping_sub(x), state.my.wrapping_sub(y)),
-            _ => (0, 0),
-        };
-        moved = Some((sid, state.mx, state.my));
-        if dx != 0 || dy != 0 {
-            if mouse.is_none() {
-                match Mouse::create() {
-                    Ok(m) => mouse = Some(m),
-                    Err(e) => warn!("{name}: no gyro mouse: {e:#}"),
-                }
-            }
-            if let Some(m) = &mouse && let Err(e) = m.moved(dx, dy) {
-                warn!("{name}: gyro mouse failed: {e:#}");
-            }
-        }
-    }
+pub async fn run(input: mpsc::Receiver<Input>, sender: Sender, name: String) {
+    vyoma_engine::gamepad::drive(Uinput(ReleaseAccessory), input, sender, name).await
 }
 
 #[cfg(test)]

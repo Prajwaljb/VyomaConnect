@@ -3,8 +3,8 @@
 //! work. So far: the Home stats, About this PC, screenshots, the live screen, the PC's files
 //! (browse, open, send both ways), brightness and app volumes ([pc]), sleep / restart / shut down
 //! / sign out, waking the screen, Task View and the virtual desktops, paste, the wallpaper's
-//! colours, walk-away rules, the phone's screen in a window ([crate::mirror]) and a photo with the
-//! camera ([crate::camera]).
+//! colours, walk-away rules, the phone's screen in a window ([crate::mirror]), a photo with the
+//! camera ([crate::camera]) and the phone as a game controller ([crate::gamepad]).
 //! Built and tested on CI and under Wine only; not yet run on a real Windows PC.
 
 use std::net::IpAddr;
@@ -45,9 +45,11 @@ impl Windows {
         match feature {
             Feature::Stats | Feature::Specs | Feature::Screenshot | Feature::Screen | Feature::Files | Feature::Power | Feature::Wake | Feature::Desktop | Feature::Paste => true,
             Feature::Controls | Feature::Wallpaper | Feature::Away | Feature::Mirror | Feature::Camera => true,
-            // Not on Windows yet: the gamepad (ViGEmBus), the browser's media handoff, the USB
-            // accessory, the phone's camera as a webcam, the Bluetooth touchpad.
-            Feature::Gamepad | Feature::Handoff | Feature::Accessory | Feature::Webcam | Feature::Touchpad => false,
+            // Offered without the driver too: the phone then says how to get it.
+            Feature::Gamepad => true,
+            // Not on Windows yet: the browser's media handoff, the USB accessory, the phone's camera
+            // as a webcam, the Bluetooth touchpad.
+            Feature::Handoff | Feature::Accessory | Feature::Webcam | Feature::Touchpad => false,
         }
     }
 }
@@ -83,6 +85,10 @@ impl Platform for Windows {
 
     async fn screenshot(&self, cx: &Cx) -> Result<()> {
         screen::screenshot(&cx.sender, &cx.me, &cx.pinned, &cx.name).await
+    }
+
+    async fn gamepad(&self, cx: &Cx, input: mpsc::Receiver<vyoma_engine::GamepadInput>) {
+        crate::gamepad::run(input, cx.sender.clone(), cx.name.clone()).await
     }
 
     async fn camera_state(&self) -> (bool, bool) {
@@ -404,9 +410,8 @@ mod tests {
         for kind in ["vyoma.camera.request", "vyoma.mirror", "vyoma.mirror.audio", "vyoma.mirror.copy", "vyoma.mirror.volume"] {
             assert!(incoming.contains(&kind), "{kind}");
         }
-        for kind in ["vyoma.webcam", "vyoma.gamepad.state"] {
-            assert!(!incoming.contains(&kind), "{kind} isn't on Windows yet");
-        }
+        assert!(incoming.contains(&"vyoma.gamepad.state"), "the controller");
+        assert!(!incoming.contains(&"vyoma.webcam"), "the webcam isn't on Windows yet");
     }
 
     #[test]

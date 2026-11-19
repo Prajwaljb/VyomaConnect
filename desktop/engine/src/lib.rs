@@ -4,6 +4,7 @@
 //! pointer, read the wallpaper) is a [Platform]'s: one per OS, each choosing among the ways its
 //! desktops allow.
 
+pub mod gamepad;
 pub mod platform;
 pub mod session;
 

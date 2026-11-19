@@ -3,12 +3,14 @@
 //! compare, or Vyoma's window), and serves the stock plugins: ping, battery both ways, find my
 //! phone, the screen lock, the clipboard both ways, sharing (files into Downloads, web links
 //! opened, text onto the clipboard), the touchpad and keyboard ([input]), the players and the
-//! volume ([media]), the phone's notifications (toasts with Reply and their buttons, [toast]), the
+//! volume ([media]), the presenter's pointer ([presenter]), the phone's notifications (toasts with Reply and their buttons, [toast]), the
 //! phone's texts for the window's Messages page, calls ([calls]), and the commands set up in the
 //! window. Vyoma's own features go through the engine ([platform]; the live screen is [cast],
 //! brightness and app volumes [pc], the wallpaper's colours [wallpaper], walk-away rules [away],
 //! the phone's screen in a window here [mirror], a photo with this PC's camera [camera]).
-//! It checks for a newer release once a day ([update]) and is in Explorer's Send to ([sendto]).
+//! It checks for a newer release once a day ([update]), is in Explorer's Send to ([sendto]), and
+//! links over the USB cable through adb ([usb]). The phone is a game controller through the
+//! usbip-win2 driver ([gamepad]).
 //!
 //! It lives in the notification area ([tray]) and starts with Windows once installed
 //! (`--install`); Vyoma's window talks to it over a named pipe ([control]). The installer stops it
@@ -35,6 +37,8 @@ mod control;
 #[cfg(windows)]
 mod firewall;
 #[cfg(windows)]
+mod gamepad;
+#[cfg(windows)]
 mod input;
 #[cfg(windows)]
 mod media;
@@ -44,6 +48,8 @@ mod mirror;
 mod pc;
 #[cfg(windows)]
 mod platform;
+#[cfg(windows)]
+mod presenter;
 #[cfg(windows)]
 mod screen;
 #[cfg(windows)]
@@ -56,6 +62,8 @@ mod toast;
 mod tray;
 #[cfg(windows)]
 mod update;
+#[cfg(windows)]
+mod usb;
 #[cfg(windows)]
 mod wallpaper;
 #[cfg(windows)]
@@ -101,7 +109,8 @@ mod agent {
     use vyoma_engine::session::{Host, Phone, phone_name};
 
     use crate::toast::{self, Button, Heard, Shown, Toast};
-    use crate::{away, calls, control, firewall, input, media, platform, system, tray, update, win};
+    use crate::{away, calls, control, firewall, input, media, platform, presenter, system, tray, update, usb, win};
+    use vyoma_core::adb::ClipboardSeen;
 
     pub const PING: &str = "kdeconnect.ping";
     pub const BATTERY: &str = "kdeconnect.battery";
@@ -121,7 +130,7 @@ mod agent {
     /// What we take and send. No lock state outward yet (WTS session notifications, later).
     const INCOMING: &[&str] = &[
         PING, BATTERY, FIND, LOCK_REQUEST, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, RUNCOMMAND_REQUEST, NOTIFICATION, input::MOUSEPAD_REQUEST,
-        media::MPRIS_REQUEST, media::VOLUME_REQUEST, telephony::TELEPHONY, telephony::DONE,
+        media::MPRIS_REQUEST, media::VOLUME_REQUEST, telephony::TELEPHONY, telephony::DONE, presenter::PRESENTER,
         messages::MESSAGES, messages::CONTACTS_UIDS_REPLY, messages::CONTACTS_VCARDS_REPLY, messages::UNLOCKED, messages::LOCKED,
     ];
     const OUTGOING: &[&str] = &[
@@ -312,8 +321,9 @@ mod agent {
         let host = Arc::new(Host { me: me.clone(), permits: permits.clone(), activity: activity.clone() });
         let mut sessions: HashMap<String, mpsc::UnboundedSender<(Value, IpAddr)>> = HashMap::new();
         let engine_takes = vyoma_engine::session::incoming_all();
-        let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone, run: run_commands.clone(), texts: texts.clone(), permits: permits.clone(), activity: activity.clone(), requests: requests_tx, pending: Mutex::default(), updates: updates.clone() };
+        let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone, run: run_commands.clone(), texts: texts.clone(), permits: permits.clone(), activity: activity.clone(), requests: requests_tx, pending: Mutex::default(), updates: updates.clone(), clip_seen: ClipboardSeen::load(&dir) };
         let mut pointer = input::Pointer::default();
+        let mut dot = presenter::Presenter::default();
         // Players and the volume, read on a thread of their own while a phone that takes them is linked.
         let media_wanted = Arc::new(AtomicBool::new(false));
         let (media_tx, media_rx) = std::sync::mpsc::channel::<(String, Value)>();
@@ -325,6 +335,18 @@ mod agent {
         let mut untrusted_told: Option<Instant> = None;
         // Calls on the phones: toasts, music paused for them.
         let calls = calls::start();
+        // The USB cable: phones plugged in with USB debugging link through adb's tunnel.
+        usb::start(lan.tcp_port());
+        // The controller's states down the cable (adb's reverse of the phone's 1866); pads a
+        // previous run left behind aren't retried.
+        tokio::spawn(vyoma_core::gamepad::serve_wired());
+        tokio::task::spawn_blocking(crate::gamepad::tidy);
+        {
+            let changes = changes.clone();
+            vyoma_core::adb::on_clipboard_change(Box::new(move || {
+                let _ = changes.send(json!({ "event": "Changed" }));
+            }));
+        }
 
         let send = |id: &str, p: Value| {
             let _ = commands.send(Command::Send(id.to_owned(), p));
@@ -387,11 +409,12 @@ mod agent {
                             sessions.remove(&id);
                             texts.gone(&id);
                             pc.away.gone(&id, Arc::new(away::Hands));
+                            dot.stop();
                             let _ = calls.send(calls::Order::Gone(id));
                         }
                         Event::Routes { id, remotes } => {
                             if let Some(d) = devices.get_mut(&id) {
-                                d.remote = remotes.last().copied();
+                                d.remote = vyoma_core::adb::best_route(&remotes, !vyoma_core::adb::cable_ports().is_empty());
                             }
                         }
                         Event::Prompt { id, name, key } => {
@@ -463,6 +486,7 @@ mod agent {
                                 media::MPRIS_REQUEST | media::VOLUME_REQUEST => {
                                     let _ = media_tx.send((id, packet));
                                 }
+                                presenter::PRESENTER => dot.on_packet(&packet["body"]),
                                 input::MOUSEPAD_REQUEST => {
                                     let now = Instant::now();
                                     if touched.insert(id.clone(), now).is_none_or(|t| now.duration_since(t) > TOUCHPAD_STRETCH) {
@@ -615,6 +639,11 @@ mod agent {
                                 send(&id, packet(NOTIFICATION_REQUEST, json!({ "cancel": get("key") })));
                             }
                         }
+                        // The cable's question: Allow or Not now (the toast itself opens Vyoma).
+                        ("cable", false) => match args.get("yes") {
+                            Some(yes) => usb::answered(&get("t"), yes == "1"),
+                            None => open_window(&[]),
+                        },
                         (_, false) => open_window(&[]),
                         _ => {}
                     }
@@ -747,6 +776,8 @@ mod agent {
         /// Files waiting for the person to pick a phone in a toast, by the toast's token.
         pending: Mutex<HashMap<String, Vec<String>>>,
         updates: Arc<update::Updates>,
+        /// Phones whose background clipboard sync was seen granted.
+        clip_seen: ClipboardSeen,
     }
 
     impl Window {
@@ -755,7 +786,7 @@ mod agent {
             match method {
                 "Phones" => {
                     let linked = devices.values().filter(|d| d.paired && d.linked).count();
-                    Ok(Value::Array(devices.iter().map(|(id, d)| details(id, d, &self.permits, linked)).collect()))
+                    Ok(Value::Array(devices.iter().map(|(id, d)| details(id, d, &self.permits, &self.clip_seen, linked)).collect()))
                 }
                 "Pair" => command(Command::Pair(control::text(args, 0)?)),
                 "Accept" => command(Command::Accept(control::text(args, 0)?)),
@@ -841,6 +872,34 @@ mod agent {
                 }
                 "FixCheck" => match control::text(args, 0)?.as_str() {
                     AUTOSTART_CHECK => system::install().map(|_| Value::Null).map_err(|e| format!("{e:#}")),
+                    usb::CHECK => {
+                        let changes = self.changes.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = usb::fetch_adb().await {
+                                tracing::warn!("no adb: {e:#}");
+                                let text = format!("{e:#}");
+                                tokio::task::spawn_blocking(move || tray::notify("Couldn't get adb", &text));
+                            }
+                            let _ = changes.send(json!({ "event": "Changed" }));
+                        });
+                        Ok(Value::Null)
+                    }
+                    crate::gamepad::CHECK => {
+                        let changes = self.changes.clone();
+                        tokio::spawn(async move {
+                            let installed = changes.clone();
+                            let done = crate::gamepad::fetch_driver(move || {
+                                let _ = installed.send(json!({ "event": "Changed" }));
+                            });
+                            if let Err(e) = done.await {
+                                tracing::warn!("no controller driver: {e:#}");
+                                let text = format!("{e:#}");
+                                tokio::task::spawn_blocking(move || tray::notify("Couldn't get the controller driver", &text));
+                            }
+                            let _ = changes.send(json!({ "event": "Changed" }));
+                        });
+                        Ok(Value::Null)
+                    }
                     crate::camera::CHECK => {
                         win::open(crate::camera::SETTINGS);
                         Ok(Value::Null)
@@ -858,6 +917,11 @@ mod agent {
                         }
                         let _ = changes.send(json!({ "event": "FirewallDone", "ok": ok }));
                     });
+                    Ok(Value::Null)
+                }
+                "AllowClipboardSync" => {
+                    let done = vyoma_core::adb::allow_clipboard().await.map_err(|e| format!("{e:#}"))?;
+                    tracing::info!("background clipboard sync allowed for {done} app(s)");
                     Ok(Value::Null)
                 }
                 "SetUpdateChecks" => {
@@ -1015,14 +1079,14 @@ mod agent {
     }
 
     /// A device as the window reads it (the Linux app's `Details`). [linked]: how many paired phones are linked.
-    fn details(id: &str, d: &Device, permits: &Permits, linked: usize) -> Value {
-        let _ = linked;
+    fn details(id: &str, d: &Device, permits: &Permits, clip_seen: &ClipboardSeen, linked: usize) -> Value {
+        let via = via(d);
         let mut v = json!({
             "id": id, "name": d.name, "paired": d.paired, "linked": d.linked, "key": d.key, "asking": d.asking,
-            "via": if d.linked { "wifi" } else { "" },
+            "via": via,
             "can": { "share": d.takes(SHARE), "ring": d.takes(FIND), "browse": false, "text": d.takes(messages::REQUEST) },
-            // The cable's one-time clipboard Allow needs adb, not on Windows yet.
-            "clipboardSync": "ask",
+            // The cable's one-time Allow for background clipboard sync (the window's Clipboard card).
+            "clipboardSync": clip_seen.state(id, d.paired && d.linked && (via == "cable" || linked == 1)),
             "permits": PERMITS.iter().map(|&p| {
                 let (name, detail) = permit_words(p);
                 json!({ "key": p.key(), "name": name, "detail": detail, "on": permits.allows(id, p) })
@@ -1032,6 +1096,15 @@ mod agent {
             v["battery"] = json!({ "charge": charge, "charging": charging, "low": low });
         }
         v
+    }
+
+    /// How a linked phone is reached: loopback is the USB cable (adb's tunnel).
+    fn via(d: &Device) -> &'static str {
+        match d.remote.filter(|_| d.linked) {
+            None => "",
+            Some(r) if r.is_loopback() => "cable",
+            Some(_) => "wifi",
+        }
     }
 
     /// This PC's checks for the window's This PC page (blocking: the firewall's rules are read).
@@ -1044,6 +1117,8 @@ mod agent {
             "action": if autostart { "" } else { "Turn on" },
         })];
         all.extend(firewall::check());
+        all.push(usb::check());
+        all.push(crate::gamepad::check());
         all.extend(crate::camera::check());
         Value::Array(all)
     }
@@ -1320,7 +1395,18 @@ mod agent {
             (d.name, d.key, d.asking, d.battery) = ("Pixel".into(), "1A2B".into(), true, Some((64, false, false)));
             let permits = Permits::default();
             permits.set("p", Permit::Files, false).unwrap();
-            let v = details("p", &d, &permits, 1);
+            let dir = std::env::temp_dir().join(format!("vyoma-details-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            let v = details("p", &d, &permits, &ClipboardSeen::load(&dir), 1);
+            assert_eq!(v["clipboardSync"], "plug", "unknown until it's plugged in");
+            assert_eq!(v["via"], "", "not linked");
+            d.linked = true;
+            d.remote = Some("127.0.0.1".parse().unwrap());
+            assert_eq!(via(&d), "cable");
+            d.remote = Some("192.0.2.7".parse().unwrap());
+            assert_eq!(via(&d), "wifi");
+            d.linked = false;
+            let _ = std::fs::remove_dir_all(&dir);
             assert_eq!((v["id"].as_str(), v["key"].as_str(), v["asking"].as_bool()), (Some("p"), Some("1A2B"), Some(true)));
             assert_eq!((v["can"]["share"].as_bool(), v["can"]["ring"].as_bool()), (Some(true), Some(false)), "only what it takes");
             assert_eq!(v["battery"]["charge"], 64);

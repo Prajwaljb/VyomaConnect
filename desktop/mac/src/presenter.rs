@@ -11,19 +11,18 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-pub const PRESENTER: &str = "kdeconnect.presenter";
+pub use vyoma_core::presenter::PRESENTER;
+use vyoma_core::presenter::Order;
 pub const WINDOW_ARG: &str = "--presenter-window";
 /// After a failed start, how long before trying again.
 const RETRY_AFTER: Duration = Duration::from_secs(5);
 
 /// The line for the window, for a packet's [body].
 fn line(body: &Value) -> Option<String> {
-    if body["stop"].as_bool() == Some(true) {
-        return Some("stop".into());
-    }
-    let number = |v: &Value| v.as_f64().filter(|n| n.is_finite());
-    let (dx, dy) = (number(&body["dx"])?, number(&body["dy"])?);
-    Some(format!("move {} {}", dx.clamp(-2.0, 2.0), dy.clamp(-2.0, 2.0)))
+    Some(match Order::of(body)? {
+        Order::Stop => "stop".into(),
+        Order::Move(dx, dy) => format!("move {dx} {dy}"),
+    })
 }
 
 /// Where the phone's packets go; a thread keeps the window fed, so a stuck one can't hold up the agent.

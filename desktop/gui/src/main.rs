@@ -105,7 +105,7 @@ fn main() -> anyhow::Result<()> {
     #[cfg(target_os = "linux")]
     let alone = instance::claim(&ui, &page).unwrap_or(true);
     #[cfg(windows)]
-    let alone = one_window::claim();
+    let alone = one_window::claim(&ui, &page);
     #[cfg(not(any(target_os = "linux", windows)))]
     let alone = true;
     if !alone {

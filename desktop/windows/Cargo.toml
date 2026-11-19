@@ -16,6 +16,8 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 vyoma-core = { path = "../core" }
 vyoma-engine = { path = "../engine" }
 sysinfo = "0.40.0"
+# The controller driver download's SHA-256 (Apache-2.0/ISC, as core's).
+ring = "0.17.14"
 # Windows' COM and WinRT APIs (MIT/Apache-2.0): media controls, Core Audio, toasts, screen capture,
 # Media Foundation's H.264 encoder, the firewall.
 # windows-core: for #[implement] (COM objects Windows calls: the toasts' buttons).
@@ -56,6 +58,7 @@ windows = { version = "0.62", features = [
 ] }
 png = "0.17"
 windows-sys = { version = "0.61", features = [
+    "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Security",
@@ -64,6 +67,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Com",
     "Win32_System_DataExchange",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_IO",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Ole",

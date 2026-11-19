@@ -1,5 +1,5 @@
-//! Windows Defender Firewall and Vyoma: phones reach this PC on TCP 1714-1764 and announce
-//! themselves on UDP 1716. The window's This PC page checks that the firewall lets them in
+//! Windows Defender Firewall and Vyoma: phones reach this PC on TCP 1714-1764, announce
+//! themselves on UDP 1716 and send the controller's states on UDP 1750-1764. The window's This PC page checks that the firewall lets them in
 //! ([check]) and offers Let phones through ([open]), which asks for an administrator once (Windows'
 //! own prompt) and runs this program as `--open-firewall` ([allow]): it takes out every rule for
 //! Vyoma (including the blocks Windows makes when its first-run question is cancelled) and adds two
@@ -23,9 +23,9 @@ use windows::core::{BSTR, HSTRING, IUnknown, Interface, PCWSTR};
 
 pub const CHECK: &str = "Firewall";
 pub const OPEN_ARG: &str = "--open-firewall";
-/// Where phones knock: the TCP ports and the UDP announcement port.
+/// Where phones knock: the TCP ports, the UDP announcement port and the controller's.
 const TCP_PORTS: &str = "1714-1764";
-const UDP_PORT: &str = "1716";
+const UDP_PORT: &str = "1716,1750-1764";
 /// The port that must be open of each, for the check.
 const PORT: u16 = 1716;
 const TCP_RULE: &str = "Vyoma (TCP in)";

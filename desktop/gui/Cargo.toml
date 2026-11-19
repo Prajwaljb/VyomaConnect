@@ -29,7 +29,7 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread"] }
 
 # The one-window lock on Windows (MIT/Apache-2.0).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_DataExchange", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
 slint-build = "1.19.0"

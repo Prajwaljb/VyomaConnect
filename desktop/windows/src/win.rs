@@ -310,9 +310,46 @@ pub fn delete_user_key(key: &str) {
     unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, wide(key).as_ptr()) };
 }
 
+/// The device interfaces of [class] present now, by their paths (cfgmgr32).
+pub fn device_interfaces(class: &windows_sys::core::GUID) -> Vec<String> {
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+        CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_Get_Device_Interface_List_SizeW, CM_Get_Device_Interface_ListW, CR_BUFFER_SMALL, CR_SUCCESS,
+    };
+    for _ in 0..3 {
+        let mut len = 0u32;
+        // SAFETY: Windows writes the needed length (in characters), then a list of NUL-terminated
+        // paths ending in an empty one into a buffer of that many characters.
+        unsafe {
+            if CM_Get_Device_Interface_List_SizeW(&mut len, class, std::ptr::null(), CM_GET_DEVICE_INTERFACE_LIST_PRESENT) != CR_SUCCESS || len <= 1 {
+                return Vec::new();
+            }
+            let mut buf = vec![0u16; len as usize];
+            match CM_Get_Device_Interface_ListW(class, std::ptr::null(), buf.as_mut_ptr(), len, CM_GET_DEVICE_INTERFACE_LIST_PRESENT) {
+                CR_SUCCESS => return paths(&buf),
+                // One arrived between the two calls: ask again.
+                CR_BUFFER_SMALL => continue,
+                _ => return Vec::new(),
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// A double-NUL-terminated list of strings.
+fn paths(list: &[u16]) -> Vec<String> {
+    list.split(|&c| c == 0).take_while(|s| !s.is_empty()).map(String::from_utf16_lossy).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_windows_lists_of_paths() {
+        let list: Vec<u16> = "\\\\?\\USB#VID_04E8&PID_6860#R5C#{f72fe0d4}\0\\\\?\\USB#VID_18D1#9A#{f72fe0d4}\0\0".encode_utf16().collect();
+        assert_eq!(paths(&list).len(), 2);
+        assert!(paths(&[0, 0]).is_empty());
+    }
 
     #[test]
     fn registry_values_go_in_and_out() {

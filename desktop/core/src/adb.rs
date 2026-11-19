@@ -452,7 +452,7 @@ async fn signing_digest(adb: &Path, serial: &str, pkg: &str) -> Result<String> {
     let tag: String = serial.chars().filter(char::is_ascii_alphanumeric).collect();
     let local = dir.join(format!("vyoma-check-{}-{tag}.apk", std::process::id()));
     let local_str = local.to_string_lossy().into_owned();
-    let pulled = tokio::time::timeout(PULL_WAIT, tokio::process::Command::new(adb).args(["-s", serial, "pull", apk, &local_str]).kill_on_drop(true).output()).await;
+    let pulled = tokio::time::timeout(PULL_WAIT, adb_command(adb).args(["-s", serial, "pull", apk, &local_str]).kill_on_drop(true).output()).await;
     let read = tokio::fs::read(&local).await;
     let _ = tokio::fs::remove_file(&local).await;
     pulled.context("fetching the APK took too long")??;
@@ -518,7 +518,7 @@ fn prefixed<'a>(input: &mut &'a [u8]) -> Result<&'a [u8]> {
 }
 
 async fn list_devices(adb: &Path) -> Vec<(String, String)> {
-    let listing = tokio::process::Command::new(adb).arg("devices").kill_on_drop(true).output();
+    let listing = adb_command(adb).arg("devices").kill_on_drop(true).output();
     let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(15), listing).await else { return Vec::new() };
     parse_devices(&String::from_utf8_lossy(&out.stdout))
 }
@@ -535,32 +535,92 @@ fn parse_devices(listing: &str) -> Vec<(String, String)> {
 
 /// Runs an adb command for one device; stdout on success.
 async fn run(adb: &Path, serial: &str, args: &[&str]) -> Option<String> {
-    let out = tokio::time::timeout(Duration::from_secs(15), tokio::process::Command::new(adb).args(["-s", serial]).args(args).kill_on_drop(true).output())
+    let out = tokio::time::timeout(Duration::from_secs(15), adb_command(adb).args(["-s", serial]).args(args).kill_on_drop(true).output())
         .await
         .ok()?
         .ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// Where Vyoma keeps a copy of Google's platform tools it fetched itself (the Mac's Get adb).
+/// The link to use of [routes], newest first among equals: the [cable] while one's plugged in
+/// (loopback, through adb's tunnel; steadier than Wi-Fi), else Wi-Fi.
+pub fn best_route(routes: &[std::net::IpAddr], cable: bool) -> Option<std::net::IpAddr> {
+    let newest = |wired: bool| routes.iter().rev().find(|r| r.is_loopback() == wired).copied();
+    if cable { newest(true).or(newest(false)) } else { newest(false).or(newest(true)) }
+}
+
+/// Phones whose background clipboard sync was seen granted (in `clipboard-sync.json`): it lasts
+/// until the app's uninstalled, and the cable, the only place it shows, is usually out.
+pub struct ClipboardSeen {
+    file: PathBuf,
+    ids: Mutex<std::collections::BTreeSet<String>>,
+}
+
+impl ClipboardSeen {
+    pub fn load(dir: &Path) -> ClipboardSeen {
+        let file = dir.join("clipboard-sync.json");
+        let ids = std::fs::read_to_string(&file).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        ClipboardSeen { file, ids: Mutex::new(ids) }
+    }
+
+    /// The window's `clipboardSync` for phone [id]: "on", "ask" (on the cable, waiting for Allow)
+    /// or "plug" (unknown until it's plugged in). [on_cable]: it's the one on the cable (linked by
+    /// it, or the only one linked).
+    pub fn state(&self, id: &str, on_cable: bool) -> &'static str {
+        self.judge(id, on_cable, &clipboard())
+    }
+
+    fn judge(&self, id: &str, on_cable: bool, plugged: &[ClipSync]) -> &'static str {
+        let mut ids = self.ids.lock().unwrap();
+        if on_cable && !plugged.is_empty() {
+            if !plugged.iter().any(|c| c.granted()) {
+                return "ask";
+            }
+            if ids.insert(id.to_owned()) {
+                let _ = std::fs::write(&self.file, serde_json::to_string(&*ids).unwrap_or_default());
+            }
+            return "on";
+        }
+        if ids.contains(id) { "on" } else { "plug" }
+    }
+}
+
+/// adb, without a console window on Windows (the agent has none, so each run would flash one).
+fn adb_command(adb: &Path) -> tokio::process::Command {
+    #[allow(unused_mut)]
+    let mut c = tokio::process::Command::new(adb);
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        c.creation_flags(CREATE_NO_WINDOW);
+    }
+    c
+}
+
+/// Where Vyoma keeps a copy of Google's platform tools it fetched itself (Get adb on the Mac and Windows).
 pub fn own_tools() -> PathBuf {
     crate::identity::dir().join("platform-tools")
 }
 
-/// $ANDROID_HOME, Android Studio's default (~/Android/Sdk; ~/Library/Android/sdk on the Mac),
-/// Vyoma's own copy, Homebrew's, then PATH.
+/// adb's file name here.
+const ADB: &str = if cfg!(windows) { "adb.exe" } else { "adb" };
+
+/// $ANDROID_HOME, Android Studio's default (~/Android/Sdk; ~/Library/Android/sdk on the Mac;
+/// %LOCALAPPDATA%\Android\Sdk on Windows), Vyoma's own copy, Homebrew's, then PATH.
 pub fn find_adb() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_default();
+    let tools = |sdk: PathBuf| sdk.join("platform-tools").join(ADB);
     let candidates = [
-        std::env::var_os("ANDROID_HOME").map(|h| PathBuf::from(h).join("platform-tools/adb")),
-        std::env::var_os("ANDROID_SDK_ROOT").map(|h| PathBuf::from(h).join("platform-tools/adb")),
-        Some(home.join("Android/Sdk/platform-tools/adb")),
-        Some(home.join("Library/Android/sdk/platform-tools/adb")),
-        Some(own_tools().join("adb")),
+        std::env::var_os("ANDROID_HOME").map(|h| tools(h.into())),
+        std::env::var_os("ANDROID_SDK_ROOT").map(|h| tools(h.into())),
+        Some(tools(home.join("Android/Sdk"))),
+        Some(tools(home.join("Library/Android/sdk"))),
+        std::env::var_os("LOCALAPPDATA").map(|l| tools(PathBuf::from(l).join("Android").join("Sdk"))),
+        Some(own_tools().join(ADB)),
         Some(PathBuf::from("/opt/homebrew/bin/adb")),
         Some(PathBuf::from("/usr/local/bin/adb")),
     ];
-    candidates.into_iter().flatten().find(|p| p.is_file()).or_else(|| std::env::var_os("PATH").and_then(|path| std::env::split_paths(&path).map(|d| d.join("adb")).find(|p| p.is_file())))
+    candidates.into_iter().flatten().find(|p| p.is_file()).or_else(|| std::env::var_os("PATH").and_then(|path| std::env::split_paths(&path).map(|d| d.join(ADB)).find(|p| p.is_file())))
 }
 
 #[cfg(test)]
@@ -632,6 +692,31 @@ mod tests {
     #[test]
     fn digests_as_sha256_hex() {
         assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    }
+
+    #[test]
+    fn the_cable_wins_while_plugged_in() {
+        let (wifi, cable): (std::net::IpAddr, std::net::IpAddr) = ("192.0.2.5".parse().unwrap(), "127.0.0.1".parse().unwrap());
+        assert_eq!(best_route(&[wifi, cable], true), Some(cable));
+        assert_eq!(best_route(&[cable, wifi], false), Some(wifi));
+        assert_eq!(best_route(&[cable], false), Some(cable), "only the cable: the cable");
+        assert_eq!(best_route(&[], true), None);
+    }
+
+    #[test]
+    fn a_clipboard_grant_is_remembered() {
+        let dir = std::env::temp_dir().join(format!("vyoma-clip-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let seen = ClipboardSeen::load(&dir);
+        assert_eq!(seen.judge("p", false, &[]), "plug");
+        assert_eq!(seen.judge("p", true, &[]), "plug", "nothing plugged in");
+        assert_eq!(ClipboardSeen::load(&dir).judge("p", false, &[]), "plug");
+        let waiting = ClipSync { serial: "s".into(), pkg: PACKAGES[0], digest: Some("d".into()) };
+        assert_eq!(seen.judge("p", true, &[waiting]), "ask", "on the cable, not yet allowed");
+        let granted = ClipSync { serial: "s".into(), pkg: PACKAGES[0], digest: None };
+        assert_eq!(seen.judge("p", true, &[granted]), "on");
+        assert_eq!(ClipboardSeen::load(&dir).judge("p", false, &[]), "on", "remembered once unplugged");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

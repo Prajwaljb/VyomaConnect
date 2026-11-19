@@ -338,7 +338,7 @@ async fn run(dir: PathBuf) -> Result<()> {
                 }
                 Event::Routes { id, remotes } => {
                     if let Some(d) = devices.get_mut(&id) {
-                        d.remote = best(&remotes, !vyoma_core::adb::cable_ports().is_empty());
+                        d.remote = vyoma_core::adb::best_route(&remotes, !vyoma_core::adb::cable_ports().is_empty());
                     }
                 }
                 Event::Prompt { id, name, key } => {
@@ -916,40 +916,16 @@ fn via(d: &Device) -> &'static str {
     }
 }
 
-/// The link to use of [routes], newest first among equals: the [cable] while one's plugged in
-/// (loopback; steadier than Wi-Fi), else Wi-Fi.
-fn best(routes: &[IpAddr], cable: bool) -> Option<IpAddr> {
-    let newest = |wired: bool| routes.iter().rev().find(|r| r.is_loopback() == wired).copied();
-    if cable { newest(true).or(newest(false)) } else { newest(false).or(newest(true)) }
-}
-
-/// Phones whose background clipboard sync was seen granted: it lasts until the app's uninstalled,
-/// and the cable (the only place it shows) is usually out.
-static CLIP_ON: std::sync::OnceLock<(PathBuf, std::sync::Mutex<std::collections::BTreeSet<String>>)> = std::sync::OnceLock::new();
+/// Phones whose background clipboard sync was seen granted (core's [vyoma_core::adb::ClipboardSeen]).
+static CLIP_ON: std::sync::OnceLock<vyoma_core::adb::ClipboardSeen> = std::sync::OnceLock::new();
 
 fn clip_load(dir: &std::path::Path) {
-    let file = dir.join("clipboard-sync.json");
-    let ids = std::fs::read_to_string(&file).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-    let _ = CLIP_ON.set((file, std::sync::Mutex::new(ids)));
+    let _ = CLIP_ON.set(vyoma_core::adb::ClipboardSeen::load(dir));
 }
 
-/// "on", "ask" (on the cable, waiting for Allow) or "plug" (unknown until it's plugged in), as on
-/// Linux. [on_cable]: this phone is the one on the cable (linked by it, or the only one linked).
+/// "on", "ask" or "plug", as on Linux. [on_cable]: this phone is the one on the cable.
 fn clipboard_sync(id: &str, on_cable: bool) -> &'static str {
-    let plugged = vyoma_core::adb::clipboard();
-    if on_cable && !plugged.is_empty() {
-        if !plugged.iter().any(|c| c.granted()) {
-            return "ask";
-        }
-        if let Some((file, ids)) = CLIP_ON.get() {
-            let mut ids = ids.lock().unwrap();
-            if ids.insert(id.to_owned()) {
-                let _ = std::fs::write(file, serde_json::to_string(&*ids).unwrap_or_default());
-            }
-        }
-        return "on";
-    }
-    if CLIP_ON.get().is_some_and(|(_, ids)| ids.lock().unwrap().contains(id)) { "on" } else { "plug" }
+    CLIP_ON.get().map_or("plug", |seen| seen.state(id, on_cable))
 }
 
 /// The window's requests after which it should read again (the rest only read, or tell by their own events).
@@ -1267,9 +1243,9 @@ mod tests {
     #[test]
     fn the_cable_wins_while_its_in() {
         let (wifi, cable): (IpAddr, IpAddr) = ("192.168.1.5".parse().unwrap(), "127.0.0.1".parse().unwrap());
-        assert_eq!(best(&[cable, wifi], true), Some(cable));
-        assert_eq!(best(&[cable, wifi], false), Some(wifi));
-        assert_eq!(best(&[cable], false), Some(cable), "whatever there is");
+        assert_eq!(vyoma_core::adb::best_route(&[cable, wifi], true), Some(cable));
+        assert_eq!(vyoma_core::adb::best_route(&[cable, wifi], false), Some(wifi));
+        assert_eq!(vyoma_core::adb::best_route(&[cable], false), Some(cable), "whatever there is");
         let mut d = phone(&[]);
         d.remote = Some(cable);
         assert_eq!(via(&d), "cable");

@@ -28,17 +28,8 @@ use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{delegate_registry, registry_handlers};
 
-pub const PRESENTER: &str = "kdeconnect.presenter";
-
-/// The dot's square, in logical pixels: a 9 px core in a soft glow.
-pub(crate) const SIZE: i32 = 48;
-/// Gone this long without a packet: the phone stopped pointing.
-pub(crate) const QUIET: Duration = Duration::from_secs(1);
-
-pub(crate) enum Order {
-    Move(f64, f64),
-    Stop,
-}
+pub use vyoma_core::presenter::PRESENTER;
+pub(crate) use vyoma_core::presenter::{Order, QUIET, SIZE, Spot, paint_dot};
 
 /// Where the phone's packets go; the overlay starts with the first.
 #[derive(Default)]
@@ -54,12 +45,7 @@ pub struct Presenter {
 
 impl Presenter {
     pub fn on_packet(&mut self, body: &Value) {
-        let order = if body["stop"].as_bool() == Some(true) {
-            Order::Stop
-        } else {
-            let (Some(dx), Some(dy)) = (number(&body["dx"]), number(&body["dy"])) else { return };
-            Order::Move(dx.clamp(-2.0, 2.0), dy.clamp(-2.0, 2.0))
-        };
+        let Some(order) = Order::of(body) else { return };
         if vyoma_companion::x11::active() {
             if self.x11.is_none() && !self.failed && matches!(order, Order::Move(..)) {
                 match crate::presenter_x11::start() {
@@ -118,33 +104,6 @@ fn through_shell() -> tokio::sync::mpsc::UnboundedSender<Order> {
         }
     });
     tx
-}
-
-/// Peers send numbers either way (see the protocol notes).
-fn number(v: &Value) -> Option<f64> {
-    v.as_f64().or_else(|| v.as_str()?.parse().ok()).filter(|f: &f64| f.is_finite())
-}
-
-/// The dot's position, -1..1 each way, as kdeconnectd keeps it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Spot {
-    x: f64,
-    y: f64,
-}
-
-impl Spot {
-    pub(crate) const CENTRE: Spot = Spot { x: 0.0, y: 0.0 };
-
-    pub(crate) fn moved(self, dx: f64, dy: f64, (w, h): (i32, i32)) -> Spot {
-        let aspect = if h > 0 { w as f64 / h as f64 } else { 1.0 };
-        Spot { x: (self.x + dx).clamp(-1.0, 1.0), y: (self.y + dy * aspect).clamp(-1.0, 1.0) }
-    }
-
-    /// The square's top-left, in the output's logical pixels, kept on screen.
-    pub(crate) fn corner(self, (w, h): (i32, i32)) -> (i32, i32) {
-        let at = |f: f64, span: i32| (((f + 1.0) / 2.0 * span as f64).round() as i32 - SIZE / 2).clamp(0, (span - SIZE).max(0));
-        (at(self.x, w), at(self.y, h))
-    }
 }
 
 fn start() -> Result<channel::Sender<Order>> {
@@ -266,7 +225,7 @@ impl Overlay {
     /// Moves the square to [spot]; until the first configure that commit only asks for one.
     fn place(&mut self) {
         let Some(layer) = &self.layer else { return };
-        let (left, top) = self.spot.corner(self.size);
+        let (left, top) = self.spot.corner(self.size, SIZE);
         layer.set_margin(top, 0, 0, left);
         layer.commit();
     }
@@ -282,29 +241,6 @@ impl Overlay {
         if buffer.attach_to(surface).is_ok() {
             layer.commit();
         }
-    }
-}
-
-/// A red dot with a white rim in a soft red glow, premultiplied ARGB, [px] square.
-pub(crate) fn paint_dot(canvas: &mut [u8], px: usize) {
-    let c = px as f32 / 2.0;
-    let unit = px as f32 / SIZE as f32;
-    let (core, rim, glow) = (4.5 * unit, 6.0 * unit, c);
-    for (i, p) in canvas.chunks_exact_mut(4).enumerate() {
-        let (x, y) = ((i % px) as f32 + 0.5 - c, (i / px) as f32 + 0.5 - c);
-        let d = (x * x + y * y).sqrt();
-        // Edge coverage over one pixel, for smooth circles.
-        let inside = |r: f32| (r - d + 0.5).clamp(0.0, 1.0);
-        // Apple's system red, the colour a presenter's laser is expected to be.
-        let (red, green, blue) = (1.0, 0.231, 0.188);
-        let halo = ((1.0 - (d - rim).max(0.0) / (glow - rim)).clamp(0.0, 1.0)).powi(2) * 0.35;
-        let (mut a, mut r, mut g, mut b) = (halo, red * halo, green * halo, blue * halo);
-        let ring = inside(rim);
-        (a, r, g, b) = (ring + a * (1.0 - ring), ring + r * (1.0 - ring), ring + g * (1.0 - ring), ring + b * (1.0 - ring));
-        let dot = inside(core);
-        (a, r, g, b) = (dot + a * (1.0 - dot), red * dot + r * (1.0 - dot), green * dot + g * (1.0 - dot), blue * dot + b * (1.0 - dot));
-        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        p.copy_from_slice(&[byte(b), byte(g), byte(r), byte(a)]);
     }
 }
 
@@ -376,17 +312,6 @@ smithay_client_toolkit::delegate_dispatch2!(Overlay);
 mod tests {
     use super::*;
 
-    #[test]
-    fn moves_like_kdeconnectd() {
-        let screen = (1920, 1080);
-        let s = Spot::CENTRE.moved(0.5, 0.1, screen);
-        assert_eq!(s.x, 0.5);
-        assert!((s.y - 0.1 * 1920.0 / 1080.0).abs() < 1e-9);
-        assert_eq!(Spot::CENTRE.moved(5.0, -5.0, screen), Spot { x: 1.0, y: -1.0 });
-        assert_eq!(Spot::CENTRE.corner(screen), (960 - SIZE / 2, 540 - SIZE / 2));
-        assert_eq!(Spot { x: 1.0, y: -1.0 }.corner(screen), (1920 - SIZE, 0));
-    }
-
     /// Shows the dot on this desktop for two seconds, drifting right: `cargo test -- --ignored shows_on`.
     #[test]
     #[ignore]
@@ -398,16 +323,5 @@ mod tests {
         }
         tx.send(Order::Stop).unwrap();
         std::thread::sleep(Duration::from_millis(200));
-    }
-
-    #[test]
-    fn the_dot_is_opaque_in_the_middle_and_clear_at_the_corners() {
-        let px = SIZE as usize;
-        let mut canvas = vec![0u8; px * px * 4];
-        paint_dot(&mut canvas, px);
-        let at = |x: usize, y: usize| &canvas[(y * px + x) * 4..][..4];
-        assert_eq!(at(px / 2, px / 2)[3], 255);
-        assert_eq!(at(0, 0)[3], 0);
-        assert_eq!(number(&serde_json::json!("0.25")), Some(0.25));
     }
 }

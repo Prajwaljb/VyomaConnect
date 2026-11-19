@@ -547,9 +547,27 @@ build, headless Xvfb display, private ports and pipe) and next on GitHub's runne
   - Checked under Wine: the decoder turns the encoder's clip back into pictures, the window shows
     them and closes at the stream's end, and the agent opens and closes it for a phone (end-to-end
     test). Not checked: the sound (Wine would play it on this PC's speakers), a real camera.
-- Next: the window's `--page` passed to an open window, the gamepad (ViGEmBus), colour conversion
-  on the GPU (the CPU still turns each picture into NV12), the mirror drawn with Direct3D if GDI's
-  scaling proves slow on large screens.
+- Then (after committing, "proceed building further"):
+  - The presenter's pointer: a layered, click-through window above everything with the same dot as
+    Linux and the Mac (`vyoma_core::presenter` now draws it for all three and reads the packets).
+  - The USB cable: Android's adb device interface watched through cfgmgr32 feeds core's `adb`, so a
+    phone plugged in with USB debugging links over adb's tunnel; the grants' question as a toast;
+    the window's Clipboard card Allow; This PC's USB cable check with Get adb (Google's platform
+    tools, fetched and unpacked with Windows' own curl and tar). Not run with a phone: none here may
+    be used, and adb itself can't be run under Wine without running a download.
+  - The window's `--page` reaches an open window (WM_COPYDATA to a message-only window), so the
+    agent's "open the command editor" works while it's open.
+- The gamepad (2026-11-19; ViGEmBus is retired upstream, and the other drivers are paid or
+  DirectInput-only): an Xbox 360 pad made in software (core `usbip` + `xbox360`: our own USB/IP
+  server and the real pad's descriptors) that usbip-win2's signed driver (BSD) plugs in, so Windows'
+  own Xbox driver binds to it and XInput games, Steam and SDL see it; rumble comes back. The loop
+  itself moved into the engine (`gamepad::drive`), Linux's uinput pad now behind the same `Pads`.
+  This PC's Game controller check gets the pinned usbip-win2 installer (SHA-256 checked); without
+  it the phone says how. Tested against a played driver side only: Wine loads no kernel drivers, so
+  the attach and a real game wait for a Windows PC.
+- Next: a DualSense on Windows (a HID gadget: report descriptor, feature reports for SDL), colour
+  conversion on the GPU (the CPU still turns each picture into NV12), the mirror drawn with Direct3D
+  if GDI's scaling proves slow on large screens.
 
 ### Google Play
 - A `play` product flavor built as an AAB; the GitHub/F-Droid build stays as it is.

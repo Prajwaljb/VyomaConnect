@@ -107,8 +107,8 @@ async fn a_phone_links_pairs_and_is_served() {
         "kdeconnect.identity",
         json!({
             "deviceId": phone.device_id, "deviceName": "Test phone", "deviceType": "phone", "protocolVersion": 8,
-            "incomingCapabilities": ["kdeconnect.ping", "kdeconnect.runcommand", "kdeconnect.mousepad.keyboardstate", "vyoma.stats", "vyoma.specs", "vyoma.screenshot", "vyoma.pc.leaving", "kdeconnect.mpris", "kdeconnect.systemvolume", "vyoma.pc", "vyoma.wallpaper", "vyoma.camera", "vyoma.mirror.state", "vyoma.mirror.input"],
-            "outgoingCapabilities": ["kdeconnect.ping", "kdeconnect.runcommand.request", "vyoma.stats.request", "vyoma.specs.request", "vyoma.screenshot.request", "kdeconnect.mpris.request", "kdeconnect.systemvolume.request", "vyoma.pc.request", "vyoma.pc.set", "vyoma.wallpaper.request", "vyoma.away", "vyoma.camera.request", "vyoma.mirror"],
+            "incomingCapabilities": ["kdeconnect.ping", "kdeconnect.runcommand", "kdeconnect.mousepad.keyboardstate", "vyoma.stats", "vyoma.specs", "vyoma.screenshot", "vyoma.pc.leaving", "kdeconnect.mpris", "kdeconnect.systemvolume", "vyoma.pc", "vyoma.wallpaper", "vyoma.camera", "vyoma.mirror.state", "vyoma.mirror.input", "vyoma.gamepad.rumble", "vyoma.gamepad.udp"],
+            "outgoingCapabilities": ["kdeconnect.ping", "kdeconnect.runcommand.request", "vyoma.stats.request", "vyoma.specs.request", "vyoma.screenshot.request", "kdeconnect.mpris.request", "kdeconnect.systemvolume.request", "vyoma.pc.request", "vyoma.pc.set", "vyoma.wallpaper.request", "vyoma.away", "vyoma.camera.request", "vyoma.mirror", "vyoma.gamepad.state", "vyoma.gamepad.close"],
         }),
     );
     let (events_tx, mut events) = mpsc::unbounded_channel();
@@ -193,6 +193,11 @@ async fn a_phone_links_pairs_and_is_served() {
     let refused = packet_of(&mut events, "vyoma.denied").await;
     println!("camera: {refused}");
 
+    // The phone as a controller: Wine has no USB/IP driver, so the phone hears how to get it.
+    send("vyoma.gamepad.state", json!({ "b": 1, "kind": "xbox", "sid": 1, "seq": 1 }));
+    let why = packet_of(&mut events, "vyoma.gamepad.rumble").await;
+    assert!(why["body"]["error"].as_str().is_some_and(|e| e.contains("Get driver")), "{why}");
+
     // The phone's screen in a window here: the agent opens the window (this same program as a
     // child), says so, and says it closed when the phone's stream ends. (Decoding is the unit
     // tests'; this stream is only start codes and filler.)
@@ -217,6 +222,7 @@ async fn a_phone_links_pairs_and_is_served() {
     assert!(me["permits"].as_array().unwrap().iter().any(|p| p["key"] == "camera" && p["on"] == false), "{me}");
     let health = window(&pipe, "Health", json!([])).await;
     assert!(health["ok"]["version"].is_string(), "{health}");
+    assert!(health["ok"]["checks"].as_array().unwrap().iter().any(|c| c["name"] == "Game controller"), "{health}");
     assert_eq!(window(&pipe, "Unpair", json!([phone.device_id])).await, json!({ "ok": null }));
     next(&mut events, |e| matches!(e, Event::Unpaired { .. }).then_some(())).await;
 
