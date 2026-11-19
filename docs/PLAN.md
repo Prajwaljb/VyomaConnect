@@ -565,8 +565,10 @@ build, headless Xvfb display, private ports and pipe) and next on GitHub's runne
   This PC's Game controller check gets the pinned usbip-win2 installer (SHA-256 checked); without
   it the phone says how. Tested against a played driver side only: Wine loads no kernel drivers, so
   the attach and a real game wait for a Windows PC.
-- Next: a DualSense on Windows (a HID gadget: report descriptor, feature reports for SDL), colour
-  conversion on the GPU (the CPU still turns each picture into NV12), the mirror drawn with Direct3D
+- The DualSense on Windows: core `dualsense`, a HID gadget with the real pad's report descriptor,
+  reports streamed at 250 a second, the calibration / address / firmware feature reports SDL and
+  Steam read, rumble from output reports. Same limits: tested against a played host only.
+- Next: colour conversion on the GPU (the CPU still turns each picture into NV12), the mirror drawn with Direct3D
   if GDI's scaling proves slow on large screens.
 
 ### Google Play

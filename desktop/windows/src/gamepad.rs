@@ -1,7 +1,8 @@
-//! The phone as a game controller on Windows: an Xbox 360 pad made in software (core's [xbox360])
-//! that Windows plugs in through usbip-win2, a free (BSD), signed USB/IP driver. Windows' own Xbox
-//! driver then binds to it as to a real pad, so every XInput game, Steam and SDL see a controller,
-//! and a game's rumble comes back to the phone. The engine's [drive] runs it (the states, the fast
+//! The phone as a game controller on Windows: an Xbox 360 pad or a DualSense made in software
+//! (core's [xbox360] and [dualsense], as the phone asks) that Windows plugs in through usbip-win2, a
+//! free (BSD), signed USB/IP driver. Windows' own drivers then bind to it as to a real pad: the Xbox
+//! pad reaches every XInput game, Steam and SDL; the DualSense games and libraries that know one
+//! (SDL, Steam, PlayStation ports), with its button names. A game's rumble comes back to the phone. The engine's [drive] runs it (the states, the fast
 //! routes, the gyro mouse as relative pointer moves here).
 //!
 //! Each pad serves its device on its own port on 127.0.0.1 (1767-1770, else any) and asks the
@@ -11,7 +12,7 @@
 //!
 //! Without the driver the phone hears why, and This PC's Game controller check offers Get driver:
 //! the pinned usbip-win2 release from GitHub, its SHA-256 checked, its installer opened (Windows
-//! asks for an administrator). A DualSense asked for gets the Xbox pad for now.
+//! asks for an administrator).
 //! Built and tested on CI and under Wine only (Wine has no USB/IP driver); not yet run on a real Windows PC.
 
 use std::ffi::c_void;
@@ -24,6 +25,8 @@ use tokio::sync::{mpsc, watch};
 use vyoma_core::gamepad::{Kind, State};
 use vyoma_core::link::Sender;
 use vyoma_core::usbip;
+use vyoma_core::dualsense::{self, DualSense};
+use vyoma_core::usbip::Gadget;
 use vyoma_core::xbox360::{self, Xbox360};
 use vyoma_engine::GamepadInput;
 use vyoma_engine::gamepad::{GyroMouse, Pads, VirtualPad, drive};
@@ -186,44 +189,81 @@ pub struct Pad {
     asked: Kind,
     hub: i32,
     port: u16,
-    reports: watch::Sender<Vec<u8>>,
+    /// The phone's newest state, which [feed] turns into the pad's reports.
+    states: watch::Sender<State>,
     rumbles: mpsc::UnboundedReceiver<(u16, u16, u16)>,
     served: tokio::task::AbortHandle,
+    fed: tokio::task::AbortHandle,
 }
 
 impl Pad {
     pub async fn create(asked: Kind) -> Result<Pad> {
-        if asked == Kind::DualSense {
-            tracing::info!("no DualSense on Windows yet: the controller is an Xbox pad");
-        }
         let vhci = Vhci::open()?;
         let listener = bind().await?;
         let port = listener.local_addr()?.port();
         vhci.stop_attempts(port);
-        let (reports, rx) = watch::channel(xbox360::report(&State::default()));
+        let (states, state_rx) = watch::channel(State { kind: asked, ..Default::default() });
+        let first = match asked {
+            Kind::Xbox => xbox360::report(&State::default()),
+            Kind::DualSense => dualsense::Reports::default().report(&State::default()),
+        };
+        let (reports_tx, rx) = watch::channel(first);
         let (rumble_tx, rumbles) = mpsc::unbounded_channel();
+        let gadget: Box<dyn Gadget> = match asked {
+            Kind::Xbox => Box::new(Xbox360::new(rumble_tx)),
+            Kind::DualSense => Box::new(DualSense::new(rumble_tx, rx.clone())),
+        };
+        let fed = tokio::spawn(feed(asked, state_rx, reports_tx)).abort_handle();
         let (imported_tx, imported) = tokio::sync::oneshot::channel();
-        let served = serve_pad(listener, Xbox360::new(rumble_tx), rx, imported_tx).abort_handle();
+        let served = serve_pad(listener, gadget, rx, imported_tx).abort_handle();
         let attached = tokio::task::spawn_blocking(move || vhci.attach(port).map(|hub| (vhci, hub))).await?;
         let (vhci, hub) = match attached {
             Ok(a) => a,
             Err(e) => {
                 served.abort();
+                fed.abort();
                 return Err(e);
             }
         };
         if tokio::time::timeout(IMPORT_WAIT, imported).await.is_err() {
             vhci.detach(hub);
             served.abort();
+            fed.abort();
             bail!("the USB/IP driver attached something else");
         }
-        tracing::info!("controller plugged in (USB/IP port {hub})");
-        Ok(Pad { asked, hub, port, reports, rumbles, served })
+        tracing::info!("controller plugged in ({asked:?}, USB/IP port {hub})");
+        Ok(Pad { asked, hub, port, states, rumbles, served, fed })
+    }
+}
+
+/// Turns the phone's states into the pad's reports: the Xbox pad's as they change, the DualSense's
+/// streamed as the real pad does (each counted and timed, the newest state in each).
+async fn feed(kind: Kind, mut states: watch::Receiver<State>, reports: watch::Sender<Vec<u8>>) {
+    match kind {
+        Kind::Xbox => loop {
+            let report = xbox360::report(&states.borrow_and_update());
+            reports.send_if_modified(|r| std::mem::replace(r, report.clone()) != report);
+            if states.changed().await.is_err() {
+                return;
+            }
+        },
+        Kind::DualSense => {
+            let mut builder = dualsense::Reports::default();
+            let mut every = tokio::time::interval(dualsense::REPORT_EVERY);
+            every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                every.tick().await;
+                let report = builder.report(&states.borrow());
+                if reports.send(report).is_err() {
+                    return;
+                }
+            }
+        }
     }
 }
 
 /// Serves the pad to the first connection that imports it (the driver), until it lets go.
-fn serve_pad(listener: TcpListener, mut pad: Xbox360, reports: watch::Receiver<Vec<u8>>, imported: tokio::sync::oneshot::Sender<()>) -> tokio::task::JoinHandle<()> {
+fn serve_pad(listener: TcpListener, mut pad: Box<dyn Gadget>, reports: watch::Receiver<Vec<u8>>, imported: tokio::sync::oneshot::Sender<()>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             let Ok((mut stream, from)) = listener.accept().await else { return };
@@ -231,11 +271,11 @@ fn serve_pad(listener: TcpListener, mut pad: Xbox360, reports: watch::Receiver<V
                 continue;
             }
             let _ = stream.set_nodelay(true);
-            match tokio::time::timeout(IMPORT_WAIT, usbip::handshake(&mut stream, BUSID, &pad)).await {
+            match tokio::time::timeout(IMPORT_WAIT, usbip::handshake(&mut stream, BUSID, pad.as_ref())).await {
                 Ok(Ok(true)) => {
                     drop(listener);
                     let _ = imported.send(());
-                    if let Err(e) = usbip::serve(stream, &mut pad, reports).await {
+                    if let Err(e) = usbip::serve(stream, pad.as_mut(), reports).await {
                         tracing::warn!("the controller's USB/IP connection failed: {e:#}");
                     }
                     return;
@@ -265,8 +305,7 @@ impl VirtualPad for Pad {
     }
 
     fn apply(&mut self, s: State) -> Result<()> {
-        let report = xbox360::report(&s);
-        self.reports.send_if_modified(|r| std::mem::replace(r, report.clone()) != report);
+        self.states.send_replace(s);
         Ok(())
     }
 
@@ -277,6 +316,7 @@ impl VirtualPad for Pad {
 
 impl Drop for Pad {
     fn drop(&mut self) {
+        self.fed.abort();
         let (hub, port, served) = (self.hub, self.port, self.served.clone());
         // Unplugged before its connection closes (a dropped connection is reattached); off the
         // async threads, as the driver waits for Windows to let go of the device.
@@ -425,7 +465,7 @@ mod tests {
         let (reports, rx) = watch::channel(xbox360::report(&State::default()));
         let (rumble_tx, mut rumbles) = mpsc::unbounded_channel();
         let (imported_tx, imported) = tokio::sync::oneshot::channel();
-        serve_pad(listener, Xbox360::new(rumble_tx), rx, imported_tx);
+        serve_pad(listener, Box::new(Xbox360::new(rumble_tx)), rx, imported_tx);
         let op = |code: u16| [&0x0111u16.to_be_bytes()[..], &code.to_be_bytes(), &[0; 4]].concat();
         // A device list on its own connection, as usbip.exe asks.
         let mut s = tokio::net::TcpStream::connect((HOST, port)).await.unwrap();
@@ -468,6 +508,59 @@ mod tests {
         let mut ret = vec![0u8; 48];
         s.read_exact(&mut ret).await.unwrap();
         assert_eq!(rumbles.recv().await, Some((65535, 0, 0)));
+    }
+
+    /// A DualSense streams its reports, each counted, the phone's newest state in each; the
+    /// pad's address and the report descriptor are there for SDL and Windows.
+    #[tokio::test]
+    async fn serves_a_streaming_dualsense() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = bind().await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (states, state_rx) = watch::channel(State { kind: Kind::DualSense, ..Default::default() });
+        let (reports, rx) = watch::channel(dualsense::Reports::default().report(&State::default()));
+        tokio::spawn(feed(Kind::DualSense, state_rx, reports));
+        let (rumble_tx, _rumbles) = mpsc::unbounded_channel();
+        let (imported_tx, imported) = tokio::sync::oneshot::channel();
+        serve_pad(listener, Box::new(DualSense::new(rumble_tx, rx.clone())), rx, imported_tx);
+        let mut s = tokio::net::TcpStream::connect((HOST, port)).await.unwrap();
+        let mut busid = [0u8; 32];
+        busid[..3].copy_from_slice(b"1-1");
+        s.write_all(&[&0x0111u16.to_be_bytes()[..], &0x8003u16.to_be_bytes(), &[0; 4], &busid].concat()).await.unwrap();
+        let mut reply = vec![0u8; 8 + 312];
+        s.read_exact(&mut reply).await.unwrap();
+        assert_eq!(&reply[8 + 300..8 + 304], [0x05, 0x4c, 0x0c, 0xe6], "a DualSense");
+        imported.await.unwrap();
+        let urb = |seq: u32, ep: u32, dir_in: bool, len: u32, setup: [u8; 8]| {
+            let mut h = vec![0u8; 48];
+            h[..4].copy_from_slice(&1u32.to_be_bytes());
+            h[4..8].copy_from_slice(&seq.to_be_bytes());
+            h[12..16].copy_from_slice(&(dir_in as u32).to_be_bytes());
+            h[16..20].copy_from_slice(&ep.to_be_bytes());
+            h[24..28].copy_from_slice(&len.to_be_bytes());
+            h[40..48].copy_from_slice(&setup);
+            h
+        };
+        let answer = async |s: &mut tokio::net::TcpStream| {
+            let mut h = vec![0u8; 48];
+            s.read_exact(&mut h).await.unwrap();
+            let mut data = vec![0u8; u32::from_be_bytes(h[24..28].try_into().unwrap()) as usize];
+            s.read_exact(&mut data).await.unwrap();
+            data
+        };
+        // The report descriptor, as Windows' HID driver asks for it.
+        s.write_all(&urb(2, 0, true, 512, [0x81, 6, 0, 0x22, 0, 0, 0, 2])).await.unwrap();
+        assert_eq!(answer(&mut s).await, dualsense::REPORT_DESCRIPTOR);
+        // Reports keep coming with nothing pressed, then with cross held.
+        s.write_all(&urb(4, 4, true, 64, [0; 8])).await.unwrap();
+        let a = answer(&mut s).await;
+        s.write_all(&urb(6, 4, true, 64, [0; 8])).await.unwrap();
+        let b = answer(&mut s).await;
+        assert_ne!(a[7], b[7], "counted");
+        states.send_replace(State { kind: Kind::DualSense, buttons: 1, ..Default::default() });
+        tokio::time::sleep(dualsense::REPORT_EVERY * 3).await;
+        s.write_all(&urb(8, 4, true, 64, [0; 8])).await.unwrap();
+        assert_eq!(answer(&mut s).await[8] & 0xf0, 0x20, "cross");
     }
 
     /// Wine (and CI) have no USB/IP driver: the phone is told what to do, in words it shows.

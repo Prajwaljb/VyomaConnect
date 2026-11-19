@@ -10,6 +10,7 @@ pub mod cert;
 pub mod clipboard;
 pub mod commands;
 pub mod device;
+pub mod dualsense;
 pub mod files;
 pub mod identity;
 pub mod invite;
