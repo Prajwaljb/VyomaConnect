@@ -305,9 +305,11 @@ component Section inherits VerticalLayout {
     in property <string> label;
     spacing: 8px;
     padding-top: 12px;
-    SectionLabel {
-        text: root.label;
-        x: 18px;
+    HorizontalLayout {
+        padding-left: 18px;
+        SectionLabel {
+            text: root.label;
+        }
     }
     Glass {
         @children
@@ -3421,11 +3423,14 @@ export component MainWindow inherits Window {
                 }
             }
             Rectangle { height: 12px; }
-            if root.phones.length > 0: SectionLabel {
-                text: "Phones";
-                height: 26px;
-                x: 12px;
-                vertical-alignment: center;
+            // 2px: where `x: 12px` used to leave it in this layout (Slint 1.19 warns of x in a layout).
+            if root.phones.length > 0: HorizontalLayout {
+                padding-left: 2px;
+                SectionLabel {
+                    text: "Phones";
+                    height: 26px;
+                    vertical-alignment: center;
+                }
             }
             for p in root.phones: SideItem {
                 icon: @image-url("icons/phone.svg");
@@ -3437,11 +3442,14 @@ export component MainWindow inherits Window {
                 selected: p.id == root.selected || (root.selected == "messages" && p.id == root.current.id);
                 clicked => { root.select(p.id); }
             }
-            if root.nearby.length > 0: SectionLabel {
-                text: "Nearby";
-                height: 34px;
-                x: 12px;
-                vertical-alignment: bottom;
+            // 2px: where `x: 12px` used to leave it in this layout (Slint 1.19 warns of x in a layout).
+            if root.nearby.length > 0: HorizontalLayout {
+                padding-left: 2px;
+                SectionLabel {
+                    text: "Nearby";
+                    height: 34px;
+                    vertical-alignment: bottom;
+                }
             }
             for p in root.nearby: SideItem {
                 icon: @image-url("icons/phone.svg");

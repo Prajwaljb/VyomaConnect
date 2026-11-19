@@ -1,5 +1,5 @@
 //! Vyoma's releases on GitHub, for the update checks: the newest one, and whether a version is
-//! later than another. Asked with curl, which every Linux desktop and macOS has.
+//! later than another. Asked with curl, which every Linux desktop, macOS and Windows 10/11 has.
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -15,13 +15,18 @@ pub struct Release {
 }
 
 pub async fn latest() -> Result<Release> {
-    let out = tokio::process::Command::new("curl")
-        .args(["-fsSL", "--max-time", "20", "-H", "Accept: application/vnd.github+json", "-A", "Vyoma"])
+    let mut curl = tokio::process::Command::new("curl");
+    curl.args(["-fsSL", "--max-time", "20", "-H", "Accept: application/vnd.github+json", "-A", "Vyoma"])
         .arg(format!("https://api.github.com/repos/{REPO}/releases/latest"))
-        .kill_on_drop(true)
-        .output()
-        .await
-        .context("curl isn't installed")?;
+        .kill_on_drop(true);
+    // Windows 10 and 11 have curl too; started from Vyoma's agent (no console of its own) it would
+    // flash a console window without this.
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        curl.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = curl.output().await.context("curl isn't installed")?;
     anyhow::ensure!(out.status.success(), "GitHub didn't answer ({})", out.status);
     parse(&serde_json::from_slice(&out.stdout)?)
 }

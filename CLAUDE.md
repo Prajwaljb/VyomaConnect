@@ -17,6 +17,8 @@ scripts/deploy.sh debug          # install + launch on phone
                                  # Settings > Generate log writes perf/device diagnostics to Downloads (app/.../demo/)
 (cd desktop/companion && cargo build --release)   # Linux companion (Rust); run inside it for its .cargo linker fix
 (cd desktop/companion && cargo test --release -p vyoma-core && cargo test --release)   # core + companion tests
+(cd desktop/engine && cargo test --release)   # the engine (a fake Platform; every PC side runs it)
+(cd desktop/windows && cargo test --release)  # the Windows agent: on Windows (or under Wine, see desktop/windows below)
 (cd desktop/gui && cargo build --release && ./target/release/vyoma)   # the desktop window (talks to vyoma-desktop)
 (cd desktop/daemon && cargo build --release && VYOMA_DIR=<scratch dir> VYOMA_ALLOW=<ids> VYOMA_ANNOUNCE=<IPs> ./target/release/vyoma-desktop)
                                  # standalone desktop app (in development, not installed); drive it with
@@ -36,10 +38,15 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - `desktop/core` (`vyoma-core`): the desktop side's shared protocol core (identity, links, payloads), no desktop
   calls, so it serves every desktop and macOS: discovery, links, pairing, trust store, the device hub (`device.rs`), and
   what both PC sides share: `messages` (texts store + lock), `files`/`xfer` (phone file access, behind `files::Hooks`),
-  `permits`, `activity`, `commands`, `telephony`, `away`, `release` (GitHub's newest release, `is_newer`), `adb` (the USB cable for every PC
+  `permits`, `activity`, `commands`, `telephony` (and `Line`: a phone's ringing/missed/pause steps), `away` (and `Rules`: the walk-away runner every PC side shares, its actions through `away::Hands`), `mirror` (the phone's screen in a PC window: Annex-B splitting, the sound's jitter buffer), `release` (GitHub's newest release, `is_newer`), `updates` (the daily check of the Mac and Windows, which only say a release is out), `adb` (the USB cable for every PC
   side: when a phone with USB debugging appears (each side feeds a watch of plugged adb interfaces: sysfs on Linux,
   `companion/src/usb.rs`; IOKit on the Mac, `mac/src/usb.rs`) the reverse tunnel, payload ports both ways, and the clipboard
   grants once the person allows the APK's signing key (`set_asker`: a notification on Linux, a dialog on the Mac)).
+- `desktop/engine` (`vyoma-engine`, `docs/PLAN.md` section 11): the PC side once for every OS: the vyoma.* session
+  (`session::serve<P: Platform>`: routing, permits, Activity, task lifetimes) and `platform::Platform`, one method per piece
+  of work (default: not on this computer) plus `supports(Feature)`, from which `capabilities` makes the identity's lists.
+  Linux's is `companion/src/platform.rs` (`Linux`, used by the daemon and the companion), the Mac's `mac/src/platform.rs`
+  (`Mac`, `Mac::offers` before there's one; the wallpaper path is fed from the main thread). Stock plugins are next.
 - `desktop/daemon` (`vyoma-desktop`): the standalone desktop app growing on that core (`docs/PLAN.md` section 10): pairing
   prompt as a freedesktop notification with Accept/Reject, `dev.vyoma.Desktop1` D-Bus control for the future GUI;
   stock plugins in `plugins.rs`, `clipboard.rs` (wl-clipboard), `share.rs` (files land in XDG Downloads), `media.rs`
@@ -49,7 +56,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   The phone treats it as its own companion (`DeviceIdentity.featuresOf`). The cable, tethering, Bluetooth and the setup
   offer start only while kdeconnectd isn't running. `install.sh` takes over from KDE Connect (`--undo` gives it back): never run it unasked.
 - `desktop/gui` (`vyoma-gui`, binary `vyoma`): the desktop app's window, Slint (GPL-3.0 option) in the phone app's look
-  (`ui/app.slint`: the PC wallpaper as a soft canvas with its accent (`src/look.rs`, the phone's formulas, from the daemon's `Wallpaper`), glass cards whose rims and shadows follow the wallpaper's light, centred heroes, tiles, the floating glass sidebar, glass dialogs and status bubble, Inter; first run is the phone's setup steps, `--setup` or This PC > Run setup again shows it again, done is kept in ~/.config/vyoma-desktop/window.json; motion as the phone's: pages rise in, the title docks in a glass bubble once scrolled, pressed things dip, rings and bars ease; Up/Down walk the sidebar, Escape/Return answer dialogs; a phone's Clipboard card has the one-time adb Allow for background clipboard sync, D-Bus `AllowClipboardSync`, state in Details `clipboardSync` on|ask|plug; a Commands page adds and edits commands in a sheet, with Ask for fingerprint first and Every time; a phone's Messages tile opens its conversations and a thread with the reply box, `src/texts.rs`). App id `vyoma` (matches vyoma.desktop; the mirror window takes it too, `mirror.rs` `brand`, as do notifications' `desktop-entry`). Wrapped Text needs `min-height: self.preferred-height` (Slint 1.18 shrinks it otherwise) and long unbroken words go through `breakable()`. The command editor warns (`command_warning`: a program not on PATH, sudo, a name used twice) and Delete offers Undo. One window at a time (`src/instance.rs` holds `dev.vyoma.Window`; a second start, or `--page commands|this-pc|activity|<id>`, shows that page in the open one). `install.sh` installs it as ~/.local/bin/vyoma with a menu entry.. It only shows and asks: `src/daemon.rs` is the `Daemon`
+  (`ui/app.slint`: the PC wallpaper as a soft canvas with its accent (`src/look.rs`, the phone's formulas, from the daemon's `Wallpaper`), glass cards whose rims and shadows follow the wallpaper's light, centred heroes, tiles, the floating glass sidebar, glass dialogs and status bubble, Inter; first run is the phone's setup steps, `--setup` or This PC > Run setup again shows it again, done is kept in ~/.config/vyoma-desktop/window.json; motion as the phone's: pages rise in, the title docks in a glass bubble once scrolled, pressed things dip, rings and bars ease; Up/Down walk the sidebar, Escape/Return answer dialogs; a phone's Clipboard card has the one-time adb Allow for background clipboard sync, D-Bus `AllowClipboardSync`, state in Details `clipboardSync` on|ask|plug; a Commands page adds and edits commands in a sheet, with Ask for fingerprint first and Every time; a phone's Messages tile opens its conversations and a thread with the reply box, `src/texts.rs`). App id `vyoma` (matches vyoma.desktop; the mirror window takes it too, `mirror.rs` `brand`, as do notifications' `desktop-entry`). Wrapped Text needs `min-height: self.preferred-height` (Slint 1.18+ shrinks it otherwise) and long unbroken words go through `breakable()`. The command editor warns (`command_warning`: a program not on PATH, sudo, a name used twice) and Delete offers Undo. One window at a time (`src/instance.rs` holds `dev.vyoma.Window`; a second start, or `--page commands|this-pc|activity|<id>`, shows that page in the open one). `install.sh` installs it as ~/.local/bin/vyoma with a menu entry.. It only shows and asks: `src/daemon.rs` is the `Daemon`
   trait (D-Bus `dev.vyoma.Desktop1` today, a local socket on macOS later), rereading on the daemon's `Changed` signal.
   `vyoma --snapshot out.png [--dark] [--plain (no wallpaper)] [--size WxH (780x540 is the smallest window)] [--scroll PX] [--scene phones|pairing|nearby|away|unpair|add-done|notice|cable|pc|pc-setup|activity|activity-empty|activity-late|commands|commands-empty|commands-edit|commands-warn|messages|messages-thread|messages-search|messages-contacts|messages-call|messages-silent|messages-loading|messages-asking|messages-declined|messages-locked|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|add|add-offline|down]` renders it offscreen
   with made-up phones (after the enter animations settle; `cable` shows the clipboard Allow): check the look with that, never by capturing the screen.
@@ -78,6 +85,45 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   (`Xvfb :97 -screen 0 1280x720x24 -nolisten tcp`): `DISPLAY=:97 XDG_SESSION_TYPE=x11 VYOMA_X11_TEST=1 cargo test
   --release --lib x11::` in companion, `... cargo test --release presenter_x11` in daemon. Not yet run on a real
   Cinnamon/MATE/Xfce session; wlroots (Sway, Hyprland) input still has no path.
+- Hyprland (and other compositors with wlr's virtual pointer + virtual keyboard: Sway, river, labwc...), by probing, not
+  names: `companion/src/wlr.rs` is input there (before the portal; daemon `input.rs` `Sink::Wlr`, `screen.rs` `Via::Wlr`);
+  `companion/src/hypr.rs` talks to Hyprland's IPC socket (a listening `$XDG_RUNTIME_DIR/hypr/*/.socket.sock`; 0.57 takes
+  dispatchers as Lua, `hl.dsp.*`, older the classic words; both tried): workspaces, dpms, log out, layout, hyprpaper/swww
+  wallpaper. Screenshots with grim where there's no Spectacle or GNOME; kernel backlight through logind where neither Plasma
+  nor Mutter dims. Test in a nested Hyprland inside `kwin_wayland --virtual` under `dbus-run-session`, with a short private
+  XDG_RUNTIME_DIR (socket paths over 108 bytes fail) and XDG_CONFIG_HOME: `VYOMA_HYPR_TEST=1 VYOMA_WLR_TEST=1
+  [VYOMA_WLR_OUTPUT=WxH VYOMA_HYPR_WALLPAPER=<path>] cargo test --release --lib -- hypr:: wlr::` in companion. Never
+  `pgrep -x kwin_wayland` to stop it (the real KWin matches): kill by pid.
+- `desktop/windows` (`vyoma-windows`, `docs/PLAN.md` section 11, Windows): the PC side on Windows on core and the engine
+  (`platform.rs` `Windows::offers`): a notification-area agent (`tray.rs`: icon, Open/Quit, balloons where there are no toasts, the session
+  ending), one per session (`system.rs`: named mutex, Run-key `--install`, power, wake; `--quit` closes the window and stops the agent
+  for the installer), the window's named pipe `\\.\pipe\vyoma-<user>` (`control.rs`, this user's SID only, no remote clients; the window's
+  `socket.rs` opens it as a file), stock plugins (`win.rs`: clipboard, battery, lock, Downloads, only http(s) links opened, HKCU registry
+  helpers; `input.rs`: SendInput, the live screen's absolute touches), media (`media.rs`: Windows' media controls as MPRIS players, covers
+  as payloads, Core Audio's default speaker; pause/resume/mute helpers for walk-away and calls), toasts (`toast.rs`: `AppUserModelId\dev.vyoma.Vyoma` + a COM activator class in HKCU, so
+  buttons and the reply box work, `-Embedding` when Windows starts the agent for one; the pairing question, phone notifications with Reply
+  and actions, Send to's phone choice; not registered when `VYOMA_DIR` is set unless `VYOMA_TOASTS=1`), engine features (stats, specs,
+  screenshots in `screen.rs`, the live screen in `cast.rs`: desktop duplication (a rotated display turned upright, `Turn`) or GDI, the
+  graphics card's H.264 encoder (an async Media Foundation transform) else the software one, the Mac's framing; files, power, wake, Task
+  View, paste, brightness and app volumes in `pc.rs` (WMI for a laptop's screen, DDC/CI for monitors, Core Audio's sessions), the
+  wallpaper's colours in `wallpaper.rs` (WIC), walk-away in `away.rs` (core `Rules`), the phone's screen in a window in `mirror.rs`
+  (`--mirror-window` child: Media Foundation's H.264 decoder into GDI, Windows keys, sound as PCM through WASAPI; core `mirror` shares the
+  splitting and jitter buffer with the Mac), a photo in `camera.rs` (MF source reader, WIC JPEG, a notification each time, This PC's Camera
+  check on Windows' privacy switches; tests only count cameras unless `VYOMA_CAMERA_TEST=1`)), calls (`calls.rs`, core `Line`: ringing toast with
+  Silence and Decline, missed calls, music paused), the daily update check (`update.rs`, core `updates`, releases with
+  `Vyoma-setup-*.exe`), Explorer's Send to (`sendto.rs`: "Phone (Vyoma)" in the SendTo folder, written by `--install`, removed by
+  `--uninstall`), the firewall check (`firewall.rs`, Let phones through = `--open-firewall` elevated). Icon `dist/vyoma.ico`
+  (from `gen.py`) in both programs via `build.rs` (embed-resource). Installer `packaging/windows/vyoma.nsi` (NSIS, per user; CI signs
+  the programs, installer and uninstaller when the repo has `WINDOWS_SIGN_PFX`/`WINDOWS_SIGN_PASSWORD`, else unsigned). Built and
+  tested as Windows builds under Wine here and on GitHub's runners (`.github/workflows/windows.yml`, artifact `Vyoma-windows`: the
+  installer and a zip; releases get `Vyoma-setup-<ver>.exe` through desktop-release.yml); not yet run on a real Windows PC. Test switches as
+  the daemon's (`VYOMA_DIR`, `VYOMA_ALLOW`, `VYOMA_ANNOUNCE`) plus `VYOMA_PIPE`, `VYOMA_UDP_PORT`, `VYOMA_TCP_PORTS`; log in
+  `%LOCALAPPDATA%\Vyoma\vyoma.log`. Here: a scratch rustup with `x86_64-pc-windows-gnu`, mingw-w64 as linker/CC/RC
+  (`CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc`, `CC_/CXX_x86_64_pc_windows_gnu`, `RC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-windres`),
+  `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=wine` with a scratch WINEPREFIX, `CARGO_TARGET_DIR` on disk (the build is ~5 GB; /tmp is a
+  small tmpfs), and DISPLAY on a private `Xvfb :97` with WAYLAND_DISPLAY unset (never the real screen: GDI would capture it); then
+  `cargo test --release --target x86_64-pc-windows-gnu` in core, engine, windows, gui. Wine has no WinRT XML, toasts, media sessions or
+  firewall (those tests skip); its H.264 encoder works, so the live screen runs (`VYOMA_CAST_DUMP=<file>` in `cast::tests` keeps 2 s to decode).
 - `desktop/mac` (`vyoma-mac`): the Mac's PC side on vyoma-core (`docs/PLAN.md` section 10, macOS): pairs in Vyoma's
   window (inside Vyoma.app a request opens it, with a notification; the bare binary asks in a dialog with the code), serves ping, battery, find my phone, lock (display sleep), clipboard (pbcopy/pbpaste polled each
   second), share (files into ~/Downloads); `--install` makes it a LaunchAgent (`launchd.rs`; from Vyoma.app it runs the
@@ -116,7 +162,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   Mac: `.github/workflows/macos.yml` builds and tests core, mac and the window on GitHub's runners and keeps Vyoma.app
   (universal) as an artifact; it compiles and tests on Linux too (`cd desktop/mac && cargo test --release`). Not yet run on a Mac.
 - `desktop/icon/gen.py`: Vyoma's icon ("Moon": the PC as a white glass orb, the phone as a small orb in a gap of one ring, on a sky tile) for every place from one geometry: Android adaptive layers, monochrome, notification glyph, splash; the desktop's `dist/vyoma.svg` (installed into hicolor) and the window's `ui/icons/vyoma.svg`. Run `python3 desktop/icon/gen.py .` from the repo root after changing it.
-- `desktop/companion`: lib + bin (the session loop is `session.rs`, shared with the desktop app); the bin is the Rust daemon beside stock kdeconnectd, built on `vyoma-core`. Dials only phones kdeconnectd trusts (mDNS), pairs with
+- `desktop/companion`: lib + bin (the session loop is the engine's, `session.rs` re-exports it; `platform.rs` is Linux's side); the bin is the Rust daemon beside stock kdeconnectd, built on `vyoma-core`. Dials only phones kdeconnectd trusts (mDNS), pairs with
   no prompt via `CompanionProof` (signed with kdeconnectd's key; phone verifies against the pinned PC cert), speaks
   `vyoma.*` packets. Phone folds it into its PC (`DeviceIdentity.companionOf`, `DeviceState.isCompanion`).
   Also watches sysfs for an adb USB interface and, for phones with Vyoma installed, runs `adb reverse tcp:1765 tcp:1716`

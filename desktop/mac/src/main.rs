@@ -22,6 +22,7 @@ mod media;
 mod mirror;
 #[cfg(target_os = "macos")]
 mod notify;
+mod platform;
 mod presenter;
 mod camera;
 mod screen;
@@ -51,6 +52,7 @@ use vyoma_core::link::packet;
 use vyoma_core::permits::{self, Permit, Permits};
 use vyoma_core::share::{self, SHARE, SHARE_UPDATE, Shared};
 use vyoma_core::trust::TrustStore;
+use vyoma_engine::session::{Host, Phone, phone_name};
 
 pub const PING: &str = "kdeconnect.ping";
 pub const BATTERY: &str = "kdeconnect.battery";
@@ -63,14 +65,14 @@ pub const KEYBOARDSTATE: &str = "kdeconnect.mousepad.keyboardstate";
 const INCOMING: &[&str] = &[
     PING, BATTERY, FIND, LOCK_REQUEST, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE,
     media::MPRIS_REQUEST, media::VOLUME_REQUEST, RUNCOMMAND_REQUEST, NOTIFICATION, input::MOUSEPAD_REQUEST,
-    vyoma_core::telephony::TELEPHONY, presenter::PRESENTER, vyoma_core::away::AWAY,
+    vyoma_core::telephony::TELEPHONY, presenter::PRESENTER,
     messages::MESSAGES, messages::CONTACTS_UIDS_REPLY, messages::CONTACTS_VCARDS_REPLY, messages::UNLOCKED, messages::LOCKED,
 ];
 const OUTGOING: &[&str] = &[
     PING, BATTERY, FIND, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE,
     media::MPRIS, media::VOLUME, RUNCOMMAND, input::MOUSEPAD_ECHO, KEYBOARDSTATE,
     messages::REQUEST, messages::REQUEST_CONVERSATIONS, messages::REQUEST_CONVERSATION, messages::CONTACTS_UIDS, messages::CONTACTS_VCARDS,
-    messages::UNLOCK, messages::LOCK, DIAL,
+    messages::UNLOCK, messages::LOCK, DIAL, vyoma::LEAVING,
 ];
 
 /// This release, as the Linux app reads it: the repo's one version.
@@ -90,20 +92,6 @@ const TOUCHPAD_STRETCH: Duration = Duration::from_secs(10 * 60);
 
 /// The switches this Mac has, in the window's order: what it serves so far.
 const PERMITS: [Permit; 5] = [Permit::Screen, Permit::Control, Permit::Files, Permit::Camera, Permit::Power];
-
-/// Text for a paste the phone types (emoji, other scripts): put on the clipboard for its Ctrl+V,
-/// and what was there before comes back a moment later.
-const PASTE: &str = "vyoma.paste";
-const PASTE_READY: &str = "vyoma.paste.ready";
-const PASTE_RESTORE: Duration = Duration::from_millis(1200);
-/// The touchpad's three-finger gestures: up is Mission Control (and down leaves it), sideways the next Space.
-const DESKTOP_STEP: &str = "vyoma.desktop.step";
-const DESKTOP_STEPPED: &str = "vyoma.desktop.stepped";
-const DESKTOP_SWITCH: &str = "vyoma.desktop.switch";
-/// Mission Control left open this long has probably been closed some other way.
-const MISSION_STALE: Duration = Duration::from_secs(20);
-const DESK_INCOMING: &[&str] = &[PASTE, DESKTOP_STEP, DESKTOP_SWITCH];
-const DESK_OUTGOING: &[&str] = &[PASTE_READY, DESKTOP_STEPPED];
 
 /// A switch as the Mac's window shows it: the Linux words, less what a Mac can't do.
 fn permit_words(p: Permit) -> (&'static str, &'static str) {
@@ -230,7 +218,11 @@ async fn run(dir: PathBuf) -> Result<()> {
     let mut touched: HashMap<String, Instant> = HashMap::new();
     let calls = calls::start();
     let walk_away = Arc::new(away::Away::default());
-    let brightness = brightness::start(commands.clone());
+    // Vyoma's own features: the engine runs each paired phone's session, the Mac does the work.
+    let mac_side = Arc::new(platform::Mac::new(brightness::start(commands.clone()), walk_away.clone()));
+    let host = Arc::new(Host { me: me.clone(), permits: permits.clone(), activity: activity.clone() });
+    let mut sessions: HashMap<String, mpsc::UnboundedSender<(Value, std::net::IpAddr)>> = HashMap::new();
+    let engine_takes = vyoma_engine::session::incoming_all();
     let mut pointer_dot = presenter::Presenter::default();
     // The phone's texts, in memory only, for the window's Messages page.
     let texts = Arc::new(Store::default());
@@ -243,10 +235,10 @@ async fn run(dir: PathBuf) -> Result<()> {
         });
     }
     // Newer releases with a Mac app, once a day.
-    let updates = update::Updates::load(&dir, VERSION);
+    let updates = update::load(&dir, VERSION);
     {
         let changes = changes.clone();
-        tokio::spawn(updates.clone().run(move || {
+        tokio::spawn(update::run(updates.clone(), move || {
             let _ = changes.send(json!({ "event": "Changed" }));
         }));
     }
@@ -272,13 +264,6 @@ async fn run(dir: PathBuf) -> Result<()> {
     let mut pointer = input::Pointer::default();
     // When the phone was last told that macOS hasn't allowed the touchpad.
     let mut untrusted_told: Option<Instant> = None;
-    let mut features = vyoma::Vyoma::new(me.clone(), commands.clone(), activity.clone());
-    let mut screens = screen::Screens::new(me.clone(), commands.clone(), activity.clone());
-    let mut photos = camera::Photos::new(me.clone(), commands.clone(), activity.clone());
-    let mut mirrors = mirror::Mirrors::new(me.clone(), commands.clone());
-    // When Mission Control was opened from the phone (macOS doesn't say whether it's showing).
-    let mut mission: Option<Instant> = None;
-    let mut switches = permits.subscribe();
     // The USB cable: phones plugged in with USB debugging get the adb tunnel and grants.
     usb::start(lan.tcp_port());
     clip_load(&dir);
@@ -337,16 +322,15 @@ async fn run(dir: PathBuf) -> Result<()> {
                         for p in started(d, battery, &clip) {
                             send(&id, p);
                         }
+                        start_session(&mut sessions, &mac_side, &host, &commands, &id, d);
                     }
                 }
                 Event::Gone { id } => {
                     if let Some(d) = devices.get_mut(&id) {
                         d.linked = false;
                     }
-                    features.gone(&id);
-                    screens.gone(&id);
-                    photos.stop(&id);
-                    mirrors.gone(&id);
+                    // Ends everything the phone's session started.
+                    sessions.remove(&id);
                     texts.gone(&id);
                     pointer_dot.stop();
                     walk_away.unlinked(&id);
@@ -405,11 +389,13 @@ async fn run(dir: PathBuf) -> Result<()> {
                     for p in started(d, battery, &clip) {
                         send(&id, p);
                     }
+                    start_session(&mut sessions, &mac_side, &host, &commands, &id, d);
                 }
                 Event::Unpaired { id, name } => {
                     if let Some(d) = devices.get_mut(&id) {
                         d.paired = false;
                     }
+                    sessions.remove(&id);
                     texts.forget(&id);
                     permits.forget(&id);
                     mac::notify(&format!("{name} is no longer paired"), "Pair again from the phone to use it with this Mac.").await;
@@ -421,6 +407,17 @@ async fn run(dir: PathBuf) -> Result<()> {
                 Event::Packet { id, packet, from } => {
                     let Some(d) = devices.get_mut(&id) else { continue };
                     let kind = packet["type"].as_str().unwrap_or("").to_owned();
+                    if engine_takes.contains(&kind.as_str()) {
+                        // The engine checks the switches and keeps Activity for these itself.
+                        if kind == "vyoma.wallpaper.request" {
+                            // AppKit tells only this thread where the wallpaper is.
+                            mac_side.set_wallpaper(vyoma::wallpaper_path());
+                        }
+                        if let Some(session) = sessions.get(&id).filter(|_| d.paired) {
+                            let _ = session.send((packet, from));
+                        }
+                        continue;
+                    }
                     // Switched off in the window: the phone hears why (once in a while: streams repeat).
                     if let Some(permit) = Permit::of(&kind).filter(|&p| !permits.allows(&id, p)) {
                         let now = Instant::now();
@@ -494,56 +491,7 @@ async fn run(dir: PathBuf) -> Result<()> {
                         vyoma_core::telephony::TELEPHONY if d.paired => {
                             let _ = calls.send(calls::Order::Packet { id, phone: d.name.clone(), packet });
                         }
-                        vyoma_core::away::AWAY if d.paired => walk_away.configure(&id, &packet["body"]),
                         presenter::PRESENTER if d.paired => pointer_dot.on_packet(&packet["body"]),
-                        kind if brightness::takes(kind) && d.paired => {
-                            let _ = brightness.send((id, packet));
-                        }
-                        camera::CAMERA_REQUEST if d.paired => photos.handle(&id, &vyoma::Phone { name: &d.name, cert: &d.cert, from }, &packet),
-                        kind if screen::takes(kind) && d.paired => screens.handle(&id, &vyoma::Phone { name: &d.name, cert: &d.cert, from }, &packet),
-                        kind if mirror::takes(kind) && d.paired => mirrors.handle(&id, &vyoma::Phone { name: &d.name, cert: &d.cert, from }, &packet),
-                        PASTE if d.paired => {
-                            if let Some(text) = packet["body"]["text"].as_str() {
-                                let (text, commands, id) = (text.to_owned(), commands.clone(), id.clone());
-                                tokio::spawn(async move {
-                                    let body = match paste(&text).await {
-                                        Ok(()) => json!({}),
-                                        Err(e) => json!({ "error": format!("{e:#}") }),
-                                    };
-                                    let _ = commands.send(Command::Send(id, vyoma_core::link::packet(PASTE_READY, body)));
-                                });
-                            }
-                        }
-                        DESKTOP_STEP if d.paired => {
-                            let up = packet["body"]["up"].as_bool().unwrap_or(true);
-                            let open = mission.is_some_and(|t| t.elapsed() < MISSION_STALE);
-                            let (press, view) = match (up, open) {
-                                (true, false) => (true, "overview"),
-                                (true, true) => (false, "overview"),
-                                (false, true) => (true, "windows"),
-                                (false, false) => (false, "windows"),
-                            };
-                            // Control+Up opens Mission Control, and again closes it.
-                            let body = if !press || press_key(126, input::CONTROL | ARROW) {
-                                if press {
-                                    mission = (view == "overview").then(Instant::now);
-                                }
-                                json!({ "view": view })
-                            } else {
-                                json!({ "error": input::ALLOW_SHORT })
-                            };
-                            send(&id, vyoma_core::link::packet(DESKTOP_STEPPED, body));
-                        }
-                        DESKTOP_SWITCH if d.paired => {
-                            // Control+Left / Right: the Space beside this one.
-                            let right = packet["body"]["right"].as_bool().unwrap_or(true);
-                            press_key(if right { 124 } else { 123 }, input::CONTROL | ARROW);
-                        }
-                        kind if vyoma::takes(kind) && d.paired => {
-                            // AppKit tells only this thread where the wallpaper is.
-                            let wallpaper = if kind == vyoma::WALLPAPER_REQUEST { vyoma::wallpaper_path() } else { None };
-                            features.handle(&id, &vyoma::Phone { name: &d.name, cert: &d.cert, from }, &packet, wallpaper);
-                        }
                         _ => {
                             for reply in on_packet(&id, d, &packet, from, &me, &mut clip, &mut ringer, &found_tx, &activity).await {
                                 send(&id, reply);
@@ -585,19 +533,6 @@ async fn run(dir: PathBuf) -> Result<()> {
                 let _ = commands.send(if yes { Command::Accept(id) } else { Command::Reject(id) });
             }
             Some(()) = found.recv() => ringer.stop(),
-            Ok(()) = switches.changed() => {
-                // Turned off: the screen stops showing now, and the phone hears why.
-                for id in devices.keys() {
-                    if !permits.allows(id, Permit::Screen) && screens.stop(id) {
-                        tracing::info!("{id}: screen turned off, stopped");
-                        send(id, permits::denied(Permit::Screen, &json!({ "type": "" })));
-                    }
-                    if !permits.allows(id, Permit::Camera) && photos.stop(id) {
-                        tracing::info!("{id}: camera turned off, photo dropped");
-                        send(id, permits::denied(Permit::Camera, &json!({ "type": camera::CAMERA_REQUEST })));
-                    }
-                }
-            }
             Some(text) = copies.recv() => {
                 if let Some(p) = clip.changed(text) {
                     for (id, d) in &devices {
@@ -619,6 +554,8 @@ async fn run(dir: PathBuf) -> Result<()> {
                 battery = now;
             }
             _ = lock_tick.tick() => {
+                // So a new wallpaper reaches the phones (the engine watches what this says).
+                mac_side.set_wallpaper(vyoma::wallpaper_path());
                 let now = mac::screen_locked();
                 let mut relock = texts.expire();
                 if now == Some(true) && screen_locked != Some(true) {
@@ -1015,43 +952,6 @@ fn clipboard_sync(id: &str, on_cable: bool) -> &'static str {
     if CLIP_ON.get().is_some_and(|(_, ids)| ids.lock().unwrap().contains(id)) { "on" } else { "plug" }
 }
 
-/// The flags macOS gives the arrow keys (kCGEventFlagMaskSecondaryFn | NumericPad): its own
-/// shortcuts on them (Mission Control, Spaces) only answer a press that carries them.
-const ARROW: u64 = 0x80_0000 | 0x20_0000;
-
-/// Presses a key the agent itself sends (the Spaces gestures); false while macOS doesn't allow it.
-fn press_key(code: u16, flags: u64) -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        input::post_key(code, flags)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (code, flags);
-        true
-    }
-}
-
-/// Puts [text] on the clipboard for the phone's paste, and what was there before back a moment
-/// later, unless something newer was copied meanwhile.
-async fn paste(text: &str) -> Result<()> {
-    static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let before = mac::clipboard().await;
-    mac::set_clipboard(text).await?;
-    let mine = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
-    let text = text.to_owned();
-    tokio::spawn(async move {
-        tokio::time::sleep(PASTE_RESTORE).await;
-        if GENERATION.load(Ordering::Relaxed) == mine
-            && mac::clipboard().await.as_deref() == Some(text.as_str())
-            && let Some(before) = before
-        {
-            let _ = mac::set_clipboard(&before).await;
-        }
-    });
-    Ok(())
-}
-
 /// The window's requests after which it should read again (the rest only read, or tell by their own events).
 const CHANGING: &[&str] = &["Pair", "Accept", "Reject", "Unpair", "SetPermission", "SaveCommand", "RemoveCommand", "SetUpdateChecks"];
 
@@ -1174,7 +1074,26 @@ fn url_encode(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
+/// Starts phone [id]'s engine session, unless one is running; dropping its entry ends it.
+fn start_session(
+    sessions: &mut HashMap<String, mpsc::UnboundedSender<(Value, std::net::IpAddr)>>,
+    mac_side: &Arc<platform::Mac>,
+    host: &Arc<Host>,
+    commands: &mpsc::UnboundedSender<Command>,
+    id: &str,
+    d: &Device,
+) {
+    if sessions.get(id).is_some_and(|s| !s.is_closed()) {
+        return;
+    }
+    let (packets, rx) = mpsc::unbounded_channel();
+    sessions.insert(id.to_owned(), packets);
+    let phone = Phone { id: id.to_owned(), name: phone_name(&d.name), pinned: d.cert.clone() };
+    tokio::spawn(vyoma_engine::session::serve(mac_side.clone(), host.clone(), phone, vyoma::sender(commands, id), rx));
+}
+
 fn identity(me: &Identity, name: String, laptop: bool) -> Value {
+    let (engine_in, engine_out) = vyoma_engine::platform::capabilities_for(platform::Mac::offers);
     packet(
         "kdeconnect.identity",
         json!({
@@ -1182,8 +1101,8 @@ fn identity(me: &Identity, name: String, laptop: bool) -> Value {
             "deviceName": name,
             "deviceType": if laptop { "laptop" } else { "desktop" },
             "protocolVersion": 8,
-            "incomingCapabilities": ([INCOMING, vyoma::INCOMING, screen::INCOMING, camera::INCOMING, mirror::INCOMING, DESK_INCOMING, brightness::incoming()].concat()),
-            "outgoingCapabilities": ([OUTGOING, vyoma::OUTGOING, screen::OUTGOING, camera::OUTGOING, mirror::OUTGOING, DESK_OUTGOING, brightness::outgoing()].concat()),
+            "incomingCapabilities": ([INCOMING, &engine_in].concat()),
+            "outgoingCapabilities": ([OUTGOING, &engine_out].concat()),
         }),
     )
 }
@@ -1367,7 +1286,7 @@ mod tests {
         let p = identity(&me, "Sam's MacBook".into(), true);
         assert_eq!(p["body"]["deviceType"], "laptop");
         let incoming = p["body"]["incomingCapabilities"].as_array().unwrap();
-        assert_eq!(incoming.len(), INCOMING.len() + vyoma::INCOMING.len() + screen::INCOMING.len() + camera::INCOMING.len() + mirror::INCOMING.len() + DESK_INCOMING.len());
+        assert_eq!(incoming.len(), INCOMING.len() + vyoma_engine::platform::capabilities_for(platform::Mac::offers).0.len());
         // What the phone looks for before it shows a tile (its PcFeatures).
         for offered in ["vyoma.away", "kdeconnect.telephony", "kdeconnect.presenter", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.screen.request", "vyoma.mirror", "vyoma.paste", "vyoma.desktop.step"] {
             assert!(incoming.iter().any(|t| t == offered), "{offered}");

@@ -163,6 +163,11 @@ async fn connect(me: &Identity, pinned: &[u8], phone: IpAddr, port: u16) -> Resu
 /// A live stream must not queue: the kernel would otherwise take megabytes of unsent video when
 /// the link slows (Wi-Fi hiccups), seconds behind. With little unsent allowed, a slow link stalls
 /// the writer instead, back up to the encoder, which then drops frames rather than delaying them.
+/// (Windows has no such option: its send buffer is small by itself, ideal send backlog.)
+#[cfg(not(unix))]
+fn live(_tcp: &TcpStream) {}
+
+#[cfg(unix)]
 fn live(tcp: &TcpStream) {
     // Darwin's netinet/tcp.h has it too, under its own number, which the libc crate doesn't carry.
     #[cfg(target_os = "macos")]

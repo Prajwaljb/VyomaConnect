@@ -4,141 +4,71 @@
 //! want whenever they change and on every new link; we act on it when its links have all closed
 //! (the keepalive notices a vanished phone within ~30 s) and it hasn't come back in `after`.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
-use tracing::{info, warn};
 use zbus::Connection;
 
-use vyoma_core::away::{Config, MIN_GONE_SECS, Step};
+use vyoma_core::away::{self, Rules};
 
 use crate::media::Media;
 
-/// What we changed while the phone was away, to put back.
-#[derive(Default)]
-struct Done {
-    unmute: bool,
-    resume: Vec<String>,
+/// How Linux carries the rules out: MPRIS players, PipeWire's default sink, logind's lock.
+struct Hands {
+    media: Option<Arc<Media>>,
 }
 
-impl Done {
-    async fn put_back(&self, media: Option<&Arc<Media>>) {
-        if self.unmute {
-            let _ = pactl(&["set-sink-mute", "@DEFAULT_SINK@", "0"]).await;
+impl away::Hands for Hands {
+    async fn pause_playing(&self) -> Vec<String> {
+        match &self.media {
+            Some(media) => media.pause_all().await,
+            None => Vec::new(),
         }
-        if let Some(media) = media {
-            for bus in &self.resume {
+    }
+
+    async fn resume(&self, buses: &[String]) {
+        if let Some(media) = &self.media {
+            for bus in buses {
                 media.play_bus(bus).await;
             }
         }
     }
+
+    async fn mute_if_on(&self) -> bool {
+        let muted = pactl(&["get-sink-mute", "@DEFAULT_SINK@"]).await.is_ok_and(|out| String::from_utf8_lossy(&out).contains("yes"));
+        !muted && pactl(&["set-sink-mute", "@DEFAULT_SINK@", "1"]).await.is_ok()
+    }
+
+    async fn unmute(&self) {
+        let _ = pactl(&["set-sink-mute", "@DEFAULT_SINK@", "0"]).await;
+    }
+
+    async fn lock(&self) -> anyhow::Result<()> {
+        lock().await
+    }
 }
 
-#[derive(Default)]
-struct Phone {
-    config: Config,
-    links: u32,
-    /// Bumped on every link, so a timer started before the phone came back knows it's stale.
-    generation: u64,
-    done: Option<Done>,
-}
-
+/// Every phone's walk-away rules: the shared [Rules], carried out with [Hands].
 #[derive(Default)]
 pub struct Away {
-    phones: Mutex<HashMap<String, Phone>>,
+    rules: Arc<Rules>,
 }
 
 impl Away {
     /// `vyoma.away` from [phone]: its walk-away wishes.
     pub fn configure(&self, phone: &str, body: &Value) {
-        let config = Config::read(body);
-        let mut phones = self.phones.lock().unwrap();
-        let entry = phones.entry(phone.to_string()).or_default();
-        if entry.config != config {
-            info!("{phone}: walk-away rules now {config:?}");
-        }
-        entry.config = config;
+        self.rules.configure(phone, body);
     }
 
     /// A link to [phone] came up: cancels a pending walk-away and puts back what one did.
     pub async fn linked(&self, phone: &str, media: Option<&Arc<Media>>) {
-        let done = {
-            let mut phones = self.phones.lock().unwrap();
-            let p = phones.entry(phone.to_string()).or_default();
-            p.links += 1;
-            p.generation += 1;
-            p.done.take()
-        };
-        if let Some(done) = done {
-            info!("{phone}: back; undoing what its walk-away rules did");
-            done.put_back(media).await;
-        }
+        self.rules.linked(phone, &Hands { media: media.cloned() }).await;
     }
 
     /// A link to [phone] closed. Once none are left and it stays gone for its `after`, runs its rules.
     pub fn unlinked(self: &Arc<Self>, phone: &str, media: Option<Arc<Media>>) {
-        let (steps, generation) = {
-            let mut phones = self.phones.lock().unwrap();
-            let Some(p) = phones.get_mut(phone) else { return };
-            p.links = p.links.saturating_sub(1);
-            if p.links > 0 || p.config.steps().is_empty() {
-                return;
-            }
-            (p.config.steps(), p.generation)
-        };
-        let (away, phone) = (self.clone(), phone.to_string());
-        tokio::spawn(async move {
-            let left = tokio::time::Instant::now();
-            for (step, want) in steps {
-                // A Wi-Fi/USB swap or an app update closes the link for a moment: never act on that.
-                tokio::time::sleep_until(left + Duration::from_secs(want.after.max(MIN_GONE_SECS))).await;
-                let still_gone = away.phones.lock().unwrap().get(&phone).is_some_and(|p| p.links == 0 && p.generation == generation);
-                if !still_gone {
-                    return;
-                }
-                info!("{phone}: gone; walk-away rules: {step:?}");
-                let mut done = Done::default();
-                match step {
-                    Step::Pause => {
-                        if let Some(media) = &media {
-                            done.resume = media.pause_all().await;
-                        }
-                    }
-                    Step::Mute => {
-                        let muted = pactl(&["get-sink-mute", "@DEFAULT_SINK@"]).await.is_ok_and(|out| String::from_utf8_lossy(&out).contains("yes"));
-                        if !muted && pactl(&["set-sink-mute", "@DEFAULT_SINK@", "1"]).await.is_ok() {
-                            done.unmute = true;
-                        }
-                    }
-                    Step::Lock => {
-                        if let Err(e) = lock().await {
-                            warn!("{phone}: couldn't lock: {e:#}");
-                        }
-                    }
-                }
-                if !want.undo {
-                    continue;
-                }
-                // Back while that ran: nothing will come to undo it later.
-                let back_already = {
-                    let mut phones = away.phones.lock().unwrap();
-                    match phones.get_mut(&phone).filter(|p| p.generation == generation) {
-                        Some(p) => {
-                            let all = p.done.get_or_insert_default();
-                            all.unmute |= done.unmute;
-                            all.resume.append(&mut done.resume);
-                            false
-                        }
-                        None => true,
-                    }
-                };
-                if back_already {
-                    done.put_back(media.as_ref()).await;
-                }
-            }
-        });
+        self.rules.unlinked(phone, Arc::new(Hands { media }));
     }
 }
 
@@ -165,39 +95,4 @@ async fn pactl(args: &[&str]) -> anyhow::Result<Vec<u8>> {
     let out = tokio::time::timeout(Duration::from_secs(4), tokio::process::Command::new("pactl").args(args).kill_on_drop(true).output()).await??;
     anyhow::ensure!(out.status.success(), "pactl {} failed", args.first().unwrap_or(&""));
     Ok(out.stdout)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use vyoma_core::away::Want;
-
-    #[test]
-    fn reads_the_config() {
-        let away = Away::default();
-        away.configure("p", &json!({ "lock": { "after": 60, "undo": true } }));
-        let c = away.phones.lock().unwrap()["p"].config;
-        assert_eq!(c, Config { lock: Want { on: true, after: 60, undo: true }, ..Config::default() });
-    }
-
-    #[test]
-    fn each_action_keeps_its_own_time() {
-        let away = Away::default();
-        away.configure("p", &json!({ "lock": { "after": 600 }, "mute": { "after": 0, "undo": true } }));
-        let steps = away.phones.lock().unwrap()["p"].config.steps();
-        let order: Vec<_> = steps.iter().map(|(s, w)| (*s, w.after)).collect();
-        assert_eq!(order, [(Step::Mute, 0), (Step::Lock, 600)]);
-    }
-
-    #[tokio::test]
-    async fn a_returning_phone_cancels_the_timer() {
-        let away = Arc::new(Away::default());
-        away.configure("p", &json!({ "mute": { "after": 0 } }));
-        away.linked("p", None).await;
-        away.unlinked("p", None);
-        away.linked("p", None).await;
-        let p = &away.phones.lock().unwrap()["p"];
-        assert_eq!((p.links, p.generation), (1, 2));
-    }
 }

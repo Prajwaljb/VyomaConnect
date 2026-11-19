@@ -38,7 +38,7 @@ pub fn signature() -> Option<(PathBuf, Option<std::time::SystemTime>, Option<std
     let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
     // GNOME's settings (read by [current], light or dark) name the picture, which says it all; its
     // settings file changes with every setting, so its time says nothing.
-    if crate::desktop::is_gnome() || other_desktop().is_some() {
+    if crate::desktop::is_gnome() || other_desktop().is_some() || crate::hypr::active() {
         return Some((path.clone(), mtime(&path), None));
     }
     let config = Path::new(&home).join(".config/plasma-org.kde.plasma.desktop-appletsrc");
@@ -66,8 +66,8 @@ fn other_desktop() -> Option<Other> {
     }
 }
 
-/// The image the desktop shows: GNOME's background (its dark one in dark mode), Cinnamon's, MATE's
-/// or Xfce's, else Plasma's.
+/// The image the desktop shows: GNOME's background (its dark one in dark mode), Cinnamon's, MATE's,
+/// Xfce's or Hyprland's (hyprpaper, swww), else Plasma's.
 fn current() -> Option<PathBuf> {
     match other_desktop() {
         Some(Other::Cinnamon) => return from_uri(&gsetting("org.cinnamon.desktop.background", "picture-uri")?),
@@ -77,6 +77,9 @@ fn current() -> Option<PathBuf> {
     }
     if crate::desktop::is_gnome() {
         return gnome();
+    }
+    if crate::hypr::active() {
+        return crate::hypr::wallpaper();
     }
     plasma()
 }

@@ -1,7 +1,8 @@
 //! The phone as this PC's touchpad and keyboard (`kdeconnect.mousepad.request`), through the
 //! RemoteDesktop portal, as kdeconnectd does on Wayland: every desktop has it (KDE, GNOME, COSMIC),
 //! and the desktop asks the user once; a restore token reopens it after that. X11 sessions
-//! (Cinnamon, MATE, Xfce) have no such portal, so there it's XTEST (`vyoma_companion::x11`).
+//! (Cinnamon, MATE, Xfce) have no such portal, so there it's XTEST (`vyoma_companion::x11`); nor do
+//! Hyprland, Sway and the like, which let a client be a virtual pointer and keyboard (`vyoma_companion::wlr`).
 //!
 //! Characters are pressed as the real key that types them in the desktop's layout, with Shift when
 //! that key needs it: sending keysyms through the portal doubled letters and then lost keys (seen
@@ -224,16 +225,21 @@ struct Session {
     path: OwnedObjectPath,
 }
 
-/// Where the input goes: the portal's session, or the X server.
+/// Where the input goes: the portal's session, the X server, or the compositor's virtual pointer
+/// and keyboard (Hyprland, Sway and the like, which have no RemoteDesktop portal).
 enum Sink {
     Portal(Session),
     X11(vyoma_companion::x11::Input),
+    Wlr(vyoma_companion::wlr::Input),
 }
 
 impl Sink {
     async fn open(token: &std::path::Path) -> Result<Self> {
         if vyoma_companion::x11::active() {
             return Ok(Sink::X11(vyoma_companion::x11::Input::open()?));
+        }
+        if vyoma_companion::wlr::offered() {
+            return Ok(Sink::Wlr(vyoma_companion::wlr::Input::open(None)?));
         }
         Ok(Sink::Portal(Session::open(token).await?))
     }
@@ -246,6 +252,7 @@ impl Sink {
                 let _ = s.call("NotifyPointerAxis", &(&s.path, finish, 0.0f64, 0.0f64)).await;
             }
             Sink::X11(x) => x.scroll_end(),
+            Sink::Wlr(w) => w.scroll_end(),
         }
     }
 }
@@ -258,6 +265,17 @@ fn on_x11(x: &vyoma_companion::x11::Input, a: Act) -> Result<()> {
         Act::Button(b, down) => x.button(b, down),
         Act::Key(code, down) => x.key(code, down),
         Act::Keysym(sym, down) => x.keysym(sym as u32, down),
+    }
+}
+
+/// One act on the compositor's virtual pointer and keyboard.
+fn on_wlr(w: &vyoma_companion::wlr::Input, a: Act) -> Result<()> {
+    match a {
+        Act::Move(dx, dy) => w.relative(dx, dy),
+        Act::Scroll(dx, dy) => w.scroll(dx, dy),
+        Act::Button(b, down) => w.button(b, down),
+        Act::Key(code, down) => w.key(code, down),
+        Act::Keysym(sym, down) => w.keysym(sym as u32, down),
     }
 }
 
@@ -327,6 +345,27 @@ pub async fn run(dir: PathBuf, mut requests: mpsc::UnboundedReceiver<(Instant, S
                 }
                 if let Err(e) = on_x11(x, a) {
                     tracing::info!("input to the X server failed: {e:#}");
+                    session = None;
+                    break;
+                }
+            }
+            continue;
+        }
+        if let Some(Sink::Wlr(w)) = &session {
+            for a in acts {
+                let a = match a {
+                    // Fingers on a touchpad: locked to their way, as one.
+                    Act::Scroll(dx, dy) => {
+                        scrolling = true;
+                        match lock.feed(dx, dy) {
+                            Some((dx, dy)) => Act::Scroll(dx, dy),
+                            None => continue,
+                        }
+                    }
+                    a => a,
+                };
+                if let Err(e) = on_wlr(w, a) {
+                    tracing::info!("input to the compositor failed: {e:#}");
                     session = None;
                     break;
                 }

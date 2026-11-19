@@ -293,6 +293,8 @@ mod tests {
         assert!(should_tell(&last, start + TELL_EVERY));
     }
 
+    // Symlinks need an elevated or developer-mode Windows; the checks are the same code there.
+    #[cfg(unix)]
     #[tokio::test]
     async fn only_plain_paths_inside_home_resolve() {
         let root = std::env::temp_dir().join(format!("vyoma-files-test-{}", std::process::id()));

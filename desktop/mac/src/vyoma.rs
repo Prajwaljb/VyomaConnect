@@ -2,8 +2,8 @@
 //! it's open), what this Mac is (the phone's About this PC), sleep, restart, shut down and log out,
 //! waking the screen, the wallpaper's colours for the phone's background, and the Mac's files
 //! from the phone (browse, open, upload; resumable sends and whole folders), through the shared
-//! `vyoma_core::files` and `xfer`. The phone offers only what [INCOMING] lists (its `PcFeature`s),
-//! so nothing here can leave a tile waiting.
+//! `vyoma_core::files` and `xfer`. The engine routes the phone's requests here through
+//! [crate::platform::Mac], which also says what a Mac offers, so no tile is left waiting.
 //!
 //! macOS's own tools only, with fixed arguments: `system_profiler` and `sw_vers` for what this Mac
 //! is (never its serial number or hardware UUID, which the same report holds), `ioreg` for the
@@ -12,58 +12,26 @@
 //! the wallpaper, whatever format it's in.
 //! Built and tested on CI only; not yet run on a real Mac.
 
-use std::collections::HashMap;
-use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use sysinfo::{Components, CpuRefreshKind, Disks, MemoryRefreshKind, RefreshKind, System};
 use tokio::process::Command as Process;
 use tokio::sync::mpsc;
-use vyoma_core::activity::Activity;
 use vyoma_core::device::Command;
-use vyoma_core::identity::Identity;
-use vyoma_core::link::{Sender, packet};
-use vyoma_core::{activity, files, xfer};
+use vyoma_core::link::Sender;
+use vyoma_core::files;
 
-pub const STATS_REQUEST: &str = "vyoma.stats.request";
-pub const STATS: &str = "vyoma.stats";
-pub const SPECS_REQUEST: &str = "vyoma.specs.request";
-pub const SPECS: &str = "vyoma.specs";
-pub const POWER: &str = "vyoma.pc.power";
-pub const POWERED: &str = "vyoma.pc.powered";
-pub const WAKE: &str = "vyoma.pc.wake";
-pub const WALLPAPER_REQUEST: &str = "vyoma.wallpaper.request";
-pub const WALLPAPER: &str = "vyoma.wallpaper";
-
-pub const FILES_LIST: &str = "vyoma.files.list";
-pub const FILES_GET: &str = "vyoma.files.get";
-pub const FILES_PUT: &str = "vyoma.files.put";
-pub const XFER_BEGIN: &str = "vyoma.xfer.begin";
-pub const XFER_DATA: &str = "vyoma.xfer.data";
-pub const XFER_END: &str = "vyoma.xfer.end";
-
-pub const INCOMING: &[&str] = &[STATS_REQUEST, SPECS_REQUEST, POWER, WAKE, WALLPAPER_REQUEST, FILES_LIST, FILES_GET, FILES_PUT, XFER_BEGIN, XFER_DATA, XFER_END];
 /// Mac → phone just before the agent stops (`why`: stop): the phone stops looking for it.
 pub const LEAVING: &str = "vyoma.pc.leaving";
-pub const OUTGOING: &[&str] = &[LEAVING, STATS, SPECS, POWERED, WALLPAPER, "vyoma.files.listing", "vyoma.files.file", "vyoma.files.saved", "vyoma.xfer.ready", "vyoma.xfer.done", vyoma_core::permits::DENIED];
 
-/// The phone's stats come for this long after it last asked (it asks every few seconds while its
-/// Home is on screen), one sample every [STATS_EVERY]: an unwatched Mac samples nothing.
-const STATS_LEASE: Duration = Duration::from_secs(12);
-const STATS_EVERY: Duration = Duration::from_secs(2);
 /// The wallpaper as the phone's background: a grid this size, which it stretches smoothly.
 const COLS: usize = 4;
 const ROWS: usize = 4;
 /// What a tool gets before it's given up on.
 const TOOL_TIMEOUT: Duration = Duration::from_secs(15);
-
-pub fn takes(kind: &str) -> bool {
-    INCOMING.contains(&kind)
-}
 
 /// A sender whose packets go to phone [id] (through the hub), for the shared payload code.
 pub fn sender(commands: &mpsc::UnboundedSender<Command>, id: &str) -> Sender {
@@ -79,153 +47,9 @@ pub fn sender(commands: &mpsc::UnboundedSender<Command>, id: &str) -> Sender {
     Sender::queue(tx)
 }
 
-/// The phone a packet came from.
-pub struct Phone<'a> {
-    pub name: &'a str,
-    /// Its certificate, which its payload connections must show.
-    pub cert: &'a [u8],
-    /// Where the packet came from: where its payload is fetched.
-    pub from: IpAddr,
-}
-
-/// Each linked phone's stats stream and file transfers, and how to reach it.
-pub struct Vyoma {
-    me: Arc<Identity>,
-    commands: mpsc::UnboundedSender<Command>,
-    activity: Arc<Activity>,
-    streams: HashMap<String, (Arc<Mutex<Instant>>, tokio::task::JoinHandle<()>)>,
-    /// A sender per phone for the shared file code; dropping its transfers cancels them.
-    links: HashMap<String, (Sender, tokio::task::JoinSet<()>)>,
-}
-
-impl Vyoma {
-    pub fn new(me: Arc<Identity>, commands: mpsc::UnboundedSender<Command>, activity: Arc<Activity>) -> Self {
-        files::set_hooks(Box::new(MacFiles));
-        Self { me, commands, activity, streams: HashMap::new(), links: HashMap::new() }
-    }
-
-    /// Phone [id]'s sender and its set of transfers.
-    fn link(&mut self, id: &str) -> (Sender, &mut tokio::task::JoinSet<()>) {
-        let commands = &self.commands;
-        let (sender, tasks) = self.links.entry(id.to_owned()).or_insert_with(|| (sender(commands, id), tokio::task::JoinSet::new()));
-        (sender.clone(), tasks)
-    }
-
-    /// One of [INCOMING] from phone [id]. [wallpaper] is the desktop picture's file, which macOS
-    /// only tells the main thread (see `wallpaper_path`).
-    pub fn handle(&mut self, id: &str, phone: &Phone, p: &Value, wallpaper: Option<PathBuf>) {
-        let reply = {
-            let (commands, id) = (self.commands.clone(), id.to_owned());
-            move |kind: &str, body: Value| {
-                let _ = commands.send(Command::Send(id.clone(), packet(kind, body)));
-            }
-        };
-        match p["type"].as_str().unwrap_or("") {
-            STATS_REQUEST => {
-                let until = Instant::now() + STATS_LEASE;
-                if let Some((lease, task)) = self.streams.get(id)
-                    && !task.is_finished()
-                {
-                    *lease.lock().unwrap() = until;
-                    return;
-                }
-                tracing::info!("{id}: stats while its Home is open");
-                let lease = Arc::new(Mutex::new(until));
-                let task = tokio::spawn(stream_stats(lease.clone(), reply));
-                self.streams.insert(id.to_owned(), (lease, task));
-            }
-            SPECS_REQUEST => {
-                tokio::spawn(async move { reply(SPECS, specs().await) });
-            }
-            POWER => {
-                let action = p["body"]["action"].as_str().unwrap_or_default().to_owned();
-                tracing::info!("{id}: asked this Mac to {action}");
-                // Before it's done: a shut down may not leave time after.
-                let what = match action.as_str() {
-                    "sleep" => Some("Put this Mac to sleep"),
-                    "restart" => Some("Restarted this Mac"),
-                    "shutdown" => Some("Shut down this Mac"),
-                    "logout" => Some("Logged out of this Mac"),
-                    _ => None,
-                };
-                if let Some(what) = what {
-                    self.activity.add(id, phone.name, "power", what);
-                }
-                tokio::spawn(async move {
-                    let mut out = json!({ "action": action });
-                    if let Err(e) = power(&action).await {
-                        tracing::warn!("{action}: {e:#}");
-                        out["error"] = json!(format!("{e:#}"));
-                    }
-                    reply(POWERED, out);
-                });
-            }
-            WAKE => {
-                self.activity.add(id, phone.name, "power", "Woke this Mac's screen");
-                tokio::spawn(async {
-                    if let Err(e) = wake().await {
-                        tracing::warn!("couldn't wake the screen: {e:#}");
-                    }
-                });
-            }
-            WALLPAPER_REQUEST => {
-                tokio::spawn(async move {
-                    let body = match wallpaper {
-                        None => json!({ "error": "couldn't find this Mac's wallpaper" }),
-                        Some(path) => match colors(&path).await {
-                            Ok(c) => json!({ "cols": COLS, "rows": ROWS, "colors": c }),
-                            Err(e) => json!({ "error": format!("{e:#}") }),
-                        },
-                    };
-                    reply(WALLPAPER, body);
-                });
-            }
-            FILES_LIST | FILES_GET | FILES_PUT | XFER_BEGIN | XFER_DATA | XFER_END => self.file(id, phone, p),
-            _ => {}
-        }
-    }
-
-    /// The phone's file traffic, as the Linux app's session runs it.
-    fn file(&mut self, id: &str, phone: &Phone, p: &Value) {
-        let (me, cert, from, name, phone_id, p) = (self.me.clone(), phone.cert.to_vec(), phone.from, phone.name.to_owned(), id.to_owned(), p.clone());
-        let rel = p["body"]["path"].as_str().unwrap_or_default().to_owned();
-        let kind = p["type"].as_str().unwrap_or_default().to_owned();
-        if kind == XFER_END {
-            if let Some((folder, count)) = xfer::end(&name, &p["body"]) {
-                self.activity.add(id, &name, "files", format!("Sent the folder \u{201c}{folder}\u{201d} to this Mac ({count} {})", if count == 1 { "file" } else { "files" }));
-            }
-            return;
-        }
-        let (activity, (sender, tasks)) = (self.activity.clone(), self.link(id));
-        tasks.spawn(async move {
-            let log = |text: String| activity.add(&phone_id, &name, "files", text);
-            let done = match kind.as_str() {
-                FILES_LIST => files::list(&sender, &rel).await,
-                FILES_GET => files::send(&sender, &me, &cert, &rel, &name).await.map(|()| log(format!("Copied \u{201c}{}\u{201d} from this Mac", activity::file_name(&rel)))),
-                FILES_PUT => files::receive(&sender, &me, &cert, from, &p, &name)
-                    .await
-                    .map(|()| log(format!("Saved \u{201c}{}\u{201d} to this Mac", activity::file_name(p["body"]["name"].as_str().unwrap_or("a file"))))),
-                XFER_BEGIN => xfer::begin(&sender, &phone_id, &p["body"]).await,
-                _ => xfer::data(&sender, &me, &cert, from, &name, &p).await.map(|saved| {
-                    if let Some(file) = saved {
-                        log(format!("Sent \u{201c}{file}\u{201d} to this Mac"));
-                    }
-                }),
-            };
-            if let Err(e) = done {
-                tracing::warn!("{phone_id}: {kind}: {e:#}");
-            }
-        });
-    }
-
-    /// Phone [id] went: its stream ends, and its transfers with it (a resumable one picks up
-    /// where it stopped when the phone is back).
-    pub fn gone(&mut self, id: &str) {
-        if let Some((_, task)) = self.streams.remove(id) {
-            task.abort();
-        }
-        self.links.remove(id);
-    }
+/// Has the shared file code say what a Mac says (once; later calls change nothing).
+pub fn install_file_hooks() {
+    files::set_hooks(Box::new(MacFiles));
 }
 
 /// What this Mac says around the phone's file traffic: a notification when the phone copies
@@ -254,37 +78,38 @@ impl files::Hooks for MacFiles {
 
 // ---- stats --------------------------------------------------------------------------------------
 
-async fn stream_stats(lease: Arc<Mutex<Instant>>, reply: impl Fn(&str, Value)) {
-    let (mut sys, mut components) = match (System::new(), Components::new_with_refreshed_list()) {
-        (Ok(s), Ok(c)) => (s, c),
-        _ => return tracing::warn!("no stats on this Mac"),
-    };
-    sys.refresh_cpu_usage();
-    let mut tick = tokio::time::interval(STATS_EVERY);
-    while Instant::now() < *lease.lock().unwrap() {
-        tick.tick().await;
-        sys.refresh_cpu_usage();
-        sys.refresh_memory();
-        components.refresh(false);
-        let temps: Vec<(String, f32)> = components.iter().filter_map(|c| Some((c.label().to_owned(), c.temperature()?))).collect();
-        let mut body = json!({
-            "cpu": round1(sys.global_cpu_usage()),
-            "memUsed": sys.used_memory(),
-            "memTotal": sys.total_memory(),
+/// The phone's Home stats, sampled while it's open.
+pub struct Stats {
+    sys: System,
+    components: Components,
+}
+
+impl Stats {
+    pub fn new() -> Result<Self> {
+        match (System::new(), Components::new_with_refreshed_list()) {
+            (Ok(mut sys), Ok(components)) => {
+                sys.refresh_cpu_usage();
+                Ok(Self { sys, components })
+            }
+            _ => bail!("no stats on this Mac"),
+        }
+    }
+
+    /// The charger and camera are added by the engine.
+    pub async fn sample(&mut self) -> Value {
+        self.sys.refresh_cpu_usage();
+        self.sys.refresh_memory();
+        self.components.refresh(false);
+        let temps: Vec<(String, f32)> = self.components.iter().filter_map(|c| Some((c.label().to_owned(), c.temperature()?))).collect();
+        let body = json!({
+            "cpu": round1(self.sys.global_cpu_usage()),
+            "memUsed": self.sys.used_memory(),
+            "memTotal": self.sys.total_memory(),
             "cpuTemp": cpu_temp(&temps).map(round1),
             "gpu": gpu_busy().await,
             "uptime": System::uptime().ok(),
         });
-        if let Some(ac) = on_ac().await {
-            body["ac"] = json!(ac);
-        }
-        // So the phone can say "Camera unavailable" up front instead of after a tap.
-        let (camera, lid) = crate::camera::state().await;
-        body["camera"] = json!(camera);
-        if !camera {
-            body["cameraLid"] = json!(lid);
-        }
-        reply(STATS, body);
+        body
     }
 }
 
@@ -312,7 +137,7 @@ fn parse_gpu(text: &str) -> Option<u8> {
 }
 
 /// On its charger: `pmset -g batt` says what it's drawing from. None if it won't say.
-async fn on_ac() -> Option<bool> {
+pub async fn on_ac() -> Option<bool> {
     let out = tool("pmset", &["-g", "batt"]).await.ok()?;
     let first = out.lines().next()?;
     first.contains("Now drawing from").then(|| first.contains("'AC Power'"))
@@ -324,7 +149,7 @@ fn round1(v: f32) -> f32 {
 
 // ---- what this Mac is ---------------------------------------------------------------------------
 
-async fn specs() -> Value {
+pub async fn specs() -> Value {
     let profile = tool("system_profiler", &["-json", "SPHardwareDataType", "SPDisplaysDataType"])
         .await
         .ok()
@@ -412,7 +237,7 @@ fn home_disk() -> Option<(u64, u64)> {
 
 /// The phone asked first, so no "are you sure" here: loginwindow's "really" events restart, shut
 /// down and log out at once, asking open apps to quit as the Apple menu does.
-async fn power(action: &str) -> Result<()> {
+pub async fn power(action: &str) -> Result<()> {
     let event = match action {
         "sleep" => {
             tool("pmset", &["sleepnow"]).await.context("this Mac didn't go to sleep")?;
@@ -434,7 +259,7 @@ async fn power(action: &str) -> Result<()> {
 }
 
 /// Lights the screen as a key press would (`caffeinate -u` declares the user active).
-async fn wake() -> Result<()> {
+pub async fn wake() -> Result<()> {
     tool("caffeinate", &["-u", "-t", "2"]).await.map(|_| ())
 }
 
@@ -469,7 +294,7 @@ pub async fn window_wallpaper(path: Option<std::path::PathBuf>) -> Result<Value,
 
 /// The picture averaged down to [COLS]×[ROWS]: sips makes a small PNG of it (it reads HEIC, which
 /// macOS's own wallpapers are), and its blocks are averaged here.
-async fn colors(path: &Path) -> Result<Vec<[u8; 3]>> {
+pub async fn colors(path: &Path) -> Result<Vec<[u8; 3]>> {
     let dir = std::env::temp_dir().join(format!("vyoma-wallpaper-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let small = dir.join("small.png");
@@ -600,11 +425,5 @@ mod tests {
         assert_eq!(c.len(), COLS * ROWS);
         assert_eq!(c[0], [255, 0, 0]);
         assert_eq!(c[3], [0, 0, 255]);
-    }
-
-    #[test]
-    fn lists_what_it_takes() {
-        assert!(INCOMING.iter().all(|k| takes(k)));
-        assert!(!takes("vyoma.screen.request"));
     }
 }

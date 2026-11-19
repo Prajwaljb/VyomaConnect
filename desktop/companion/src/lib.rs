@@ -11,6 +11,7 @@ pub mod ddc;
 pub mod desktop;
 pub mod files;
 pub mod gamepad;
+pub mod hypr;
 pub mod kde;
 pub mod media;
 pub mod mirror;
@@ -18,6 +19,7 @@ pub mod notice;
 pub mod paste;
 pub mod pc;
 pub mod permits;
+pub mod platform;
 pub mod pointer;
 pub mod portal;
 pub mod screen;
@@ -33,6 +35,7 @@ pub mod usb;
 pub mod wallpaper;
 pub mod x11;
 pub mod webcam;
+pub mod wlr;
 pub mod xfer;
 
 // The shared protocol core; `crate::link` and friends keep working for the modules here.

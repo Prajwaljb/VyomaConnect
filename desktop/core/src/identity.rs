@@ -70,6 +70,11 @@ impl Identity {
 
 /// Nothing in here is anyone else's business: the portal tokens let the holder skip Plasma's
 /// "share your screen?" question. Older installs left them readable, so this also corrects those.
+/// (Windows: a folder under the profile is already the user's alone, by its inherited ACL.)
+#[cfg(not(unix))]
+fn lock_down(_dir: &Path) {}
+
+#[cfg(unix)]
 fn lock_down(dir: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let private = |path: &Path, mode| {
@@ -87,13 +92,16 @@ fn lock_down(dir: &Path) {
 /// Writes [data] readable by the user only (0600).
 pub fn write_private(path: &PathBuf, data: &[u8]) -> Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut f = options.open(path)?;
     f.write_all(data)?;
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

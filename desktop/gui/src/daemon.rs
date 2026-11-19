@@ -152,7 +152,7 @@ pub struct Health {
 
 /// Whether a running daemon of [running] is behind this window's [mine]. One that doesn't say is
 /// from before it could; [mine] unreadable proves nothing.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", windows, test))]
 pub fn behind(running: &str, mine: &str) -> bool {
     let parts = |v: &str| v.trim().split('.').map(|p| p.parse::<u64>().ok()).collect::<Option<Vec<_>>>();
     match (parts(running), parts(mine)) {

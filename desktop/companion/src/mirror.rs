@@ -500,20 +500,20 @@ async fn bounds() -> (u32, u32) {
 // ---- The window process ----
 
 #[repr(C)]
-struct RuleNames {
-    rules: *const libc::c_char,
-    model: *const libc::c_char,
-    layout: *const libc::c_char,
-    variant: *const libc::c_char,
-    options: *const libc::c_char,
+pub(crate) struct RuleNames {
+    pub rules: *const libc::c_char,
+    pub model: *const libc::c_char,
+    pub layout: *const libc::c_char,
+    pub variant: *const libc::c_char,
+    pub options: *const libc::c_char,
 }
 
 #[link(name = "xkbcommon")]
 unsafe extern "C" {
     fn xkb_keysym_from_name(name: *const libc::c_char, flags: libc::c_int) -> u32;
     fn xkb_keysym_to_utf32(keysym: u32) -> u32;
-    fn xkb_context_new(flags: libc::c_int) -> *mut libc::c_void;
-    fn xkb_keymap_new_from_names(ctx: *mut libc::c_void, names: *const RuleNames, flags: libc::c_int) -> *mut libc::c_void;
+    pub(crate) fn xkb_context_new(flags: libc::c_int) -> *mut libc::c_void;
+    pub(crate) fn xkb_keymap_new_from_names(ctx: *mut libc::c_void, names: *const RuleNames, flags: libc::c_int) -> *mut libc::c_void;
     fn xkb_keymap_min_keycode(keymap: *mut libc::c_void) -> u32;
     fn xkb_keymap_max_keycode(keymap: *mut libc::c_void) -> u32;
     fn xkb_keymap_key_get_syms_by_level(keymap: *mut libc::c_void, key: u32, layout: u32, level: u32, syms: *mut *const u32) -> libc::c_int;

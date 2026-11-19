@@ -53,6 +53,7 @@ use vyoma_core::link::packet;
 use vyoma_core::trust::TrustStore;
 use vyoma_companion::activity::Activity;
 use vyoma_companion::permits::{Permit, Permits};
+use vyoma_companion::platform::Linux;
 use vyoma_companion::session::{self as features, Host, Phone};
 use zbus::fdo;
 
@@ -705,6 +706,8 @@ struct Desk {
     volume: mpsc::UnboundedSender<(String, Value)>,
     /// What the companion did beside kdeconnectd (screen, files, controller…), served here.
     host: Arc<Host>,
+    /// How this PC does what the engine asks (and its media and walk-away rules).
+    linux: Arc<Linux>,
     /// When each phone's remote input was last refused (see [Permit::Control]).
     refused_input: HashMap<String, std::time::Instant>,
     /// Device id to its running features session, which takes its vyoma.* packets.
@@ -968,10 +971,12 @@ async fn daemon(dir: PathBuf) -> Result<()> {
             None
         }
     };
-    let host = Arc::new(Host { me: me.clone(), media: player, away: Arc::default(), permits, activity });
+    let host = Arc::new(Host { me: me.clone(), permits, activity });
+    let linux = Arc::new(Linux { media: player, away: Arc::default() });
 
     let mut desk = Desk {
         host,
+        linux,
         texts,
         refused_input: HashMap::new(),
         sessions: HashMap::new(),
@@ -1173,13 +1178,13 @@ impl Desk {
 
     /// Serves the device's vyoma.* packets, if it sends any, until it's gone or unpaired.
     fn start_features(&mut self, id: &str, device: &DeviceView) {
-        if self.sessions.contains_key(id) || !device.incoming.iter().any(|t| features::OUTGOING.contains(&t.as_str())) {
+        if self.sessions.contains_key(id) || !device.incoming.iter().any(|t| features::outgoing_all().contains(&t.as_str())) {
             return;
         }
         let (packets, rx) = mpsc::unbounded_channel();
         let (replies, mut out) = mpsc::unbounded_channel();
         let phone = Phone { id: id.to_owned(), name: features::phone_name(&device.name), pinned: device.cert.clone() };
-        let (host, commands, id) = (self.host.clone(), self.commands.clone(), id.to_owned());
+        let (host, linux, commands, id) = (self.host.clone(), self.linux.clone(), self.commands.clone(), id.to_owned());
         self.sessions.insert(id.clone(), packets);
         tokio::spawn(async move {
             let to = id.clone();
@@ -1188,9 +1193,9 @@ impl Desk {
                     let _ = commands.send(Command::Send(to.clone(), p));
                 }
             });
-            host.away.linked(&id, host.media.as_ref()).await;
-            features::serve(host.clone(), phone, vyoma_core::link::Sender::queue(replies), rx).await;
-            host.away.unlinked(&id, host.media.clone());
+            linux.away.linked(&id, linux.media.as_ref()).await;
+            features::serve(linux.clone(), host.clone(), phone, vyoma_core::link::Sender::queue(replies), rx).await;
+            linux.away.unlinked(&id, linux.media.clone());
         });
     }
 
@@ -1712,7 +1717,7 @@ impl Desk {
         for n in steps.close {
             self.notifier.close(n).await;
         }
-        if let Some(media) = &self.host.media {
+        if let Some(media) = &self.linux.media {
             if steps.pause {
                 line.paused = media.pause_all().await;
             }
@@ -2145,8 +2150,8 @@ fn identity(me: &Identity) -> Value {
             "deviceName": host_name(),
             "deviceType": if system::battery().is_some() { "laptop" } else { "desktop" },
             "protocolVersion": 8,
-            "incomingCapabilities": ([plugins::INCOMING, features::INCOMING, &[ECHO]].concat()),
-            "outgoingCapabilities": ([plugins::OUTGOING, features::OUTGOING, &[ECHO_REQUEST]].concat()),
+            "incomingCapabilities": ([plugins::INCOMING, &features::incoming_all(), &[ECHO]].concat()),
+            "outgoingCapabilities": ([plugins::OUTGOING, &features::outgoing_all(), &[ECHO_REQUEST]].concat()),
         }),
     )
 }

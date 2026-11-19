@@ -117,6 +117,16 @@ pub struct Link {
 /// FIN lost on the way): probes after 15 s idle, every 5 s, 3 misses; unacknowledged data gives up
 /// after 30 s. Without it a half-open link looked alive for good, so the companion never redialled
 /// and the dashboard lost its gauges until a restart.
+#[cfg(windows)]
+fn keepalive(tcp: &TcpStream) {
+    // Windows has no user timeout for unsent data; the probes stand.
+    let probes = socket2::TcpKeepalive::new().with_time(std::time::Duration::from_secs(15)).with_interval(std::time::Duration::from_secs(5)).with_retries(3);
+    if let Err(e) = socket2::SockRef::from(tcp).set_tcp_keepalive(&probes) {
+        tracing::debug!("no keepalive: {e}");
+    }
+}
+
+#[cfg(unix)]
 fn keepalive(tcp: &TcpStream) {
     use std::os::fd::AsRawFd;
     let fd = tcp.as_raw_fd();

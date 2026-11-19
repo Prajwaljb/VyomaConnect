@@ -1,6 +1,7 @@
 //! The daemon over a local socket (macOS, where there's no session bus): `vyoma-mac` listens on
 //! `~/Library/Application Support/Vyoma/control.sock` (or `VYOMA_SOCKET`), readable by this user
-//! alone. One JSON line per request, `{"method": "Phones", "args": [...]}`, and one per reply,
+//! alone. On Windows the same lines go over the agent's named pipe, `\\.\pipe\vyoma-<user>`
+//! (or `VYOMA_PIPE`), which only this user can open. One JSON line per request, `{"method": "Phones", "args": [...]}`, and one per reply,
 //! `{"ok": value}` or `{"error": "words for the person"}`. The methods are the D-Bus interface's
 //! names (`Pair`, `SendFiles`, `PairingCode`…), with JSON where D-Bus carries JSON in a string,
 //! except `Phones`: every device's details at once, each with its `id` and `permits`.
@@ -9,7 +10,8 @@
 //! `{"event": "SetupDone", "ok"}` and `{"event": "FirewallDone", "ok"}`.
 
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream as Stream;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -23,7 +25,54 @@ const NOT_RUNNING: &str = "Vyoma isn't running here right now. It restarts by it
 /// A call the daemon takes longer than this over has hung.
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[cfg(windows)]
+type Stream = std::fs::File;
+
+/// A connection to the daemon at [path].
+fn open(path: &std::path::Path) -> std::io::Result<Stream> {
+    #[cfg(unix)]
+    {
+        Stream::connect(path)
+    }
+    #[cfg(windows)]
+    {
+        // Every instance of the pipe taken (231, ERROR_PIPE_BUSY): the agent makes the next at
+        // once, so a moment's wait finds it.
+        for _ in 0..50 {
+            match std::fs::OpenOptions::new().read(true).write(true).open(path) {
+                Err(e) if e.raw_os_error() == Some(231) => std::thread::sleep(Duration::from_millis(20)),
+                other => return other,
+            }
+        }
+        std::fs::OpenOptions::new().read(true).write(true).open(path)
+    }
+}
+
+/// A call that takes longer than [CALL_TIMEOUT] has hung (Windows pipes opened as files have no
+/// read timeout: there the agent's own answers bound it).
+fn time_limit(stream: &Stream) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return stream.set_read_timeout(Some(CALL_TIMEOUT));
+    #[cfg(windows)]
+    {
+        let _ = (stream, CALL_TIMEOUT);
+        Ok(())
+    }
+}
+
+/// Where the agent listens: its named pipe, the window works it out as the agent does
+/// (`windows/src/control.rs`).
+#[cfg(windows)]
+pub fn path() -> PathBuf {
+    if let Some(p) = std::env::var_os("VYOMA_PIPE") {
+        return PathBuf::from(p);
+    }
+    let user: String = std::env::var("USERNAME").unwrap_or_default().chars().filter(|c| c.is_alphanumeric() || "-_.".contains(*c)).collect();
+    PathBuf::from(format!(r"\\.\pipe\vyoma-{user}"))
+}
+
 // Linux reaches its daemon over D-Bus; this builds there for its tests.
+#[cfg(not(windows))]
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 pub fn path() -> PathBuf {
     if let Some(p) = std::env::var_os("VYOMA_SOCKET") {
@@ -35,7 +84,7 @@ pub fn path() -> PathBuf {
 
 pub struct SocketDaemon {
     path: PathBuf,
-    events: Mutex<Option<BufReader<UnixStream>>>,
+    events: Mutex<Option<BufReader<Stream>>>,
 }
 
 impl SocketDaemon {
@@ -46,13 +95,13 @@ impl SocketDaemon {
 
     pub fn at(path: PathBuf) -> Result<Self> {
         // Only to know it's there now; each call opens its own connection.
-        UnixStream::connect(&path).map_err(|_| anyhow!(NOT_RUNNING))?;
+        open(&path).map_err(|_| anyhow!(NOT_RUNNING))?;
         Ok(Self { path, events: Mutex::new(None) })
     }
 
     fn call(&self, method: &str, args: Value) -> Result<Value> {
-        let mut stream = UnixStream::connect(&self.path).map_err(|_| anyhow!(NOT_RUNNING))?;
-        stream.set_read_timeout(Some(CALL_TIMEOUT))?;
+        let mut stream = open(&self.path).map_err(|_| anyhow!(NOT_RUNNING))?;
+        time_limit(&stream)?;
         writeln!(stream, "{}", json!({ "method": method, "args": args }))?;
         let mut line = String::new();
         BufReader::new(stream).read_line(&mut line).map_err(|_| anyhow!("Vyoma didn't answer in time. Try again"))?;
@@ -225,7 +274,7 @@ impl Daemon for SocketDaemon {
     fn next_event(&self) -> Result<Event> {
         let mut events = self.events.lock().unwrap();
         if events.is_none() {
-            let mut stream = UnixStream::connect(&self.path).map_err(|_| anyhow!(NOT_RUNNING))?;
+            let mut stream = open(&self.path).map_err(|_| anyhow!(NOT_RUNNING))?;
             writeln!(stream, "{}", json!({ "method": "Events", "args": [] }))?;
             *events = Some(BufReader::new(stream));
         }
@@ -243,7 +292,7 @@ impl Daemon for SocketDaemon {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::net::UnixListener;

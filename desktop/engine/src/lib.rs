@@ -1,0 +1,10 @@
+//! Vyoma's PC side, once for every platform. The engine knows what each phone request means, who may
+//! make it (permits), what to remember (activity), which tasks it starts and when they end, and what
+//! to tell the phone this PC offers. How a thing is done on this computer (take a screenshot, move the
+//! pointer, read the wallpaper) is a [Platform]'s: one per OS, each choosing among the ways its
+//! desktops allow.
+
+pub mod platform;
+pub mod session;
+
+pub use platform::{Cx, Feature, GamepadInput, Handoff, Platform, Sampler, Started};

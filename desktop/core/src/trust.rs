@@ -105,6 +105,7 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
@@ -121,8 +122,8 @@ mod tests {
         let again = TrustStore::open(&dir).unwrap();
         assert_eq!(again.get("phone_one_0123456"), Some(&phone));
         assert!(again.get("phone_two_0123456").is_none());
-        let mode = std::fs::metadata(dir.join("trusted.json")).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
+        #[cfg(unix)]
+        assert_eq!(std::fs::metadata(dir.join("trusted.json")).unwrap().permissions().mode() & 0o777, 0o600);
 
         std::fs::write(dir.join("trusted.json"), "{oops").unwrap();
         assert!(TrustStore::open(&dir).is_err());

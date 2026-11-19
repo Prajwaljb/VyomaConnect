@@ -277,6 +277,7 @@ pub fn pick(devices: &[(String, String, bool, bool)]) -> Pick {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn a_folder_goes_as_its_files_with_where_each_was() {
         let root = std::env::temp_dir().join(format!("vyoma-expand-{}", std::process::id()));

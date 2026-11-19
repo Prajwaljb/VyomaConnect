@@ -88,6 +88,7 @@ fn message(timestamp: i64, phone_cert: &[u8], pc_cert: &[u8]) -> Vec<u8> {
 /// This PC's addresses a phone on the same network can dial, best first: IPv4 on interfaces that
 /// are up, private (home and office) networks before others. Not loopback, and not containers',
 /// VMs' or VPNs' own interfaces, which a phone can't reach. At most [MAX_ADDRESSES], to keep the code small.
+#[cfg(unix)]
 pub fn local_addresses() -> Vec<std::net::IpAddr> {
     let mut found: Vec<(bool, std::net::Ipv4Addr)> = Vec::new();
     let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
@@ -118,8 +119,69 @@ pub fn local_addresses() -> Vec<std::net::IpAddr> {
     found.into_iter().take(MAX_ADDRESSES).map(|(_, ip)| ip.into()).collect()
 }
 
+/// Windows: the adapters that are up, by their own names (Hyper-V's, VMs' and VPNs' skipped).
+#[cfg(windows)]
+pub fn local_addresses() -> Vec<std::net::IpAddr> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST, GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH};
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
+    const UP: i32 = 1; // IfOperStatusUp
+    const LOOPBACK: u32 = 24; // IF_TYPE_SOFTWARE_LOOPBACK
+    let wide = |p: *const u16| {
+        // SAFETY: a NUL-terminated UTF-16 string the adapter list owns.
+        unsafe { (!p.is_null()).then(|| String::from_utf16_lossy(std::slice::from_raw_parts(p, (0..).take_while(|&i| *p.add(i) != 0).count()))).unwrap_or_default() }
+    };
+    let mut size: u32 = 16 * 1024;
+    let mut buf: Vec<u64> = Vec::new();
+    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    for _ in 0..3 {
+        buf.resize((size as usize).div_ceil(8), 0);
+        // SAFETY: the buffer is [size] bytes, aligned for the structures written into it.
+        match unsafe { GetAdaptersAddresses(AF_INET as u32, flags, std::ptr::null(), buf.as_mut_ptr().cast(), &mut size) } {
+            0 => break,
+            111 => continue, // ERROR_BUFFER_OVERFLOW: [size] says how much
+            _ => return Vec::new(),
+        }
+    }
+    let mut found: Vec<(bool, std::net::Ipv4Addr)> = Vec::new();
+    let mut at = buf.as_ptr() as *const IP_ADAPTER_ADDRESSES_LH;
+    // SAFETY: walking the list GetAdaptersAddresses wrote, read-only, while [buf] lives.
+    unsafe {
+        while let Some(a) = at.as_ref() {
+            at = a.Next;
+            if a.OperStatus != UP || a.IfType == LOOPBACK || windows_adapter_skipped(&wide(a.FriendlyName), &wide(a.Description)) {
+                continue;
+            }
+            let mut u = a.FirstUnicastAddress;
+            while let Some(one) = u.as_ref() {
+                u = one.Next;
+                let sa = one.Address.lpSockaddr;
+                if sa.is_null() || (*sa).sa_family != AF_INET {
+                    continue;
+                }
+                let sin = &*(sa as *const SOCKADDR_IN);
+                let ip = std::net::Ipv4Addr::from(u32::from_be(sin.sin_addr.S_un.S_addr));
+                if !ip.is_link_local() && !ip.is_loopback() && !found.iter().any(|(_, f)| *f == ip) {
+                    found.push((ip.is_private(), ip));
+                }
+            }
+        }
+    }
+    found.sort_by_key(|(private, _)| !private);
+    found.into_iter().take(MAX_ADDRESSES).map(|(_, ip)| ip.into()).collect()
+}
+
+/// Windows names its virtual adapters in words: Hyper-V's and WSL's "vEthernet (...)", VirtualBox's
+/// and VMware's, and VPNs' (their descriptions say TAP, WireGuard, Tailscale, ZeroTier...).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_adapter_skipped(name: &str, description: &str) -> bool {
+    const WORDS: &[&str] = &["vethernet", "hyper-v", "virtualbox", "vmware", "virtual", "tap-", "wireguard", "tailscale", "zerotier", "openvpn", "wintun", "vpn", "bluetooth"];
+    let all = format!("{name} {description}").to_lowercase();
+    WORDS.iter().any(|w| all.contains(w))
+}
+
 pub const MAX_ADDRESSES: usize = 3;
 /// Interfaces of containers, VMs and VPNs, by name.
+#[cfg(unix)]
 const SKIP: &[&str] = &["docker", "br-", "veth", "virbr", "vmnet", "vboxnet", "lxc", "lxd", "podman", "cni", "flannel", "tun", "tap", "wg", "tailscale", "zt"];
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -170,4 +232,14 @@ mod tests {
         // Worked out apart (Python's hmac), and checked by the phone's QrInviteTest too.
         assert_eq!(proof(&[7u8; 16], 1_700_000_000, b"phone", b"pc"), "1b9f3d973c838fe866cb806b72ef20448ccb55c320a514b35e9e03808d00069b");
     }
+
+    #[test]
+    fn windows_virtual_adapters_are_skipped() {
+        assert!(windows_adapter_skipped("vEthernet (WSL)", "Hyper-V Virtual Ethernet Adapter"));
+        assert!(windows_adapter_skipped("Ethernet 3", "TAP-Windows Adapter V9"));
+        assert!(windows_adapter_skipped("Tailscale", "Tailscale Tunnel"));
+        assert!(!windows_adapter_skipped("Wi-Fi", "Intel(R) Wi-Fi 6 AX201 160MHz"));
+        assert!(!windows_adapter_skipped("Ethernet", "Realtek PCIe GbE Family Controller"));
+    }
+
 }

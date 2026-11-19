@@ -62,6 +62,8 @@ impl Need {
         match self.probe {
             Probe::Tool("wl-copy") | Probe::Gst("pipewire") => !x11,
             Probe::Gst("ximagesrc") => x11,
+            // Screenshots where there's no Spectacle and no GNOME: wlroots-style compositors (Hyprland, Sway...).
+            Probe::Tool("grim") => !x11 && !crate::desktop::is_gnome() && !on_path("spectacle"),
             _ => true,
         }
     }
@@ -104,6 +106,7 @@ const NEEDS: &[Need] = &[
     need("volume", Probe::Tool("wpctl"), "wireplumber", "wireplumber", "wireplumber"),
     need("phone's sound on this PC", Probe::Tool("pw-dump"), "pipewire", "pipewire-bin", "pipewire-utils"),
     need("clipboard", Probe::Tool("wl-copy"), "wl-clipboard", "wl-clipboard", "wl-clipboard"),
+    need("screenshots", Probe::Tool("grim"), "grim", "grim", "grim"),
     need("notifications", Probe::Tool("notify-send"), "libnotify", "libnotify-bin", "libnotify"),
     need("opening files", Probe::Tool("xdg-open"), "xdg-utils", "xdg-utils", "xdg-utils"),
     need("updates", Probe::Tool("curl"), "curl", "curl", "curl"),

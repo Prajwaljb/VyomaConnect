@@ -14,48 +14,30 @@
 //! ends, Escape or a right click is Back, a middle click Home.
 //! Built and tested on CI only; not yet run on a real Mac.
 
-use std::collections::HashMap;
 use std::net::IpAddr;
 use std::process::Stdio;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::sync::mpsc;
-use vyoma_core::device::Command;
 use vyoma_core::identity::Identity;
 use vyoma_core::link::{Sender, packet};
 use vyoma_core::payload;
 
-use crate::vyoma::Phone;
 
-pub const MIRROR: &str = "vyoma.mirror";
-pub const AUDIO: &str = "vyoma.mirror.audio";
-pub const COPY: &str = "vyoma.mirror.copy";
-pub const VOLUME: &str = "vyoma.mirror.volume";
-pub const INPUT: &str = "vyoma.mirror.input";
-pub const STATE: &str = "vyoma.mirror.state";
+pub use vyoma_core::mirror::{INPUT, PASTE_MAX, STATE};
 
-pub const INCOMING: &[&str] = &[MIRROR, AUDIO, COPY, VOLUME];
-pub const OUTGOING: &[&str] = &[INPUT, STATE];
 
 pub const WINDOW_ARG: &str = "--mirror-window";
 
-/// Most text one paste types into the phone.
-const PASTE_MAX: usize = 20_000;
-
-pub fn takes(kind: &str) -> bool {
-    INCOMING.contains(&kind)
-}
 
 async fn state(sender: &Sender, body: Value) {
     let _ = sender.send(&packet(STATE, body)).await;
 }
 
 /// Shows the phone's screen until the phone stops or the window is closed.
-async fn show(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr, p: &Value, name: &str) -> Result<()> {
+pub async fn show(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr, p: &Value, name: &str) -> Result<()> {
     let mut input = payload::fetch_stream(me, pinned, phone, p).await?;
     let child = tokio::process::Command::new(std::env::current_exe()?)
         .args([WINDOW_ARG, name])
@@ -107,115 +89,13 @@ async fn show(sender: &Sender, me: &Identity, pinned: &[u8], phone: IpAddr, p: &
 }
 
 /// The phone's volume keys while its sound plays here: the Mac's output, a step a press.
-async fn volume(up: bool) {
+pub async fn volume(up: bool) {
     let script = if up {
         "set volume output volume ((output volume of (get volume settings)) + 6)"
     } else {
         "set volume output volume ((output volume of (get volume settings)) - 6)"
     };
     let _ = tokio::process::Command::new("osascript").args(["-e", script]).status().await;
-}
-
-/// One phone's window and sound.
-#[derive(Default)]
-struct Mirroring {
-    window: Option<tokio::task::JoinHandle<()>>,
-    sound: Option<tokio::task::JoinHandle<()>>,
-}
-
-/// Every phone's mirror.
-pub struct Mirrors {
-    me: Arc<Identity>,
-    commands: mpsc::UnboundedSender<Command>,
-    phones: HashMap<String, Mirroring>,
-}
-
-impl Mirrors {
-    pub fn new(me: Arc<Identity>, commands: mpsc::UnboundedSender<Command>) -> Self {
-        Self { me, commands, phones: HashMap::new() }
-    }
-
-    pub fn handle(&mut self, id: &str, phone: &Phone, p: &Value) {
-        let (me, pinned, name, from) = (self.me.clone(), phone.cert.to_vec(), phone.name.to_owned(), phone.from);
-        let m = self.phones.entry(id.to_owned()).or_default();
-        match p["type"].as_str().unwrap_or("") {
-            MIRROR => {
-                // A new stream (the phone restarted it, or turned) replaces the window.
-                if let Some(t) = m.window.take() {
-                    t.abort();
-                }
-                let (sender, p) = (crate::vyoma::sender(&self.commands, id), p.clone());
-                m.window = Some(tokio::spawn(async move {
-                    if let Err(e) = show(&sender, &me, &pinned, from, &p, &name).await {
-                        tracing::warn!("{name}: mirror: {e:#}");
-                    }
-                }));
-            }
-            AUDIO => {
-                if let Some(t) = m.sound.take() {
-                    t.abort();
-                }
-                let p = p.clone();
-                m.sound = Some(tokio::spawn(async move {
-                    if let Err(e) = sound::play(&me, &pinned, from, &p, &name).await {
-                        tracing::warn!("{name}: phone sound: {e:#}");
-                    }
-                }));
-            }
-            COPY => {
-                if let Some(text) = p["body"]["text"].as_str() {
-                    let text = text.to_owned();
-                    tokio::spawn(async move {
-                        let _ = crate::mac::set_clipboard(&text).await;
-                    });
-                }
-            }
-            VOLUME => {
-                tokio::spawn(volume(p["body"]["up"].as_bool().unwrap_or(true)));
-            }
-            _ => {}
-        }
-    }
-
-    pub fn gone(&mut self, id: &str) {
-        if let Some(m) = self.phones.remove(id) {
-            for t in [m.window, m.sound].into_iter().flatten() {
-                t.abort();
-            }
-        }
-    }
-}
-
-/// Splits an Annex-B stream into NAL units (without their start codes): the whole ones in [buf],
-/// and how much of it they took. The last unit stays until the next start code shows it's whole.
-pub fn split_nals(buf: &[u8]) -> (Vec<&[u8]>, usize) {
-    let mut starts = Vec::new();
-    let mut i = 0;
-    while i + 3 <= buf.len() {
-        if buf[i] == 0 && buf[i + 1] == 0 && buf[i + 2] == 1 {
-            starts.push(i + 3);
-            i += 3;
-        } else {
-            i += 1;
-        }
-    }
-    let mut nals = Vec::new();
-    for pair in starts.windows(2) {
-        let (from, next) = (pair[0], pair[1] - 3);
-        // A 4-byte start code's leading zero belongs to it, not to the unit before.
-        let end = if next > from && buf[next - 1] == 0 { next - 1 } else { next };
-        if end > from {
-            nals.push(&buf[from..end]);
-        }
-    }
-    let used = match starts.last() {
-        Some(&last) => {
-            let at = last - 3;
-            if at > 0 && buf[at - 1] == 0 { at - 1 } else { at }
-        }
-        None => buf.len().saturating_sub(3),
-    };
-    (nals, used)
 }
 
 /// What a key press in the window means on the phone. [code] is the Mac's virtual key code,
@@ -509,7 +389,7 @@ mod view {
                 Ok(n) => n,
             };
             buf.extend_from_slice(&chunk[..n]);
-            let (nals, used) = super::split_nals(&buf);
+            let (nals, used) = vyoma_core::mirror::split_nals(&buf);
             for nal in nals {
                 match nal[0] & 0x1f {
                     7 => {
@@ -624,110 +504,21 @@ mod view {
 }
 
 /// The phone's sound: s16le PCM in 10 ms pieces through a small jitter buffer into an AudioQueue.
-mod sound {
-    use std::collections::VecDeque;
+pub mod sound {
     use std::net::IpAddr;
-    use std::sync::{Arc, Mutex};
-    use std::time::{Duration, Instant};
 
     use anyhow::Result;
     use serde_json::Value;
-    use tokio::io::AsyncReadExt;
     use vyoma_core::identity::Identity;
-    use vyoma_core::payload;
-
-    /// Pieces to have in hand before playing (absorbs the network's bursts) ...
-    const TARGET: usize = 4;
-    /// ... judged by the fewest there were over this long ...
-    const WINDOW: Duration = Duration::from_secs(2);
-    /// ... and never more than this (a stall that then floods in).
-    const MAX: usize = 30;
-
-    /// Sound waiting for the output.
-    #[derive(Default)]
-    pub struct Queue {
-        pieces: VecDeque<Vec<u8>>,
-        priming: bool,
-        low: usize,
-        since: Option<Instant>,
-    }
-
-    impl Queue {
-        pub fn push(&mut self, piece: Vec<u8>) {
-            self.pieces.push_back(piece);
-            while self.pieces.len() > MAX {
-                self.pieces.pop_front();
-            }
-        }
-
-        /// Fills [out] with sound, silence where there's none yet; skips ahead if it has been
-        /// more than [TARGET] behind all [WINDOW] long (the phone's clock runs a little fast).
-        pub fn fill(&mut self, out: &mut [u8]) {
-            let mut at = 0;
-            if self.priming && self.pieces.len() < TARGET {
-                out.fill(0);
-                return;
-            }
-            self.priming = false;
-            let since = *self.since.get_or_insert_with(Instant::now);
-            self.low = if self.low == 0 { self.pieces.len() } else { self.low.min(self.pieces.len()) };
-            if since.elapsed() >= WINDOW {
-                for _ in 0..self.low.saturating_sub(TARGET).min(3) {
-                    self.pieces.pop_front();
-                }
-                (self.low, self.since) = (0, Some(Instant::now()));
-            }
-            while at < out.len() {
-                let Some(mut piece) = self.pieces.pop_front() else {
-                    // Ran dry: wait for the target again.
-                    out[at..].fill(0);
-                    self.priming = true;
-                    return;
-                };
-                let n = piece.len().min(out.len() - at);
-                out[at..at + n].copy_from_slice(&piece[..n]);
-                at += n;
-                if n < piece.len() {
-                    piece.drain(..n);
-                    self.pieces.push_front(piece);
-                }
-            }
-        }
-    }
-
-    pub type Shared = Arc<Mutex<Queue>>;
+    use vyoma_core::mirror::{self, Queue, Sound};
 
     /// Plays the phone's sound until it stops.
     pub async fn play(me: &Identity, pinned: &[u8], phone: IpAddr, p: &Value, name: &str) -> Result<()> {
-        let body = &p["body"];
-        let rate = body["rate"].as_u64().unwrap_or(48_000).clamp(8_000, 96_000) as u32;
-        let channels = body["channels"].as_u64().unwrap_or(2).clamp(1, 2) as u32;
-        if body["codec"].is_string() {
-            anyhow::bail!("only PCM here");
-        }
-        let mut input = payload::fetch_stream(me, pinned, phone, p).await?;
-        let queue: Shared = Arc::new(Mutex::new(Queue { priming: true, ..Default::default() }));
-        let _output = output::Output::start(rate, channels, queue.clone())?;
+        let sound = Sound::of(&p["body"])?;
+        let queue = Queue::shared();
+        let _output = output::Output::start(sound.rate, sound.channels, queue.clone())?;
         tracing::info!("{name}: playing the phone's sound");
-        let piece = (rate / 100 * 2 * channels) as usize;
-        let mut buf: Vec<u8> = Vec::with_capacity(piece * 4);
-        let mut chunk = vec![0u8; 16 * 1024];
-        loop {
-            let n = input.read(&mut chunk).await?;
-            if n == 0 {
-                break;
-            }
-            buf.extend_from_slice(&chunk[..n]);
-            let whole = buf.len() - buf.len() % piece;
-            if whole > 0 {
-                let mut q = queue.lock().unwrap();
-                for p in buf[..whole].chunks(piece) {
-                    q.push(p.to_vec());
-                }
-                drop(q);
-                buf.drain(..whole);
-            }
-        }
+        mirror::receive(me, pinned, phone, p, sound, &queue).await?;
         tracing::info!("{name}: phone's sound stopped");
         Ok(())
     }
@@ -737,7 +528,7 @@ mod sound {
         pub struct Output;
 
         impl Output {
-            pub fn start(_: u32, _: u32, _: super::Shared) -> anyhow::Result<Self> {
+            pub fn start(_: u32, _: u32, _: vyoma_core::mirror::Shared) -> anyhow::Result<Self> {
                 Ok(Output)
             }
         }
@@ -798,7 +589,7 @@ mod sound {
             // SAFETY: user is the Shared leaked in [Output::start], freed after the queue's disposed;
             // the buffer is one of ours, handed back by the queue.
             unsafe {
-                let shared = &*(user as *const std::sync::Mutex<super::Queue>);
+                let shared = &*(user as *const std::sync::Mutex<vyoma_core::mirror::Queue>);
                 let b = &mut *buffer;
                 let out = std::slice::from_raw_parts_mut(b.data as *mut u8, b.capacity as usize);
                 if let Ok(mut q) = shared.lock() {
@@ -813,14 +604,14 @@ mod sound {
 
         pub struct Output {
             queue: AQ,
-            user: *const std::sync::Mutex<super::Queue>,
+            user: *const std::sync::Mutex<vyoma_core::mirror::Queue>,
         }
 
         // SAFETY: the queue is only disposed of (from whichever thread drops it), which AudioToolbox allows.
         unsafe impl Send for Output {}
 
         impl Output {
-            pub fn start(rate: u32, channels: u32, shared: super::Shared) -> Result<Self> {
+            pub fn start(rate: u32, channels: u32, shared: vyoma_core::mirror::Shared) -> Result<Self> {
                 let format = Format {
                     sample_rate: rate as f64,
                     format_id: LPCM,
@@ -867,49 +658,11 @@ mod sound {
             }
         }
     }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn waits_for_a_few_pieces_then_plays_them_in_order() {
-            let mut q = Queue { priming: true, ..Default::default() };
-            let mut out = [9u8; 4];
-            q.push(vec![1, 1]);
-            q.fill(&mut out);
-            assert_eq!(out, [0; 4], "silence until there's some in hand");
-            for n in 2..=4 {
-                q.push(vec![n, n]);
-            }
-            q.fill(&mut out);
-            assert_eq!(out, [1, 1, 2, 2]);
-            q.fill(&mut out);
-            assert_eq!(out, [3, 3, 4, 4]);
-            q.fill(&mut out);
-            assert_eq!(out, [0; 4], "ran dry");
-            for n in 0..40 {
-                q.push(vec![n, n]);
-            }
-            assert_eq!(q.pieces.len(), MAX, "a flood is cut to the newest");
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn splits_annex_b_into_whole_units() {
-        let stream = [0, 0, 0, 1, 0x67, 1, 2, 0, 0, 1, 0x68, 3, 0, 0, 0, 1, 0x65, 4, 5, 6];
-        let (nals, used) = split_nals(&stream);
-        assert_eq!(nals, [&[0x67, 1, 2][..], &[0x68, 3]]);
-        assert_eq!(&stream[used..], &[0, 0, 0, 1, 0x65, 4, 5, 6], "the last unit waits for the next start code");
-        let (none, used) = split_nals(&[1, 2, 3, 4, 5]);
-        assert!(none.is_empty());
-        assert_eq!(used, 2, "keeps what could be the start of a start code");
-    }
 
     #[test]
     fn mac_keys_as_a_mac_user_expects() {

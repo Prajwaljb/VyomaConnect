@@ -6,6 +6,7 @@ license = "GPL-3.0-or-later"
 
 [dependencies]
 vyoma-core = { path = "../core" }
+vyoma-engine = { path = "../engine" }
 anyhow = "1.0.104"
 base64 = "0.23"
 futures-util = { version = "0.3", default-features = false }
@@ -31,6 +32,10 @@ zbus = { version = "6", default-features = false, features = ["tokio", "service"
 gstreamer = { version = "0.25", features = ["v1_22"] }
 gstreamer-video = { version = "0.25", features = ["v1_22"] }
 gstreamer-gl = { version = "0.25", features = ["v1_22"] }
+# The pointer and keyboard on compositors without a RemoteDesktop portal (Hyprland, Sway...): MIT.
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
 x11rb = { version = "0.13", features = ["xtest", "xfixes", "randr", "shape", "dpms"] }
 
 [profile.release]

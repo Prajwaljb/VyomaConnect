@@ -18,31 +18,19 @@
 // The capture itself is macOS's; the framing and its tests run everywhere.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
-use vyoma_core::activity::Activity;
-use vyoma_core::device::Command;
 use vyoma_core::identity::Identity;
 use vyoma_core::link::{Sender, packet};
 use vyoma_core::payload;
 
-use crate::vyoma::Phone;
 
-pub const SCREENSHOT_REQUEST: &str = "vyoma.screenshot.request";
 pub const SCREENSHOT: &str = "vyoma.screenshot";
-pub const SCREEN_REQUEST: &str = "vyoma.screen.request";
-pub const SCREEN_STOP: &str = "vyoma.screen.stop";
-pub const SCREEN_INPUT: &str = "vyoma.screen.input";
-pub const SCREEN_TOUCH: &str = "vyoma.screen.touch";
 pub const SCREEN: &str = "vyoma.screen";
 
-pub const INCOMING: &[&str] = &[SCREENSHOT_REQUEST, SCREEN_REQUEST, SCREEN_STOP, SCREEN_INPUT, SCREEN_TOUCH];
-pub const OUTGOING: &[&str] = &[SCREENSHOT, SCREEN];
 
 /// Where macOS lets apps see the screen.
 pub const SCREEN_RECORDING: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
@@ -62,10 +50,6 @@ const MAX_PENDING: usize = 256 * 1024;
 /// Small windows from the encoder to the socket, so a slow link holds frames back at the start.
 const RELAY_BYTES: usize = 16 * 1024;
 const STAMP_MAGIC: &[u8; 4] = b"VYTS";
-
-pub fn takes(kind: &str) -> bool {
-    INCOMING.contains(&kind)
-}
 
 /// The rate a phone asked for, within what the cast allows.
 pub fn fps_for(asked: Option<u64>) -> u32 {
@@ -128,7 +112,7 @@ async fn capture() -> Result<Vec<u8>> {
     }
 }
 
-async fn screenshot(sender: &Sender, me: &Identity, pinned: &[u8], phone: &str) -> Result<()> {
+pub async fn screenshot(sender: &Sender, me: &Identity, pinned: &[u8], phone: &str) -> Result<()> {
     let image = match capture().await {
         Ok(b) => b,
         Err(e) => {
@@ -156,7 +140,7 @@ pub fn allowed(ask: bool) -> bool {
 
 /// Casts until the phone hangs up or the stream fails. Failures before it starts reach the phone
 /// as an error, so it never waits on a spinner.
-async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, fps: u32, inputs: mpsc::UnboundedReceiver<Value>) -> Result<()> {
+pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, fps: u32, inputs: mpsc::UnboundedReceiver<Value>) -> Result<()> {
     #[cfg(target_os = "macos")]
     let started = tokio::task::spawn_blocking(move || cast::Cast::start(fps)).await.context("the cast didn't start")?;
     #[cfg(not(target_os = "macos"))]
@@ -235,134 +219,6 @@ async fn follow(display: u32, mut inputs: mpsc::UnboundedReceiver<Value>) {
     }
     if held {
         let _ = pointer.handle(&[crate::input::Act::Button(crate::input::Button::Left, false)]);
-    }
-}
-
-/// One phone's screenshot and cast, and the touches for the cast.
-#[derive(Default)]
-struct Watching {
-    shot: Option<tokio::task::JoinHandle<()>>,
-    cast: Option<tokio::task::JoinHandle<()>>,
-    inputs: Option<mpsc::UnboundedSender<Value>>,
-    touch: Option<tokio::task::JoinHandle<()>>,
-}
-
-impl Watching {
-    /// Stops everything; whether something was running.
-    fn stop(&mut self) -> bool {
-        self.inputs = None;
-        let mut busy = false;
-        for t in [self.shot.take(), self.cast.take(), self.touch.take()].into_iter().flatten() {
-            busy |= !t.is_finished();
-            t.abort();
-        }
-        busy
-    }
-}
-
-/// Every phone's screenshots and casts.
-pub struct Screens {
-    me: Arc<Identity>,
-    commands: mpsc::UnboundedSender<Command>,
-    activity: Arc<Activity>,
-    phones: HashMap<String, Watching>,
-}
-
-impl Screens {
-    pub fn new(me: Arc<Identity>, commands: mpsc::UnboundedSender<Command>, activity: Arc<Activity>) -> Self {
-        Self { me, commands, activity, phones: HashMap::new() }
-    }
-
-    pub fn handle(&mut self, id: &str, phone: &Phone, p: &Value) {
-        let sender = crate::vyoma::sender(&self.commands, id);
-        let (me, pinned, name, from) = (self.me.clone(), phone.cert.to_vec(), phone.name.to_owned(), phone.from);
-        let log = {
-            let (activity, id, name) = (self.activity.clone(), id.to_owned(), name.clone());
-            move |kind: &'static str, text: &str| activity.add(&id, &name, kind, text)
-        };
-        let w = self.phones.entry(id.to_owned()).or_default();
-        match p["type"].as_str().unwrap_or("") {
-            SCREENSHOT_REQUEST => {
-                // One at a time; taps while one is on its way are ignored.
-                if w.shot.as_ref().is_none_or(|t| t.is_finished()) {
-                    w.shot = Some(tokio::spawn(async move {
-                        match screenshot(&sender, &me, &pinned, &name).await {
-                            Ok(()) => {
-                                tracing::info!("{name}: sent a screenshot");
-                                log("screenshot", "Took a screenshot");
-                            }
-                            Err(e) => tracing::warn!("{name}: screenshot failed: {e:#}"),
-                        }
-                    }));
-                }
-            }
-            SCREEN_REQUEST => {
-                // A new request replaces a cast still running (the phone reopened the viewer).
-                let replaced = w.cast.take().is_some_and(|t| {
-                    t.abort();
-                    true
-                });
-                if !replaced {
-                    log("screen", "Watched the screen");
-                }
-                let (tx, inputs) = mpsc::unbounded_channel();
-                w.inputs = Some(tx);
-                let fps = fps_for(p["body"]["maxFps"].as_u64());
-                w.cast = Some(tokio::spawn(async move {
-                    if let Err(e) = stream(&sender, &me, &pinned, &name, fps, inputs).await {
-                        tracing::warn!("{name}: screen cast failed: {e:#}");
-                    }
-                }));
-            }
-            SCREEN_INPUT => {
-                if let Some(t) = &w.inputs {
-                    let _ = t.send(p["body"].clone());
-                }
-            }
-            SCREEN_TOUCH => {
-                // The viewer's touches as a live stream (over the cable when it's in): a JSON line each.
-                if let Some(t) = w.touch.take() {
-                    t.abort();
-                }
-                if let Some(touches) = w.inputs.clone() {
-                    let p = p.clone();
-                    w.touch = Some(tokio::spawn(async move {
-                        use tokio::io::AsyncBufReadExt;
-                        let Ok(stream) = payload::fetch_stream(&me, &pinned, from, &p).await else { return };
-                        let mut lines = tokio::io::BufReader::new(stream).lines();
-                        while let Ok(Some(line)) = lines.next_line().await {
-                            let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
-                            if touches.send(v).is_err() {
-                                break;
-                            }
-                        }
-                    }));
-                }
-            }
-            SCREEN_STOP => {
-                w.inputs = None;
-                if let Some(t) = w.touch.take() {
-                    t.abort();
-                }
-                if let Some(t) = w.cast.take() {
-                    t.abort();
-                    tracing::info!("{name}: screen cast stopped");
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Stops what phone [id] watches (its switch went off); whether something was running.
-    pub fn stop(&mut self, id: &str) -> bool {
-        self.phones.get_mut(id).is_some_and(Watching::stop)
-    }
-
-    /// The phone left.
-    pub fn gone(&mut self, id: &str) {
-        if let Some(mut w) = self.phones.remove(id) {
-            w.stop();
-        }
     }
 }
 

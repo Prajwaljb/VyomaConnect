@@ -7,7 +7,7 @@ description = "Vyoma's desktop protocol core: identity, KDE Connect links and pa
 
 [dependencies]
 anyhow = "1.0.104"
-libc = "0.2.191"
+base64 = "0.23"
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem", "crypto"] }
 ring = "0.17.14"
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
@@ -18,3 +18,13 @@ tokio = { version = "1.54.1", features = ["full"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
 tracing = "0.1.44"
 uuid = { version = "1.29.0", features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_Foundation"] }
+
+[dev-dependencies]
+# Paused time for the walk-away tests.
+tokio = { version = "1.54.1", features = ["full", "test-util"] }

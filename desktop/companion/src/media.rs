@@ -29,7 +29,8 @@ pub struct Handoff {
     pub position_ms: Option<i64>,
     /// False when the position is our estimate rather than the player's own.
     pub exact: bool,
-    bus: String,
+    /// The player's bus name, to pause it.
+    pub bus: String,
 }
 
 #[derive(Clone)]
@@ -109,7 +110,11 @@ impl Media {
 
     /// Pauses the player we just handed off, so it doesn't keep going on the PC.
     pub async fn pause(&self, handoff: &Handoff) {
-        let _ = self.conn.call_method(Some(handoff.bus.as_str()), PATH, Some(PLAYER), "Pause", &()).await;
+        self.pause_player(&handoff.bus).await;
+    }
+
+    pub async fn pause_player(&self, bus: &str) {
+        let _ = self.conn.call_method(Some(bus), PATH, Some(PLAYER), "Pause", &()).await;
     }
 
     /// Pauses every player that's playing (any player, not only web ones); returns their bus names to resume.

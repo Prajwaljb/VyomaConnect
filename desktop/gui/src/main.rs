@@ -3,9 +3,14 @@
 //! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|away|unpair|add-done|notice|cable|pc|pc-setup|activity|commands|commands-empty|commands-edit|messages|messages-thread|messages-search|messages-contacts|messages-call|messages-silent|messages-loading|messages-asking|messages-declined|messages-locked|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|add|down`, `--setup` to open on setup). `--page commands|this-pc|activity|<phone id>` opens on that page;
 //! a window already open shows it instead (`instance.rs`).
 
+// No console window behind Vyoma's on Windows.
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+
 mod daemon;
 #[cfg(target_os = "linux")]
 mod instance;
+#[cfg(windows)]
+mod one_window;
 mod look;
 mod qr;
 mod snapshot;
@@ -23,7 +28,7 @@ slint::include_modules!();
 
 /// How long a notice stays, and how often the window rereads the daemon without being told to
 /// (a battery that moved without a change signal, a daemon that restarted).
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 const VERSION: &str = include_str!("../../../VERSION");
 const NOTICE_FOR: Duration = Duration::from_millis(3200);
 const REREAD_EVERY: Duration = Duration::from_secs(5);
@@ -99,7 +104,9 @@ fn main() -> anyhow::Result<()> {
     // One window at a time (a D-Bus name; macOS has no session bus, and a Mac app is one window anyway).
     #[cfg(target_os = "linux")]
     let alone = instance::claim(&ui, &page).unwrap_or(true);
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    let alone = one_window::claim();
+    #[cfg(not(any(target_os = "linux", windows)))]
     let alone = true;
     if !alone {
         return Ok(());
@@ -112,11 +119,14 @@ fn main() -> anyhow::Result<()> {
     // moved) starts the background part from inside it, which then starts at login. After an update
     // the old background part is still running from before, and the phone and this window would
     // only get what it knew: it's replaced with the one in this app.
-    #[cfg(target_os = "macos")]
+    // On Windows too: the first open sets the agent up to start with Windows and starts it. An
+    // older agent still running after an update is left for the next sign-in (it can't be told to
+    // quit yet).
+    #[cfg(any(target_os = "macos", windows))]
     std::thread::spawn(|| {
         let start = match daemon::connect() {
             Err(_) => true,
-            Ok(d) => d.health().is_ok_and(|h| daemon::behind(&h.version, VERSION)),
+            Ok(d) => cfg!(target_os = "macos") && d.health().is_ok_and(|h| daemon::behind(&h.version, VERSION)),
         };
         if start {
             let _ = start_daemon();
@@ -452,6 +462,7 @@ fn wire(ui: &MainWindow) {
             std::thread::spawn(move || {
                 match start_daemon() {
                     Ok(s) if s.success() => notify(&ui, "Starting Vyoma\u{2026}".into()),
+                    _ if cfg!(windows) => notify(&ui, "Vyoma couldn't start. Its log is vyoma.log in %LOCALAPPDATA%\\Vyoma".into()),
                     _ => notify(&ui, format!("Vyoma couldn't start. Run {} in a terminal to see why", if cfg!(target_os = "macos") { "vyoma-mac" } else { "vyoma-desktop" })),
                 }
             });
@@ -487,6 +498,11 @@ fn wire(ui: &MainWindow) {
 
 /// Starts the daemon again: its systemd user unit, or on macOS its LaunchAgent.
 fn start_daemon() -> std::io::Result<std::process::ExitStatus> {
+    if cfg!(windows) {
+        // The agent beside this window: `--install` has it start with Windows, and starts it now.
+        let agent = std::env::current_exe()?.with_file_name("vyoma-windows.exe");
+        return std::process::Command::new(agent).arg("--install").status();
+    }
     if cfg!(target_os = "macos") {
         // From Vyoma.app: (re)install the agent from beside this window, so a moved app still starts.
         if let Some(helper) = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("vyoma-mac"))).filter(|p| p.exists()) {
@@ -973,7 +989,24 @@ mod connected_tests {
     }
 }
 
+/// Whether [program] is a program Windows can run: as named, or with one of PATHEXT's endings
+/// (.exe, .cmd...), in the folder given or on PATH, as cmd looks for it.
+#[cfg(windows)]
+fn on_path(program: &str) -> bool {
+    let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    let runs = |p: std::path::PathBuf| {
+        let has_ext = p.extension().is_some_and(|e| exts.split(';').any(|x| x.trim_start_matches('.').eq_ignore_ascii_case(&e.to_string_lossy())));
+        (has_ext && p.is_file()) || exts.split(';').filter(|x| !x.is_empty()).any(|x| std::path::PathBuf::from(format!("{}{x}", p.display())).is_file())
+    };
+    if program.contains(['/', '\\']) {
+        return runs(program.into());
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::current_dir().into_iter().chain(std::env::split_paths(&path)).any(|dir| runs(dir.join(program)))
+}
+
 /// Whether [program] (no slash) is a file this PC can run, on PATH.
+#[cfg(not(windows))]
 fn on_path(program: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;
     let runs = |p: std::path::PathBuf| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);

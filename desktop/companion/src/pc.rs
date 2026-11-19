@@ -143,7 +143,26 @@ pub async fn power(action: &str) -> Result<()> {
                 _ => (gnome("Shutdown"), "GNOME"),
             }
         }
-        "restart" | "shutdown" | "logout" => (None, ""),
+        // No session manager to ask (Hyprland, Sway...): logind, which closes the apps itself.
+        "logout" if crate::hypr::active() => {
+            crate::hypr::exit().await?;
+            return Ok(());
+        }
+        "restart" | "shutdown" | "logout" => {
+            let system = Connection::system().await.context("no system bus")?;
+            let (path, iface, method) = match action {
+                "restart" => ("/org/freedesktop/login1", "org.freedesktop.login1.Manager", "Reboot"),
+                "shutdown" => ("/org/freedesktop/login1", "org.freedesktop.login1.Manager", "PowerOff"),
+                _ => ("/org/freedesktop/login1/session/auto", "org.freedesktop.login1.Session", "Terminate"),
+            };
+            let reply = if method == "Terminate" {
+                system.call_method(Some("org.freedesktop.login1"), path, Some(iface), method, &()).await
+            } else {
+                system.call_method(Some("org.freedesktop.login1"), path, Some(iface), method, &(true,)).await
+            };
+            reply.with_context(|| format!("the PC refused to {action}"))?;
+            return Ok(());
+        }
         other => bail!("unknown action {other}"),
     };
     let Some((service, path, iface, method)) = call else {
@@ -154,6 +173,41 @@ pub async fn power(action: &str) -> Result<()> {
 }
 
 const GNOME_SESSION: &str = "org.gnome.SessionManager";
+/// The kernel's backlights, as the phone's display ids say them.
+const BACKLIGHT_ID: &str = "backlight_";
+const BACKLIGHTS: &str = "/sys/class/backlight";
+
+/// Each panel the kernel can dim, by name, with its level (0 to 1).
+fn backlights() -> Vec<(String, f64)> {
+    let read = |p: std::path::PathBuf| std::fs::read_to_string(p).ok()?.trim().parse::<f64>().ok();
+    let Ok(dir) = std::fs::read_dir(BACKLIGHTS) else { return Vec::new() };
+    let mut out: Vec<(String, f64)> = dir
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.to_owned();
+            let (now, max) = (read(e.path().join("brightness"))?, read(e.path().join("max_brightness"))?);
+            (max > 0.0 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')).then(|| (name, (now / max).clamp(0.0, 1.0)))
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Sets a kernel backlight through logind, which lets the session at the screen do it without root.
+async fn set_backlight(name: &str, level: f64) -> Result<()> {
+    if !backlights().iter().any(|(n, _)| n == name) {
+        bail!("no backlight {name}");
+    }
+    let max: f64 = std::fs::read_to_string(format!("{BACKLIGHTS}/{name}/max_brightness"))?.trim().parse()?;
+    // Never fully dark from the phone, as elsewhere.
+    let value = (level.clamp(0.01, 1.0) * max).round().max(1.0) as u32;
+    let system = Connection::system().await.context("no system bus")?;
+    system
+        .call_method(Some("org.freedesktop.login1"), "/org/freedesktop/login1/session/auto", Some("org.freedesktop.login1.Session"), "SetBrightness", &("backlight", name, value))
+        .await
+        .context("logind refused the brightness")?;
+    Ok(())
+}
 
 /// Whether [name] is served on [conn]'s bus right now.
 async fn has_owner(conn: &Connection, name: &str) -> bool {
@@ -174,6 +228,10 @@ pub async fn wake() -> Result<()> {
     if crate::x11::active() {
         if let Err(e) = crate::x11::wake_screens() {
             warn!("couldn't turn the displays on (X11): {e:#}");
+        }
+    } else if crate::hypr::active() {
+        if let Err(e) = crate::hypr::displays_on().await {
+            warn!("couldn't turn the displays on (Hyprland): {e:#}");
         }
     } else if has_owner(&session, MUTTER).await {
         // GNOME: power-save mode 0 is "on".
@@ -204,6 +262,10 @@ async fn displays() -> Result<Vec<Value>> {
         return kde_displays(&conn).await;
     }
     let mut out = mutter_displays(&conn).await.unwrap_or_default();
+    // No desktop service for the built-in panel (Hyprland, Sway...): the kernel's, set through logind.
+    if out.is_empty() {
+        out.extend(backlights().into_iter().map(|(name, value)| json!({ "id": format!("{BACKLIGHT_ID}{name}"), "label": "Built-in display", "internal": true, "value": value })));
+    }
     for m in crate::ddc::monitors().await {
         if let Ok(value) = crate::ddc::brightness(m.bus).await {
             out.push(json!({ "id": crate::ddc::id(m.bus), "label": m.label, "internal": false, "value": value }));
@@ -296,6 +358,9 @@ async fn set_brightness(display: &str, level: f64) -> Result<()> {
         crate::ddc::set_brightness(bus, level).await?;
         brightness_osd(level, crate::ddc::connector(bus).as_deref()).await;
         return Ok(());
+    }
+    if let Some(name) = display.strip_prefix(BACKLIGHT_ID) {
+        return set_backlight(name, level).await;
     }
     let conn = Connection::session().await.context("no session bus")?;
     if display.starts_with(MUTTER_ID) {

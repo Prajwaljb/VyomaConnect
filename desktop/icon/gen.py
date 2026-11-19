@@ -105,3 +105,23 @@ with tempfile.TemporaryDirectory() as tmp:
         pngs[size] = open(out, "rb").read()
 body = b"".join(kind.encode() + struct.pack(">I", 8 + len(pngs[n])) + pngs[n] for kind, n in SLOTS)
 open(f"{ROOT}/desktop/mac/dist/vyoma.icns", "wb").write(b"icns" + struct.pack(">I", 8 + len(body)) + body)
+
+# ---- Windows: the programs' icon (an .ico of PNGs) and the toasts' picture -----------------------
+win_dir = f"{ROOT}/desktop/windows/dist"
+os.makedirs(win_dir, exist_ok=True)
+WIN_SIZES = [16, 20, 24, 32, 40, 48, 64, 256]
+with tempfile.TemporaryDirectory() as tmp:
+    open(f"{tmp}/vyoma.svg", "w").write(svg())
+    pngs = []
+    for size in WIN_SIZES:
+        out = f"{tmp}/{size}.png"
+        subprocess.run(["resvg", "-w", str(size), "-h", str(size), f"{tmp}/vyoma.svg", out], check=True)
+        pngs.append(open(out, "rb").read())
+# ICONDIR, then one ICONDIRENTRY per size (0 means 256), then the PNGs.
+at = 6 + 16 * len(pngs)
+entries = b""
+for size, png in zip(WIN_SIZES, pngs):
+    entries += struct.pack("<BBBBHHII", size % 256, size % 256, 0, 0, 1, 32, len(png), at)
+    at += len(png)
+open(f"{win_dir}/vyoma.ico", "wb").write(struct.pack("<HHH", 0, 1, len(pngs)) + entries + b"".join(pngs))
+open(f"{win_dir}/vyoma.png", "wb").write(pngs[-1])

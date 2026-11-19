@@ -1,0 +1,135 @@
+# The Windows side, built and tested where there's Windows: GitHub's Windows runners. Nobody on the
+# project has a Windows PC to try it on yet, so this is the only place Windows code runs: it builds the
+# shared core, the engine, the Windows agent and Vyoma's window, and runs their tests, including the
+# agent end to end (a phone made of vyoma-core links and pairs with the real program over loopback).
+# It's no stand-in for trying it on a real Windows PC. Kept as a download for whoever tries it:
+# Vyoma-windows (the installer, packaging/windows/vyoma.nsi, and the two programs in a zip:
+# vyoma.exe opens the window, which starts the agent). For a release (called by
+# desktop-release.yml after it makes the draft, or run by hand with `release`), it builds that tag
+# and attaches Vyoma-setup-<version>.exe and its .sha256 to the release.
+name: Windows
+
+on:
+  push:
+    branches: [main]
+    paths: ["desktop/**", "packaging/windows/**", "VERSION", ".github/workflows/windows.yml"]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Release tag to build and attach the installer to (e.g. v0.12.0); empty for a plain build"
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      release:
+        type: string
+        required: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release || github.ref }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/core/target
+            desktop/engine/target
+            desktop/windows/target
+            desktop/gui/target
+          key: windows-${{ hashFiles('desktop/core/Cargo.toml', 'desktop/engine/Cargo.toml', 'desktop/windows/Cargo.toml', 'desktop/gui/Cargo.lock') }}
+      - name: Test vyoma-core
+        working-directory: desktop/core
+        run: cargo test --release
+      # What every PC side shares: each phone request's handling, switches, Activity, what's offered.
+      - name: Test vyoma-engine
+        working-directory: desktop/engine
+        run: cargo test --release
+      - name: Test vyoma-windows
+        working-directory: desktop/windows
+        run: cargo test --release
+      # The window talks to the agent over its named pipe (gui/src/socket.rs).
+      - name: Test the window
+        working-directory: desktop/gui
+        run: cargo test --release
+      - name: Build
+        working-directory: desktop
+        shell: bash
+        run: |
+          (cd windows && cargo build --release)
+          (cd gui && cargo build --release)
+      # Code signing, if the repo has a certificate: secrets WINDOWS_SIGN_PFX (the .pfx, base64) and
+      # WINDOWS_SIGN_PASSWORD. It has to come from a certificate authority (or SignPath's free
+      # programme for open source) for SmartScreen to stop warning; a self-made one changes nothing.
+      # Without it everything is built unsigned. sign.cmd signs one file; the installer uses it for
+      # itself and its uninstaller (vyoma.nsi's SIGN).
+      - name: Signing certificate
+        shell: pwsh
+        env:
+          PFX: ${{ secrets.WINDOWS_SIGN_PFX }}
+        run: |
+          if (-not $env:PFX) { "no signing certificate: unsigned"; exit 0 }
+          $pfx = "$env:RUNNER_TEMP\vyoma.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
+          $cmd = "$env:RUNNER_TEMP\sign.cmd"
+          "@`"$($signtool.FullName)`" sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /f `"$pfx`" /p `"%SIGN_PASSWORD%`" %1" | Set-Content -Encoding ascii $cmd
+          "VYOMA_SIGN=$cmd" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Sign the programs
+        if: env.VYOMA_SIGN
+        working-directory: desktop
+        shell: cmd
+        env:
+          SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
+        run: |
+          call "%VYOMA_SIGN%" windows\target\release\vyoma-windows.exe || exit /b 1
+          call "%VYOMA_SIGN%" gui\target\release\vyoma.exe || exit /b 1
+      - name: Package
+        working-directory: desktop
+        shell: bash
+        run: |
+          mkdir -p out/Vyoma
+          cp windows/target/release/vyoma-windows.exe gui/target/release/vyoma.exe ../LICENSE out/Vyoma/
+          cp ../VERSION out/Vyoma/VERSION.txt
+          (cd out && 7z a -tzip Vyoma-windows.zip Vyoma >/dev/null)
+          ls -l out
+      # NSIS comes with GitHub's Windows images; installed if a newer image dropped it.
+      - name: Installer
+        working-directory: packaging/windows
+        shell: pwsh
+        env:
+          SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
+        run: |
+          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis)) { choco install nsis -y --no-progress; $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe" }
+          $version = (Get-Content ../../VERSION -Raw).Trim()
+          $sign = @(); if ($env:VYOMA_SIGN) { $sign = @("/DSIGN=$env:VYOMA_SIGN") }
+          & $nsis /V2 "/DVERSION=$version" @sign "/DSRC=$PWD\..\..\desktop\out\Vyoma" "/DOUT=$PWD\..\..\desktop\out\Vyoma-setup.exe" vyoma.nsi
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-Item ../../desktop/out/Vyoma-setup.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vyoma-windows
+          path: |
+            desktop/out/Vyoma-setup.exe
+            desktop/out/Vyoma-windows.zip
+      - name: Attach to the release
+        if: inputs.release
+        working-directory: desktop/out
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release }}
+        run: |
+          version=${TAG#v}
+          [ "$(tr -d '[:space:]' < ../../VERSION)" = "$version" ] || { echo "VERSION isn't $version"; exit 1; }
+          cp Vyoma-setup.exe "Vyoma-setup-$version.exe"
+          sha256sum "Vyoma-setup-$version.exe" > "Vyoma-setup-$version.exe.sha256"
+          cat "Vyoma-setup-$version.exe.sha256"
+          gh release upload "$TAG" "Vyoma-setup-$version.exe" "Vyoma-setup-$version.exe.sha256" --clobber

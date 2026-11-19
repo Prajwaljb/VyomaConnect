@@ -8,23 +8,13 @@ use tokio::sync::mpsc;
 use vyoma_core::link::packet;
 use vyoma_core::device::Command;
 
-pub const REQUEST: &str = "vyoma.pc.request";
 pub const SET: &str = "vyoma.pc.set";
 pub const STATE: &str = "vyoma.pc";
-const INCOMING: &[&str] = &[REQUEST, SET];
-const OUTGOING: &[&str] = &[STATE];
 
-pub fn takes(kind: &str) -> bool {
-    INCOMING.contains(&kind)
-}
 
-/// What to say we take: nothing without a display this can dim.
-pub fn incoming() -> &'static [&'static str] {
-    if display::all().is_empty() { &[] } else { INCOMING }
-}
-
-pub fn outgoing() -> &'static [&'static str] {
-    if display::all().is_empty() { &[] } else { OUTGOING }
+/// Whether there's a display this can dim: only then is it offered.
+pub fn available() -> bool {
+    !display::all().is_empty()
 }
 
 fn state(displays: &[(u32, f32)]) -> Value {

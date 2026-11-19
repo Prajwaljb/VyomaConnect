@@ -37,11 +37,16 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             desktop/core/target
+            desktop/engine/target
             desktop/mac/target
             desktop/gui/target
-          key: macos-${{ hashFiles('desktop/core/Cargo.toml', 'desktop/mac/Cargo.lock', 'desktop/gui/Cargo.lock') }}
+          key: macos-${{ hashFiles('desktop/core/Cargo.toml', 'desktop/engine/Cargo.toml', 'desktop/mac/Cargo.lock', 'desktop/gui/Cargo.lock') }}
       - name: Test vyoma-core
         working-directory: desktop/core
+        run: cargo test --release
+      # What every PC side shares: each phone request's handling, switches, Activity, what's offered.
+      - name: Test vyoma-engine
+        working-directory: desktop/engine
         run: cargo test --release
       - name: Test vyoma-mac
         working-directory: desktop/mac

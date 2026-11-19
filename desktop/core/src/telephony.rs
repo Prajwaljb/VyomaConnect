@@ -97,3 +97,96 @@ impl Call {
         }
     }
 }
+
+/// What a PC side does as one phone's calls come and go: told who's ringing once a call, the
+/// alert taken down when it's answered or over, a missed call left until the phone clears it, and
+/// what's playing paused for the call and resumed after it.
+#[derive(Debug, Default, PartialEq)]
+pub struct Steps {
+    pub ring: bool,
+    pub stop_ringing: bool,
+    pub missed: bool,
+    pub clear_missed: bool,
+    pub pause: bool,
+    pub resume: bool,
+}
+
+/// One phone's line: whether a call is on (ringing or talking), so what's paused stays paused.
+#[derive(Default)]
+pub struct Line {
+    on: bool,
+}
+
+impl Line {
+    pub fn on_call(&mut self, call: &Call) -> Steps {
+        let mut s = Steps::default();
+        match (call.kind, call.over) {
+            (Kind::Ringing, false) => {
+                // The phone can say it again: one alert a call.
+                s.ring = !self.on;
+                s.pause = !self.on;
+                self.on = true;
+            }
+            (Kind::Talking, false) => {
+                s.stop_ringing = true;
+                s.pause = !self.on;
+                self.on = true;
+            }
+            (Kind::Ringing | Kind::Talking, true) => self.end(&mut s),
+            (Kind::Missed, false) => {
+                s.missed = true;
+                self.end(&mut s);
+            }
+            (Kind::Missed, true) => s.clear_missed = true,
+        }
+        s
+    }
+
+    /// The phone's gone: nothing will say the call ended.
+    pub fn gone(&mut self) -> Steps {
+        let mut s = Steps::default();
+        self.end(&mut s);
+        s
+    }
+
+    fn end(&mut self, s: &mut Steps) {
+        s.stop_ringing = true;
+        s.resume = self.on;
+        self.on = false;
+    }
+}
+
+#[cfg(test)]
+mod line_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn call(event: &str, over: bool) -> Call {
+        parse(&json!({ "type": TELEPHONY, "body": { "event": event, "contactName": "A", "isCancel": over } })).unwrap()
+    }
+
+    #[test]
+    fn a_call_rings_once_and_gives_the_music_back() {
+        let mut line = Line::default();
+        assert_eq!(line.on_call(&call("ringing", false)), Steps { ring: true, pause: true, ..Steps::default() });
+        assert_eq!(line.on_call(&call("ringing", false)), Steps::default(), "said again: no second alert");
+        assert_eq!(line.on_call(&call("talking", false)), Steps { stop_ringing: true, ..Steps::default() });
+        assert_eq!(line.on_call(&call("talking", true)), Steps { stop_ringing: true, resume: true, ..Steps::default() });
+    }
+
+    #[test]
+    fn a_missed_call_stays_until_the_phone_clears_it() {
+        let mut line = Line::default();
+        line.on_call(&call("ringing", false));
+        assert_eq!(line.on_call(&call("missedCall", false)), Steps { missed: true, stop_ringing: true, resume: true, ..Steps::default() });
+        assert_eq!(line.on_call(&call("missedCall", true)), Steps { clear_missed: true, ..Steps::default() });
+    }
+
+    #[test]
+    fn a_phone_that_goes_mid_call_gives_the_music_back() {
+        let mut line = Line::default();
+        line.on_call(&call("talking", false));
+        assert!(line.gone().resume);
+        assert!(!line.gone().resume, "only once");
+    }
+}

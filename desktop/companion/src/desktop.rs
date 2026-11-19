@@ -39,7 +39,13 @@ pub fn keyboard_layout() -> (String, String) {
         let first = |key: &str| text.lines().find_map(|l| l.strip_prefix(key).map(|v| v.split(',').next().unwrap_or("").trim().to_owned()));
         first("LayoutList=").filter(|l| !l.is_empty()).map(|l| (l, first("VariantList=").unwrap_or_default()))
     };
-    let found = if is_gnome() { from_gnome() } else { from_plasma() };
+    let found = if crate::hypr::active() {
+        crate::hypr::keyboard_layout()
+    } else if is_gnome() {
+        from_gnome()
+    } else {
+        from_plasma()
+    };
     found.unwrap_or_else(|| ("us".into(), String::new()))
 }
 
@@ -67,6 +73,9 @@ pub fn scroll_needs_finish() -> bool {
 pub async fn switch(right: bool) -> Result<()> {
     if crate::x11::active() {
         return crate::x11::switch_workspace(right);
+    }
+    if crate::hypr::active() {
+        return crate::hypr::switch_workspace(right).await;
     }
     if is_gnome() {
         crate::shell::switch_workspace(right).await?;
@@ -102,6 +111,9 @@ async fn toggle_desktop(conn: &Connection) -> Result<()> {
 }
 
 pub async fn step(up: bool) -> Result<&'static str> {
+    if crate::hypr::active() {
+        return hypr_step(up).await;
+    }
     if is_gnome() {
         return Ok(match crate::shell::step(up).await?.as_str() {
             "grid" => "grid",
@@ -149,6 +161,24 @@ pub async fn step(up: bool) -> Result<&'static str> {
         }
         (false, false, _, true) => "desktop",
     })
+}
+
+/// When the overview was opened from here: Hyprland doesn't say whether hyprexpo is showing.
+static EXPO: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// Hyprland has no overview of its own; the hyprexpo plugin gives it one (up opens, down closes).
+async fn hypr_step(up: bool) -> Result<&'static str> {
+    if !crate::hypr::has_plugin("hyprexpo").await {
+        anyhow::bail!("Hyprland has no overview without its hyprexpo plugin");
+    }
+    let open = EXPO.lock().unwrap().is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(60));
+    if up == open {
+        return Ok(if open { "overview" } else { "windows" });
+    }
+    // hyprexpo's own dispatcher; not yet tried with the plugin loaded (Lua name as its docs give it).
+    crate::hypr::dispatch("hl.plugin.hyprexpo.expo(\"toggle\")", "hyprexpo:expo toggle").await?;
+    *EXPO.lock().unwrap() = up.then(std::time::Instant::now);
+    Ok(if up { "overview" } else { "windows" })
 }
 
 #[cfg(test)]

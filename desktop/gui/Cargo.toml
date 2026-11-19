@@ -19,16 +19,22 @@ rfd = "0.18.0"
 serde = "1"
 serde_json = "1.0.154"
 # GPL-3.0 option of Slint's licence, as Vyoma is GPL-3.0-or-later.
-slint = { version = "1.18.1", features = ["renderer-software"] }
-futures-util = { version = "0.3", default-features = false }
-tokio = { version = "1.54.1", features = ["rt-multi-thread"] }
+slint = { version = "1.19.0", features = ["renderer-software"] }
 
 # The daemon's D-Bus interface and the one-window name; macOS uses a local socket instead.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"] }
+futures-util = { version = "0.3", default-features = false }
+tokio = { version = "1.54.1", features = ["rt-multi-thread"] }
+
+# The one-window lock on Windows (MIT/Apache-2.0).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
-slint-build = "1.18.1"
+slint-build = "1.19.0"
+# The icon inside vyoma.exe on Windows (MIT).
+embed-resource = "3"
 
 [profile.release]
 lto = "thin"

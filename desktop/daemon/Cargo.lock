@@ -1994,6 +1994,10 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "vyoma-core",
+ "vyoma-engine",
+ "wayland-client",
+ "wayland-protocols-misc",
+ "wayland-protocols-wlr",
  "x11rb",
  "zbus",
 ]
@@ -2003,6 +2007,7 @@ name = "vyoma-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "libc",
  "rcgen",
  "ring",
@@ -2014,6 +2019,7 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2034,6 +2040,17 @@ dependencies = [
  "x11rb",
  "x509-parser",
  "zbus",
+]
+
+[[package]]
+name = "vyoma-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "vyoma-core",
 ]
 
 [[package]]

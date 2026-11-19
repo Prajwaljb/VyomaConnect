@@ -7,25 +7,17 @@
 //! why), so the bare binary refuses rather than be stopped by macOS.
 //! Built and tested on CI only; not yet run on a real Mac.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
-use serde_json::{Value, json};
-use tokio::sync::mpsc;
-use vyoma_core::activity::Activity;
-use vyoma_core::device::Command;
+use serde_json::json;
 use vyoma_core::identity::Identity;
 use vyoma_core::link::{Sender, packet};
 use vyoma_core::payload;
 
-use crate::vyoma::Phone;
 
-pub const CAMERA_REQUEST: &str = "vyoma.camera.request";
 pub const CAMERA: &str = "vyoma.camera";
-pub const INCOMING: &[&str] = &[CAMERA_REQUEST];
-pub const OUTGOING: &[&str] = &[CAMERA];
 
 /// System Settings > Privacy & Security > Camera.
 pub const CAMERA_SETTINGS: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera";
@@ -155,7 +147,7 @@ async fn capture() -> Result<Vec<u8>> {
     }
 }
 
-async fn take(sender: &Sender, me: &Identity, pinned: &[u8], phone: &str) -> Result<()> {
+pub async fn take(sender: &Sender, me: &Identity, pinned: &[u8], phone: &str) -> Result<()> {
     let photo = match capture().await {
         Ok(b) => b,
         Err(e) => {
@@ -165,49 +157,6 @@ async fn take(sender: &Sender, me: &Identity, pinned: &[u8], phone: &str) -> Res
     };
     crate::mac::notify("Camera used from your phone", &format!("{phone} took a photo with this Mac's camera.")).await;
     payload::offer(sender, me, pinned, packet(CAMERA, json!({ "format": "jpg" })), photo.len() as u64, photo.as_slice()).await
-}
-
-/// Every phone's photo on its way, one at a time each.
-pub struct Photos {
-    me: Arc<Identity>,
-    commands: mpsc::UnboundedSender<Command>,
-    activity: Arc<Activity>,
-    taking: HashMap<String, tokio::task::JoinHandle<()>>,
-}
-
-impl Photos {
-    pub fn new(me: Arc<Identity>, commands: mpsc::UnboundedSender<Command>, activity: Arc<Activity>) -> Self {
-        Self { me, commands, activity, taking: HashMap::new() }
-    }
-
-    pub fn handle(&mut self, id: &str, phone: &Phone, p: &Value) {
-        if p["type"] != CAMERA_REQUEST || self.taking.get(id).is_some_and(|t| !t.is_finished()) {
-            return; // Taps while one is on its way are ignored.
-        }
-        let sender = crate::vyoma::sender(&self.commands, id);
-        let (me, pinned, name, activity, phone_id) = (self.me.clone(), phone.cert.to_vec(), phone.name.to_owned(), self.activity.clone(), id.to_owned());
-        self.taking.insert(
-            id.to_owned(),
-            tokio::spawn(async move {
-                match take(&sender, &me, &pinned, &name).await {
-                    Ok(()) => {
-                        tracing::info!("{name}: sent a camera photo");
-                        activity.add(&phone_id, &name, "photo", "Took a photo with the camera");
-                    }
-                    Err(e) => tracing::warn!("{name}: camera photo failed: {e:#}"),
-                }
-            }),
-        );
-    }
-
-    /// Phone [id]'s switch went off, or it left: a photo on its way isn't sent.
-    pub fn stop(&mut self, id: &str) -> bool {
-        self.taking.remove(id).is_some_and(|t| {
-            let busy = !t.is_finished();
-            t.abort();
-            busy
-        })
-    }
 }
 
 #[cfg(target_os = "macos")]

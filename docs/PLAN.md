@@ -5,7 +5,7 @@ Fully compatible with KDE Connect (Plasma), GSConnect and Valent (GNOME), with a
 optional Linux companion that unlocks features stock KDE Connect can't do.
 
 Primary target: Galaxy S24 FE, Android 17 / One UI 9. Supported: Android 12+ (API 31).
-Distribution: F-Droid / FOSS — **no Google Play Services, Firebase, or proprietary SDKs.**
+Distribution: Google Play, F-Droid and GitHub (section 11) — **no Google Play Services, Firebase, or proprietary SDKs** in any build.
 
 ---
 
@@ -395,3 +395,182 @@ Xvfb only; next is a real Cinnamon or Xfce session (a VM).
 Packaging (AUR, Flatpak, Homebrew), the app's desktop name, and whether KDE users keep the option of
 running beside kdeconnectd.
 
+## 11. Direction (decided 2026-11-19): Play Store, Windows, Hyprland, one engine
+
+Four goals: the phone app on Google Play beside F-Droid and GitHub; a Windows PC side; Hyprland (and
+the other compositors built the same way); and one engine underneath, so every PC side behaves the
+same however the person's machine is set up.
+
+### One engine (first, since Windows and Hyprland both build on it)
+Today the feature logic lives twice: Linux has the daemon's stock plugins plus the companion's
+`session.rs`; the Mac agent's `main.rs` is its own copy of both. Windows would make a third.
+- **Engine** (on `vyoma-core`): the session loop, what every packet does, permits, activity,
+  throttles, and the window's control API as one method table (served over D-Bus on Linux, the
+  socket on the Mac, a named pipe on Windows).
+- **Backends** behind one trait per capability: clipboard; input (pointer, keys, absolute touch);
+  media; volume and per-app volume; notifications (show, replace, withdraw, actions, reply);
+  lock/sleep/power; brightness; screenshot; screen capture and encoding; the presenter overlay;
+  workspaces and overview steps; wallpaper; gamepad; camera; file manager menus; autostart; firewall.
+- **Probing, not desktop names**: each capability picks its backend at start from what's there
+  (Wayland globals, D-Bus names, portals, programs) and probes again when the session changes, so a
+  compositor nobody tested still gets every protocol it speaks. This PC in the window lists each
+  capability, the backend in use, and the fix when none works.
+- **OS crates become thin**: linux (today's daemon), mac, windows: `main`, install/autostart, backends.
+- Done when Linux and the Mac behave exactly as before (unit tests, emulator runs, snapshots).
+
+Progress (2026-11-19):
+1. Done: `desktop/engine` (`vyoma-engine`) holds the vyoma.* session (moved from the companion) as
+   `serve<P: Platform>`; `Platform` has a method per piece of work with a "not on this computer"
+   default, and `supports(Feature)` decides what the identity offers (`capabilities`). Linux's
+   `companion/src/platform.rs` calls today's modules, which keep their per-desktop choices; the daemon
+   and the companion both use it, offering exactly the packet lists they did before.
+2. Done: the Mac runs the same sessions (`mac/src/platform.rs`); its own screen, camera, mirror,
+   stats/specs/power/files and paste/Spaces routing is gone. Changes a Mac user notices: a new
+   wallpaper reaches the phone without it asking, and the phone's name in Activity is cleaned as on
+   Linux.
+3. Next: the stock plugins (ping, battery, find, lock, clipboard, share, MPRIS, volume, run command,
+   notifications, mousepad, telephony, presenter, messages) into the engine, behind the same trait.
+4. Hyprland and Windows were taken first (user, 2026-11-19); then the window's method table, then
+   probing per capability and This PC's report.
+
+Linux, the order each capability tries:
+
+| Capability | Tried in order |
+|---|---|
+| Input | RemoteDesktop portal (KDE, GNOME) → wlr virtual pointer + virtual keyboard (Hyprland, Sway, river) → X11 XTEST |
+| Clipboard | GNOME extension → ext/wlr data-control (KWin, Hyprland, Sway, COSMIC) → X11 selections |
+| Overlay | layer-shell → GNOME extension → X11 override-redirect |
+| Workspaces | KWin → GNOME extension → Hyprland IPC → Sway IPC → EWMH |
+| Screen | ScreenCast portal (xdg-desktop-portal-hyprland too) → X11 ximagesrc |
+| Screenshot | Spectacle → GNOME extension → Screenshot portal → grim (wlr screencopy) |
+| Lock | logind lock-session (the session's locker: KDE, GNOME, hyprlock/swaylock through their idle daemon) |
+| Autostart | graphical-session.target (KDE, GNOME, uwsm) → XDG autostart → Hyprland's exec-once, offered, never written unasked |
+
+### Hyprland
+- xdg-desktop-portal-hyprland has ScreenCast and Screenshot but no RemoteDesktop (late 2026), so input
+  goes over the wlr virtual pointer/keyboard protocols, which Hyprland speaks. Clipboard
+  (data-control), the layer-shell dot, MPRIS, pactl and freedesktop notifications already work.
+- Hyprland's own: workspaces through its IPC socket; locking through hypridle/hyprlock or loginctl;
+  often no polkit agent (the Firewall check's pkexec).
+- Hyprland 0.57 is installed on the dev PC: tests run in a nested Hyprland with a scratch config.
+
+Done (2026-11-19), checked against Hyprland 0.57.2 nested in a headless KWin (private runtime dir and
+bus): `companion/src/wlr.rs` (virtual pointer + keyboard, the layout's keymap from xkbcommon, a lone
+keymap for symbols no key types; used wherever the compositor offers both, before the portal) for the
+touchpad, keyboard, Bluetooth touchpad and cast touches (an output-bound pointer for absolute moves);
+`companion/src/hypr.rs` (IPC socket, found by probing a listening socket; 0.57 takes dispatchers as Lua,
+`hl.dsp.focus({ workspace = "e+1" })`, older ones the classic words, both tried) for workspaces, dpms on
+wake, log out, the keyboard layout (`[[EMPTY]]` is unset) and the wallpaper (hyprctl hyprpaper
+listactive: hyprpaper 0.8's socket is binary; swww query); grim screenshots; the kernel backlight
+through logind (any desktop without Plasma's or Mutter's); restart/shut down through logind where no
+session manager answers. Hyprland 0.57 starts hyprland-session.target (binds graphical-session.target)
+and hands systemd its environment, so the unit starts with no config line. Not yet tried: the cast
+through xdg-desktop-portal-hyprland (needs its picker and PipeWire in the test stack), hyprexpo's
+overview (plugin not installed; its Lua dispatcher name is a guess), a real Hyprland session.
+
+### Windows
+- `vyoma-windows` on the engine; the window reaches it over a named pipe. Backends: Win32 clipboard,
+  SendInput, the system media controls (every player), Core Audio (per-app volume too), toasts
+  (Start menu shortcut + AppUserModelID), LockWorkStation, WMI/DDC brightness, Windows.Graphics.Capture
+  + Media Foundation H.264, ViGEmBus for the gamepad (a real Xbox 360/DualShock 4 pad; the driver is
+  installed once and no longer maintained), cmd/PowerShell commands, Run-key autostart.
+- Core changes: interface addresses, TCP keep-alive through socket2, owner-only files, the send-buffer tweak.
+- Catches: the firewall asks an admin on first run; SmartScreen warns about an unsigned app
+  (SignPath Foundation signs open-source projects for free); crates `windows`/`windows-sys` (MIT/Apache).
+- CI `windows.yml` builds and tests on GitHub's runners; real testing needs a Windows PC.
+
+Started (2026-11-19), `desktop/windows`, checked on this PC as Windows builds under Wine (mingw cross
+build, headless Xvfb display, private ports and pipe) and next on GitHub's runners:
+- Core builds and passes on Windows: socket2 keep-alive, GetAdaptersAddresses for the pairing code's
+  addresses (virtual adapters skipped by name), owner-only files by the profile's ACL, run commands
+  through `cmd /C` (9009 = not found).
+- The agent: one per session (named mutex), Run-key autostart (`--install`, also what the window's
+  first open runs), the notification-area icon with Open/Quit, phones told it's leaving when the session ends; pairing with a dialog
+  showing the code (stale answers ignored) or in the window; ping, battery both ways, find my PC
+  (alert sound), lock, clipboard both ways (password managers' copies skipped), share (Downloads;
+  only http(s) links opened, other schemes copied instead), touchpad and keyboard (SendInput: Unicode
+  typing, shortcuts on the layout's keys), phone notifications, texts, run commands. The engine's
+  Windows platform: stats, About this PC (registry SMBIOS names, never the serial), screenshots
+  (GDI, per-monitor DPI), files, power (ExitWindowsEx/SetSuspendState, never forced), wake, Task
+  View and the desktops (Win+Tab, Ctrl+Win+arrows), paste.
+- The window builds for Windows: the named pipe in `socket.rs`, one window per session, the agent
+  started on first open. Slint 1.19 (1.18's winit throttle divided by a monitor's 0 Hz refresh).
+- End to end (`windows/tests/agent.rs`): a vyoma-core phone links, the window pairs it over the
+  pipe, the command list, About this PC, stats, a screenshot, the players and the speaker come back,
+  the window unpairs it, and `Quit` (the installer's `--quit`) stops the agent.
+- Then (2026-11-19, the user's "first 4"):
+  - Media and volume (`media.rs`): every app in Windows' media controls (system media transport
+    controls: Spotify, browsers, Media Player...) as MPRIS players, with covers as payloads, shuffle
+    and repeat; the default speaker's volume and mute through Core Audio. Players have no volume of
+    their own here (theirs is the speaker's).
+  - Toasts (`toast.rs`): registered for this user only (`AppUserModelId\dev.vyoma.Vyoma` + a COM
+    activator class, no shortcut, no administrator), every notification a toast where Windows has
+    them, balloons otherwise. The pairing question with Accept/Reject (a dialog if toasts are off),
+    the phone's notifications with Reply and up to three of their actions, taken down when the phone
+    dismisses them and dismissed on the phone when closed here, Send to's choice of phone as buttons.
+  - The live screen (`cast.rs`): desktop duplication of the main display (GDI copies where there's
+    none), the pointer drawn in, NV12 into Media Foundation's software H.264 encoder (low latency,
+    30 fps unless asked for up to 60), the Mac's framing; touches as absolute input on that display.
+    Under Wine (GDI plus Wine's encoder) two seconds decode cleanly with ffmpeg.
+  - The icon in both programs (`dist/vyoma.ico` from `gen.py`, embed-resource), the firewall check
+    (`firewall.rs`: blocks win over allows, per network profile; Let phones through runs the agent
+    elevated as `--open-firewall`, which replaces Vyoma's rules with two for its ports), and the
+    NSIS installer (`packaging/windows/vyoma.nsi`: per user, no administrator, Start menu entry,
+    Settings > Apps uninstall entry; built on CI and attached to releases as `Vyoma-setup-<ver>.exe`).
+- Then (same day, "fix the worth knowing parts, then add more features"):
+  - The live screen uses the graphics card's H.264 encoder (an asynchronous Media Foundation
+    transform: Intel, NVIDIA, AMD) when one takes pictures from memory, and goes on with the
+    software one if it refuses mid-stream; a display turned to portrait is turned upright instead
+    of falling back to GDI copies (Microsoft's Desktop Duplication sample's mapping, in a test).
+  - Signing on CI when the repo has a certificate (`WINDOWS_SIGN_PFX`, `WINDOWS_SIGN_PASSWORD`):
+    both programs, the installer and its uninstaller (NSIS `!finalize`/`!uninstfinalize`). Only a
+    certificate authority's certificate (or SignPath's free programme for open source) stops
+    SmartScreen's warning; without one it builds unsigned.
+  - Brightness and app volumes (`pc.rs`), the wallpaper's colours for the phone and the window's
+    look (`wallpaper.rs`), walk-away rules, calls (ringing toast with Silence and Decline where the
+    phone allows, missed calls, music paused), the daily update check, Explorer's Send to.
+  - Shared now instead of copied per side: walk-away's runner (`vyoma_core::away::Rules`, Linux and
+    the Mac switched to it), a phone's call steps (`telephony::Line`), the update check
+    (`vyoma_core::updates`, the Mac switched to it).
+- Then ("do the mirror and camera next"):
+  - The phone's screen in a window (`mirror.rs`): the agent runs itself as a child
+    (`--mirror-window`), as Linux and the Mac do; Windows' own H.264 decoder (Media Foundation, low
+    latency) into GDI, aspect kept; the mouse and keys as on Windows (Ctrl+C/X/A/V, Ctrl+arrows by
+    word, Escape / right click / the mouse's back button for Back, middle click Home, Ctrl+W closes);
+    the phone's sound as PCM through WASAPI; its copies onto the clipboard, its volume keys as the
+    speaker's own steps.
+  - A photo with the PC's camera (`camera.rs`): Media Foundation's source reader at the largest
+    picture up to 1080p, a moment to expose, a JPEG from WIC, a notification each time; the per-phone
+    Camera switch; This PC's Camera check reads Windows' privacy switches and opens their page.
+  - Shared now: the stream splitting and the sound's jitter buffer (`vyoma_core::mirror`, the Mac
+    switched to it).
+  - Checked under Wine: the decoder turns the encoder's clip back into pictures, the window shows
+    them and closes at the stream's end, and the agent opens and closes it for a phone (end-to-end
+    test). Not checked: the sound (Wine would play it on this PC's speakers), a real camera.
+- Next: the window's `--page` passed to an open window, the gamepad (ViGEmBus), colour conversion
+  on the GPU (the CPU still turns each picture into NV12), the mirror drawn with Direct3D if GDI's
+  scaling proves slow on large screens.
+
+### Google Play
+- A `play` product flavor built as an AAB; the GitHub/F-Droid build stays as it is.
+- Signing: uploading the existing release key to Play App Signing keeps one signature everywhere
+  (people switch channels without reinstalling; the PC's cable allow-list goes by signing key). It
+  can't be undone: the owner's call.
+- Account: personal accounts made after 13 Nov 2023 need a closed test with 12 testers for 14 days
+  before production; organisation accounts (D-U-N-S number) don't.
+- Declarations, each reviewed case by case; the Play build drops what's refused:
+
+| Permission | Play's terms |
+|---|---|
+| READ_SMS, SEND_SMS, READ_CALL_LOG | Exception "cross-device synchronization or transfer of SMS or calls" |
+| MANAGE_EXTERNAL_STORAGE (the PC browsing phone files) | File managers, backup, documents only; if refused, folder grants (SAF) in the Play build |
+| Accessibility service (mirror control) | Prominent in-app disclosure plus a declaration |
+| Foreground service types camera, microphone, mediaProjection, connectedDevice | Console declarations with videos |
+| USE_FULL_SCREEN_INTENT | Calling and alarm apps only: check each use |
+| REQUEST_IGNORE_BATTERY_OPTIMIZATIONS | A justified use |
+
+- Also: a privacy policy page on the site; Data safety (no servers; data only goes to the person's
+  own PCs); the store listing from fastlane metadata. No self-update code to remove.
+
+### Open (2026-11-19)
+Play account type and signing; who tests on Windows and on Hyprland.

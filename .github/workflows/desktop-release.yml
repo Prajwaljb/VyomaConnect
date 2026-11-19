@@ -2,7 +2,7 @@
 # Debian 12 (so it runs on any distro as new as that) and attaches it to that tag's release, with
 # SHA256SUMS and the one-line installer (packaging/get.sh as install.sh). The release is created as
 # a draft when there isn't one yet; publishing it stays a person's job. Then the Mac's Vyoma.app is
-# built from the same tag and attached too (macos.yml).
+# built from the same tag and attached too (macos.yml), and so is the Windows installer (windows.yml).
 name: PC app release build
 
 on:
@@ -111,6 +111,15 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/macos.yml
+    with:
+      release: ${{ inputs.tag || github.ref_name }}
+    secrets: inherit
+
+  windows:
+    needs: release
+    permissions:
+      contents: write
+    uses: ./.github/workflows/windows.yml
     with:
       release: ${{ inputs.tag || github.ref_name }}
     secrets: inherit

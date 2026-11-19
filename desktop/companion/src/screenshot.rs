@@ -2,6 +2,7 @@
 //! prompt or notification of its own, so we show one; the image travels as a payload (see payload.rs).
 //! On GNOME, which lets only its own parts capture without asking, Vyoma's extension does (PNG).
 //! X11 sessions (Cinnamon, MATE, Xfce) let any app read the screen: GStreamer grabs it (PNG).
+//! Hyprland, Sway and the other wlroots-style compositors: grim (PNG).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -18,11 +19,15 @@ use crate::payload;
 pub async fn capture_and_send(sender: &Sender, me: &Identity, pinned: &[u8], phone_name: &str) -> Result<()> {
     let x11 = crate::x11::active();
     let gnome = crate::desktop::is_gnome() && !x11;
-    let png = gnome || x11;
+    // wlroots-style compositors (Hyprland, Sway...) let grim copy the screen; Plasma has Spectacle.
+    let grim = !x11 && !gnome && !has("spectacle") && has("grim");
+    let png = gnome || x11 || grim;
     let shot = if x11 {
         capture_x11().await
     } else if gnome {
         crate::shell::screenshot().await
+    } else if grim {
+        capture_grim().await
     } else {
         capture().await
     };
@@ -36,6 +41,23 @@ pub async fn capture_and_send(sender: &Sender, me: &Identity, pinned: &[u8], pho
     crate::notice::tell("camera-photo", "Screenshot taken from your phone", &format!("{phone_name} took a screenshot of this PC.")).await;
     let announce: Value = link::packet("vyoma.screenshot", json!({ "format": if png { "png" } else { "webp" } }));
     payload::offer(sender, me, pinned, announce, image.len() as u64, image.as_slice()).await
+}
+
+/// Whether [program] is on PATH.
+fn has(program: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(program).is_file()))
+}
+
+/// Every output, as PNG, through wlr's screencopy (grim writes it to its stdout).
+async fn capture_grim() -> Result<Vec<u8>> {
+    let out = tokio::time::timeout(Duration::from_secs(15), tokio::process::Command::new("grim").args(["-t", "png", "-"]).kill_on_drop(true).output())
+        .await
+        .context("the screenshot took too long")?
+        .context("grim isn't installed")?;
+    if !out.status.success() || !out.stdout.starts_with(b"\x89PNG") {
+        bail!("grim couldn't capture the screen: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(out.stdout)
 }
 
 /// The whole X screen, every monitor, as PNG.

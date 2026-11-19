@@ -70,6 +70,17 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, f
     } else {
         Cast::start().await.map(|c| {
             let control = c.control.clone().zip(c.size).map(|(session, size)| Pointer { via: Via::Portal { conn: c.conn.clone(), session, node: c.node }, size });
+            // No remote desktop in the portal (Hyprland, Sway...): the compositor's virtual pointer.
+            let control = control.or_else(|| {
+                let size = c.size.filter(|_| crate::wlr::offered())?;
+                match crate::wlr::Input::open(Some(size)) {
+                    Ok(input) => Some(Pointer { via: Via::Wlr { input }, size }),
+                    Err(e) => {
+                        warn!("no touch control ({e:#}); watching only");
+                        None
+                    }
+                }
+            });
             let size = c.size;
             (Some(c), None, control, size)
         })
@@ -233,11 +244,12 @@ pub struct Pointer {
     size: (i32, i32),
 }
 
-/// The portal's remote-desktop session, or the X server (X11 sessions), with where the cast
-/// monitor's top-left sits on the X screen.
+/// The portal's remote-desktop session, the X server (X11 sessions) with where the cast
+/// monitor's top-left sits on the X screen, or the compositor's virtual pointer and keyboard.
 enum Via {
     Portal { conn: Connection, session: OwnedObjectPath, node: u32 },
     X11 { input: crate::x11::Input, origin: (i32, i32) },
+    Wlr { input: crate::wlr::Input },
 }
 
 impl Pointer {
@@ -288,7 +300,7 @@ impl Pointer {
     fn session(&self) -> Result<&OwnedObjectPath> {
         match &self.via {
             Via::Portal { session, .. } => Ok(session),
-            Via::X11 { .. } => bail!("not a portal session"),
+            Via::X11 { .. } | Via::Wlr { .. } => bail!("not a portal session"),
         }
     }
 
@@ -311,6 +323,7 @@ impl Pointer {
         let y = i["y"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0) * self.size.1 as f64;
         match &self.via {
             Via::X11 { input, origin } => input.absolute(origin.0 as f64 + x, origin.1 as f64 + y),
+            Via::Wlr { input } => input.absolute(x, y, self.size.0, self.size.1),
             Via::Portal { session, node, .. } => {
                 let body = (session, opts([]), *node, x, y);
                 if wait { self.call("NotifyPointerMotionAbsolute", &body).await } else { self.call_fast("NotifyPointerMotionAbsolute", &body).await }
@@ -321,6 +334,9 @@ impl Pointer {
     /// One key, by its evdev code: real key presses, which the desktop handles like a keyboard's.
     async fn key(&self, code: i32, down: bool) -> Result<()> {
         if let Via::X11 { input, .. } = &self.via {
+            return input.key(code, down);
+        }
+        if let Via::Wlr { input } = &self.via {
             return input.key(code, down);
         }
         self.call("NotifyKeyboardKeycode", &(self.session()?, opts([]), code, down as u32)).await
@@ -380,6 +396,9 @@ impl Pointer {
         if let Via::X11 { input, .. } = &self.via {
             return input.button(button, down);
         }
+        if let Via::Wlr { input } = &self.via {
+            return input.button(button, down);
+        }
         self.call("NotifyPointerButton", &(self.session()?, opts([]), button, down as u32)).await
     }
 
@@ -388,12 +407,18 @@ impl Pointer {
         if let Via::X11 { input, .. } = &self.via {
             return input.relative(dx, dy);
         }
+        if let Via::Wlr { input } = &self.via {
+            return input.relative(dx, dy);
+        }
         self.call_fast("NotifyPointerMotion", &(self.session()?, opts([]), dx, dy)).await
     }
 
     /// Smooth scrolling (positive: down, right); X11 always reads it that way, the portal per desktop.
     pub async fn axis(&self, dx: f64, dy: f64) -> Result<()> {
         if let Via::X11 { input, .. } = &self.via {
+            return input.scroll(dx, dy);
+        }
+        if let Via::Wlr { input } = &self.via {
             return input.scroll(dx, dy);
         }
         let sign = crate::desktop::scroll_sign();
@@ -406,12 +431,16 @@ impl Pointer {
             input.scroll_end();
             return Ok(());
         }
+        if let Via::Wlr { input } = &self.via {
+            input.scroll_end();
+            return Ok(());
+        }
         self.call("NotifyPointerAxis", &(self.session()?, opts([("finish", Variant::Bool(true))]), 0.0f64, 0.0f64)).await
     }
 
     /// Returns once the portal has dealt with the moves before it (X11's are done when sent).
     pub async fn settle(&self) -> Result<()> {
-        if let Via::X11 { .. } = &self.via {
+        if let Via::X11 { .. } | Via::Wlr { .. } = &self.via {
             return Ok(());
         }
         self.call("NotifyPointerMotion", &(self.session()?, opts([]), 0.0f64, 0.0f64)).await
@@ -553,6 +582,9 @@ pub async fn pointer_session() -> Result<Pointer> {
     if crate::x11::active() {
         return Ok(Pointer { via: Via::X11 { input: crate::x11::Input::open()?, origin: (0, 0) }, size: (0, 0) });
     }
+    if crate::wlr::offered() {
+        return Ok(Pointer { via: Via::Wlr { input: crate::wlr::Input::open(None)? }, size: (0, 0) });
+    }
     let conn = crate::portal::connection().await?;
     let portal = Portal::new(&conn)?;
     let created = portal
@@ -592,6 +624,10 @@ impl Cast {
     /// Remote desktop first (the screen plus the pointer, for touch control); plain screen sharing
     /// if the portal can't, so watching still works. Cancelling on the PC cancels both.
     async fn start() -> Result<Cast> {
+        // The compositor's own virtual pointer does the touches (Hyprland's portal has no remote desktop).
+        if crate::wlr::offered() {
+            return Self::watch().await;
+        }
         match Self::remote().await {
             Ok(c) => Ok(c),
             Err(e) if format!("{e:#}").contains("cancelled") => Err(e),

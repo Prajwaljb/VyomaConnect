@@ -1134,6 +1134,7 @@ name = "vyoma-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "libc",
  "rcgen",
  "ring",
@@ -1145,6 +1146,18 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "vyoma-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "vyoma-core",
 ]
 
 [[package]]
@@ -1167,6 +1180,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vyoma-core",
+ "vyoma-engine",
 ]
 
 [[package]]

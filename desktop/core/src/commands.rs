@@ -113,7 +113,7 @@ impl Commands {
         let all = self.all();
         let c = all.get(key)?;
         let (name, command) = (c["name"].as_str()?.to_owned(), c["command"].as_str()?);
-        match std::process::Command::new("sh").args(["-c", command]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn() {
+        match shell(command).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn() {
             // Reaped on its own thread; it may run for as long as it likes.
             Ok(child) => {
                 let name = name.clone();
@@ -122,16 +122,48 @@ impl Commands {
                     // 127: no such program, 126: it can't be run. The phone can't be told (stock
                     // runcommand has no reply), so the PC says so. Other exit codes are left alone:
                     // plenty of commands use them for ordinary outcomes.
-                    if let Some(code @ (126 | 127)) = out.status.code() {
+                    if let Some(code) = out.status.code()
+                        && let Some(why) = cant_run(code)
+                    {
                         let said = String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or_default().trim().to_owned();
                         tracing::warn!("{name} couldn't run ({code}): {said}");
-                        failed(name, if code == 127 { "Its program isn't on this computer" } else { "Its program can't be run (is it executable?)" });
+                        failed(name, why);
                     }
                 }));
             }
             Err(e) => tracing::warn!("can't run {name}: {e}"),
         }
         Some(name)
+    }
+}
+
+/// The command line as the person would type it: sh on Unix, cmd on Windows (with no console
+/// window popping up for it).
+fn shell(command: &str) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut c = std::process::Command::new("cmd");
+        // As typed: cmd parses its own line, so no quoting of ours gets in the way.
+        c.raw_arg("/D /S /C \"").raw_arg(command).raw_arg("\"").creation_flags(CREATE_NO_WINDOW);
+        c
+    }
+    #[cfg(not(windows))]
+    {
+        let mut c = std::process::Command::new("sh");
+        c.args(["-c", command]);
+        c
+    }
+}
+
+/// Exit codes that mean the command never ran, in words. sh: 127 no such program, 126 can't be
+/// run; cmd: 9009 not recognised.
+fn cant_run(code: i32) -> Option<&'static str> {
+    match code {
+        127 | 9009 => Some("Its program isn't on this computer"),
+        126 if cfg!(unix) => Some("Its program can't be run (is it executable?)"),
+        _ => None,
     }
 }
 
@@ -170,14 +202,16 @@ mod tests {
         let c = Commands::new(&dir);
         assert!(c.run("nope", |_, _| {}).is_none());
         let flag = dir.join("ran");
-        let key = c.add("Touch", &format!("touch '{}'", flag.display())).unwrap();
+        // Each computer's own way to make an empty file (cmd's keeps the quotes as typed).
+        let touch = if cfg!(windows) { format!("type nul > \"{}\"", flag.display()) } else { format!("touch '{}'", flag.display()) };
+        let key = c.add("Touch", &touch).unwrap();
         let list: Value = serde_json::from_str(c.list_packet()["body"]["commandList"].as_str().unwrap()).unwrap();
         assert_eq!(list[&key]["name"], "Touch");
-        assert_eq!(c.save_one(&key, "Touch it", &format!("touch '{}'", flag.display()), true, true).unwrap(), key);
+        assert_eq!(c.save_one(&key, "Touch it", &touch, true, true).unwrap(), key);
         let list: Value = serde_json::from_str(c.list_packet()["body"]["commandList"].as_str().unwrap()).unwrap();
         assert_eq!((list[&key]["name"].as_str(), list[&key]["fingerprint"].as_bool(), list[&key]["everyTime"].as_bool()), (Some("Touch it"), Some(true), Some(true)));
         // Every time means nothing without the fingerprint.
-        c.save_one(&key, "Touch it", &format!("touch '{}'", flag.display()), false, true).unwrap();
+        c.save_one(&key, "Touch it", &touch, false, true).unwrap();
         let list: Value = serde_json::from_str(c.list_packet()["body"]["commandList"].as_str().unwrap()).unwrap();
         assert_eq!(list[&key]["everyTime"].as_bool(), Some(false));
         assert!(c.save_one("", " ", "true", false, false).is_err());
@@ -193,4 +227,12 @@ mod tests {
         assert!(c.run(&key, |_, _| {}).is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn says_when_a_command_never_ran() {
+        assert_eq!(cant_run(127), Some("Its program isn't on this computer"));
+        assert_eq!(cant_run(9009), Some("Its program isn't on this computer"), "cmd's word for it");
+        assert_eq!(cant_run(1), None, "an ordinary outcome");
+    }
+
 }

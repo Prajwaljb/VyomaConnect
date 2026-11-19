@@ -15,6 +15,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use tracing::{info, warn};
 
+use vyoma_companion::platform::Linux;
 use vyoma_companion::session::{self, Host, Phone, phone_name};
 use vyoma_companion::{bluetooth, mirror, gamepad, kde, media, setup, tether, usb, webcam};
 use vyoma_core::{identity, link};
@@ -63,6 +64,7 @@ struct Shared {
     host: KdeHost,
     /// Its features, which each phone's session serves.
     features: Arc<Host>,
+    platform: Arc<Linux>,
     links: Links,
     /// Last address each trusted phone announced, so we can redial without waiting for mDNS.
     seen: Mutex<HashMap<String, SocketAddr>>,
@@ -100,7 +102,7 @@ async fn daemon() -> Result<()> {
             None
         }
     };
-    let shared = Arc::new(Shared { host, features: Arc::new(Host { me: Arc::new(me), media, away: Arc::default(), permits: Arc::default(), activity: Arc::default() }), links: Links::default(), seen: Mutex::default(), sessions: Mutex::default() });
+    let shared = Arc::new(Shared { host, features: Arc::new(Host { me: Arc::new(me), permits: Arc::default(), activity: Arc::default() }), platform: Arc::new(Linux { media, away: Arc::default() }), links: Links::default(), seen: Mutex::default(), sessions: Mutex::default() });
 
     tokio::spawn(setup::offer());
     tokio::spawn(usb::watch());
@@ -211,8 +213,8 @@ fn identity_packet(shared: &Shared) -> Value {
             "deviceName": format!("{} companion", shared.host.name),
             "deviceType": "desktop",
             "protocolVersion": 8,
-            "incomingCapabilities": session::INCOMING,
-            "outgoingCapabilities": session::OUTGOING,
+            "incomingCapabilities": session::incoming_all(),
+            "outgoingCapabilities": session::outgoing_all(),
             // Lets Vyoma show us as part of this PC instead of as a second computer.
             "vyomaHost": shared.host.device_id,
         }),
@@ -351,9 +353,9 @@ async fn run(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u
         .send(&packet("kdeconnect.pair", json!({ "pair": true, "timestamp": ts, "vyomaHost": shared.host.device_id, "vyomaHostProof": proof })))
         .await?;
 
-    shared.features.away.linked(phone_id, shared.features.media.as_ref()).await;
+    shared.platform.away.linked(phone_id, shared.platform.media.as_ref()).await;
     let result = serve(shared, phone_id, addr, pinned, &mut link, &name).await;
-    shared.features.away.unlinked(phone_id, shared.features.media.clone());
+    shared.platform.away.unlinked(phone_id, shared.platform.media.clone());
     result
 }
 
@@ -362,7 +364,7 @@ async fn run(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u
 async fn serve(shared: &Arc<Shared>, phone_id: &str, addr: SocketAddr, pinned: &[u8], link: &mut link::Link, name: &str) -> Result<()> {
     let (packets, rx) = tokio::sync::mpsc::unbounded_channel();
     let phone = Phone { id: phone_id.to_string(), name: name.to_string(), pinned: pinned.to_vec() };
-    let session = tokio::spawn(session::serve(shared.features.clone(), phone, link.sender.clone(), rx));
+    let session = tokio::spawn(session::serve(shared.platform.clone(), shared.features.clone(), phone, link.sender.clone(), rx));
     let mut trust_check = tokio::time::interval(TRUST_CHECK);
     let replaced = Arc::new(tokio::sync::Notify::new());
     shared.sessions.lock().unwrap().insert(phone_id.to_string(), replaced.clone());
