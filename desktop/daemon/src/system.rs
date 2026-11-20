@@ -10,11 +10,7 @@ use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use zbus::{Connection, MatchRule, MessageStream, OwnedObjectPath, OwnedVariant};
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Battery {
-    pub charge: i64,
-    pub charging: bool,
-}
+pub use vyoma_engine::stock::Battery;
 
 /// The PC's own batteries as one (a laptop may have two), or None on a desktop.
 pub fn battery() -> Option<Battery> {

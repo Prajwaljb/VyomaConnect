@@ -65,11 +65,7 @@ pub fn name() -> String {
     std::env::var("COMPUTERNAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "Windows PC".into())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Battery {
-    pub charge: i64,
-    pub charging: bool,
-}
+pub use vyoma_engine::stock::Battery;
 
 fn power_status() -> Option<SYSTEM_POWER_STATUS> {
     // SAFETY: fills the struct we pass.

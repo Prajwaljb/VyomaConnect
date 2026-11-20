@@ -6,16 +6,15 @@
 //! desktop (UAC prompts, the lock screen); there SendInput lands nowhere, as with any normal app.
 //! Built and tested on CI and under Wine only; not yet run on a real Windows PC.
 
-use serde_json::{Value, json};
-use vyoma_core::link::packet;
+use serde_json::Value;
+use vyoma_engine::mousepad::{self as pad, Key, Mod};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
     MOUSE_EVENT_FLAGS, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE,
     MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput, VkKeyScanW,
 };
 
-pub const MOUSEPAD_REQUEST: &str = "kdeconnect.mousepad.request";
-pub const MOUSEPAD_ECHO: &str = "kdeconnect.mousepad.echo";
+pub use vyoma_engine::mousepad::{Button, MOUSEPAD_ECHO, MOUSEPAD_REQUEST, echo};
 
 /// Virtual keys.
 pub const SHIFT: u16 = 0x10;
@@ -36,16 +35,11 @@ pub const RIGHT: u16 = 0x27;
 const DOWN: u16 = 0x28;
 const DELETE: u16 = 0x2E;
 const F1: u16 = 0x70;
+const SNAPSHOT: u16 = 0x2C;
+const SCROLL: u16 = 0x91;
 
 /// Pixels of the phone's scroll per wheel unit (120 units a notch, about three lines).
 const SCROLL_SCALE: f64 = 2.4;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Button {
-    Left,
-    Right,
-    Middle,
-}
 
 /// One thing the phone asked, in the order it's done.
 #[derive(Clone, Debug, PartialEq)]
@@ -89,81 +83,68 @@ fn absolute(x: f64, y: f64, display: Area, all: Area) -> (i32, i32) {
     (ax.round() as i32, ay.round() as i32)
 }
 
-/// The live screen's touches (`vyoma.screen.input`/`touch`) as acts on the cast display: taps and
-/// drags with the left button, a long press's right click, scrolls there, typing and keys (the
-/// phone's names; its Super is the Start menu).
-pub fn touch_acts(i: &Value) -> Vec<Act> {
-    let at = || Act::At(i["x"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0), i["y"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0));
-    match i["kind"].as_str().unwrap_or("") {
-        "click" => vec![at(), Act::Button(Button::Left, true), Act::Button(Button::Left, false)],
-        "right" => vec![at(), Act::Button(Button::Right, true), Act::Button(Button::Right, false)],
-        "down" => vec![at(), Act::Button(Button::Left, true)],
-        "move" => vec![at()],
-        "up" => vec![at(), Act::Button(Button::Left, false)],
-        "scroll" => vec![at(), Act::Scroll(i["dx"].as_f64().unwrap_or(0.0), i["dy"].as_f64().unwrap_or(0.0))],
-        "text" => {
-            let text: String = i["text"].as_str().unwrap_or("").chars().take(4096).collect();
-            acts(&json!({ "key": text }))
-        }
-        "key" => {
-            let mods: Vec<u16> = i["mods"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|m| match m.as_str()? {
-                    "ctrl" => Some(CONTROL),
-                    "alt" => Some(ALT),
-                    "super" => Some(WIN),
-                    "shift" => Some(SHIFT),
-                    _ => None,
-                })
-                .collect();
-            let code = match i["key"].as_str().unwrap_or("") {
-                "BackSpace" => BACK,
-                "Tab" => TAB,
-                "Return" => RETURN,
-                "Escape" => ESCAPE,
-                "Delete" => DELETE,
-                "Home" => HOME,
-                "End" => END,
-                "Left" => LEFT,
-                "Right" => RIGHT,
-                "Up" => UP,
-                "Down" => DOWN,
-                "PageUp" => PRIOR,
-                "PageDown" => NEXT,
-                "Super" => WIN,
-                one if one.chars().count() == 1 => match one.chars().next().and_then(key_of) {
-                    Some(code) => code,
-                    None => return Vec::new(),
-                },
-                _ => return Vec::new(),
-            };
-            vec![Act::Key(code, mods)]
-        }
-        _ => Vec::new(),
+/// A key that types nothing, as a virtual key.
+fn vk(key: Key) -> u16 {
+    match key {
+        Key::Backspace => BACK,
+        Key::Tab => TAB,
+        Key::Return => RETURN,
+        Key::Left => LEFT,
+        Key::Up => UP,
+        Key::Right => RIGHT,
+        Key::Down => DOWN,
+        Key::PageUp => PRIOR,
+        Key::PageDown => NEXT,
+        Key::Home => HOME,
+        Key::End => END,
+        Key::Delete => DELETE,
+        Key::Escape => ESCAPE,
+        Key::Print => SNAPSHOT,
+        Key::ScrollLock => SCROLL,
+        Key::F(n) => F1 + u16::from(n.clamp(1, 12)) - 1,
+        Key::Super => WIN,
     }
 }
 
-/// KDE Connect's special key numbers as virtual keys.
-fn special(n: i64) -> Option<u16> {
-    Some(match n {
-        1 => BACK,
-        2 => TAB,
-        3 | 12 => RETURN,
-        4 => LEFT,
-        5 => UP,
-        6 => RIGHT,
-        7 => DOWN,
-        8 => PRIOR,
-        9 => NEXT,
-        10 => HOME,
-        11 => END,
-        13 => DELETE,
-        14 => ESCAPE,
-        21..=32 => F1 + (n - 21) as u16,
-        _ => return None,
-    })
+/// The phone's Ctrl is Ctrl here, its Super the Windows key.
+fn modifiers(mods: &[Mod]) -> Vec<u16> {
+    mods.iter()
+        .map(|m| match m {
+            Mod::Ctrl => CONTROL,
+            Mod::Alt => ALT,
+            Mod::Super => WIN,
+            Mod::Shift => SHIFT,
+        })
+        .collect()
+}
+
+/// What the engine read, as SendInput's acts.
+fn local(a: pad::Act) -> Vec<Act> {
+    let click = |button| [Act::Button(button, true), Act::Button(button, false)];
+    match a {
+        pad::Act::Move(x, y) => vec![Act::Move(x, y)],
+        pad::Act::Scroll(x, y) => vec![Act::Scroll(x, y)],
+        pad::Act::At(x, y) => vec![Act::At(x, y)],
+        pad::Act::Click(b) => click(b).to_vec(),
+        // Two clicks close together: Windows makes them a double click by itself.
+        pad::Act::DoubleClick => [click(Button::Left), click(Button::Left)].concat(),
+        pad::Act::Button(b, down) => vec![Act::Button(b, down)],
+        pad::Act::Key(k, mods) => vec![Act::Key(vk(k), modifiers(&mods))],
+        pad::Act::Shortcut(c, mods) => key_of(c).map(|code| Act::Key(code, modifiers(&mods))).into_iter().collect(),
+        pad::Act::Text(t) => vec![Act::Text(t)],
+    }
+}
+
+/// What a mousepad packet does.
+pub fn acts(b: &Value) -> Vec<Act> {
+    pad::acts(b).into_iter().flat_map(local).collect()
+}
+
+/// The live screen's touches (`vyoma.screen.input`/`touch`) as acts on the cast display: taps and
+/// drags with the left button, a long press's right click, scrolls there, typing and keys (the
+/// phone's Super is the Start menu).
+pub fn touch_acts(i: &Value) -> Vec<Act> {
+    pad::touch_acts(i).into_iter().flat_map(local).collect()
 }
 
 /// The key that types [c] on this PC's layout, for shortcuts; letters and digits fall back to
@@ -179,78 +160,6 @@ fn key_of(c: char) -> Option<u16> {
     }
     let up = c.to_ascii_uppercase();
     up.is_ascii_alphanumeric().then_some(up as u16)
-}
-
-/// What a mousepad packet does. The phone's Ctrl is Ctrl here, its Super the Windows key.
-pub fn acts(b: &Value) -> Vec<Act> {
-    let f = |k: &str| b[k].as_f64().unwrap_or(0.0);
-    let on = |k: &str| b[k].as_bool() == Some(true);
-    let click = |button| vec![Act::Button(button, true), Act::Button(button, false)];
-    if on("singleclick") {
-        return click(Button::Left);
-    }
-    if on("doubleclick") {
-        // Two clicks close together: Windows makes them a double click by itself.
-        return [click(Button::Left), click(Button::Left)].concat();
-    }
-    if on("rightclick") {
-        return click(Button::Right);
-    }
-    if on("middleclick") {
-        return click(Button::Middle);
-    }
-    if on("singlehold") {
-        return vec![Act::Button(Button::Left, true)];
-    }
-    if on("singlerelease") {
-        return vec![Act::Button(Button::Left, false)];
-    }
-    if on("scroll") {
-        return vec![Act::Scroll(f("dx"), f("dy"))];
-    }
-    if b["key"].is_string() || b["specialKey"].is_i64() {
-        let text = b["key"].as_str().unwrap_or("");
-        let mods: Vec<u16> = [("ctrl", CONTROL), ("alt", ALT), ("super", WIN), ("shift", SHIFT)].into_iter().filter(|(k, _)| on(k)).map(|(_, v)| v).collect();
-        if let Some(n) = b["specialKey"].as_i64() {
-            return special(n).map(|code| vec![Act::Key(code, mods)]).unwrap_or_default();
-        }
-        // A shortcut holds what it names; plain typing (Shift alone included) is its characters.
-        if mods.iter().any(|&m| m != SHIFT) {
-            return text.chars().filter_map(key_of).map(|code| Act::Key(code, mods.clone())).collect();
-        }
-        let mut out = Vec::new();
-        let mut run = String::new();
-        for c in text.chars() {
-            match c {
-                '\n' | '\r' | '\t' => {
-                    if !run.is_empty() {
-                        out.push(Act::Text(std::mem::take(&mut run)));
-                    }
-                    out.push(Act::Key(if c == '\t' { TAB } else { RETURN }, Vec::new()));
-                }
-                _ => run.push(c),
-            }
-        }
-        if !run.is_empty() {
-            out.push(Act::Text(run));
-        }
-        return out;
-    }
-    if b["dx"].is_number() || b["dy"].is_number() {
-        return vec![Act::Move(f("dx"), f("dy"))];
-    }
-    Vec::new()
-}
-
-/// The echo a device asks for with `sendAck`.
-pub fn echo(b: &Value) -> Option<Value> {
-    if b["sendAck"].as_bool() != Some(true) {
-        return None;
-    }
-    let mut body = b.clone();
-    body["isAck"] = json!(true);
-    body.as_object_mut()?.remove("sendAck");
-    Some(packet(MOUSEPAD_ECHO, body))
 }
 
 /// Keys Windows wants marked extended: on the arrow/navigation block, not the number pad.
@@ -365,6 +274,7 @@ fn send(all: &[INPUT]) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn reads_the_phone_as_the_mac_does() {

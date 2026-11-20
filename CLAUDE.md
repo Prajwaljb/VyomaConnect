@@ -47,7 +47,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   (`session::serve<P: Platform>`: routing, permits, Activity, task lifetimes) and `platform::Platform`, one method per piece
   of work (default: not on this computer) plus `supports(Feature)`, from which `capabilities` makes the identity's lists.
   Linux's is `companion/src/platform.rs` (`Linux`, used by the daemon and the companion), the Mac's `mac/src/platform.rs`
-  (`Mac`, `Mac::offers` before there's one; the wallpaper path is fed from the main thread). `gamepad::drive` is the phone's controller for every side (states in order, the fast routes, the pad remade for another kind, rumble back, the gyro mouse), each side's pads behind `gamepad::Pads` (uinput on Linux, USB/IP on Windows). Stock plugins are next.
+  (`Mac`, `Mac::offers` before there's one; the wallpaper path is fed from the main thread). `stock` is the stock plugins once (ping, battery, find, lock so far; each side's `Desk` shows, rings and locks), `mousepad` reads the touchpad/keyboard/live-screen packets once into neutral acts each side maps to its own codes. `gamepad::drive` is the phone's controller for every side (states in order, the fast routes, the pad remade for another kind, rumble back, the gyro mouse), each side's pads behind `gamepad::Pads` (uinput on Linux, USB/IP on Windows). Stock plugins are next.
 - `desktop/daemon` (`vyoma-desktop`): the standalone desktop app growing on that core (`docs/PLAN.md` section 10): pairing
   prompt as a freedesktop notification with Accept/Reject, `dev.vyoma.Desktop1` D-Bus control for the future GUI;
   stock plugins in `plugins.rs`, `clipboard.rs` (wl-clipboard), `share.rs` (files land in XDG Downloads), `media.rs`

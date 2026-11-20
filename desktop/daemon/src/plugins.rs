@@ -1,11 +1,10 @@
-//! The stock KDE Connect plugins, the PC's part of each, as the phone's plugins expect it
-//! (core/protocol's SimplePlugins.kt and PhonePlugins.kt): ping, battery both ways, the PC's screen
-//! lock and ringing either side. The clipboard and sharing are in their
-//! own modules.
+//! The stock KDE Connect plugins on Linux: what the engine's [vyoma_engine::stock] does through
+//! this PC's notifications, ringer and logind session, plus the lists of what we take and send.
+//! The clipboard and sharing are in their own modules.
 //!
 //! A packet only goes to a paired device whose identity says it takes that type.
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::DeviceView;
 use crate::clipboard::{CLIPBOARD, CLIPBOARD_CONNECT};
@@ -21,13 +20,8 @@ use crate::presenter::PRESENTER;
 use crate::phonefiles::{SFTP, SFTP_REQUEST};
 use crate::notify::{Notice, Notifier};
 use crate::system::{Battery, Ringer, Session};
-use vyoma_core::link::packet;
-
-pub const PING: &str = "kdeconnect.ping";
-pub const BATTERY: &str = "kdeconnect.battery";
-pub const FIND: &str = "kdeconnect.findmyphone.request";
-pub const LOCK: &str = "kdeconnect.lock";
-pub const LOCK_REQUEST: &str = "kdeconnect.lock.request";
+use vyoma_engine::stock::{self, Desk};
+pub use vyoma_engine::stock::{BATTERY, FIND, LOCK, LOCK_REQUEST, PING, battery_packet, lock_packet};
 
 /// What we take. Not lock requests outward: phones can't be locked that way, and a KDE PC would lock.
 pub const INCOMING: &[&str] = &[PING, BATTERY, FIND, LOCK_REQUEST, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, MPRIS_REQUEST, VOLUME_REQUEST, RUNCOMMAND_REQUEST, NOTIFICATION, MOUSEPAD_REQUEST, TELEPHONY, telephony::DONE, PRESENTER, SFTP, messages::MESSAGES, messages::CONTACTS_UIDS_REPLY, messages::CONTACTS_VCARDS_REPLY, messages::UNLOCKED, messages::LOCKED];
@@ -55,15 +49,6 @@ pub fn started(device: &DeviceView, battery: Option<Battery>, locked: Option<boo
     out
 }
 
-pub fn battery_packet(b: Battery) -> Value {
-    // Low is the phone's to judge for itself; a PC sends no threshold event, as kdeconnectd.
-    packet(BATTERY, json!({ "currentCharge": b.charge, "isCharging": b.charging, "thresholdEvent": 0 }))
-}
-
-pub fn lock_packet(locked: bool) -> Value {
-    packet(LOCK, json!({ "isLocked": locked }))
-}
-
 /// Shared by the handlers: how to reply and what to touch on this PC.
 pub struct Context<'a> {
     pub notifier: &'a Notifier,
@@ -73,53 +58,36 @@ pub struct Context<'a> {
     pub ring_notice: &'a mut Option<u32>,
 }
 
-/// Handles one packet from a paired device; what to send back.
-pub async fn on_packet(cx: Context<'_>, device: &mut DeviceView, p: &Value) -> Vec<Value> {
-    let body = &p["body"];
-    match p["type"].as_str().unwrap_or("") {
-        PING => {
-            let message = body["message"].as_str().unwrap_or("Ping!");
-            tell(cx.notifier, &device.name, message).await;
-        }
-        BATTERY => {
-            let charge = body["currentCharge"].as_i64().or_else(|| body["currentCharge"].as_str()?.parse().ok()).unwrap_or(-1);
-            let was_low = device.battery.is_some_and(|b| b.2);
-            device.battery = (0..=100).contains(&charge).then(|| (charge, body["isCharging"].as_bool().unwrap_or(false), body["thresholdEvent"].as_i64() == Some(1)));
-            if let Some((charge, _, true)) = device.battery
-                && !was_low
-            {
-                tell(cx.notifier, &format!("{}'s battery is low", device.name), &format!("{charge}% left")).await;
-            }
-        }
-        FIND => {
-            cx.ringer.start();
-            let title = format!("{} is looking for this PC", device.name);
-            let notice = Notice { icon: "smartphone", title: &title, body: "", actions: &[("found", "Found it")], sticky: false, replaces: *cx.ring_notice };
-            *cx.ring_notice = cx.notifier.show(notice).await.ok();
-        }
-        LOCK_REQUEST => {
-            let Some(session) = cx.session else { return Vec::new() };
-            if let Some(lock) = body["setLocked"].as_bool() {
-                // The new state goes out when logind reports it, to every device that follows it.
-                match session.set_locked(lock).await {
-                    Ok(()) => tracing::info!("{}: {} this PC", device.name, if lock { "locked" } else { "unlocked" }),
-                    Err(e) => {
-                        tracing::warn!("{}: {e:#}", device.name);
-                        // Said on the phone, where Lock was pressed (`reason`: the PC can't, not a switch).
-                        let why = format!("{e:#}");
-                        return vec![packet(vyoma_companion::permits::DENIED, json!({ "request": LOCK_REQUEST, "name": "Lock", "reason": why }))];
-                    }
-                }
-            }
-            if body["requestLocked"].as_bool() == Some(true)
-                && let Ok(locked) = session.locked().await
-            {
-                return vec![lock_packet(locked)];
-            }
-        }
-        other => tracing::debug!("{}: no plugin for {other}", device.name),
+impl Desk for Context<'_> {
+    async fn tell(&mut self, title: &str, body: &str) {
+        tell(self.notifier, title, body).await;
     }
-    Vec::new()
+
+    async fn ring(&mut self, phone: &str) {
+        self.ringer.start();
+        let title = format!("{phone} is looking for this PC");
+        let notice = Notice { icon: "smartphone", title: &title, body: "", actions: &[("found", "Found it")], sticky: false, replaces: *self.ring_notice };
+        *self.ring_notice = self.notifier.show(notice).await.ok();
+    }
+
+    async fn set_locked(&mut self, lock: bool) -> Option<anyhow::Result<()>> {
+        // The new state goes out when logind reports it, to every device that follows it.
+        Some(self.session?.set_locked(lock).await)
+    }
+
+    async fn locked(&mut self) -> Option<bool> {
+        self.session?.locked().await.ok()
+    }
+}
+
+/// Handles one packet from a paired device; what to send back.
+pub async fn on_packet(mut cx: Context<'_>, device: &mut DeviceView, p: &Value) -> Vec<Value> {
+    let kind = p["type"].as_str().unwrap_or("");
+    if !stock::handles(kind) {
+        tracing::debug!("{}: no plugin for {kind}", device.name);
+        return Vec::new();
+    }
+    stock::on_packet(&mut cx, &device.name, &mut device.battery, p).await
 }
 
 /// Stops a ring started by a device and takes its notification down.
@@ -139,6 +107,7 @@ pub async fn tell(notifier: &Notifier, title: &str, body: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn paired(incoming: &[&str]) -> DeviceView {
         DeviceView { paired: true, linked: true, incoming: incoming.iter().map(|s| s.to_string()).collect(), ..Default::default() }

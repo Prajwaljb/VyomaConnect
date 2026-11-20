@@ -114,10 +114,7 @@ mod agent {
     use crate::{away, calls, control, firewall, input, media, platform, presenter, system, tray, update, usb, win};
     use vyoma_core::adb::ClipboardSeen;
 
-    pub const PING: &str = "kdeconnect.ping";
-    pub const BATTERY: &str = "kdeconnect.battery";
-    pub const FIND: &str = "kdeconnect.findmyphone.request";
-    pub const LOCK_REQUEST: &str = "kdeconnect.lock.request";
+    use vyoma_engine::stock::{self, BATTERY, Desk, FIND, LOCK_REQUEST, PING, battery_packet};
     pub const NOTIFICATION: &str = "kdeconnect.notification";
     /// PC → phone: `{cancel: id}` (closed here), the reply typed in a toast, one of its buttons.
     const NOTIFICATION_REQUEST: &str = "kdeconnect.notification.request";
@@ -1208,10 +1205,6 @@ mod agent {
         )
     }
 
-    fn battery_packet(b: win::Battery) -> Value {
-        packet(BATTERY, json!({ "currentCharge": b.charge, "isCharging": b.charging, "thresholdEvent": 0 }))
-    }
-
     /// What a paired device that just linked is sent: this PC's battery, its clipboard, and that
     /// it takes typing (the phone's keyboard button).
     fn started(d: &Device, battery: Option<win::Battery>, clip: &Clipboard) -> Vec<Value> {
@@ -1295,34 +1288,35 @@ mod agent {
         }
     }
 
+    /// The stock plugins on Windows: notifications in the notification area, the ringer, the lock.
+    struct WinDesk<'a> {
+        ringer: &'a mut win::Ringer,
+    }
+
+    impl Desk for WinDesk<'_> {
+        async fn tell(&mut self, title: &str, body: &str) {
+            tray::notify(title, body);
+        }
+
+        async fn ring(&mut self, phone: &str) {
+            self.ringer.start();
+            tray::notify(&format!("{phone} is looking for this PC"), "Found it? Open Vyoma or wait a minute; it stops by itself.");
+        }
+
+        async fn set_locked(&mut self, lock: bool) -> Option<Result<()>> {
+            // Windows can be locked from outside, never unlocked.
+            lock.then(win::lock)
+        }
+    }
+
     /// Handles one packet from a paired device; what to send back.
     #[allow(clippy::too_many_arguments)]
     async fn on_packet(id: &str, d: &mut Device, p: &Value, from: IpAddr, me: &Arc<Identity>, clip: &mut Clipboard, ringer: &mut win::Ringer, activity: &Arc<Activity>) -> Vec<Value> {
-        let body = &p["body"];
-        match p["type"].as_str().unwrap_or("") {
-            PING => tray::notify(&d.name, body["message"].as_str().unwrap_or("Ping!")),
-            BATTERY => {
-                let charge = body["currentCharge"].as_i64().or_else(|| body["currentCharge"].as_str()?.parse().ok()).unwrap_or(-1);
-                let was_low = d.battery.is_some_and(|b| b.2);
-                d.battery = (0..=100).contains(&charge).then(|| (charge, body["isCharging"].as_bool().unwrap_or(false), body["thresholdEvent"].as_i64() == Some(1)));
-                if let Some((charge, _, true)) = d.battery
-                    && !was_low
-                {
-                    tray::notify(&format!("{}'s battery is low", d.name), &format!("{charge}% left"));
-                }
-            }
-            FIND => {
-                ringer.start();
-                tray::notify(&format!("{} is looking for this PC", d.name), "Found it? Open Vyoma or wait a minute; it stops by itself.");
-            }
-            LOCK_REQUEST => {
-                if body["setLocked"].as_bool() == Some(true) {
-                    match win::lock() {
-                        Ok(()) => tracing::info!("{}: locked this PC", d.name),
-                        Err(e) => tracing::warn!("{}: {e:#}", d.name),
-                    }
-                }
-            }
+        let kind = p["type"].as_str().unwrap_or("");
+        if stock::handles(kind) {
+            return stock::on_packet(&mut WinDesk { ringer }, &d.name, &mut d.battery, p).await;
+        }
+        match kind {
             CLIPBOARD | CLIPBOARD_CONNECT => {
                 if let Some(text) = clip.received(p)
                     && let Err(e) = win::set_clipboard(&text)

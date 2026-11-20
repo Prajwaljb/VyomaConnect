@@ -11,11 +11,10 @@
 // Only macOS does anything with most of this; the tests run everywhere.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
-use serde_json::{Value, json};
-use vyoma_core::link::packet;
+use serde_json::Value;
+use vyoma_engine::mousepad::{self as pad, Key, Mod};
 
-pub const MOUSEPAD_REQUEST: &str = "kdeconnect.mousepad.request";
-pub const MOUSEPAD_ECHO: &str = "kdeconnect.mousepad.echo";
+pub use vyoma_engine::mousepad::{Button, MOUSEPAD_ECHO, MOUSEPAD_REQUEST, echo};
 
 /// CGEventFlags.
 pub const SHIFT: u64 = 0x2_0000;
@@ -25,13 +24,6 @@ pub const COMMAND: u64 = 0x10_0000;
 
 const RETURN: u16 = 36;
 const TAB: u16 = 48;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Button {
-    Left,
-    Right,
-    Middle,
-}
 
 /// One thing the phone asked, in the order it's done.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,36 +42,70 @@ pub enum Act {
     Text(String),
 }
 
-/// KDE Connect's special key numbers as Mac virtual key codes.
-fn special(n: i64) -> Option<u16> {
-    Some(match n {
-        1 => 51,       // Backspace (the Mac's Delete)
-        2 => TAB,      // Tab
-        3 | 12 => RETURN, // Linefeed, Return
-        4 => 123,      // Left
-        5 => 126,      // Up
-        6 => 124,      // Right
-        7 => 125,      // Down
-        8 => 116,      // Page Up
-        9 => 121,      // Page Down
-        10 => 115,     // Home
-        11 => 119,     // End
-        13 => 117,     // Delete (forward)
-        14 => 53,      // Escape
-        21 => 122,     // F1
-        22 => 120,
-        23 => 99,
-        24 => 118,
-        25 => 96,
-        26 => 97,
-        27 => 98,
-        28 => 100,
-        29 => 101,
-        30 => 109,     // F10
-        31 => 103,     // F11
-        32 => 111,     // F12
-        _ => return None,
+/// A key that types nothing, as a Mac virtual key code (with the flags it needs); None where a
+/// Mac keyboard has no such key.
+fn vk(key: Key) -> Option<(u16, u64)> {
+    Some(match key {
+        // The Mac's Delete.
+        Key::Backspace => (51, 0),
+        Key::Tab => (TAB, 0),
+        Key::Return => (RETURN, 0),
+        Key::Left => (123, 0),
+        Key::Up => (126, 0),
+        Key::Right => (124, 0),
+        Key::Down => (125, 0),
+        Key::PageUp => (116, 0),
+        Key::PageDown => (121, 0),
+        Key::Home => (115, 0),
+        Key::End => (119, 0),
+        // Forward delete.
+        Key::Delete => (117, 0),
+        Key::Escape => (53, 0),
+        Key::F(n) => ([122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111][usize::from(n.clamp(1, 12)) - 1], 0),
+        // The PC's launcher key: Spotlight.
+        Key::Super => (49, COMMAND),
+        Key::Print | Key::ScrollLock => return None,
     })
+}
+
+/// The phone's Ctrl is Command (so Ctrl+C copies), Alt is Option, Super is Control.
+fn flags(mods: &[Mod]) -> u64 {
+    mods.iter().fold(0, |all, m| {
+        all | match m {
+            Mod::Ctrl => COMMAND,
+            Mod::Alt => OPTION,
+            Mod::Super => CONTROL,
+            Mod::Shift => SHIFT,
+        }
+    })
+}
+
+/// What the engine read, as CGEvents' acts.
+fn local(a: pad::Act) -> Vec<Act> {
+    let click = |button| vec![Act::Button(button, true), Act::Button(button, false)];
+    match a {
+        pad::Act::Move(x, y) => vec![Act::Move(x, y)],
+        pad::Act::Scroll(x, y) => vec![Act::Scroll(x, y)],
+        pad::Act::At(x, y) => vec![Act::At(x, y)],
+        pad::Act::Click(b) => click(b),
+        pad::Act::DoubleClick => [click(Button::Left), vec![Act::Double]].concat(),
+        pad::Act::Button(b, down) => vec![Act::Button(b, down)],
+        // Spotlight's Command+Space is that, whatever else is held.
+        pad::Act::Key(Key::Super, _) => vec![Act::Key(49, COMMAND)],
+        pad::Act::Key(k, mods) => vk(k).map(|(code, own)| Act::Key(code, own | flags(&mods))).into_iter().collect(),
+        pad::Act::Shortcut(c, mods) => key_of(c).map(|code| Act::Key(code, flags(&mods))).into_iter().collect(),
+        pad::Act::Text(t) => vec![Act::Text(t)],
+    }
+}
+
+/// What a mousepad packet does.
+pub fn acts(b: &Value) -> Vec<Act> {
+    pad::acts(b).into_iter().flat_map(local).collect()
+}
+
+/// A touch on this Mac's screen as the phone shows it (the engine's [pad::touch_acts]).
+pub fn touch_acts(i: &Value) -> Vec<Act> {
+    pad::touch_acts(i).into_iter().flat_map(local).collect()
 }
 
 /// The US-layout key for [c], for shortcuts.
@@ -93,132 +119,6 @@ fn key_of(c: char) -> Option<u16> {
     ];
     let c = c.to_ascii_lowercase();
     KEYS.iter().find(|(k, _)| *k == c).map(|(_, code)| *code)
-}
-
-/// What a mousepad packet does.
-pub fn acts(b: &Value) -> Vec<Act> {
-    let f = |k: &str| b[k].as_f64().unwrap_or(0.0);
-    let on = |k: &str| b[k].as_bool() == Some(true);
-    let click = |button| vec![Act::Button(button, true), Act::Button(button, false)];
-    if on("singleclick") {
-        return click(Button::Left);
-    }
-    if on("doubleclick") {
-        return [click(Button::Left), vec![Act::Double]].concat();
-    }
-    if on("rightclick") {
-        return click(Button::Right);
-    }
-    if on("middleclick") {
-        return click(Button::Middle);
-    }
-    if on("singlehold") {
-        return vec![Act::Button(Button::Left, true)];
-    }
-    if on("singlerelease") {
-        return vec![Act::Button(Button::Left, false)];
-    }
-    if on("scroll") {
-        return vec![Act::Scroll(f("dx"), f("dy"))];
-    }
-    if b["key"].is_string() || b["specialKey"].is_i64() {
-        let text = b["key"].as_str().unwrap_or("");
-        let flags = [("ctrl", COMMAND), ("alt", OPTION), ("super", CONTROL), ("shift", SHIFT)].into_iter().filter(|(k, _)| on(k)).fold(0, |all, (_, f)| all | f);
-        if let Some(n) = b["specialKey"].as_i64() {
-            return special(n).map(|code| vec![Act::Key(code, flags)]).unwrap_or_default();
-        }
-        // A shortcut holds what it names; plain typing (Shift alone included) is its characters.
-        if flags & !SHIFT != 0 {
-            return text.chars().filter_map(key_of).map(|code| Act::Key(code, flags)).collect();
-        }
-        let mut out = Vec::new();
-        let mut run = String::new();
-        for c in text.chars() {
-            match c {
-                '\n' | '\r' | '\t' => {
-                    if !run.is_empty() {
-                        out.push(Act::Text(std::mem::take(&mut run)));
-                    }
-                    out.push(Act::Key(if c == '\t' { TAB } else { RETURN }, 0));
-                }
-                _ => run.push(c),
-            }
-        }
-        if !run.is_empty() {
-            out.push(Act::Text(run));
-        }
-        return out;
-    }
-    if b["dx"].is_number() || b["dy"].is_number() {
-        return vec![Act::Move(f("dx"), f("dy"))];
-    }
-    Vec::new()
-}
-
-/// A touch on this Mac's screen as the phone shows it (`vyoma.screen.input`, a line of the touch
-/// stream): x, y 0..1 across the picture. Kinds: "click", "right", "down" / "move" / "up" (a
-/// left-button drag), "scroll" (dx, dy in pixels, positive down), "scrollend"; typing as "text"
-/// and "key" (BackSpace, Return, Escape, Tab, Delete, Home, End, arrows, PageUp/PageDown, Super, or
-/// one character, with `mods` ctrl/alt/super/shift: the phone's Ctrl is Command, as on the touchpad).
-pub fn touch_acts(i: &Value) -> Vec<Act> {
-    let at = || Act::At(i["x"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0), i["y"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0));
-    match i["kind"].as_str().unwrap_or("") {
-        "click" => vec![at(), Act::Button(Button::Left, true), Act::Button(Button::Left, false)],
-        "right" => vec![at(), Act::Button(Button::Right, true), Act::Button(Button::Right, false)],
-        "down" => vec![at(), Act::Button(Button::Left, true)],
-        "move" => vec![at()],
-        "up" => vec![at(), Act::Button(Button::Left, false)],
-        "scroll" => vec![at(), Act::Scroll(i["dx"].as_f64().unwrap_or(0.0), i["dy"].as_f64().unwrap_or(0.0))],
-        "text" => {
-            let text: String = i["text"].as_str().unwrap_or("").chars().take(4096).collect();
-            acts(&json!({ "key": text }))
-        }
-        "key" => {
-            let flags = i["mods"].as_array().into_iter().flatten().filter_map(|m| match m.as_str()? {
-                "ctrl" => Some(COMMAND),
-                "alt" => Some(OPTION),
-                "super" => Some(CONTROL),
-                "shift" => Some(SHIFT),
-                _ => None,
-            });
-            let flags = flags.fold(0, |all, f| all | f);
-            let code = match i["key"].as_str().unwrap_or("") {
-                "BackSpace" => 51,
-                "Tab" => TAB,
-                "Return" => RETURN,
-                "Escape" => 53,
-                "Delete" => 117,
-                "Home" => 115,
-                "End" => 119,
-                "Left" => 123,
-                "Right" => 124,
-                "Up" => 126,
-                "Down" => 125,
-                "PageUp" => 116,
-                "PageDown" => 121,
-                // The PC's launcher key: Spotlight.
-                "Super" => return vec![Act::Key(49, COMMAND)],
-                one if one.chars().count() == 1 => match one.chars().next().and_then(key_of) {
-                    Some(code) => code,
-                    None => return Vec::new(),
-                },
-                _ => return Vec::new(),
-            };
-            vec![Act::Key(code, flags)]
-        }
-        _ => Vec::new(),
-    }
-}
-
-/// The echo a device asks for with `sendAck`.
-pub fn echo(b: &Value) -> Option<Value> {
-    if b["sendAck"].as_bool() != Some(true) {
-        return None;
-    }
-    let mut body = b.clone();
-    body["isAck"] = json!(true);
-    body.as_object_mut()?.remove("sendAck");
-    Some(packet(MOUSEPAD_ECHO, body))
 }
 
 #[cfg(target_os = "macos")]
@@ -535,6 +435,7 @@ mod mac {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn clicks_moves_and_scrolls() {

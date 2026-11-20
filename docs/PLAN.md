@@ -428,8 +428,15 @@ Progress (2026-11-19):
    stats/specs/power/files and paste/Spaces routing is gone. Changes a Mac user notices: a new
    wallpaper reaches the phone without it asking, and the phone's name in Activity is cleaned as on
    Linux.
-3. Next: the stock plugins (ping, battery, find, lock, clipboard, share, MPRIS, volume, run command,
-   notifications, mousepad, telephony, presenter, messages) into the engine, behind the same trait.
+3. The stock plugins into the engine (2026-11-20, under way): `engine::stock` (ping, battery both
+   ways, ringing this PC, its lock: what a packet means, through a `Desk` each side implements with
+   its own notifications, ringer and lock; a lock that fails now tells the phone why on the Mac and
+   Windows too) and `engine::mousepad` (the touchpad, keyboard and live-screen touches read once, in
+   the phone's terms: buttons, named keys, the phone's modifiers, shortcuts by character, text; each
+   side maps them to its own key codes, Linux through the layout). Linux, the Mac and Windows all use
+   both; each side's own input tests pass unchanged on top. Next: clipboard and share (the file's
+   landing and its notifications), notifications, MPRIS and volume, run command, telephony,
+   presenter, messages.
 4. Hyprland and Windows were taken first (user, 2026-11-19); then the window's method table, then
    probing per capability and This PC's report.
 

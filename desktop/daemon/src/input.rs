@@ -7,7 +7,8 @@
 //! Characters are pressed as the real key that types them in the desktop's layout, with Shift when
 //! that key needs it: sending keysyms through the portal doubled letters and then lost keys (seen
 //! with the companion 2026-11-04, and here 2026-11-07). Only what no key types goes as a keysym.
-//! Special keys are KDE Connect's numbers.
+//! What each packet asks is the engine's reading ([vyoma_engine::mousepad]); this turns it into
+//! evdev codes and keysyms.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -17,12 +18,10 @@ use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
-use vyoma_core::link::packet;
 use zbus::{Connection, MatchRule, MessageStream, OwnedObjectPath, OwnedVariant, Variant};
 
-pub const MOUSEPAD_REQUEST: &str = "kdeconnect.mousepad.request";
-pub const MOUSEPAD_ECHO: &str = "kdeconnect.mousepad.echo";
-pub const MOUSEPAD_KEYBOARDSTATE: &str = "kdeconnect.mousepad.keyboardstate";
+pub use vyoma_engine::mousepad::{MOUSEPAD_ECHO, MOUSEPAD_KEYBOARDSTATE, MOUSEPAD_REQUEST, echo, keyboard_state};
+use vyoma_engine::mousepad::{self as pad, Button, Key, Mod};
 
 const PORTAL: &str = "org.freedesktop.portal.Desktop";
 const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -37,31 +36,6 @@ const KEY_LEFTALT: i32 = 56;
 const KEY_LEFTMETA: i32 = 125;
 const KEYSYM_RETURN: i32 = 0xff0d;
 const KEYSYM_TAB: i32 = 0xff09;
-
-/// KDE Connect's special key numbers as evdev codes (0: none).
-fn special(n: i64) -> Option<i32> {
-    Some(match n {
-        1 => 14,        // Backspace
-        2 => 15,        // Tab
-        3 | 12 => 28,   // Linefeed, Return
-        4 => 105,       // Left
-        5 => 103,       // Up
-        6 => 106,       // Right
-        7 => 108,       // Down
-        8 => 104,       // Page Up
-        9 => 109,       // Page Down
-        10 => 102,      // Home
-        11 => 107,      // End
-        13 => 111,      // Delete
-        14 => 1,        // Escape
-        15 => 99,       // SysRq / Print
-        16 => 70,       // Scroll Lock
-        21..=30 => 59 + (n - 21) as i32, // F1..F10
-        31 => 87,       // F11
-        32 => 88,       // F12
-        _ => return None,
-    })
-}
 
 /// The keysym that types [c]: Latin-1 is its own code, the rest Unicode's (0x0100_0000 + code).
 fn keysym(c: char) -> i32 {
@@ -144,80 +118,88 @@ fn acts(b: &Value) -> Vec<Act> {
 
 /// [acts], with [key] giving the key and Shift that type a keysym.
 fn acts_in(b: &Value, key: &dyn Fn(u32) -> Option<(i32, bool)>) -> Vec<Act> {
-    let f = |k: &str| b[k].as_f64().unwrap_or(0.0);
-    let on = |k: &str| b[k].as_bool() == Some(true);
-    let click = |button| vec![Act::Button(button, true), Act::Button(button, false)];
-    let mut out = Vec::new();
-    if on("singleclick") {
-        out = click(BTN_LEFT);
-    } else if on("doubleclick") {
-        out = [click(BTN_LEFT), click(BTN_LEFT)].concat();
-    } else if on("rightclick") {
-        out = click(BTN_RIGHT);
-    } else if on("middleclick") {
-        out = click(BTN_MIDDLE);
-    } else if on("singlehold") {
-        out.push(Act::Button(BTN_LEFT, true));
-    } else if on("singlerelease") {
-        out.push(Act::Button(BTN_LEFT, false));
-    } else if on("scroll") {
-        out.push(Act::Scroll(f("dx"), f("dy")));
-    } else if b["key"].is_string() || b["specialKey"].is_i64() {
-        let special_key = b["specialKey"].as_i64().and_then(special);
-        let text = b["key"].as_str().unwrap_or("");
-        // A shortcut (Ctrl+Shift+T) holds what it names. Plain typing gets its Shift from the
-        // layout instead: the phone guesses shifted runs from a US keyboard.
-        let shortcut = special_key.is_some() || on("ctrl") || on("alt") || on("super");
-        let mods: Vec<i32> = [("ctrl", KEY_LEFTCTRL), ("alt", KEY_LEFTALT), ("shift", KEY_LEFTSHIFT), ("super", KEY_LEFTMETA)]
-            .into_iter()
-            .filter(|(k, _)| on(k) && (shortcut || *k != "shift"))
-            .map(|(_, c)| c)
-            .collect();
-        if special_key.is_none() && text.is_empty() {
-            return out;
-        }
-        out.extend(mods.iter().map(|m| Act::Key(*m, true)));
-        if let Some(code) = special_key {
-            out.extend([Act::Key(code, true), Act::Key(code, false)]);
-        }
-        for c in text.chars().take(if special_key.is_some() { 0 } else { usize::MAX }) {
-            let sym = keysym(c) as u32;
-            // A shortcut's letter is its key as such: Ctrl+C presses C, whatever case it came in.
-            let found = key(sym).or_else(|| shortcut.then(|| key(keysym(c.to_ascii_lowercase()) as u32)).flatten());
-            match found {
-                Some((code, shift)) => {
-                    let shift = shift && !shortcut;
-                    if shift {
-                        out.push(Act::Key(KEY_LEFTSHIFT, true));
-                    }
-                    out.extend([Act::Key(code, true), Act::Key(code, false)]);
-                    if shift {
-                        out.push(Act::Key(KEY_LEFTSHIFT, false));
-                    }
-                }
-                None => out.extend([Act::Keysym(sym as i32, true), Act::Keysym(sym as i32, false)]),
-            }
-        }
-        out.extend(mods.iter().rev().map(|m| Act::Key(*m, false)));
-    } else if b["dx"].is_number() || b["dy"].is_number() {
-        out.push(Act::Move(f("dx"), f("dy")));
-    }
-    out
+    pad::acts(b).into_iter().flat_map(|a| local(a, key)).collect()
 }
 
-/// The echo a device asks for with `sendAck`.
-fn echo(b: &Value) -> Option<Value> {
-    if b["sendAck"].as_bool() != Some(true) {
-        return None;
+fn button(b: Button) -> i32 {
+    match b {
+        Button::Left => BTN_LEFT,
+        Button::Right => BTN_RIGHT,
+        Button::Middle => BTN_MIDDLE,
     }
-    let mut body = b.clone();
-    body["isAck"] = json!(true);
-    body.as_object_mut()?.remove("sendAck");
-    Some(packet(MOUSEPAD_ECHO, body))
 }
 
-pub fn keyboard_state() -> Value {
-    packet(MOUSEPAD_KEYBOARDSTATE, json!({ "state": true }))
+/// A key that types nothing, as its evdev code.
+fn evdev(key: Key) -> i32 {
+    match key {
+        Key::Backspace => 14,
+        Key::Tab => 15,
+        Key::Return => 28,
+        Key::Left => 105,
+        Key::Up => 103,
+        Key::Right => 106,
+        Key::Down => 108,
+        Key::PageUp => 104,
+        Key::PageDown => 109,
+        Key::Home => 102,
+        Key::End => 107,
+        Key::Delete => 111,
+        Key::Escape => 1,
+        // SysRq / Print.
+        Key::Print => 99,
+        Key::ScrollLock => 70,
+        Key::F(n @ 1..=10) => 58 + i32::from(n),
+        Key::F(11) => 87,
+        Key::F(_) => 88,
+        Key::Super => KEY_LEFTMETA,
+    }
+}
+
+fn modifier(m: Mod) -> i32 {
+    match m {
+        Mod::Ctrl => KEY_LEFTCTRL,
+        Mod::Alt => KEY_LEFTALT,
+        Mod::Shift => KEY_LEFTSHIFT,
+        Mod::Super => KEY_LEFTMETA,
+    }
+}
+
+/// [inner] with [mods] held around it.
+fn held(mods: &[Mod], inner: Vec<Act>) -> Vec<Act> {
+    let codes: Vec<i32> = mods.iter().map(|&m| modifier(m)).collect();
+    codes.iter().map(|&m| Act::Key(m, true)).chain(inner).chain(codes.iter().rev().map(|&m| Act::Key(m, false))).collect()
+}
+
+/// The key that types [c] in the layout, with Shift when it needs it (never in a shortcut, where
+/// Ctrl+C presses C whatever case it came in); a keysym where no key types it.
+fn typed(c: char, key: &dyn Fn(u32) -> Option<(i32, bool)>, shortcut: bool) -> Vec<Act> {
+    let sym = keysym(c) as u32;
+    let found = key(sym).or_else(|| shortcut.then(|| key(keysym(c.to_ascii_lowercase()) as u32)).flatten());
+    match found {
+        Some((code, shift)) => {
+            let press = vec![Act::Key(code, true), Act::Key(code, false)];
+            if shift && !shortcut { held(&[Mod::Shift], press) } else { press }
+        }
+        None => vec![Act::Keysym(sym as i32, true), Act::Keysym(sym as i32, false)],
+    }
+}
+
+/// What the engine read, as portal calls. The phone guesses Shift for typing from a US keyboard,
+/// so plain typing takes its Shift from the layout instead.
+fn local(a: pad::Act, key: &dyn Fn(u32) -> Option<(i32, bool)>) -> Vec<Act> {
+    let click = |b| vec![Act::Button(button(b), true), Act::Button(button(b), false)];
+    match a {
+        pad::Act::Move(x, y) => vec![Act::Move(x, y)],
+        pad::Act::Scroll(x, y) => vec![Act::Scroll(x, y)],
+        pad::Act::Click(b) => click(b),
+        pad::Act::DoubleClick => [click(Button::Left), click(Button::Left)].concat(),
+        pad::Act::Button(b, down) => vec![Act::Button(button(b), down)],
+        pad::Act::Key(k, mods) => held(&mods, vec![Act::Key(evdev(k), true), Act::Key(evdev(k), false)]),
+        pad::Act::Shortcut(c, mods) => held(&mods, typed(c, key, true)),
+        pad::Act::Text(t) => t.chars().flat_map(|c| typed(c, key, false)).collect(),
+        // Only the live screen places the pointer, and that isn't this module's.
+        pad::Act::At(..) => Vec::new(),
+    }
 }
 
 struct Session {

@@ -5,7 +5,9 @@
 //! desktops allow.
 
 pub mod gamepad;
+pub mod mousepad;
 pub mod platform;
 pub mod session;
+pub mod stock;
 
 pub use platform::{Cx, Feature, GamepadInput, Handoff, Platform, Sampler, Started};

@@ -54,10 +54,8 @@ use vyoma_core::share::{self, SHARE, SHARE_UPDATE, Shared};
 use vyoma_core::trust::TrustStore;
 use vyoma_engine::session::{Host, Phone, phone_name};
 
-pub const PING: &str = "kdeconnect.ping";
-pub const BATTERY: &str = "kdeconnect.battery";
-pub const FIND: &str = "kdeconnect.findmyphone.request";
-pub const LOCK_REQUEST: &str = "kdeconnect.lock.request";
+pub use vyoma_engine::stock::{BATTERY, FIND, LOCK_REQUEST, PING, battery_packet};
+use vyoma_engine::stock::{self, Desk};
 pub const NOTIFICATION: &str = "kdeconnect.notification";
 pub const KEYBOARDSTATE: &str = "kdeconnect.mousepad.keyboardstate";
 
@@ -1083,10 +1081,6 @@ fn identity(me: &Identity, name: String, laptop: bool) -> Value {
     )
 }
 
-fn battery_packet(b: mac::Battery) -> Value {
-    packet(BATTERY, json!({ "currentCharge": b.charge, "isCharging": b.charging, "thresholdEvent": 0 }))
-}
-
 /// What a paired device that just linked is sent: this Mac's battery and its clipboard.
 fn started(d: &Device, battery: Option<mac::Battery>, clip: &Clipboard) -> Vec<Value> {
     let mut out = Vec::new();
@@ -1126,40 +1120,46 @@ async fn phone_notification(id: &str, d: &Device, b: &Value) {
     mac::phone_notification(&key, &from, &title, &text).await;
 }
 
+/// The stock plugins on the Mac: its notifications, the ringer with a Found it dialog, display
+/// sleep as the lock.
+struct MacDesk<'a> {
+    ringer: &'a mut mac::Ringer,
+    found: &'a mpsc::UnboundedSender<()>,
+}
+
+impl Desk for MacDesk<'_> {
+    async fn tell(&mut self, title: &str, body: &str) {
+        mac::notify(title, body).await;
+    }
+
+    async fn ring(&mut self, phone: &str) {
+        self.ringer.start();
+        let (found, text) = (self.found.clone(), format!("{phone} is looking for this Mac."));
+        tokio::spawn(async move {
+            if let Ok(child) = mac::ask("Vyoma", &text, "Stop", "Found it", Duration::from_secs(60)) {
+                let _ = child.wait_with_output().await;
+            }
+            let _ = found.send(());
+        });
+    }
+
+    async fn set_locked(&mut self, lock: bool) -> Option<Result<()>> {
+        // The display asleep asks for the password when it wakes; nothing unlocks it from outside.
+        if !lock {
+            return None;
+        }
+        Some(mac::sleep_display().await)
+    }
+}
+
 /// Handles one packet from a paired device; what to send back.
 #[allow(clippy::too_many_arguments)]
 async fn on_packet(id: &str, d: &mut Device, p: &Value, from: IpAddr, me: &Arc<Identity>, clip: &mut Clipboard, ringer: &mut mac::Ringer, found: &mpsc::UnboundedSender<()>, activity: &Arc<Activity>) -> Vec<Value> {
-    let body = &p["body"];
-    match p["type"].as_str().unwrap_or("") {
-        PING => mac::notify(&d.name, body["message"].as_str().unwrap_or("Ping!")).await,
-        BATTERY => {
-            let charge = body["currentCharge"].as_i64().or_else(|| body["currentCharge"].as_str()?.parse().ok()).unwrap_or(-1);
-            let was_low = d.battery.is_some_and(|b| b.2);
-            d.battery = (0..=100).contains(&charge).then(|| (charge, body["isCharging"].as_bool().unwrap_or(false), body["thresholdEvent"].as_i64() == Some(1)));
-            if let Some((charge, _, true)) = d.battery
-                && !was_low
-            {
-                mac::notify(&format!("{}'s battery is low", d.name), &format!("{charge}% left")).await;
-            }
-        }
-        FIND => {
-            ringer.start();
-            let (found, text) = (found.clone(), format!("{} is looking for this Mac.", d.name));
-            tokio::spawn(async move {
-                if let Ok(child) = mac::ask("Vyoma", &text, "Stop", "Found it", Duration::from_secs(60)) {
-                    let _ = child.wait_with_output().await;
-                }
-                let _ = found.send(());
-            });
-        }
-        LOCK_REQUEST => {
-            if body["setLocked"].as_bool() == Some(true) {
-                match mac::sleep_display().await {
-                    Ok(()) => tracing::info!("{}: locked this Mac", d.name),
-                    Err(e) => tracing::warn!("{}: {e:#}", d.name),
-                }
-            }
-        }
+    let kind = p["type"].as_str().unwrap_or("");
+    if stock::handles(kind) {
+        return stock::on_packet(&mut MacDesk { ringer, found }, &d.name, &mut d.battery, p).await;
+    }
+    match kind {
         CLIPBOARD | CLIPBOARD_CONNECT => {
             if let Some(text) = clip.received(p)
                 && let Err(e) = mac::set_clipboard(&text).await

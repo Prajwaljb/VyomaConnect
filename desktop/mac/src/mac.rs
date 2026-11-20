@@ -18,11 +18,7 @@ use tokio::process::{Child, Command};
 /// argv's item 1: ours, never an option, so what follows is never read as one.
 const FIRST: &str = "vyoma";
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Battery {
-    pub charge: i64,
-    pub charging: bool,
-}
+pub use vyoma_engine::stock::Battery;
 
 /// The Mac's battery, or None on a Mac without one.
 pub async fn battery() -> Option<Battery> {
