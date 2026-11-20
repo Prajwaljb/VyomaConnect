@@ -31,7 +31,7 @@ use vyoma_core::payload;
 use windows::Win32::Foundation::{HMODULE, POINT, RECT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
+    D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
     D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -422,7 +422,13 @@ impl Duplication {
         // SAFETY: the caller's; everything made here is owned.
         unsafe {
             let (mut device, mut context): (Option<ID3D11Device>, Option<ID3D11DeviceContext>) = (None, None);
-            D3D11CreateDevice(adapter, D3D_DRIVER_TYPE_UNKNOWN, HMODULE::default(), D3D11_CREATE_DEVICE_BGRA_SUPPORT, None, D3D11_SDK_VERSION, Some(&mut device), None, Some(&mut context))?;
+            // With video support (the card's colour conversion, crate::gpu), else without.
+            let create = |flags, device: &mut Option<ID3D11Device>, context: &mut Option<ID3D11DeviceContext>| {
+                D3D11CreateDevice(adapter, D3D_DRIVER_TYPE_UNKNOWN, HMODULE::default(), flags, None, D3D11_SDK_VERSION, Some(device), None, Some(context))
+            };
+            if create(D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT, &mut device, &mut context).is_err() {
+                create(D3D11_CREATE_DEVICE_BGRA_SUPPORT, &mut device, &mut context)?;
+            }
             let (device, context) = (device.context("no Direct3D device")?, context.context("no Direct3D context")?);
             let dup = output.DuplicateOutput(&device).context("Windows wouldn't share the screen")?;
             let turn = Turn::of(dup.GetDesc().Rotation);

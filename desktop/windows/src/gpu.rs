@@ -64,6 +64,7 @@ impl Converter {
         }
         // SAFETY: Direct3D calls on owned COM pointers; every view is made from a texture made here.
         unsafe {
+            // Only a device made with D3D11_CREATE_DEVICE_VIDEO_SUPPORT has it.
             let vdevice: ID3D11VideoDevice = device.cast().context("this graphics driver has no video processing")?;
             let video: ID3D11VideoContext = context.cast().context("this graphics driver has no video processing")?;
             let rate = DXGI_RATIONAL { Numerator: fps, Denominator: 1 };
@@ -185,13 +186,15 @@ mod tests {
     use super::*;
     use windows::Win32::Foundation::HMODULE;
     use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
-    use windows::Win32::Graphics::Direct3D11::{D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_SUBRESOURCE_DATA, D3D11CreateDevice};
+    use windows::Win32::Graphics::Direct3D11::{D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION, D3D11_SUBRESOURCE_DATA, D3D11CreateDevice};
     use windows::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, FillRect};
 
+    /// A device of [kind] with video support, as cast.rs makes it, or nothing.
     fn device(kind: D3D_DRIVER_TYPE) -> Option<(ID3D11Device, ID3D11DeviceContext)> {
         let (mut device, mut context) = (None, None);
+        let flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
         // SAFETY: a device of that kind, or nothing.
-        unsafe { D3D11CreateDevice(None, kind, HMODULE::default(), D3D11_CREATE_DEVICE_BGRA_SUPPORT, None, D3D11_SDK_VERSION, Some(&mut device), None, Some(&mut context)).ok()? };
+        unsafe { D3D11CreateDevice(None, kind, HMODULE::default(), flags, None, D3D11_SDK_VERSION, Some(&mut device), None, Some(&mut context)).ok()? };
         Some((device?, context?))
     }
 
@@ -205,8 +208,9 @@ mod tests {
     }
 
     /// A picture of top white, bottom red, with a black square GDI draws, through the card: the
-    /// same video-range colours the CPU makes, at a quarter of the size. Windows' own software
-    /// card (WARP) has a video processor, so this runs on CI too; Wine has none.
+    /// same video-range colours the CPU makes, at a quarter of the size. Any device made with
+    /// video support must convert; a computer with none (Wine, a CI machine without a card whose
+    /// software card refuses video support) says so and checks nothing.
     #[test]
     fn the_card_converts_as_the_cpu_does() {
         let devices = [D3D_DRIVER_TYPE_WARP, D3D_DRIVER_TYPE_HARDWARE].into_iter().filter_map(device).collect::<Vec<_>>();
@@ -219,6 +223,10 @@ mod tests {
         }
         let mut cpu = Vec::new();
         crate::cast::to_nv12(&pixels, iw as usize * 4, iw as usize, ih as usize, ow as usize, oh as usize, &mut cpu);
+        if devices.is_empty() {
+            eprintln!("no Direct3D device with video support here: nothing to check");
+            return;
+        }
         let mut tested = 0;
         for (device, context) in &devices {
             let converter = match Converter::new(device, context, (iw, ih), (ow, oh), 30) {
@@ -263,6 +271,6 @@ mod tests {
             near(v, cpu[i + 1] as i32, "red's V");
             tested += 1;
         }
-        assert!(tested > 0 || under_wine(), "no Direct3D device at all");
+        assert!(tested > 0 || under_wine(), "a device with video support that never converted");
     }
 }
