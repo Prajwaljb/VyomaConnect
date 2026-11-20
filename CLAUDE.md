@@ -93,7 +93,14 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   wallpaper. Screenshots with grim where there's no Spectacle or GNOME; kernel backlight through logind where neither Plasma
   nor Mutter dims. Test in a nested Hyprland inside `kwin_wayland --virtual` under `dbus-run-session`, with a short private
   XDG_RUNTIME_DIR (socket paths over 108 bytes fail) and XDG_CONFIG_HOME: `VYOMA_HYPR_TEST=1 VYOMA_WLR_TEST=1
-  [VYOMA_WLR_OUTPUT=WxH VYOMA_HYPR_WALLPAPER=<path>] cargo test --release --lib -- hypr:: wlr::` in companion. Never
+  [VYOMA_WLR_OUTPUT=WxH VYOMA_HYPR_WALLPAPER=<path>] cargo test --release --lib -- hypr:: wlr::` in companion (the workspace test
+  needs a window on workspaces 1 and 2: two `foot` there). The rest in the same stack: `VYOMA_SHOT_TEST=1 ... screenshot::`
+  (grim: Spectacle comes first only on Plasma, `desktop::is_plasma`), `ways::tests::reads_this_session -- --ignored`, and the
+  cast through xdg-desktop-portal-hyprland, `VYOMA_CAST_TEST=1 ... screen::tests::casts_through_the_portal`: start a private
+  `pipewire`, `wireplumber` (a conf.d file with every `monitor.*` disabled, so no sound card is touched), then
+  `/usr/lib/xdg-desktop-portal-hyprland` and `/usr/lib/xdg-desktop-portal` with XDG_CURRENT_DESKTOP=Hyprland; the picker is
+  `screencopy { custom_picker_binary = <script> }` in $XDG_CONFIG_HOME/hypr/xdph.conf printing `[SELECTION]/screen:<monitor>`;
+  Hyprland's portal sends a picture only once the screen changes, so the stream wakes it with an invisible layer-shell overlay until the first (`wlr::touch_screens`); `VYOMA_CAST_STILL=1` skips that, `VYOMA_CAST_SECS=<n>` counts longer, per second. Never
   `pgrep -x kwin_wayland` to stop it (the real KWin matches): kill by pid.
 - `desktop/windows` (`vyoma-windows`, `docs/PLAN.md` section 11, Windows): the PC side on Windows on core and the engine
   (`platform.rs` `Windows::offers`): a notification-area agent (`tray.rs`: icon, Open/Quit, balloons where there are no toasts, the session

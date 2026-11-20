@@ -36,6 +36,9 @@ const CPB_KBITS: u32 = 600;
 /// The longest gap the encoder allows between keyframes. TCP never loses one, so they're only
 /// needed to start; every one is a burst, so as few as possible.
 const KEYFRAME_FRAMES: u32 = 1024;
+/// Until the first picture, the screens are marked changed this often ([wake]), this many times.
+const WAKE_EVERY: std::time::Duration = std::time::Duration::from_millis(300);
+const WAKE_TRIES: usize = 10;
 /// The most frames a second the cast sends: the phone asks for what its screen and decoder keep up
 /// with (`maxFps`), up to this. KWin's cap delays changes, not just thins them: at 60 a typed letter
 /// reached the encoder ~30 ms later than uncapped (typing_reaches_the_encoder, 2026-11-04), so the
@@ -63,6 +66,8 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, f
     // X11 sessions have no ScreenCast portal: the X server's picture of the primary monitor instead,
     // with the pointer driven through XTEST (no dialog: X11 lets any app do both).
     let x11 = !test && crate::x11::active();
+    // Cast through a wlr compositor's portal (Hyprland, Sway...), which waits for a change.
+    let wakes = !x11 && !test && crate::wlr::offered();
     let prepared = if x11 {
         x11_cast().map(|(source, control, size)| (None, Some(source), control, Some(size)))
     } else if test {
@@ -116,7 +121,9 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, f
     // link falls behind, the encoder blocks and the leaky queue before it drops raw frames, instead
     // of video piling up on the way.
     let (video, relay) = tokio::io::duplex(RELAY_BYTES);
-    let stamping = tokio::spawn(stamp(encoded, relay));
+    let (first, pictured) = tokio::sync::oneshot::channel();
+    let stamping = tokio::spawn(stamp(encoded, relay, Some(first)));
+    let waking = wakes.then(|| AbortOnDrop(tokio::spawn(wake(pictured))));
     // Read all along: a chatty driver filling the pipe would block the encoder and freeze the cast.
     let mut stderr = gst.stderr.take().context("encoder has no error output")?;
     let errors = tokio::spawn(async move {
@@ -138,7 +145,7 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, f
     // outlive that, holding the portal connection and so the remote-desktop session open.
     let touching = control.map(|p| AbortOnDrop(tokio::spawn(p.follow(inputs, sender.clone()))));
     let result = payload::offer_stream(sender, me, pinned, announce, video).await;
-    drop(touching);
+    drop((touching, waking));
     let _ = gst.kill().await;
     stamping.abort();
     if let Err(e) = &result {
@@ -164,7 +171,7 @@ impl Drop for AbortOnDrop {
 /// Passes the encoder's length-prefixed NAL units through, putting a timestamp unit before each
 /// picture: an SEI-typed NAL with our marker and the send time (µs since the epoch), which the phone
 /// reads for its latency figures and removes before decoding.
-async fn stamp(mut encoded: impl AsyncRead + Unpin, mut out: impl AsyncWrite + Unpin) -> Result<()> {
+async fn stamp(mut encoded: impl AsyncRead + Unpin, mut out: impl AsyncWrite + Unpin, mut first: Option<tokio::sync::oneshot::Sender<()>>) -> Result<()> {
     let mut nal = Vec::with_capacity(256 * 1024);
     loop {
         let size = encoded.read_u32().await? as usize;
@@ -174,6 +181,9 @@ async fn stamp(mut encoded: impl AsyncRead + Unpin, mut out: impl AsyncWrite + U
         nal.resize(size, 0);
         encoded.read_exact(&mut nal).await?;
         if matches!(nal[0] & 0x1f, 1 | 5) {
+            if let Some(first) = first.take() {
+                let _ = first.send(());
+            }
             let us = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_micros() as u64).unwrap_or(0);
             let mut ts = Vec::with_capacity(17);
             ts.extend_from_slice(&13u32.to_be_bytes());
@@ -184,6 +194,26 @@ async fn stamp(mut encoded: impl AsyncRead + Unpin, mut out: impl AsyncWrite + U
         }
         out.write_all(&(size as u32).to_be_bytes()).await?;
         out.write_all(&nal).await?;
+    }
+}
+
+/// Until [first] (the first picture): Hyprland's portal, as wlr screencopy, sends a picture only
+/// once part of the screen changes, so a still desktop would leave the phone's viewer empty. The
+/// screens are marked changed with an invisible overlay ([crate::wlr::touch_screens]) meanwhile.
+async fn wake(mut first: tokio::sync::oneshot::Receiver<()>) {
+    for _ in 0..WAKE_TRIES {
+        tokio::select! {
+            _ = &mut first => return,
+            _ = tokio::time::sleep(WAKE_EVERY) => {}
+        }
+        match tokio::task::spawn_blocking(crate::wlr::touch_screens).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                warn!("couldn't wake the screen cast ({e:#})");
+                return;
+            }
+            Err(_) => return,
+        }
     }
 }
 
@@ -877,6 +907,66 @@ mod tests {
         let _ = editor.kill();
         let _ = gst.kill().await;
         for d in &delays { println!("frames around a letter, ms: {d:?}"); }
+    }
+
+    /// A cast as the phone gets one (`VYOMA_CAST_TEST=1`, in a nested test compositor with its own
+    /// portal and PipeWire, never the real screen): the portal's stream through the encoder, counting
+    /// the H.264 frames that come out for 3 s. Nothing is kept. Something on the test screen must
+    /// change (a clock in a terminal): Hyprland's portal sends a picture only when one does.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn casts_through_the_portal() {
+        if std::env::var_os("VYOMA_CAST_TEST").is_none() {
+            return;
+        }
+        let cast = Cast::start().await.expect("a cast");
+        let size = cast.size.expect("the stream's size");
+        println!("portal control: {}, size {size:?}", cast.control.is_some());
+        let (w, h) = fit(size);
+        let mut gst = encoder(&format!("pipewiresrc fd=0 path={} do-timestamp=true keepalive-time=1000", cast.node), Some(cast.fd), w, h, MAX_FPS).unwrap();
+        let mut out = gst.stdout.take().unwrap();
+        // VYOMA_CAST_SECS: watch longer, to compare a still screen with one that changes.
+        let secs: usize = std::env::var("VYOMA_CAST_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(3);
+        let (mut frames, mut keys, mut nal, mut first, mut each) = (0, 0, Vec::new(), None, vec![0; secs]);
+        let began = std::time::Instant::now();
+        // VYOMA_CAST_STILL=1: without waking it, to see what a still screen gives.
+        let (pictured, waiting) = tokio::sync::oneshot::channel();
+        let mut pictured = Some(pictured);
+        let waking = (std::env::var_os("VYOMA_CAST_STILL").is_none() && crate::wlr::offered()).then(|| tokio::spawn(wake(waiting)));
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(secs as u64), async {
+            loop {
+                let Ok(n) = out.read_u32().await else { return };
+                nal.resize(n as usize, 0);
+                if out.read_exact(&mut nal).await.is_err() {
+                    return;
+                }
+                let kind = nal.first().map(|b| b & 0x1f);
+                if matches!(kind, Some(1 | 5)) {
+                    if let Some(p) = pictured.take() {
+                        let _ = p.send(());
+                    }
+                    first.get_or_insert(began.elapsed());
+                    if let Some(c) = each.get_mut(began.elapsed().as_secs() as usize) {
+                        *c += 1;
+                    }
+                }
+                match kind {
+                    Some(5) => (frames, keys) = (frames + 1, keys + 1),
+                    Some(1) => frames += 1,
+                    _ => {}
+                }
+            }
+        })
+        .await;
+        if let Some(w) = waking {
+            w.abort();
+        }
+        let _ = gst.kill().await;
+        let mut said = String::new();
+        if let Some(mut e) = gst.stderr.take() {
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(1), e.read_to_string(&mut said)).await;
+        }
+        println!("{frames} frames ({each:?} each second), {keys} keyframes in {secs} s at {w}x{h}, the first after {first:?}{}", if said.is_empty() { String::new() } else { format!("; the encoder said: {}", said.trim()) });
+        assert!(keys >= 1 && frames >= 5, "the stream came through the encoder");
     }
 
     struct Log {

@@ -51,16 +51,20 @@ pub enum Shooter {
     Nothing,
 }
 
-/// The way this session takes screenshots, in the order tried.
+/// The way this session takes screenshots, in the order tried. Spectacle captures through KWin,
+/// so it comes first only on Plasma: someone who moved to Hyprland often still has it installed.
 pub fn shooter() -> Shooter {
+    let (spectacle, grim) = (has("spectacle"), has("grim"));
     if crate::x11::active() {
         Shooter::X11
     } else if crate::desktop::is_gnome() {
         Shooter::Gnome
-    } else if has("spectacle") {
+    } else if spectacle && crate::desktop::is_plasma() {
         Shooter::Spectacle
-    } else if has("grim") {
+    } else if grim {
         Shooter::Grim
+    } else if spectacle {
+        Shooter::Spectacle
     } else {
         Shooter::Nothing
     }
@@ -123,4 +127,28 @@ async fn capture() -> Result<Vec<u8>> {
         bail!("Spectacle couldn't capture the screen");
     }
     bytes.context("Spectacle saved no image")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Takes one the way this session would (`VYOMA_SHOT_TEST=1`; in a nested test compositor, never
+    /// the real screen) and checks it's an image; it's dropped, not kept.
+    #[tokio::test]
+    async fn takes_one_here() {
+        if std::env::var_os("VYOMA_SHOT_TEST").is_none() {
+            return;
+        }
+        let how = shooter();
+        let shot = match how {
+            Shooter::X11 => capture_x11().await,
+            Shooter::Gnome => crate::shell::screenshot().await,
+            Shooter::Grim => capture_grim().await,
+            Shooter::Spectacle | Shooter::Nothing => capture().await,
+        }
+        .unwrap();
+        println!("{how:?}: {} bytes", shot.len());
+        assert!(shot.starts_with(b"\x89PNG") || shot.starts_with(b"RIFF"), "an image");
+    }
 }

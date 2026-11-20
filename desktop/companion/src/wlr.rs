@@ -20,10 +20,18 @@ use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_output::{self, WlOutput};
 use wayland_client::protocol::wl_pointer::{Axis, AxisSource, ButtonState};
 use wayland_client::protocol::wl_registry::WlRegistry;
+use wayland_client::protocol::wl_buffer::WlBuffer;
+use wayland_client::protocol::wl_compositor::WlCompositor;
+use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_seat::WlSeat;
+use wayland_client::protocol::wl_shm::{self, WlShm};
+use wayland_client::protocol::wl_shm_pool::WlShmPool;
+use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 use wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1;
 use wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1;
 
@@ -331,6 +339,94 @@ fn memfd(bytes: &[u8]) -> Result<OwnedFd> {
     file.write_all(bytes)?;
     Ok(owned)
 }
+
+/// Marks every screen as changed without showing anything: a 1×1 transparent overlay that takes
+/// no clicks, mapped for a moment on each output. Hyprland's ScreenCast portal (as wlr screencopy's
+/// copy_with_damage) sends a picture only once part of the screen changes, so the phone's viewer
+/// of a still desktop would stay empty until someone touched it.
+pub fn touch_screens() -> Result<()> {
+    let conn = Connection::connect_to_env().context("no Wayland display")?;
+    let (globals, mut queue) = registry_queue_init::<Touched>(&conn)?;
+    let qh = queue.handle();
+    let compositor: WlCompositor = globals.bind(&qh, 1..=4, ()).context("no wl_compositor")?;
+    let shm: WlShm = globals.bind(&qh, 1..=1, ()).context("no wl_shm")?;
+    let layers: ZwlrLayerShellV1 = globals.bind(&qh, 1..=4, ()).context("no layer-shell")?;
+    let outputs: Vec<WlOutput> = globals
+        .contents()
+        .clone_list()
+        .into_iter()
+        .filter(|g| g.interface == WlOutput::interface().name)
+        .map(|g| globals.registry().bind(g.name, g.version.min(4), &qh, ()))
+        .collect();
+    let file = memfd(&[0; 4])?;
+    let pool = shm.create_pool(file.as_fd(), 4, &qh, ());
+    let buffer = pool.create_buffer(0, 1, 1, 4, wl_shm::Format::Argb8888, &qh, ());
+    let nowhere = compositor.create_region(&qh, ());
+    let mut state = Touched { buffer: Some(buffer.clone()), ..Default::default() };
+    // No outputs listed: one overlay where the compositor puts it.
+    let targets: Vec<Option<&WlOutput>> = if outputs.is_empty() { vec![None] } else { outputs.iter().map(Some).collect() };
+    let mut overlays = Vec::new();
+    for (i, output) in targets.into_iter().enumerate() {
+        let surface = compositor.create_surface(&qh, ());
+        surface.set_input_region(Some(&nowhere));
+        let layer = layers.get_layer_surface(&surface, output, Layer::Overlay, "vyoma".into(), &qh, i);
+        layer.set_size(1, 1);
+        layer.set_anchor(Anchor::Top | Anchor::Left);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        surface.commit();
+        state.surfaces.push(surface);
+        overlays.push(layer);
+    }
+    // The configure comes back, the buffer goes on (Touched's dispatch), then the compositor has it.
+    queue.roundtrip(&mut state)?;
+    queue.roundtrip(&mut state)?;
+    // Long enough for a frame to be drawn with it; taking it away again is a change too.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    for layer in overlays {
+        layer.destroy();
+    }
+    for surface in &state.surfaces {
+        surface.destroy();
+    }
+    buffer.destroy();
+    pool.destroy();
+    nowhere.destroy();
+    queue.roundtrip(&mut state)?;
+    Ok(())
+}
+
+/// [touch_screens]' event queue: the overlays, which take the buffer once configured.
+#[derive(Default)]
+struct Touched {
+    surfaces: Vec<WlSurface>,
+    buffer: Option<WlBuffer>,
+}
+
+impl Dispatch<ZwlrLayerSurfaceV1, usize> for Touched {
+    fn event(state: &mut Self, layer: &ZwlrLayerSurfaceV1, event: zwlr_layer_surface_v1::Event, i: &usize, _: &Connection, _: &QueueHandle<Self>) {
+        if let zwlr_layer_surface_v1::Event::Configure { serial, .. } = event
+            && let Some(surface) = state.surfaces.get(*i)
+        {
+            layer.ack_configure(serial);
+            surface.attach(state.buffer.as_ref(), 0, 0);
+            surface.damage_buffer(0, 0, 1, 1);
+            surface.commit();
+        }
+    }
+}
+
+impl Dispatch<WlRegistry, GlobalListContents> for Touched {
+    fn event(_: &mut Self, _: &WlRegistry, _: wayland_client::protocol::wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+}
+
+macro_rules! touched_ignores {
+    ($($t:ty),*) => {$(
+        impl Dispatch<$t, ()> for Touched {
+            fn event(_: &mut Self, _: &$t, _: <$t as wayland_client::Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+        }
+    )*};
+}
+touched_ignores!(WlCompositor, WlShm, WlShmPool, WlBuffer, WlSurface, WlRegion, WlOutput, ZwlrLayerShellV1);
 
 #[cfg(test)]
 mod tests {

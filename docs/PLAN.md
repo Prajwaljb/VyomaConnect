@@ -464,8 +464,8 @@ Progress (2026-11-19):
    capability with the way found or why there's none; the screenshot's choice is one function
    both use). The Mac and Windows send none yet: the Mac's ways never vary (its checks say
    what's allowed), and Windows' (the card's encoder or the software one) wants a real PC to
-   check. Next: Hyprland's missing pieces as the report shows them (a real Hyprland session,
-   the cast through xdg-desktop-portal-hyprland), then the Play Store build.
+   check. Then Hyprland checked again, nested and in a real session (below). Next: the Play
+   Store build.
 4. Hyprland and Windows were taken first (user, 2026-11-19); then the window's method table, then
    probing per capability and This PC's report.
 
@@ -500,9 +500,26 @@ wake, log out, the keyboard layout (`[[EMPTY]]` is unset) and the wallpaper (hyp
 listactive: hyprpaper 0.8's socket is binary; swww query); grim screenshots; the kernel backlight
 through logind (any desktop without Plasma's or Mutter's); restart/shut down through logind where no
 session manager answers. Hyprland 0.57 starts hyprland-session.target (binds graphical-session.target)
-and hands systemd its environment, so the unit starts with no config line. Not yet tried: the cast
-through xdg-desktop-portal-hyprland (needs its picker and PipeWire in the test stack), hyprexpo's
-overview (plugin not installed; its Lua dispatcher name is a guess), a real Hyprland session.
+and hands systemd its environment, so the unit starts with no config line.
+
+Checked again (2026-11-20) in the same nested stack plus a private PipeWire/WirePlumber (no devices)
+and xdg-desktop-portal with xdg-desktop-portal-hyprland, a scripted picker in place of its dialog: This
+PC's report reads Hyprland's virtual pointer, data-control, the ScreenCast portal with touches through
+the virtual pointer, grim, layer-shell and Hyprland's workspaces; the clipboard round-trips through
+wl-clipboard; a cast runs through the portal into the encoder (DMA-BUF, ~20 frames in 3 s with a clock
+on screen). Fixed: Spectacle was picked for screenshots wherever installed, so a person who moved from
+Plasma got failing screenshots; it now comes first only on Plasma, grim first elsewhere. Then in a
+real session (Hyprland 0.57.2 with Caelestia, xdph 1.5, Intel graphics driving the screen): the
+report, a grim screenshot and the daemon itself (it took Hyprland's environment from systemd at
+login; the phone linked, the clipboard flowed) all fine. The cast: Hyprland's portal sends a
+picture only once part of the screen changes (wlr screencopy's copy_with_damage), nested or not,
+and the pointer moving doesn't count; after that pipewiresrc only repeats the last picture each
+second. Measured with the screen still: nothing for 4 s. So a still desktop left the phone's viewer
+empty. Fixed: until the first picture the stream marks the screens changed with an invisible 1×1
+layer-shell overlay that takes no clicks (`wlr::touch_screens`, every 300 ms, at most 10 times);
+the first picture then came after 0.8 s. Still so: the pointer moving alone sends no new picture
+(a touch from the phone changes what's under it, which does). Not yet tried: hyprexpo's overview
+(plugin not installed; its Lua dispatcher name is a guess).
 
 ### Windows
 - `vyoma-windows` on the engine; the window reaches it over a named pipe. Backends: Win32 clipboard,

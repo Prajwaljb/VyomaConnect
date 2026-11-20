@@ -20,6 +20,11 @@ pub fn is_gnome() -> bool {
     std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|p| p.eq_ignore_ascii_case("gnome")))
 }
 
+/// A Plasma session (KWin, Spectacle and the rest of KDE's are its own).
+pub fn is_plasma() -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|p| p.eq_ignore_ascii_case("kde")))
+}
+
 /// The desktop's first keyboard layout and its variant ("de", "nodeadkeys"), for pressing the
 /// keys that type each character: GNOME's input sources, or Plasma's kxkbrc; "us" when neither says.
 pub fn keyboard_layout() -> (String, String) {
