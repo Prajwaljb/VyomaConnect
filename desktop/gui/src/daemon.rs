@@ -126,6 +126,14 @@ pub struct Feature {
     pub unavailable: bool,
 }
 
+/// How this PC does one thing a phone asks (`ways`): the way found, or why there's none.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Way {
+    pub name: String,
+    pub found: bool,
+    pub detail: String,
+}
+
 /// Something no package fixes: ok, worth knowing (info), or in the way (warn).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Check {
@@ -143,6 +151,8 @@ pub struct Health {
     pub installable: bool,
     pub installing: bool,
     pub checks: Vec<Check>,
+    /// How this PC does each thing (Linux's, which vary by desktop).
+    pub ways: Vec<Way>,
     pub notes: Vec<String>,
     pub update: Update,
     /// The running daemon's own version, where it says (the Mac's, from 0.11.1).
@@ -205,6 +215,10 @@ impl Health {
                     detail: c["detail"].as_str().unwrap_or("").to_owned(),
                     action: c["action"].as_str().unwrap_or("").to_owned(),
                 })
+                .collect(),
+            ways: list("ways")
+                .iter()
+                .map(|w| Way { name: w["name"].as_str().unwrap_or("").to_owned(), found: w["ready"].as_bool().unwrap_or(true), detail: w["detail"].as_str().unwrap_or("").to_owned() })
                 .collect(),
             notes: strings(&v["notes"]),
             update: Update {
@@ -712,6 +726,9 @@ mod tests {
             "installable": true, "checks": [{ "name": "Firewall", "state": "info", "detail": "d" }, { "name": "KDE Connect", "state": "warn", "detail": "k" }], "notes": ["n"] });
         let h = Health::from_json(&v);
         assert_eq!((h.features.len(), h.features[1].needs.clone(), h.installable, h.notes.len()), (2, vec!["sshfs".to_owned()], true, 1));
+        assert!(h.ways.is_empty(), "the Mac and Windows say no ways");
+        let w = Health::from_json(&json!({ "ways": [{ "name": "Desktops", "ready": false, "detail": "Not on this compositor yet" }] })).ways;
+        assert_eq!(w, [Way { name: "Desktops".into(), found: false, detail: "Not on this compositor yet".into() }]);
         assert_eq!(h.attention(), 2, "a missing feature and a check in the way; info isn't a fault");
         assert_eq!((h.update.latest.clone(), h.update.checks), (None, true), "an older daemon says nothing of updates");
         let u = Health::from_json(&json!({ "update": { "current": "0.3.0", "latest": "0.4.0", "checks": true, "canUpdate": true } })).update;

@@ -33,6 +33,7 @@ pub mod stats;
 pub mod tether;
 pub mod usb;
 pub mod wallpaper;
+pub mod ways;
 pub mod x11;
 pub mod webcam;
 pub mod wlr;

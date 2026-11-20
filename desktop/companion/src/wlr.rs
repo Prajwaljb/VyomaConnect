@@ -57,10 +57,14 @@ pub fn offered() -> bool {
     if crate::x11::active() {
         return false;
     }
-    let Ok(conn) = Connection::connect_to_env() else { return false };
-    let Ok((globals, _)) = registry_queue_init::<State>(&conn) else { return false };
-    let names: Vec<String> = globals.contents().clone_list().into_iter().map(|g| g.interface).collect();
-    names.iter().any(|n| n == POINTER) && names.iter().any(|n| n == KEYBOARD)
+    globals().is_some_and(|names| names.iter().any(|n| n == POINTER) && names.iter().any(|n| n == KEYBOARD))
+}
+
+/// The protocols this session's Wayland compositor offers (one round trip); None off Wayland.
+pub fn globals() -> Option<Vec<String>> {
+    let conn = Connection::connect_to_env().ok()?;
+    let (globals, _) = registry_queue_init::<State>(&conn).ok()?;
+    Some(globals.contents().clone_list().into_iter().map(|g| g.interface).collect())
 }
 
 /// What the event queue keeps: the outputs' sizes, for touches on one screen.

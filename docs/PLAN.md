@@ -459,20 +459,26 @@ Progress (2026-11-19):
    its phone picker; one `Device` record) and the Messages page's rules once (`texting::Texting`,
    which Linux's D-Bus methods use too; Linux still reads texts already loaded while the phone's
    away). Linux's other D-Bus methods keep their own table: its devices carry more (files,
-   Bluetooth, the companion). Next: probing per capability and This PC's report.
+   Bluetooth, the companion). Then This PC's "How this PC does it" (`ways::Way`; Linux's
+   `companion/src/ways.rs` asks the session what each part's own chooser asks, one row per
+   capability with the way found or why there's none; the screenshot's choice is one function
+   both use). The Mac and Windows send none yet: the Mac's ways never vary (its checks say
+   what's allowed), and Windows' (the card's encoder or the software one) wants a real PC to
+   check. Next: Hyprland's missing pieces as the report shows them (a real Hyprland session,
+   the cast through xdg-desktop-portal-hyprland), then the Play Store build.
 4. Hyprland and Windows were taken first (user, 2026-11-19); then the window's method table, then
    probing per capability and This PC's report.
 
-Linux, the order each capability tries:
+Linux, the order each capability tries (as the code does it, and This PC's report says):
 
 | Capability | Tried in order |
 |---|---|
-| Input | RemoteDesktop portal (KDE, GNOME) → wlr virtual pointer + virtual keyboard (Hyprland, Sway, river) → X11 XTEST |
-| Clipboard | GNOME extension → ext/wlr data-control (KWin, Hyprland, Sway, COSMIC) → X11 selections |
-| Overlay | layer-shell → GNOME extension → X11 override-redirect |
-| Workspaces | KWin → GNOME extension → Hyprland IPC → Sway IPC → EWMH |
+| Input | X11 XTEST (an X11 session) → wlr virtual pointer + virtual keyboard (Hyprland, Sway, river) → RemoteDesktop portal (KDE, GNOME) |
+| Clipboard | X11 selections → GNOME extension → ext/wlr data-control (KWin, Hyprland, Sway, COSMIC) |
+| Overlay | X11 override-redirect → GNOME extension → layer-shell |
+| Workspaces | EWMH → Hyprland IPC → GNOME extension → KWin (no Sway yet) |
 | Screen | ScreenCast portal (xdg-desktop-portal-hyprland too) → X11 ximagesrc |
-| Screenshot | Spectacle → GNOME extension → Screenshot portal → grim (wlr screencopy) |
+| Screenshot | X11 (ximagesrc) → GNOME extension → Spectacle → grim (wlr screencopy) |
 | Lock | logind lock-session (the session's locker: KDE, GNOME, hyprlock/swaylock through their idle daemon) |
 | Autostart | graphical-session.target (KDE, GNOME, uwsm) → XDG autostart → Hyprland's exec-once, offered, never written unasked |
 

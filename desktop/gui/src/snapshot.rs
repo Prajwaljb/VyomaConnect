@@ -234,7 +234,16 @@ fn health(missing: bool) -> Health {
         notes.push("PC screen on the phone needs your graphics card's video driver for hardware encoding. Your system's driver settings can add it.".into());
     }
     let update = crate::daemon::Update { current: "0.3.0".into(), latest: missing.then(|| "0.4.0".into()), checks: true, can_update: true, ..Default::default() };
-    Health { features, installable: missing, installing: false, checks, notes, update, version: String::new() }
+    let way = |name: &str, found: bool, detail: &str| crate::daemon::Way { name: name.into(), found, detail: detail.into() };
+    let ways = vec![
+        way("Touchpad and keyboard", true, "The Remote Desktop portal, which asks once"),
+        way("Clipboard", true, "Wayland's data-control, through wl-clipboard"),
+        way("Live screen", true, "The ScreenCast portal, touches through its Remote Desktop"),
+        way("Screenshots", !missing, if missing { "Needs Spectacle (Plasma) or grim (Hyprland, Sway and the like)" } else { "Spectacle" }),
+        way("Pointer dot", true, "A layer-shell overlay"),
+        way("Desktops", true, "KWin's shortcuts"),
+    ];
+    Health { features, installable: missing, installing: false, checks, ways, notes, update, version: String::new() }
 }
 
 /// Made-up texts: messages (the list), messages-thread, messages-silent, messages-loading, and the phone's texts

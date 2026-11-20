@@ -728,6 +728,11 @@ pub fn show_health(ui: &MainWindow, h: &Health) {
     ui.set_missing(ModelRc::new(VecModel::from(missing)));
     ui.set_features(ModelRc::new(VecModel::from(features)));
     ui.set_checks(ModelRc::new(VecModel::from(checks)));
+    // A way missing first, as the features.
+    let mut ways: Vec<&daemon::Way> = h.ways.iter().collect();
+    ways.sort_by_key(|w| w.found);
+    let ways: Vec<Feature> = ways.into_iter().map(|w| Feature { name: w.name.clone().into(), ready: w.found, detail: w.detail.clone().into() }).collect();
+    ui.set_ways(ModelRc::new(VecModel::from(ways)));
     ui.set_notes(ModelRc::new(VecModel::from(notes)));
     ui.set_installable(h.installable);
     ui.set_installing(h.installing);

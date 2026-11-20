@@ -15,6 +15,7 @@ pub mod platform;
 pub mod session;
 pub mod stock;
 pub mod texting;
+pub mod ways;
 pub mod window;
 
 pub use platform::{Cx, Feature, GamepadInput, Handoff, Platform, Sampler, Started};

@@ -1354,6 +1354,8 @@ component PhonePage inherits Page {
 component PcPage inherits Page {
     in property <[Feature]> features;
     in property <[Check]> checks;
+    // How this PC does each thing a phone asks: [detail] is the way, or why there's none.
+    in property <[Feature]> ways;
     in property <[string]> notes;
     in property <bool> installable;
     in property <bool> installing;
@@ -1413,6 +1415,16 @@ component PcPage inherits Page {
             title: f.name;
             subtitle: f.detail;
             last: i == root.features.length - 1;
+        }
+    }
+
+    if root.ways.length > 0: Section {
+        label: "How this PC does it";
+        for w[i] in root.ways: StatusRow {
+            dot: w.ready ? Theme.connected : Theme.pending;
+            title: w.name;
+            subtitle: w.detail;
+            last: i == root.ways.length - 1;
         }
     }
 
@@ -3208,6 +3220,7 @@ export component MainWindow inherits Window {
     // This PC's page (selected: "this-pc").
     in property <[Feature]> features;
     in property <[Check]> checks;
+    in property <[Feature]> ways;
     in property <[string]> notes;
     in property <bool> installable;
     in property <bool> installing;
@@ -3534,6 +3547,7 @@ export component MainWindow inherits Window {
         if root.selected == "this-pc" && root.daemon-ok: PcPage {
             features: root.features;
             checks: root.checks;
+            ways: root.ways;
             notes: root.notes;
             installable: root.installable;
             installing: root.installing;

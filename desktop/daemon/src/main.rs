@@ -363,8 +363,10 @@ impl Control {
         let (beside_kde, updates) = (self.beside_kde, self.updates.clone());
         let shell = if vyoma_companion::desktop::is_gnome() { Some(vyoma_companion::shell::version().await) } else { None };
         let lock = system::cannot_lock().await;
+        let ways = vyoma_companion::ways::Session::look().await.ways();
         let report = tokio::task::spawn_blocking(move || {
             let mut report = health(beside_kde, shell);
+            report["ways"] = vyoma_engine::ways::json(&ways);
             if let (Some(why), Some(checks)) = (lock, report["checks"].as_array_mut()) {
                 checks.push(json!({ "name": "Screen lock", "state": "info", "detail": why }));
             }

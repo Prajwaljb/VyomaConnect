@@ -17,19 +17,14 @@ use crate::payload;
 /// Captures the whole desktop and offers it to the phone. On failure the phone gets an error
 /// packet instead, so it never waits on a spinner.
 pub async fn capture_and_send(sender: &Sender, me: &Identity, pinned: &[u8], phone_name: &str) -> Result<()> {
-    let x11 = crate::x11::active();
-    let gnome = crate::desktop::is_gnome() && !x11;
-    // wlroots-style compositors (Hyprland, Sway...) let grim copy the screen; Plasma has Spectacle.
-    let grim = !x11 && !gnome && !has("spectacle") && has("grim");
-    let png = gnome || x11 || grim;
-    let shot = if x11 {
-        capture_x11().await
-    } else if gnome {
-        crate::shell::screenshot().await
-    } else if grim {
-        capture_grim().await
-    } else {
-        capture().await
+    let how = shooter();
+    let png = !matches!(how, Shooter::Spectacle | Shooter::Nothing);
+    let shot = match how {
+        Shooter::X11 => capture_x11().await,
+        Shooter::Gnome => crate::shell::screenshot().await,
+        Shooter::Grim => capture_grim().await,
+        // With neither, Spectacle's own error says what's missing.
+        Shooter::Spectacle | Shooter::Nothing => capture().await,
     };
     let image = match shot {
         Ok(bytes) => bytes,
@@ -41,6 +36,34 @@ pub async fn capture_and_send(sender: &Sender, me: &Identity, pinned: &[u8], pho
     crate::notice::tell("camera-photo", "Screenshot taken from your phone", &format!("{phone_name} took a screenshot of this PC.")).await;
     let announce: Value = link::packet("vyoma.screenshot", json!({ "format": if png { "png" } else { "webp" } }));
     payload::offer(sender, me, pinned, announce, image.len() as u64, image.as_slice()).await
+}
+
+/// How a screenshot is taken here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shooter {
+    /// The X server's picture (GStreamer's ximagesrc).
+    X11,
+    /// Vyoma's GNOME extension: GNOME lets only its own parts capture silently.
+    Gnome,
+    Spectacle,
+    /// wlroots-style compositors (Hyprland, Sway...) let grim copy the screen.
+    Grim,
+    Nothing,
+}
+
+/// The way this session takes screenshots, in the order tried.
+pub fn shooter() -> Shooter {
+    if crate::x11::active() {
+        Shooter::X11
+    } else if crate::desktop::is_gnome() {
+        Shooter::Gnome
+    } else if has("spectacle") {
+        Shooter::Spectacle
+    } else if has("grim") {
+        Shooter::Grim
+    } else {
+        Shooter::Nothing
+    }
 }
 
 /// Whether [program] is on PATH.
