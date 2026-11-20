@@ -189,13 +189,16 @@ mod tests {
     use windows::Win32::Graphics::Direct3D11::{D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION, D3D11_SUBRESOURCE_DATA, D3D11CreateDevice};
     use windows::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, FillRect};
 
-    /// A device of [kind] with video support, as cast.rs makes it, or nothing.
+    /// A device of [kind] with a video processor, made as cast.rs makes it, or nothing. Windows'
+    /// software card (WARP, all a CI machine has) takes the video flag and still has none.
     fn device(kind: D3D_DRIVER_TYPE) -> Option<(ID3D11Device, ID3D11DeviceContext)> {
         let (mut device, mut context) = (None, None);
         let flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
         // SAFETY: a device of that kind, or nothing.
         unsafe { D3D11CreateDevice(None, kind, HMODULE::default(), flags, None, D3D11_SDK_VERSION, Some(&mut device), None, Some(&mut context)).ok()? };
-        Some((device?, context?))
+        let (device, context) = (device?, context?);
+        device.cast::<ID3D11VideoDevice>().ok()?;
+        Some((device, context))
     }
 
     fn under_wine() -> bool {
@@ -208,9 +211,9 @@ mod tests {
     }
 
     /// A picture of top white, bottom red, with a black square GDI draws, through the card: the
-    /// same video-range colours the CPU makes, at a quarter of the size. Any device made with
-    /// video support must convert; a computer with none (Wine, a CI machine without a card whose
-    /// software card refuses video support) says so and checks nothing.
+    /// same video-range colours the CPU makes, at a quarter of the size. Any device with a video
+    /// processor must convert; a computer with none (a CI machine's software card) says so and
+    /// checks nothing, and Wine's, which claims one and can't, is let off.
     #[test]
     fn the_card_converts_as_the_cpu_does() {
         let devices = [D3D_DRIVER_TYPE_WARP, D3D_DRIVER_TYPE_HARDWARE].into_iter().filter_map(device).collect::<Vec<_>>();
@@ -224,7 +227,7 @@ mod tests {
         let mut cpu = Vec::new();
         crate::cast::to_nv12(&pixels, iw as usize * 4, iw as usize, ih as usize, ow as usize, oh as usize, &mut cpu);
         if devices.is_empty() {
-            eprintln!("no Direct3D device with video support here: nothing to check");
+            eprintln!("no Direct3D device with a video processor here: nothing to check");
             return;
         }
         let mut tested = 0;
