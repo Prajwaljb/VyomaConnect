@@ -99,17 +99,16 @@ mod agent {
     use vyoma_engine::commands::{self, Commands, RUNCOMMAND, RUNCOMMAND_REQUEST};
     use vyoma_core::device::{Command, Event, Hub};
     use vyoma_core::identity::Identity;
-    use vyoma_core::invite::Invite;
     use vyoma_core::lan::{Lan, Ports, Rules};
     use vyoma_core::link::packet;
     use vyoma_core::messages::{self, Store};
     use vyoma_core::permits::{Permit, Permits};
-    use vyoma_core::release::REPO;
     use vyoma_core::share::{self, SHARE, SHARE_UPDATE};
     use vyoma_core::telephony;
     use vyoma_core::trust::TrustStore;
     use vyoma_engine::dispatch::{self, Route, Touch};
     use vyoma_engine::session::{Host, Phone, phone_name};
+    use vyoma_engine::window::{Answer, CHANGING, Device, Devices, Side};
 
     use crate::toast::{self, Button, Heard, Shown, Toast};
     use crate::{away, calls, control, firewall, input, media, platform, presenter, system, tray, update, usb, win};
@@ -120,8 +119,6 @@ mod agent {
     pub const KEYBOARDSTATE: &str = "kdeconnect.mousepad.keyboardstate";
     /// PC → phone just before the agent stops (`why`: stop): the phone stops looking for it.
     pub const LEAVING: &str = "vyoma.pc.leaving";
-    /// PC → phone: `{number}`, call it (Messages); the phone checks it all again.
-    const DIAL: &str = "vyoma.call.dial";
 
     /// What we take and send. No lock state outward yet (WTS session notifications, later).
     const INCOMING: &[&str] = &[
@@ -132,7 +129,7 @@ mod agent {
     const OUTGOING: &[&str] = &[
         PING, BATTERY, FIND, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, RUNCOMMAND, input::MOUSEPAD_ECHO, KEYBOARDSTATE, media::MPRIS, media::VOLUME,
         messages::REQUEST, messages::REQUEST_CONVERSATIONS, messages::REQUEST_CONVERSATION, messages::CONTACTS_UIDS, messages::CONTACTS_VCARDS,
-        messages::UNLOCK, messages::LOCK, DIAL, LEAVING, NOTIFICATION_REQUEST, NOTIFICATION_REPLY, NOTIFICATION_ACTION, telephony::MUTE,
+        messages::UNLOCK, messages::LOCK, vyoma_engine::calls::DIAL, LEAVING, NOTIFICATION_REQUEST, NOTIFICATION_REPLY, NOTIFICATION_ACTION, telephony::MUTE,
         telephony::REQUEST,
     ];
 
@@ -190,29 +187,6 @@ mod agent {
             }
             Some(other) => bail!("unknown option {other}: try --install, --uninstall or --quit"),
             None => run(win::data_dir()),
-        }
-    }
-
-    /// A device as this PC knows it.
-    #[derive(Default)]
-    struct Device {
-        name: String,
-        paired: bool,
-        linked: bool,
-        incoming: Vec<String>,
-        cert: Vec<u8>,
-        /// The address of its newest link, where its payloads are fetched.
-        remote: Option<IpAddr>,
-        /// Its battery: charge, charging, and whether it said it's low.
-        battery: Option<(i64, bool, bool)>,
-        /// The code of a pairing in progress, and whether it's the phone asking (so Accept and Reject).
-        key: String,
-        asking: bool,
-    }
-
-    impl Device {
-        fn takes(&self, kind: &str) -> bool {
-            self.paired && self.linked && self.incoming.iter().any(|t| t == kind)
         }
     }
 
@@ -313,7 +287,20 @@ mod agent {
         let pc = Arc::new(platform::Windows::default());
         let host = Arc::new(Host { me: me.clone(), permits: permits.clone(), activity: activity.clone() });
         let mut sessions: HashMap<String, mpsc::UnboundedSender<(Value, IpAddr)>> = HashMap::new();
-        let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone, run: run_commands.clone(), texts: texts.clone(), permits: permits.clone(), activity: activity.clone(), requests: requests_tx, pending: Mutex::default(), updates: updates.clone(), clip_seen: ClipboardSeen::load(&dir) };
+        let window = Window {
+            me: me.clone(),
+            lan: lan.clone(),
+            commands: commands.clone(),
+            changes: changes.clone(),
+            everyone,
+            run: run_commands.clone(),
+            texts: texts.clone(),
+            permits: permits.clone(),
+            activity: activity.clone(),
+            updates: updates.clone(),
+            clip_seen: ClipboardSeen::load(&dir),
+            side: WinSide { requests: requests_tx, pending: Mutex::default() },
+        };
         let mut pointer = input::Pointer::default();
         let mut dot = presenter::Presenter::default();
         // Players and the volume, read on a thread of their own while a phone that takes them is linked.
@@ -602,7 +589,7 @@ mod agent {
                             }
                         }
                         ("send", false) => {
-                            let paths = window.pending.lock().unwrap().remove(&get("t"));
+                            let paths = window.side.pending.lock().unwrap().remove(&get("t"));
                             if let Some(paths) = paths {
                                 let _ = window.send(id, paths, &devices, true).await;
                             }
@@ -724,9 +711,6 @@ mod agent {
         }
     }
 
-    /// Window methods after which it should read everything again.
-    const CHANGING: &[&str] = &["Pair", "Accept", "Reject", "Unpair", "SetPermission", "FixCheck", "SaveCommand", "RemoveCommand"];
-
     fn changes_details(event: &Event) -> bool {
         match event {
             Event::Packet { packet, .. } => packet["type"] == BATTERY,
@@ -734,350 +718,129 @@ mod agent {
         }
     }
 
-    /// What the window can ask for (the Linux app's D-Bus methods, the ones Windows has so far).
-    struct Window {
-        me: Arc<Identity>,
-        lan: Arc<Lan>,
-        commands: mpsc::UnboundedSender<Command>,
-        changes: broadcast::Sender<Value>,
-        everyone: Vec<SocketAddr>,
-        run: Commands,
-        texts: Arc<Store>,
-        permits: Arc<Permits>,
-        activity: Arc<Activity>,
+    /// What the window asks that only Windows answers, and how Windows shows things (the rest is
+    /// the engine's [vyoma_engine::window]).
+    struct WinSide {
         /// For a choice made in a dialog to come back as a request.
         requests: mpsc::Sender<control::Request>,
         /// Files waiting for the person to pick a phone in a toast, by the toast's token.
         pending: Mutex<HashMap<String, Vec<String>>>,
-        updates: Arc<update::Updates>,
-        /// Phones whose background clipboard sync was seen granted.
-        clip_seen: ClipboardSeen,
     }
 
-    impl Window {
-        async fn answer(&self, method: &str, args: &Value, devices: &mut HashMap<String, Device>) -> Result<Value, String> {
-            let command = |c: Command| self.commands.send(c).map(|_| Value::Null).map_err(|_| "Vyoma is stopping".to_owned());
-            match method {
-                "Phones" => {
-                    let linked = devices.values().filter(|d| d.paired && d.linked).count();
-                    Ok(Value::Array(devices.iter().map(|(id, d)| details(id, d, &self.permits, &self.clip_seen, linked)).collect()))
-                }
-                "Pair" => command(Command::Pair(control::text(args, 0)?)),
-                "Accept" => command(Command::Accept(control::text(args, 0)?)),
-                "Reject" => command(Command::Reject(control::text(args, 0)?)),
-                "Unpair" => command(Command::Unpair(control::text(args, 0)?)),
-                "Ring" => {
-                    let id = control::text(args, 0)?;
-                    if !devices.get(&id).is_some_and(|d| d.takes(FIND)) {
-                        return Err("That phone can't be rung right now".into());
-                    }
-                    command(Command::Send(id, packet(FIND, json!({}))))
-                }
-                "SendFiles" => {
-                    let id = control::text(args, 0)?;
-                    let tell = args[2].as_bool().unwrap_or(false);
-                    self.send(id, strings(&args[1]), devices, tell).await
-                }
-                "SendAny" => {
-                    let paths = strings(&args[0]);
-                    if paths.is_empty() {
-                        return Ok(Value::Null);
-                    }
-                    let all: Vec<_> = devices.iter().map(|(id, d)| (id.clone(), d.name.clone(), d.paired, d.linked)).collect();
-                    match share::pick(&all) {
-                        share::Pick::One(id) => self.send(id, paths, devices, true).await,
-                        share::Pick::NonePaired => {
-                            tray::notify("No phone to send to", "Pair your phone in Vyoma first, then try again.");
-                            Ok(Value::Null)
-                        }
-                        share::Pick::Ask(phones) => {
-                            let what = if paths.len() == 1 { "this".to_owned() } else { format!("these {} items", paths.len()) };
-                            // A toast with a button per phone, where there are toasts.
-                            let token = toast::short(&format!("{paths:?}{:?}", Instant::now()));
-                            let t = Toast {
-                                tag: token.clone(),
-                                group: "send".into(),
-                                title: format!("Send {what} to which phone?"),
-                                body: share::summary(&share::expand(&paths).unwrap_or_default()),
-                                launch: toast::args(&[("do", "open")]),
-                                buttons: phones.iter().map(|(id, name)| Button { label: name.clone(), args: toast::args(&[("do", "send"), ("dev", id), ("t", &token)]), with_reply: false }).collect(),
-                                ..Default::default()
-                            };
-                            if phones.len() <= 5 && toast::show(&t) == Shown::Yes {
-                                self.pending.lock().unwrap().insert(token, paths);
-                                return Ok(Value::Null);
-                            }
-                            let requests = self.requests.clone();
-                            // One question per phone, in turn, until one's picked.
-                            tokio::task::spawn_blocking(move || {
-                                let Some((id, _)) = phones.into_iter().find(|p| win::ask("Vyoma", &format!("Send {what} to {}?", p.1))) else { return };
-                                let (reply, _) = tokio::sync::oneshot::channel();
-                                let _ = requests.blocking_send(control::Request { method: "SendFiles".into(), args: json!([id, paths, true]), reply });
-                            });
-                            Ok(Value::Null)
-                        }
-                    }
-                }
-                "Refresh" => self.lan.announce(&self.everyone).await.map(|_| Value::Null).map_err(|e| format!("{e:#}")),
-                "PairingCode" => {
-                    // No address, no code: a phone couldn't reach this PC. The window says so (the error's word).
-                    let addresses: Vec<String> = vyoma_core::invite::local_addresses().iter().map(|a| a.to_string()).collect();
-                    if addresses.is_empty() {
-                        return Err("offline".into());
-                    }
-                    let invite = Invite::new(std::time::Instant::now()).ok_or("no randomness")?;
-                    let secret = vyoma_core::invite::hex(invite.secret());
-                    command(Command::Invite(Some(invite)))?;
-                    Ok(json!(format!(
-                        "https://github.com/{REPO}/releases/latest#pair?v=1&id={}&name={}&fp={}&s={secret}&a={}&p={}",
-                        self.me.device_id,
-                        url_encode(&win::name()),
-                        vyoma_core::invite::fingerprint(&self.me.cert),
-                        addresses.join(","),
-                        self.lan.tcp_port()
-                    )))
-                }
-                "EndPairingCode" => command(Command::Invite(None)),
-                // The window's look: the wallpaper's colours.
-                "Wallpaper" => tokio::task::spawn_blocking(crate::wallpaper::for_window).await.map_err(|e| e.to_string())?.map_err(|e| format!("{e:#}")),
-                "Health" => {
-                    let checks = tokio::task::spawn_blocking(checks).await.map_err(|e| e.to_string())?;
-                    Ok(json!({ "features": [], "installable": false, "checks": checks, "notes": [], "update": self.updates.status(), "version": VERSION.trim() }))
-                }
-                "FixCheck" => match control::text(args, 0)?.as_str() {
-                    AUTOSTART_CHECK => system::install().map(|_| Value::Null).map_err(|e| format!("{e:#}")),
-                    usb::CHECK => {
-                        let changes = self.changes.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = usb::fetch_adb().await {
-                                tracing::warn!("no adb: {e:#}");
-                                let text = format!("{e:#}");
-                                tokio::task::spawn_blocking(move || tray::notify("Couldn't get adb", &text));
-                            }
-                            let _ = changes.send(json!({ "event": "Changed" }));
-                        });
-                        Ok(Value::Null)
-                    }
-                    crate::gamepad::CHECK => {
-                        let changes = self.changes.clone();
-                        tokio::spawn(async move {
-                            let installed = changes.clone();
-                            let done = crate::gamepad::fetch_driver(move || {
-                                let _ = installed.send(json!({ "event": "Changed" }));
-                            });
-                            if let Err(e) = done.await {
-                                tracing::warn!("no controller driver: {e:#}");
-                                let text = format!("{e:#}");
-                                tokio::task::spawn_blocking(move || tray::notify("Couldn't get the controller driver", &text));
-                            }
-                            let _ = changes.send(json!({ "event": "Changed" }));
-                        });
-                        Ok(Value::Null)
-                    }
-                    crate::camera::CHECK => {
-                        win::open(crate::camera::SETTINGS);
-                        Ok(Value::Null)
-                    }
-                    _ => Err("Not on Windows yet".into()),
-                },
-                // Let phones through: Windows asks for an administrator; FirewallDone says how it went.
-                "OpenFirewall" => {
-                    let changes = self.changes.clone();
-                    tokio::spawn(async move {
-                        let done = tokio::task::spawn_blocking(firewall::open).await;
-                        let ok = matches!(done, Ok(Ok(())));
-                        if let Ok(Err(e)) = &done {
-                            tracing::info!("firewall: {e:#}");
-                        }
-                        let _ = changes.send(json!({ "event": "FirewallDone", "ok": ok }));
-                    });
-                    Ok(Value::Null)
-                }
-                "AllowClipboardSync" => {
-                    let done = vyoma_core::adb::allow_clipboard().await.map_err(|e| format!("{e:#}"))?;
-                    tracing::info!("background clipboard sync allowed for {done} app(s)");
-                    Ok(Value::Null)
-                }
-                "SetUpdateChecks" => {
-                    self.updates.set_checks(args[0].as_bool().ok_or("on or off?")?);
-                    Ok(Value::Null)
-                }
-                // Update: the release's page, where the installer is.
-                "Update" => {
-                    win::open(&self.updates.page().ok_or("No newer Vyoma for Windows yet")?);
-                    Ok(Value::Null)
-                }
-                "Commands" => Ok(Value::Object(self.run.all().into_iter().collect())),
-                "SaveCommand" => {
-                    let flag = |i: usize| args[i].as_bool().unwrap_or(false);
-                    let key = self.run.save_one(&control::text(args, 0)?, &control::text(args, 1)?, &control::text(args, 2)?, flag(3), flag(4)).map_err(|e| format!("{e:#}"))?;
-                    self.commands_changed(devices);
-                    Ok(json!(key))
-                }
-                "RemoveCommand" => {
-                    self.run.remove(&control::text(args, 0)?).map_err(|e| format!("{e:#}"))?;
-                    self.commands_changed(devices);
-                    Ok(Value::Null)
-                }
-                "Activity" => Ok(Value::Array(self.activity.recent())),
-                "ClearActivity" => {
-                    self.activity.clear();
-                    Ok(Value::Null)
-                }
-                "SetPermission" => {
-                    let (id, key) = (control::text(args, 0)?, control::text(args, 1)?);
-                    let on = args[2].as_bool().ok_or("on or off?")?;
-                    let p = Permit::from_key(&key).filter(|p| PERMITS.contains(p)).ok_or_else(|| format!("no permission {key}"))?;
-                    self.permits.set(&id, p, on).map_err(|e| format!("{e:#}"))?;
-                    tracing::info!("{id}: {key} {}", if on { "allowed" } else { "turned off" });
-                    Ok(Value::Null)
-                }
-                "Conversations" => {
-                    let id = control::text(args, 0)?;
-                    let d = devices.get(&id).filter(|d| d.takes(messages::REQUEST)).ok_or("This phone doesn't share its texts")?;
-                    let (json, ask) = self.texts.conversations(&id, d.takes(messages::UNLOCK));
-                    let can_call = d.takes(DIAL);
-                    for p in ask {
-                        command(Command::Send(id.clone(), p))?;
-                    }
-                    let mut v: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-                    // Calls go through the phone, their sound staying there (no hands-free here yet).
-                    (v["canCall"], v["callHere"]) = (json!(can_call), json!(false));
-                    Ok(v)
-                }
-                "Contacts" | "SearchTexts" => {
-                    let id = control::text(args, 0)?;
-                    let d = devices.get(&id).filter(|d| d.takes(messages::REQUEST)).ok_or("This phone doesn't share its texts")?;
-                    let guarded = d.takes(messages::UNLOCK);
-                    let (json, ask) = if method == "Contacts" { self.texts.contacts(&id, guarded) } else { self.texts.search(&id, &control::text(args, 1)?, guarded) };
-                    for p in ask {
-                        command(Command::Send(id.clone(), p))?;
-                    }
-                    serde_json::from_str(&json).map_err(|e| e.to_string())
-                }
-                "ThreadFor" => {
-                    let id = control::text(args, 0)?;
-                    let d = devices.get(&id).filter(|d| d.takes(messages::REQUEST)).ok_or("This phone doesn't share its texts")?;
-                    Ok(json!(self.texts.thread_for(&id, &control::text(args, 1)?, d.takes(messages::UNLOCK))?))
-                }
-                "Call" => {
-                    let id = control::text(args, 0)?;
-                    let d = devices.get(&id).filter(|d| d.linked).ok_or("The phone isn't connected")?;
-                    if !d.takes(DIAL) {
-                        return Err("Update Vyoma on the phone to call from here".into());
-                    }
-                    let number = messages::dialable(&control::text(args, 1)?).ok_or("That isn't a number to call")?;
-                    self.texts.may_call(&id, d.takes(messages::UNLOCK))?;
-                    tracing::info!("{id}: asking the phone to make a call");
-                    command(Command::Send(id, packet(DIAL, json!({ "number": number }))))
-                }
-                "Thread" => {
-                    let id = control::text(args, 0)?;
-                    let thread = args[1].as_i64().ok_or("which conversation?")?;
-                    let guarded = devices.get(&id).is_some_and(|d| d.takes(messages::UNLOCK));
-                    let (json, ask) = self.texts.thread(&id, thread, guarded);
-                    for p in ask {
-                        command(Command::Send(id.clone(), p))?;
-                    }
-                    serde_json::from_str(&json).map_err(|e| e.to_string())
-                }
-                "TextThread" => {
-                    let id = control::text(args, 0)?;
-                    let thread = args[1].as_i64().ok_or("which conversation?")?;
-                    let text = control::text(args, 2)?;
-                    let d = devices.get(&id).filter(|d| d.takes(messages::REQUEST)).ok_or("The phone isn't connected")?;
-                    let p = self.texts.send(&id, thread, &text, d.takes(messages::UNLOCK))?;
-                    tracing::info!("{id}: sending a text");
-                    command(Command::Send(id, p))
-                }
-                "UnlockTexts" => {
-                    let id = control::text(args, 0)?;
-                    let Some(d) = devices.get(&id).filter(|d| d.takes(messages::UNLOCK)) else { return Ok(Value::Null) };
-                    if !d.linked {
-                        return Err("The phone isn't connected".into());
-                    }
-                    if let Some(p) = self.texts.unlock(&id) {
-                        tracing::info!("{id}: asking to show the texts");
-                        command(Command::Send(id, p))?;
-                    }
-                    Ok(Value::Null)
-                }
-                _ => Err("Not on Windows yet".into()),
-            }
+    type Window = vyoma_engine::window::Window<WinSide>;
+
+    impl Side for WinSide {
+        const OS: &'static str = "Windows";
+        const PERMITS: &'static [Permit] = &PERMITS;
+
+        async fn name() -> String {
+            win::name()
         }
 
-        /// Sends [paths] (files and folders) to [id]; with [tell], notifications say how it went.
-        async fn send(&self, id: String, paths: Vec<String>, devices: &HashMap<String, Device>, tell: bool) -> Result<Value, String> {
-            let Some(d) = devices.get(&id).filter(|d| d.takes(SHARE)) else {
-                let name = devices.get(&id).map_or("The phone", |d| d.name.as_str());
-                let why = format!("{name} isn't connected. Open Vyoma on it, then try again.");
-                if tell {
-                    tray::notify("Couldn't send", &why);
-                }
-                return Err(why);
+        async fn notify(title: &str, body: &str) {
+            tray::notify(title, body);
+        }
+
+        fn open(url: &str) {
+            win::open(url);
+        }
+
+        fn permit_words(p: Permit) -> (&'static str, &'static str) {
+            permit_words(p)
+        }
+
+        fn pick(w: &Window, phones: Vec<(String, String)>, paths: Vec<String>) -> Answer {
+            let what = if paths.len() == 1 { "this".to_owned() } else { format!("these {} items", paths.len()) };
+            // A toast with a button per phone, where there are toasts.
+            let token = toast::short(&format!("{paths:?}{:?}", Instant::now()));
+            let t = Toast {
+                tag: token.clone(),
+                group: "send".into(),
+                title: format!("Send {what} to which phone?"),
+                body: share::summary(&share::expand(&paths).unwrap_or_default()),
+                launch: toast::args(&[("do", "open")]),
+                buttons: phones.iter().map(|(id, name)| Button { label: name.clone(), args: toast::args(&[("do", "send"), ("dev", id), ("t", &token)]), with_reply: false }).collect(),
+                ..Default::default()
             };
-            let files = share::expand(&paths).map_err(|e| {
-                if tell {
-                    tray::notify("Couldn't send", &format!("{e:#}"));
-                }
-                format!("{e:#}")
-            })?;
-            let what = share::summary(&files);
-            let (me, cert, commands, changes, name) = (self.me.clone(), d.cert.clone(), self.commands.clone(), self.changes.clone(), d.name.clone());
-            tokio::spawn(async move {
-                let count = files.len();
-                let error = match share::send_files(&commands, &id, &me, &cert, files).await {
-                    Ok(()) => String::new(),
-                    Err(e) => format!("{e:#}"),
-                };
-                if tell {
-                    if error.is_empty() {
-                        tray::notify(&format!("Sent to {name}"), &what);
-                    } else {
-                        tray::notify(&format!("Couldn't send to {name}"), &error);
-                    }
-                }
-                let _ = changes.send(json!({ "event": "FilesSent", "id": id, "count": count, "error": error }));
+            if phones.len() <= 5 && toast::show(&t) == Shown::Yes {
+                w.side.pending.lock().unwrap().insert(token, paths);
+                return Ok(Value::Null);
+            }
+            let requests = w.side.requests.clone();
+            // One question per phone, in turn, until one's picked.
+            tokio::task::spawn_blocking(move || {
+                let Some((id, _)) = phones.into_iter().find(|p| win::ask("Vyoma", &format!("Send {what} to {}?", p.1))) else { return };
+                let (reply, _) = tokio::sync::oneshot::channel();
+                let _ = requests.blocking_send(control::Request { method: "SendFiles".into(), args: json!([id, paths, true]), reply });
             });
             Ok(Value::Null)
         }
 
-        /// Phones showing the list get the new one.
-        fn commands_changed(&self, devices: &HashMap<String, Device>) {
-            for (id, d) in devices {
-                if d.takes(RUNCOMMAND) {
-                    let _ = self.commands.send(Command::Send(id.clone(), self.run.list_packet()));
-                }
+        async fn answer(w: &Window, method: &str, args: &Value, _: &mut Devices) -> Option<Answer> {
+            matches!(method, "Wallpaper" | "Health" | "FixCheck" | "OpenFirewall").then_some(())?;
+            Some(own(w, method, args).await)
+        }
+    }
+
+    /// The window's requests only Windows answers.
+    async fn own(w: &Window, method: &str, args: &Value) -> Answer {
+        match method {
+            // The window's look: the wallpaper's colours.
+            "Wallpaper" => tokio::task::spawn_blocking(crate::wallpaper::for_window).await.map_err(|e| e.to_string())?.map_err(|e| format!("{e:#}")),
+            "Health" => {
+                let checks = tokio::task::spawn_blocking(checks).await.map_err(|e| e.to_string())?;
+                Ok(json!({ "features": [], "installable": false, "checks": checks, "notes": [], "update": w.updates.status(), "version": VERSION.trim() }))
             }
-        }
-    }
-
-    /// A device as the window reads it (the Linux app's `Details`). [linked]: how many paired phones are linked.
-    fn details(id: &str, d: &Device, permits: &Permits, clip_seen: &ClipboardSeen, linked: usize) -> Value {
-        let via = via(d);
-        let mut v = json!({
-            "id": id, "name": d.name, "paired": d.paired, "linked": d.linked, "key": d.key, "asking": d.asking,
-            "via": via,
-            "can": { "share": d.takes(SHARE), "ring": d.takes(FIND), "browse": false, "text": d.takes(messages::REQUEST) },
-            // The cable's one-time Allow for background clipboard sync (the window's Clipboard card).
-            "clipboardSync": clip_seen.state(id, d.paired && d.linked && (via == "cable" || linked == 1)),
-            "permits": PERMITS.iter().map(|&p| {
-                let (name, detail) = permit_words(p);
-                json!({ "key": p.key(), "name": name, "detail": detail, "on": permits.allows(id, p) })
-            }).collect::<Vec<_>>(),
-        });
-        if let Some((charge, charging, low)) = d.battery {
-            v["battery"] = json!({ "charge": charge, "charging": charging, "low": low });
-        }
-        v
-    }
-
-    /// How a linked phone is reached: loopback is the USB cable (adb's tunnel).
-    fn via(d: &Device) -> &'static str {
-        match d.remote.filter(|_| d.linked) {
-            None => "",
-            Some(r) if r.is_loopback() => "cable",
-            Some(_) => "wifi",
+            "FixCheck" => match vyoma_engine::window::text(args, 0)?.as_str() {
+                AUTOSTART_CHECK => system::install().map(|_| Value::Null).map_err(|e| format!("{e:#}")),
+                usb::CHECK => {
+                    let changes = w.changes.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = usb::fetch_adb().await {
+                            tracing::warn!("no adb: {e:#}");
+                            let text = format!("{e:#}");
+                            tokio::task::spawn_blocking(move || tray::notify("Couldn't get adb", &text));
+                        }
+                        let _ = changes.send(json!({ "event": "Changed" }));
+                    });
+                    Ok(Value::Null)
+                }
+                crate::gamepad::CHECK => {
+                    let changes = w.changes.clone();
+                    tokio::spawn(async move {
+                        let installed = changes.clone();
+                        let done = crate::gamepad::fetch_driver(move || {
+                            let _ = installed.send(json!({ "event": "Changed" }));
+                        });
+                        if let Err(e) = done.await {
+                            tracing::warn!("no controller driver: {e:#}");
+                            let text = format!("{e:#}");
+                            tokio::task::spawn_blocking(move || tray::notify("Couldn't get the controller driver", &text));
+                        }
+                        let _ = changes.send(json!({ "event": "Changed" }));
+                    });
+                    Ok(Value::Null)
+                }
+                crate::camera::CHECK => {
+                    win::open(crate::camera::SETTINGS);
+                    Ok(Value::Null)
+                }
+                _ => Err(w.not_here()),
+            },
+            // Let phones through: Windows asks for an administrator; FirewallDone says how it went.
+            "OpenFirewall" => {
+                let changes = w.changes.clone();
+                tokio::spawn(async move {
+                    let done = tokio::task::spawn_blocking(firewall::open).await;
+                    let ok = matches!(done, Ok(Ok(())));
+                    if let Ok(Err(e)) = &done {
+                        tracing::info!("firewall: {e:#}");
+                    }
+                    let _ = changes.send(json!({ "event": "FirewallDone", "ok": ok }));
+                });
+                Ok(Value::Null)
+            }
+            _ => Err(w.not_here()),
         }
     }
 
@@ -1097,14 +860,7 @@ mod agent {
         Value::Array(all)
     }
 
-    /// A JSON list of strings (the files of a send).
-    fn strings(v: &Value) -> Vec<String> {
-        v.as_array().map(|a| a.iter().filter_map(|p| p.as_str().map(str::to_owned)).collect()).unwrap_or_default()
-    }
 
-    fn url_encode(s: &str) -> String {
-        s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
-    }
 
     /// `--send-any [paths]` (Explorer's Send to): hands the files to the running agent, which
     /// picks the phone and says how it went.
@@ -1309,6 +1065,7 @@ mod agent {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use vyoma_engine::window::{details, url_encode};
 
         fn phone(incoming: &[&str]) -> Device {
             Device { paired: true, linked: true, incoming: incoming.iter().map(|s| s.to_string()).collect(), ..Default::default() }
@@ -1333,14 +1090,14 @@ mod agent {
             permits.set("p", Permit::Files, false).unwrap();
             let dir = std::env::temp_dir().join(format!("vyoma-details-{}", std::process::id()));
             let _ = std::fs::create_dir_all(&dir);
-            let v = details("p", &d, &permits, &ClipboardSeen::load(&dir), 1);
+            let v = details::<WinSide>("p", &d, &permits, &ClipboardSeen::load(&dir), 1);
             assert_eq!(v["clipboardSync"], "plug", "unknown until it's plugged in");
             assert_eq!(v["via"], "", "not linked");
             d.linked = true;
             d.remote = Some("127.0.0.1".parse().unwrap());
-            assert_eq!(via(&d), "cable");
+            assert_eq!(d.via(), "cable");
             d.remote = Some("192.0.2.7".parse().unwrap());
-            assert_eq!(via(&d), "wifi");
+            assert_eq!(d.via(), "wifi");
             d.linked = false;
             let _ = std::fs::remove_dir_all(&dir);
             assert_eq!((v["id"].as_str(), v["key"].as_str(), v["asking"].as_bool()), (Some("p"), Some("1A2B"), Some(true)));

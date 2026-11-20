@@ -55,6 +55,7 @@ use vyoma_companion::activity::Activity;
 use vyoma_companion::permits::{Permit, Permits};
 use vyoma_companion::platform::Linux;
 use vyoma_engine::dispatch::{self, Route};
+use vyoma_engine::texting::Texting;
 use vyoma_companion::session::{self as features, Host, Phone};
 use zbus::fdo;
 
@@ -489,94 +490,57 @@ impl Control {
     /// The phone's text conversations as JSON (`messages.rs`), newest first; asks the phone the
     /// first time on each link, and [messages_changed] follows as they come.
     fn conversations(&self, id: String) -> fdo::Result<String> {
-        let takes = self.devices.lock().unwrap().get(&id).is_some_and(|d| plugins::takes(d, messages::REQUEST));
-        if !takes {
-            return Err(fdo::Error::NotSupported("This phone doesn't share its texts".into()));
-        }
-        let guarded = self.texts_guarded(&id);
-        let (json, ask) = self.texts.conversations(&id, guarded);
-        for p in ask {
-            self.command(Command::Send(id.clone(), p))?;
-        }
-        // Whether the window offers to call: a phone that takes calls from here.
-        let can_call = self.devices.lock().unwrap().get(&id).is_some_and(|d| plugins::takes(d, telephony::DIAL));
-        let mut v: Value = serde_json::from_str(&json).map_err(|e| fdo::Error::Failed(e.to_string()))?;
-        v["canCall"] = json!(can_call);
+        // Calls made here have their sound here (hfp.rs).
+        let (v, ask) = self.texting(&id).conversations(&self.texts, &id, true).map_err(fdo::Error::NotSupported)?;
+        self.ask_phone(&id, ask)?;
         Ok(v.to_string())
     }
 
     /// One conversation's texts as JSON, oldest first.
     fn thread(&self, id: String, thread: i64) -> fdo::Result<String> {
-        let (json, ask) = self.texts.thread(&id, thread, self.texts_guarded(&id));
-        for p in ask {
-            self.command(Command::Send(id.clone(), p))?;
-        }
+        let (json, ask) = self.texting(&id).thread(&self.texts, &id, thread);
+        self.ask_phone(&id, ask)?;
         Ok(json)
     }
 
     /// Texts [text] to [thread]'s people from the phone (D-Bus `TextThread`).
     fn text_thread(&self, id: String, thread: i64, text: String) -> fdo::Result<()> {
-        let linked = self.devices.lock().unwrap().get(&id).is_some_and(|d| d.linked && plugins::takes(d, messages::REQUEST));
-        if !linked {
-            return Err(fdo::Error::Failed("The phone isn't connected".into()));
-        }
-        let p = self.texts.send(&id, thread, &text, self.texts_guarded(&id)).map_err(fdo::Error::Failed)?;
+        let p = self.texting(&id).send(&self.texts, &id, thread, &text).map_err(fdo::Error::Failed)?;
         tracing::info!("{id}: sending a text");
         self.command(Command::Send(id, p))
     }
 
     /// The phone's contacts with a number, by name, as JSON (`{state, list: [{name, numbers}]}`).
     fn contacts(&self, id: String) -> fdo::Result<String> {
-        self.texts_ready(&id)?;
-        let (json, ask) = self.texts.contacts(&id, self.texts_guarded(&id));
-        for p in ask {
-            self.command(Command::Send(id.clone(), p))?;
-        }
+        let (json, ask) = self.texting(&id).contacts(&self.texts, &id).map_err(fdo::Error::NotSupported)?;
+        self.ask_phone(&id, ask)?;
         Ok(json)
     }
 
     /// Conversations and contacts matching [query] as JSON (`{chats, people}`); it also loads more texts to search,
     /// so it's worth asking again on `MessagesChanged`.
     fn search_texts(&self, id: String, query: String) -> fdo::Result<String> {
-        self.texts_ready(&id)?;
-        let (json, ask) = self.texts.search(&id, &query, self.texts_guarded(&id));
-        for p in ask {
-            self.command(Command::Send(id.clone(), p))?;
-        }
+        let (json, ask) = self.texting(&id).search(&self.texts, &id, &query).map_err(fdo::Error::NotSupported)?;
+        self.ask_phone(&id, ask)?;
         Ok(json)
     }
 
     /// The conversation with [number] (a contact's), started here if there's none yet: its thread id for `Thread`.
     fn thread_for(&self, id: String, number: String) -> fdo::Result<i64> {
-        self.texts_ready(&id)?;
-        self.texts.thread_for(&id, &number, self.texts_guarded(&id)).map_err(fdo::Error::Failed)
+        self.texting(&id).thread_for(&self.texts, &id, &number).map_err(fdo::Error::Failed)
     }
 
     /// Calls [number] from the phone, its sound on this PC once it starts (as for a call answered here). Only while
     /// Messages is open (the phone checks that again, and takes only a plain number, never an emergency one).
     fn call(&self, id: String, number: String) -> fdo::Result<()> {
-        let can = self.devices.lock().unwrap().get(&id).map(|d| (d.linked, plugins::takes(d, telephony::DIAL)));
-        match can {
-            Some((true, true)) => {}
-            Some((true, false)) => return Err(fdo::Error::NotSupported("Update Vyoma on the phone to call from here".into())),
-            _ => return Err(fdo::Error::Failed("The phone isn't connected".into())),
-        }
-        let number = messages::dialable(&number).ok_or_else(|| fdo::Error::InvalidArgs("That isn't a number to call".into()))?;
-        self.texts.may_call(&id, self.texts_guarded(&id)).map_err(fdo::Error::Failed)?;
+        let number = self.texting(&id).dial(&self.texts, &id, &number).map_err(fdo::Error::Failed)?;
         self.asks.send(Ask::Dial(id, number)).map_err(|_| fdo::Error::Failed("Vyoma is stopping".into()))
     }
 
     /// The Messages page was opened, a conversation picked or a text sent: a phone with the texts lock is asked to
     /// let them in (its owner confirms there), or, already open, stays open 10 more minutes.
     fn unlock_texts(&self, id: String) -> fdo::Result<()> {
-        if !self.texts_guarded(&id) {
-            return Ok(());
-        }
-        let linked = self.devices.lock().unwrap().get(&id).is_some_and(|d| d.linked);
-        if !linked {
-            return Err(fdo::Error::Failed("The phone isn't connected".into()));
-        }
-        if let Some(p) = self.texts.unlock(&id) {
+        if let Some(p) = self.texting(&id).unlock(&self.texts, &id).map_err(fdo::Error::Failed)? {
             tracing::info!("{id}: asking to show the texts");
             self.command(Command::Send(id, p))?;
         }
@@ -624,13 +588,19 @@ impl Control {
 impl Control {
     /// The phone holds its texts behind Vyoma's texts lock.
     /// The phone shares its texts (Messages works with it).
-    fn texts_ready(&self, id: &str) -> fdo::Result<()> {
-        let takes = self.devices.lock().unwrap().get(id).is_some_and(|d| plugins::takes(d, messages::REQUEST));
-        if takes { Ok(()) } else { Err(fdo::Error::NotSupported("This phone doesn't share its texts".into())) }
+    /// What the Messages page knows of [id]: its texts stay readable while it's away (paired is enough).
+    fn texting(&self, id: &str) -> Texting {
+        self.devices.lock().unwrap().get(id).map_or_else(Texting::default, |d| Texting {
+            linked: d.linked,
+            shares: plugins::takes(d, messages::REQUEST),
+            guarded: plugins::takes(d, messages::UNLOCK),
+            dials: plugins::takes(d, telephony::DIAL),
+        })
     }
 
-    fn texts_guarded(&self, id: &str) -> bool {
-        self.devices.lock().unwrap().get(id).is_some_and(|d| plugins::takes(d, messages::UNLOCK))
+    /// Sends [id] what an answer needs from it.
+    fn ask_phone(&self, id: &str, ask: Vec<Value>) -> fdo::Result<()> {
+        ask.into_iter().try_for_each(|p| self.command(Command::Send(id.to_owned(), p)))
     }
 
     /// Every linked device that takes the list gets it again.

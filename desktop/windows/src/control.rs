@@ -146,11 +146,6 @@ async fn connection(stream: impl AsyncRead + AsyncWrite, requests: mpsc::Sender<
     Ok(())
 }
 
-/// The [i]th argument as text, or the reply's error.
-pub fn text(args: &Value, i: usize) -> Result<String, String> {
-    args[i].as_str().map(str::to_owned).ok_or_else(|| "That request was missing something".to_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

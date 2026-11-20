@@ -45,15 +45,15 @@ use vyoma_core::clipboard::{CLIPBOARD, CLIPBOARD_CONNECT, Clipboard, MAX_TEXT};
 use vyoma_engine::commands::{self, Commands, RUNCOMMAND, RUNCOMMAND_REQUEST};
 use vyoma_core::device::{Command, Event, Hub};
 use vyoma_core::identity::Identity;
-use vyoma_core::invite::Invite;
 use vyoma_core::lan::{Lan, Ports, Rules, UDP_PORT};
 use vyoma_core::messages::{self, Store};
 use vyoma_core::link::packet;
 use vyoma_core::permits::{Permit, Permits};
-use vyoma_core::share::{self, SHARE, SHARE_UPDATE};
+use vyoma_core::share::{SHARE, SHARE_UPDATE};
 use vyoma_core::trust::TrustStore;
 use vyoma_engine::dispatch::{self, Route, Touch};
 use vyoma_engine::session::{Host, Phone, phone_name};
+use vyoma_engine::window::{Answer, CHANGING, Device, Devices, Side};
 
 pub use vyoma_engine::stock::{BATTERY, FIND, LOCK_REQUEST, PING, battery_packet};
 use vyoma_engine::stock::{self, Desk};
@@ -72,14 +72,13 @@ const OUTGOING: &[&str] = &[
     PING, BATTERY, FIND, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE,
     media::MPRIS, media::VOLUME, RUNCOMMAND, input::MOUSEPAD_ECHO, KEYBOARDSTATE,
     messages::REQUEST, messages::REQUEST_CONVERSATIONS, messages::REQUEST_CONVERSATION, messages::CONTACTS_UIDS, messages::CONTACTS_VCARDS,
-    messages::UNLOCK, messages::LOCK, DIAL, vyoma::LEAVING,
+    messages::UNLOCK, messages::LOCK, vyoma_engine::calls::DIAL, vyoma::LEAVING,
 ];
 
 /// This release, as the Linux app reads it: the repo's one version.
 const VERSION: &str = include_str!("../../../VERSION");
 const AGENT_LOCK_TRIES: u32 = 24;
 const AGENT_LOCK_WAIT: Duration = Duration::from_millis(250);
-use vyoma_core::release::REPO;
 
 /// How often the clipboard is looked at (macOS sends no change events to a program like this one)
 /// and the battery read.
@@ -124,28 +123,6 @@ fn main() -> Result<()> {
 }
 
 /// A device as this Mac knows it.
-#[derive(Default)]
-struct Device {
-    name: String,
-    paired: bool,
-    linked: bool,
-    incoming: Vec<String>,
-    cert: Vec<u8>,
-    /// The address of its newest link, where its payloads are fetched.
-    remote: Option<IpAddr>,
-    /// Its battery: charge, charging, and whether it said it's low.
-    battery: Option<(i64, bool, bool)>,
-    /// The code of a pairing in progress, and whether it's the phone asking (so Accept and Reject).
-    key: String,
-    asking: bool,
-}
-
-impl Device {
-    fn takes(&self, kind: &str) -> bool {
-        self.paired && self.linked && self.incoming.iter().any(|t| t == kind)
-    }
-}
-
 /// Waits for this Mac's one-agent lock. Two agents would both answer the phone under one identity,
 /// each with its own idea of who is paired, and the network doesn't stop them: the second simply
 /// listens on the next port. The wait covers an agent still saying goodbye after a restart.
@@ -250,7 +227,20 @@ async fn run(dir: PathBuf) -> Result<()> {
             Err(e) => tracing::warn!("no {} in Finder: {e:#}", finder::NAME),
         }
     }
-    let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone, run: run_commands.clone(), texts: texts.clone(), permits: permits.clone(), activity: activity.clone(), updates, requests: requests_tx };
+    let window = Window {
+        me: me.clone(),
+        lan: lan.clone(),
+        commands: commands.clone(),
+        changes: changes.clone(),
+        everyone: everyone.to_vec(),
+        run: run_commands.clone(),
+        texts: texts.clone(),
+        permits: permits.clone(),
+        activity: activity.clone(),
+        updates,
+        clip_seen: vyoma_core::adb::ClipboardSeen::load(&dir),
+        side: MacSide { requests: requests_tx },
+    };
 
     // Players and the volume, read while a phone that takes them is linked.
     let media_wanted = Arc::new(AtomicBool::new(false));
@@ -260,7 +250,6 @@ async fn run(dir: PathBuf) -> Result<()> {
     let mut pointer = input::Pointer::default();
     // The USB cable: phones plugged in with USB debugging get the adb tunnel and grants.
     usb::start(lan.tcp_port());
-    clip_load(&dir);
     {
         let changes = changes.clone();
         vyoma_core::adb::on_clipboard_change(Box::new(move || {
@@ -572,354 +561,116 @@ async fn run(dir: PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// What the window can ask for (the Linux app's D-Bus methods, the ones a Mac has so far).
-struct Window {
-    me: Arc<Identity>,
-    lan: Arc<Lan>,
-    commands: mpsc::UnboundedSender<Command>,
-    changes: broadcast::Sender<Value>,
-    everyone: [SocketAddr; 1],
-    run: Commands,
-    texts: Arc<Store>,
-    permits: Arc<Permits>,
-    activity: Arc<Activity>,
-    updates: Arc<update::Updates>,
+/// What the window asks that only this Mac answers, and how the Mac shows things (the rest is
+/// the engine's [vyoma_engine::window]).
+struct MacSide {
     /// For a choice made in a dialog to come back as a request.
     requests: mpsc::Sender<control::Request>,
 }
 
-impl Window {
-    async fn answer(&self, method: &str, args: &Value, devices: &mut HashMap<String, Device>) -> Result<Value, String> {
-        let command = |c: Command| self.commands.send(c).map(|_| Value::Null).map_err(|_| "Vyoma is stopping".to_owned());
-        match method {
-            "Phones" => {
-                let linked = devices.values().filter(|d| d.paired && d.linked).count();
-                Ok(Value::Array(devices.iter().map(|(id, d)| details(id, d, &self.permits, linked)).collect()))
-            }
-            "Pair" => command(Command::Pair(control::text(args, 0)?)),
-            "Accept" => command(Command::Accept(control::text(args, 0)?)),
-            "Reject" => command(Command::Reject(control::text(args, 0)?)),
-            "Unpair" => command(Command::Unpair(control::text(args, 0)?)),
-            "Ring" => {
-                let id = control::text(args, 0)?;
-                if !devices.get(&id).is_some_and(|d| d.takes(FIND)) {
-                    return Err("That phone can't be rung right now".into());
-                }
-                command(Command::Send(id, packet(FIND, json!({}))))
-            }
-            "SendFiles" => {
-                let id = control::text(args, 0)?;
-                // From Finder ([finder]): nobody's looking at the window, so notifications say how it went.
-                let tell = args[2].as_bool().unwrap_or(false);
-                self.send(id, strings(&args[1]), devices, tell).await
-            }
-            "SendAny" => {
-                let paths = strings(&args[0]);
-                if paths.is_empty() {
-                    return Ok(Value::Null);
-                }
-                let all: Vec<_> = devices.iter().map(|(id, d)| (id.clone(), d.name.clone(), d.paired, d.linked)).collect();
-                match share::pick(&all) {
-                    share::Pick::One(id) => self.send(id, paths, devices, true).await,
-                    share::Pick::NonePaired => {
-                        mac::notify("No phone to send to", "Pair your phone in Vyoma first, then try again.").await;
-                        Ok(Value::Null)
-                    }
-                    share::Pick::Ask(phones) => {
-                        let names: Vec<String> = phones.iter().map(|p| p.1.clone()).collect();
-                        let what = if paths.len() == 1 {
-                            format!("Send \u{201c}{}\u{201d} to which phone?", std::path::Path::new(&paths[0]).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
-                        } else {
-                            format!("Send {} items to which phone?", paths.len())
-                        };
-                        let requests = self.requests.clone();
-                        tokio::spawn(async move {
-                            let picked = match mac::choose("Vyoma", &what, "Send", &names) {
-                                Ok(child) => child.wait_with_output().await.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()).unwrap_or_default(),
-                                Err(e) => {
-                                    tracing::warn!("couldn't ask which phone: {e:#}");
-                                    return;
-                                }
-                            };
-                            let Some((id, _)) = phones.into_iter().find(|p| !picked.is_empty() && p.1 == picked) else { return };
-                            let (reply, _) = tokio::sync::oneshot::channel();
-                            let _ = requests.send(control::Request { method: "SendFiles".into(), args: json!([id, paths, true]), reply }).await;
-                        });
-                        Ok(Value::Null)
-                    }
-                }
-            }
-            "Refresh" => self.lan.announce(&self.everyone).await.map(|_| Value::Null).map_err(|e| format!("{e:#}")),
-            "PairingCode" => {
-                // No address, no code: a phone couldn't reach this Mac. The window says so (the error's word).
-                let addresses: Vec<String> = vyoma_core::invite::local_addresses().iter().map(|a| a.to_string()).collect();
-                if addresses.is_empty() {
-                    return Err("offline".into());
-                }
-                let invite = Invite::new(std::time::Instant::now()).ok_or("no randomness")?;
-                let secret = vyoma_core::invite::hex(invite.secret());
-                command(Command::Invite(Some(invite)))?;
-                Ok(json!(format!(
-                    "https://github.com/{REPO}/releases/latest#pair?v=1&id={}&name={}&fp={}&s={secret}&a={}&p={}",
-                    self.me.device_id,
-                    url_encode(&mac::name().await),
-                    vyoma_core::invite::fingerprint(&self.me.cert),
-                    addresses.join(","),
-                    self.lan.tcp_port()
-                )))
-            }
-            "EndPairingCode" => command(Command::Invite(None)),
-            "Health" => Ok(json!({
-                "features": [], "installable": false, "checks": checks(), "notes": [],
-                "update": self.updates.status(), "version": VERSION.trim(),
-            })),
-            "FixCheck" => match control::text(args, 0)?.as_str() {
-                TOUCHPAD_CHECK => {
-                    input::ask();
-                    mac::open(input::ACCESSIBILITY);
-                    tokio::spawn(restart_once_trusted());
-                    Ok(Value::Null)
-                }
-                SCREEN_CHECK => {
-                    screen::allowed(true);
-                    mac::open(screen::SCREEN_RECORDING);
-                    Ok(Value::Null)
-                }
-                CAMERA_CHECK => {
-                    if camera::access() == camera::Access::NotAsked {
-                        let changes = self.changes.clone();
-                        tokio::spawn(async move {
-                            let answer = camera::ask().await;
-                            tracing::info!("camera: {answer:?}");
-                            if answer == camera::Access::NotAsked {
-                                // Not from Vyoma.app, or no answer: Settings is where it's turned on.
-                                mac::open(camera::CAMERA_SETTINGS);
-                            }
-                            let _ = changes.send(json!({ "event": "Changed" }));
-                        });
-                    } else {
-                        mac::open(camera::CAMERA_SETTINGS);
-                    }
-                    Ok(Value::Null)
-                }
-                CABLE_CHECK => {
-                    let changes = self.changes.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = usb::fetch_adb().await {
-                            tracing::warn!("no adb: {e:#}");
-                            mac::notify("Couldn't get adb", &format!("{e:#}")).await;
-                        }
-                        let _ = changes.send(json!({ "event": "Changed" }));
-                    });
-                    Ok(Value::Null)
-                }
-                _ => Err("Not on the Mac yet".into()),
-            },
-            "AllowClipboardSync" => {
-                let done = vyoma_core::adb::allow_clipboard().await.map_err(|e| format!("{e:#}"))?;
-                tracing::info!("background clipboard sync allowed for {done} app(s)");
-                Ok(Value::Null)
-            }
-            "SetUpdateChecks" => {
-                self.updates.set_checks(args[0].as_bool().ok_or("on or off?")?);
-                Ok(Value::Null)
-            }
-            "Update" => {
-                mac::open(&self.updates.page().ok_or("No newer Vyoma for the Mac yet")?);
-                Ok(Value::Null)
-            }
-            "Commands" => Ok(Value::Object(self.run.all().into_iter().collect())),
-            "SaveCommand" => {
-                let flag = |i: usize| args[i].as_bool().unwrap_or(false);
-                let key = self.run.save_one(&control::text(args, 0)?, &control::text(args, 1)?, &control::text(args, 2)?, flag(3), flag(4)).map_err(|e| format!("{e:#}"))?;
-                self.commands_changed(devices);
-                Ok(json!(key))
-            }
-            "RemoveCommand" => {
-                self.run.remove(&control::text(args, 0)?).map_err(|e| format!("{e:#}"))?;
-                self.commands_changed(devices);
-                Ok(Value::Null)
-            }
-            "Activity" => Ok(Value::Array(self.activity.recent())),
-            "ClearActivity" => {
-                self.activity.clear();
-                Ok(Value::Null)
-            }
-            "SetPermission" => {
-                let (id, key) = (control::text(args, 0)?, control::text(args, 1)?);
-                let on = args[2].as_bool().ok_or("on or off?")?;
-                let p = Permit::from_key(&key).filter(|p| PERMITS.contains(p)).ok_or_else(|| format!("no permission {key}"))?;
-                self.permits.set(&id, p, on).map_err(|e| format!("{e:#}"))?;
-                tracing::info!("{id}: {key} {}", if on { "allowed" } else { "turned off" });
-                Ok(Value::Null)
-            }
-            "Conversations" => {
-                let id = control::text(args, 0)?;
-                let d = devices.get(&id).filter(|d| d.takes(messages::REQUEST)).ok_or("This phone doesn't share its texts")?;
-                let (json, ask) = self.texts.conversations(&id, d.takes(messages::UNLOCK));
-                let can_call = d.takes(DIAL);
-                for p in ask {
-                    command(Command::Send(id.clone(), p))?;
-                }
-                let mut v: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-                // Calls go through the phone, their sound staying there: a Mac can't be its headset.
-                (v["canCall"], v["callHere"]) = (json!(can_call), json!(false));
-                Ok(v)
-            }
-            "Contacts" | "SearchTexts" => {
-                let id = control::text(args, 0)?;
-                let d = devices.get(&id).filter(|d| d.takes(messages::REQUEST)).ok_or("This phone doesn't share its texts")?;
-                let guarded = d.takes(messages::UNLOCK);
-                let (json, ask) = if method == "Contacts" { self.texts.contacts(&id, guarded) } else { self.texts.search(&id, &control::text(args, 1)?, guarded) };
-                for p in ask {
-                    command(Command::Send(id.clone(), p))?;
-                }
-                serde_json::from_str(&json).map_err(|e| e.to_string())
-            }
-            "ThreadFor" => {
-                let id = control::text(args, 0)?;
-                let d = devices.get(&id).filter(|d| d.takes(messages::REQUEST)).ok_or("This phone doesn't share its texts")?;
-                Ok(json!(self.texts.thread_for(&id, &control::text(args, 1)?, d.takes(messages::UNLOCK))?))
-            }
-            "Call" => {
-                let id = control::text(args, 0)?;
-                let d = devices.get(&id).filter(|d| d.linked).ok_or("The phone isn't connected")?;
-                if !d.takes(DIAL) {
-                    return Err("Update Vyoma on the phone to call from here".into());
-                }
-                let number = messages::dialable(&control::text(args, 1)?).ok_or("That isn't a number to call")?;
-                self.texts.may_call(&id, d.takes(messages::UNLOCK))?;
-                tracing::info!("{id}: asking the phone to make a call");
-                command(Command::Send(id, packet(DIAL, json!({ "number": number }))))
-            }
-            "Thread" => {
-                let id = control::text(args, 0)?;
-                let thread = args[1].as_i64().ok_or("which conversation?")?;
-                let guarded = devices.get(&id).is_some_and(|d| d.takes(messages::UNLOCK));
-                let (json, ask) = self.texts.thread(&id, thread, guarded);
-                for p in ask {
-                    command(Command::Send(id.clone(), p))?;
-                }
-                serde_json::from_str(&json).map_err(|e| e.to_string())
-            }
-            "TextThread" => {
-                let id = control::text(args, 0)?;
-                let thread = args[1].as_i64().ok_or("which conversation?")?;
-                let text = control::text(args, 2)?;
-                let d = devices.get(&id).filter(|d| d.takes(messages::REQUEST)).ok_or("The phone isn't connected")?;
-                let p = self.texts.send(&id, thread, &text, d.takes(messages::UNLOCK))?;
-                tracing::info!("{id}: sending a text");
-                command(Command::Send(id, p))
-            }
-            "UnlockTexts" => {
-                let id = control::text(args, 0)?;
-                let Some(d) = devices.get(&id).filter(|d| d.takes(messages::UNLOCK)) else { return Ok(Value::Null) };
-                if !d.linked {
-                    return Err("The phone isn't connected".into());
-                }
-                if let Some(p) = self.texts.unlock(&id) {
-                    tracing::info!("{id}: asking to show the texts");
-                    command(Command::Send(id, p))?;
-                }
-                Ok(Value::Null)
-            }
-            _ => Err("Not on the Mac yet".into()),
-        }
-    }
-}
+type Window = vyoma_engine::window::Window<MacSide>;
 
-impl Window {
-    /// Sends [paths] (files and folders) to [id]; with [tell], notifications say how it went.
-    async fn send(&self, id: String, paths: Vec<String>, devices: &HashMap<String, Device>, tell: bool) -> Result<Value, String> {
-        let Some(d) = devices.get(&id).filter(|d| d.takes(SHARE)) else {
-            let name = devices.get(&id).map_or("The phone", |d| d.name.as_str());
-            let why = format!("{name} isn't connected. Open Vyoma on it, then try again.");
-            if tell {
-                mac::notify("Couldn't send", &why).await;
-            }
-            return Err(why);
+impl Side for MacSide {
+    const OS: &'static str = "the Mac";
+    const PERMITS: &'static [Permit] = &PERMITS;
+
+    async fn name() -> String {
+        mac::name().await
+    }
+
+    async fn notify(title: &str, body: &str) {
+        mac::notify(title, body).await;
+    }
+
+    fn open(url: &str) {
+        mac::open(url);
+    }
+
+    fn permit_words(p: Permit) -> (&'static str, &'static str) {
+        permit_words(p)
+    }
+
+    fn pick(w: &Window, phones: Vec<(String, String)>, paths: Vec<String>) -> Answer {
+        let names: Vec<String> = phones.iter().map(|p| p.1.clone()).collect();
+        let what = if paths.len() == 1 {
+            format!("Send \u{201c}{}\u{201d} to which phone?", std::path::Path::new(&paths[0]).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+        } else {
+            format!("Send {} items to which phone?", paths.len())
         };
-        let files = match share::expand(&paths) {
-            Ok(f) => f,
-            Err(e) => {
-                if tell {
-                    mac::notify("Couldn't send", &format!("{e:#}")).await;
-                }
-                return Err(format!("{e:#}"));
-            }
-        };
-        let what = share::summary(&files);
-        let (me, cert, commands, changes, name) = (self.me.clone(), d.cert.clone(), self.commands.clone(), self.changes.clone(), d.name.clone());
+        let requests = w.side.requests.clone();
         tokio::spawn(async move {
-            let count = files.len();
-            let error = match share::send_files(&commands, &id, &me, &cert, files).await {
-                Ok(()) => String::new(),
-                Err(e) => format!("{e:#}"),
-            };
-            if tell {
-                if error.is_empty() {
-                    mac::notify(&format!("Sent to {name}"), &what).await;
-                } else {
-                    mac::notify(&format!("Couldn't send to {name}"), &error).await;
+            let picked = match mac::choose("Vyoma", &what, "Send", &names) {
+                Ok(child) => child.wait_with_output().await.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()).unwrap_or_default(),
+                Err(e) => {
+                    tracing::warn!("couldn't ask which phone: {e:#}");
+                    return;
                 }
-            }
-            let _ = changes.send(json!({ "event": "FilesSent", "id": id, "count": count, "error": error }));
+            };
+            let Some((id, _)) = phones.into_iter().find(|p| !picked.is_empty() && p.1 == picked) else { return };
+            let (reply, _) = tokio::sync::oneshot::channel();
+            let _ = requests.send(control::Request { method: "SendFiles".into(), args: json!([id, paths, true]), reply }).await;
         });
         Ok(Value::Null)
     }
 
-    /// Phones showing the list get the new one.
-    fn commands_changed(&self, devices: &HashMap<String, Device>) {
-        for (id, d) in devices {
-            if d.takes(RUNCOMMAND) {
-                let _ = self.commands.send(Command::Send(id.clone(), self.run.list_packet()));
+    async fn answer(w: &Window, method: &str, args: &Value, _: &mut Devices) -> Option<Answer> {
+        Some(match method {
+            "Health" => Ok(json!({
+                "features": [], "installable": false, "checks": checks(), "notes": [],
+                "update": w.updates.status(), "version": VERSION.trim(),
+            })),
+            "FixCheck" => {
+                let check = match vyoma_engine::window::text(args, 0) {
+                    Ok(c) => c,
+                    Err(e) => return Some(Err(e)),
+                };
+                match check.as_str() {
+                    TOUCHPAD_CHECK => {
+                        input::ask();
+                        mac::open(input::ACCESSIBILITY);
+                        tokio::spawn(restart_once_trusted());
+                        Ok(Value::Null)
+                    }
+                    SCREEN_CHECK => {
+                        screen::allowed(true);
+                        mac::open(screen::SCREEN_RECORDING);
+                        Ok(Value::Null)
+                    }
+                    CAMERA_CHECK => {
+                        if camera::access() == camera::Access::NotAsked {
+                            let changes = w.changes.clone();
+                            tokio::spawn(async move {
+                                let answer = camera::ask().await;
+                                tracing::info!("camera: {answer:?}");
+                                if answer == camera::Access::NotAsked {
+                                    // Not from Vyoma.app, or no answer: Settings is where it's turned on.
+                                    mac::open(camera::CAMERA_SETTINGS);
+                                }
+                                let _ = changes.send(json!({ "event": "Changed" }));
+                            });
+                        } else {
+                            mac::open(camera::CAMERA_SETTINGS);
+                        }
+                        Ok(Value::Null)
+                    }
+                    CABLE_CHECK => {
+                        let changes = w.changes.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = usb::fetch_adb().await {
+                                tracing::warn!("no adb: {e:#}");
+                                mac::notify("Couldn't get adb", &format!("{e:#}")).await;
+                            }
+                            let _ = changes.send(json!({ "event": "Changed" }));
+                        });
+                        Ok(Value::Null)
+                    }
+                    _ => Err(w.not_here()),
+                }
             }
-        }
+            _ => return None,
+        })
     }
 }
-
-/// A device as the window reads it (the Linux app's `Details`). [linked]: how many paired phones are linked.
-fn details(id: &str, d: &Device, permits: &Permits, linked: usize) -> Value {
-    let via = via(d);
-    let mut v = json!({
-        "id": id, "name": d.name, "paired": d.paired, "linked": d.linked, "key": d.key, "asking": d.asking,
-        "via": via,
-        "can": { "share": d.takes(SHARE), "ring": d.takes(FIND), "browse": false, "text": d.takes(messages::REQUEST) },
-        "clipboardSync": clipboard_sync(id, d.paired && d.linked && (via == "cable" || linked == 1)),
-        "permits": PERMITS.iter().map(|&p| {
-            let (name, detail) = permit_words(p);
-            json!({ "key": p.key(), "name": name, "detail": detail, "on": permits.allows(id, p) })
-        }).collect::<Vec<_>>(),
-    });
-    if let Some((charge, charging, low)) = d.battery {
-        v["battery"] = json!({ "charge": charge, "charging": charging, "low": low });
-    }
-    v
-}
-
-/// How a linked phone is reached: loopback is the USB cable (the Mac has no Bluetooth link).
-fn via(d: &Device) -> &'static str {
-    match d.remote.filter(|_| d.linked) {
-        None => "",
-        Some(r) if r.is_loopback() => "cable",
-        Some(_) => "wifi",
-    }
-}
-
-/// Phones whose background clipboard sync was seen granted (core's [vyoma_core::adb::ClipboardSeen]).
-static CLIP_ON: std::sync::OnceLock<vyoma_core::adb::ClipboardSeen> = std::sync::OnceLock::new();
-
-fn clip_load(dir: &std::path::Path) {
-    let _ = CLIP_ON.set(vyoma_core::adb::ClipboardSeen::load(dir));
-}
-
-/// "on", "ask" or "plug", as on Linux. [on_cable]: this phone is the one on the cable.
-fn clipboard_sync(id: &str, on_cable: bool) -> &'static str {
-    CLIP_ON.get().map_or("plug", |seen| seen.state(id, on_cable))
-}
-
-/// The window's requests after which it should read again (the rest only read, or tell by their own events).
-const CHANGING: &[&str] = &["Pair", "Accept", "Reject", "Unpair", "SetPermission", "SaveCommand", "RemoveCommand", "SetUpdateChecks"];
 
 /// Whether [event] changes what the window shows of a device: not the packets passing through,
 /// except the battery it shows.
@@ -996,14 +747,6 @@ const SCREEN_CHECK: &str = "Screen";
 const CAMERA_CHECK: &str = "Camera";
 const CABLE_CHECK: &str = "USB cable";
 
-/// Mac → phone: `{number}`, call it (Messages); the phone checks it all again (see the Linux app's telephony.rs).
-const DIAL: &str = "vyoma.call.dial";
-
-/// A JSON list of strings (the files of a send).
-fn strings(v: &Value) -> Vec<String> {
-    v.as_array().map(|a| a.iter().filter_map(|p| p.as_str().map(str::to_owned)).collect()).unwrap_or_default()
-}
-
 /// `--send-any [paths]` (Finder's Quick Action): hands the files to the running agent, which picks
 /// the phone and says how it went. With the agent not running, opens Vyoma (which starts it) first.
 fn send_any(paths: Vec<String>) -> Result<()> {
@@ -1034,10 +777,6 @@ fn send_any(paths: Vec<String>) -> Result<()> {
     }
     mac::notify_now("Couldn't send", "Vyoma isn't running on this Mac right now. Open Vyoma, then try again.");
     Ok(())
-}
-
-fn url_encode(s: &str) -> String {
-    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
 /// Starts phone [id]'s engine session, unless one is running; dropping its entry ends it.
@@ -1166,6 +905,7 @@ async fn on_packet(id: &str, d: &mut Device, p: &Value, from: IpAddr, me: &Arc<I
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vyoma_engine::window::{details, url_encode};
 
     fn phone(incoming: &[&str]) -> Device {
         Device { paired: true, linked: true, incoming: incoming.iter().map(|s| s.to_string()).collect(), ..Default::default() }
@@ -1189,11 +929,12 @@ mod tests {
         (d.name, d.key, d.asking, d.battery) = ("Pixel".into(), "1A2B".into(), true, Some((64, false, false)));
         let permits = Permits::default();
         permits.set("p", Permit::Files, false).unwrap();
-        let v = details("p", &d, &permits, 1);
+        let seen = vyoma_core::adb::ClipboardSeen::load(&std::env::temp_dir().join(format!("vyoma-mac-clip-{}", std::process::id())));
+        let v = details::<MacSide>("p", &d, &permits, &seen, 1);
         assert_eq!((v["id"].as_str(), v["key"].as_str(), v["asking"].as_bool()), (Some("p"), Some("1A2B"), Some(true)));
         assert_eq!((v["can"]["share"].as_bool(), v["can"]["ring"].as_bool()), (Some(true), Some(false)), "only what it takes");
         assert_eq!(v["battery"]["charge"], 64);
-        assert!(details("q", &Device::default(), &permits, 1)["battery"].is_null());
+        assert!(details::<MacSide>("q", &Device::default(), &permits, &seen, 1)["battery"].is_null());
         // Only the switches this Mac has, in Mac words.
         let keys: Vec<(&str, bool)> = v["permits"].as_array().unwrap().iter().map(|p| (p["key"].as_str().unwrap(), p["on"].as_bool().unwrap())).collect();
         assert_eq!(keys, [("screen", true), ("control", true), ("files", false), ("camera", true), ("power", true)]);
@@ -1210,11 +951,11 @@ mod tests {
         assert_eq!(vyoma_core::adb::best_route(&[cable], false), Some(cable), "whatever there is");
         let mut d = phone(&[]);
         d.remote = Some(cable);
-        assert_eq!(via(&d), "cable");
+        assert_eq!(d.via(), "cable");
         d.remote = Some(wifi);
-        assert_eq!(via(&d), "wifi");
+        assert_eq!(d.via(), "wifi");
         d.linked = false;
-        assert_eq!(via(&d), "");
+        assert_eq!(d.via(), "");
     }
 
     #[test]

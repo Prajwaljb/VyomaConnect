@@ -452,8 +452,14 @@ Progress (2026-11-19):
    were already shared through core (`presenter`, `messages::Store`). Then one dispatch
    (`dispatch::route`: every packet type to a `Route` each side's loop matches exhaustively, so a
    plugin added to the engine can't go unhandled on one OS; `dispatch::Touchpad`, the touchpad's
-   switch, its refusals and its stretches of use in Activity, now on Linux too). Next: the
-   window's method table, then probing per capability.
+   switch, its refusals and its stretches of use in Activity, now on Linux too). Then the
+   window's method table (`window::Window<S: Side>`: the Mac's and Windows' requests answered
+   once, pairing, ringing, sending, the pairing code, commands, Activity, switches, Messages,
+   the phone's details; each `Side` adds its checks, wallpaper and firewall, its notifications,
+   its phone picker; one `Device` record) and the Messages page's rules once (`texting::Texting`,
+   which Linux's D-Bus methods use too; Linux still reads texts already loaded while the phone's
+   away). Linux's other D-Bus methods keep their own table: its devices carry more (files,
+   Bluetooth, the companion). Next: probing per capability and This PC's report.
 4. Hyprland and Windows were taken first (user, 2026-11-19); then the window's method table, then
    probing per capability and This PC's report.
 
