@@ -35,7 +35,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
@@ -49,9 +49,10 @@ use vyoma_core::invite::Invite;
 use vyoma_core::lan::{Lan, Ports, Rules, UDP_PORT};
 use vyoma_core::messages::{self, Store};
 use vyoma_core::link::packet;
-use vyoma_core::permits::{self, Permit, Permits};
+use vyoma_core::permits::{Permit, Permits};
 use vyoma_core::share::{self, SHARE, SHARE_UPDATE};
 use vyoma_core::trust::TrustStore;
+use vyoma_engine::dispatch::{self, Route, Touch};
 use vyoma_engine::session::{Host, Phone, phone_name};
 
 pub use vyoma_engine::stock::{BATTERY, FIND, LOCK_REQUEST, PING, battery_packet};
@@ -86,8 +87,6 @@ const CLIPBOARD_EVERY: Duration = Duration::from_secs(1);
 const BATTERY_EVERY: Duration = Duration::from_secs(60);
 /// How often the screen's lock and unused texts are looked at (texts lock again with the screen).
 const LOCK_EVERY: Duration = Duration::from_secs(3);
-/// The touchpad counts as one use in Activity until it's left alone this long.
-const TOUCHPAD_STRETCH: Duration = Duration::from_secs(10 * 60);
 
 /// The switches this Mac has, in the window's order: what it serves so far.
 const PERMITS: [Permit; 5] = [Permit::Screen, Permit::Control, Permit::Files, Permit::Camera, Permit::Power];
@@ -213,15 +212,13 @@ async fn run(dir: PathBuf) -> Result<()> {
             }
         });
     }
-    let mut refused: HashMap<(String, Permit), Instant> = HashMap::new();
-    let mut touched: HashMap<String, Instant> = HashMap::new();
+    let mut touchpad = dispatch::Touchpad::default();
     let calls = calls::start();
     let walk_away = Arc::new(away::Away::default());
     // Vyoma's own features: the engine runs each paired phone's session, the Mac does the work.
     let mac_side = Arc::new(platform::Mac::new(brightness::start(commands.clone()), walk_away.clone()));
     let host = Arc::new(Host { me: me.clone(), permits: permits.clone(), activity: activity.clone() });
     let mut sessions: HashMap<String, mpsc::UnboundedSender<(Value, std::net::IpAddr)>> = HashMap::new();
-    let engine_takes = vyoma_engine::session::incoming_all();
     let mut pointer_dot = presenter::Presenter::default();
     // The phone's texts, in memory only, for the window's Messages page.
     let texts = Arc::new(Store::default());
@@ -261,8 +258,6 @@ async fn run(dir: PathBuf) -> Result<()> {
     let (media_out_tx, mut media_out) = mpsc::unbounded_channel::<(Option<String>, Value)>();
     tokio::spawn(media::run(media_wanted.clone(), media_rx, media_out_tx));
     let mut pointer = input::Pointer::default();
-    // When the phone was last told that macOS hasn't allowed the touchpad.
-    let mut untrusted_told: Option<Instant> = None;
     // The USB cable: phones plugged in with USB debugging get the adb tunnel and grants.
     usb::start(lan.tcp_port());
     clip_load(&dir);
@@ -407,58 +402,44 @@ async fn run(dir: PathBuf) -> Result<()> {
                 Event::Packet { id, packet, from } => {
                     let Some(d) = devices.get_mut(&id) else { continue };
                     let kind = packet["type"].as_str().unwrap_or("").to_owned();
-                    if engine_takes.contains(&kind.as_str()) {
-                        // The engine checks the switches and keeps Activity for these itself.
-                        if kind == "vyoma.wallpaper.request" {
-                            // AppKit tells only this thread where the wallpaper is.
-                            mac_side.set_wallpaper(vyoma::wallpaper_path());
+                    match dispatch::route(&kind) {
+                        Route::Session => {
+                            // The engine checks the switches and keeps Activity for these itself.
+                            if kind == "vyoma.wallpaper.request" {
+                                // AppKit tells only this thread where the wallpaper is.
+                                mac_side.set_wallpaper(vyoma::wallpaper_path());
+                            }
+                            if let Some(session) = sessions.get(&id).filter(|_| d.paired) {
+                                let _ = session.send((packet, from));
+                            }
                         }
-                        if let Some(session) = sessions.get(&id).filter(|_| d.paired) {
-                            let _ = session.send((packet, from));
-                        }
-                        continue;
-                    }
-                    // Switched off in the window: the phone hears why (once in a while: streams repeat).
-                    if let Some(permit) = Permit::of(&kind).filter(|&p| !permits.allows(&id, p)) {
-                        let now = Instant::now();
-                        let last = refused.insert((id.clone(), permit), now);
-                        if last.is_none_or(|t| now.duration_since(t) > Duration::from_secs(2)) {
-                            tracing::info!("{id}: {kind} refused, {} is off for this phone", permit.key());
-                            activity.add(&id, &d.name, "refused", format!("Refused: \u{201c}{}\u{201d} is off", permit_words(permit).0));
-                            send(&id, permits::denied(permit, &packet));
-                        }
-                        continue;
-                    }
-                    match kind.as_str() {
-                        media::MPRIS_REQUEST | media::VOLUME_REQUEST => {
+                        Route::Media | Route::Volume => {
                             let _ = media_tx.send((id, packet));
                         }
-                        input::MOUSEPAD_REQUEST => {
-                            let now = Instant::now();
-                            if touched.insert(id.clone(), now).is_none_or(|t| now.duration_since(t) > TOUCHPAD_STRETCH) {
-                                activity.add(&id, &d.name, "touchpad", "Used as touchpad");
+                        Route::Mousepad => match touchpad.on_packet(&permits, &activity, &id, &d.name, permit_words(Permit::Control).0, &packet) {
+                            Touch::Refused(no) => {
+                                if let Some(no) = no {
+                                    send(&id, no);
+                                }
                             }
-                            if let Some(echo) = input::echo(&packet["body"]) {
-                                send(&id, echo);
-                            }
-                            if pointer.handle(&input::acts(&packet["body"])).is_err() {
+                            Touch::Use { acts, echo } => {
+                                if let Some(echo) = echo {
+                                    send(&id, echo);
+                                }
                                 // Said on the phone (every so often: moves stream) and once a run on the Mac,
                                 // then watched, so the agent picks the Allow up by itself.
-                                let now = Instant::now();
-                                if untrusted_told.is_none_or(|t| now.duration_since(t) > Duration::from_secs(15)) {
-                                    let first = untrusted_told.is_none();
-                                    untrusted_told = Some(now);
-                                    let mut no = permits::denied(Permit::Control, &packet);
-                                    no["body"]["reason"] = json!(input::ALLOW_SHORT);
-                                    send(&id, no);
-                                    if first {
+                                if pointer.handle(&input::mapped(acts)).is_err()
+                                    && let Some(stuck) = touchpad.stuck(&packet, input::ALLOW_SHORT)
+                                {
+                                    send(&id, stuck.refusal);
+                                    if stuck.first {
                                         mac::notify("Allow Vyoma to control this Mac", input::ALLOW_HOW).await;
                                         tokio::spawn(restart_once_trusted());
                                     }
                                 }
                             }
-                        }
-                        RUNCOMMAND_REQUEST => {
+                        },
+                        Route::Commands => {
                             let a = commands::on_request(&run_commands, &packet["body"], |name, why| {
                                 let (title, body) = commands::failure(&name, why);
                                 mac::notify_now(&title, &body);
@@ -478,25 +459,34 @@ async fn run(dir: PathBuf) -> Result<()> {
                                 tracing::info!("{id}: no command {key}");
                             }
                         }
-                        NOTIFICATION => phone_notification(&id, d, &packet["body"]).await,
-                        messages::UNLOCKED | messages::LOCKED => {
-                            tracing::info!("{id}: {}", packet["type"].as_str().unwrap_or(""));
+                        Route::Notification => phone_notification(&id, d, &packet["body"]).await,
+                        Route::TextsLock => {
+                            tracing::info!("{id}: {kind}");
                             texts.on_packet(&id, &packet);
                         }
-                        messages::MESSAGES | messages::CONTACTS_UIDS_REPLY | messages::CONTACTS_VCARDS_REPLY => {
+                        Route::Texts => {
                             for p in texts.on_packet(&id, &packet) {
                                 send(&id, p);
                             }
                         }
-                        vyoma_core::telephony::TELEPHONY if d.paired => {
-                            let _ = calls.send(calls::Order::Packet { id, phone: d.name.clone(), packet });
+                        Route::Call => {
+                            if d.paired {
+                                let _ = calls.send(calls::Order::Packet { id, phone: d.name.clone(), packet });
+                            }
                         }
-                        presenter::PRESENTER if d.paired => pointer_dot.on_packet(&packet["body"]),
-                        _ => {
+                        // The Mac asks the phone nothing about calls; logged all the same.
+                        Route::CallDone => tracing::info!("{id}: {}", dispatch::call_done(&packet["body"])),
+                        Route::Presenter => {
+                            if d.paired {
+                                pointer_dot.on_packet(&packet["body"]);
+                            }
+                        }
+                        Route::Stock => {
                             for reply in on_packet(&id, d, &packet, from, &me, &mut clip, &mut ringer, &found_tx, &activity, &arrivals).await {
                                 send(&id, reply);
                             }
                         }
+                        Route::Other => tracing::debug!("{}: nothing here for {kind}", d.name),
                     }
                 }
             }
@@ -1151,14 +1141,9 @@ impl Desk for MacDesk<'_> {
     }
 }
 
-/// Handles one packet from a paired device; what to send back.
+/// Handles one stock plugin's packet from a paired device; what to send back.
 #[allow(clippy::too_many_arguments)]
 async fn on_packet(id: &str, d: &mut Device, p: &Value, from: IpAddr, me: &Arc<Identity>, clip: &mut Clipboard, ringer: &mut mac::Ringer, found: &mpsc::UnboundedSender<()>, activity: &Arc<Activity>, arrivals: &Arc<stock::Arrivals>) -> Vec<Value> {
-    let kind = p["type"].as_str().unwrap_or("");
-    if !stock::handles(kind) {
-        tracing::debug!("{}: nothing here for {kind}", d.name);
-        return Vec::new();
-    }
     let mut phone = stock::Phone { name: d.name.clone(), battery: d.battery };
     let out = stock::on_packet(&mut MacDesk { ringer, found }, &mut phone, clip, p).await;
     d.battery = phone.battery;

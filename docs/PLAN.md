@@ -449,9 +449,11 @@ Progress (2026-11-19):
    and calls (`calls`: the Mac's and Windows' call task once, behind a `Ringer` each side gives
    its notifications and pausing; the packets a PC sends about a call; Linux keeps its fuller line
    for answering here and the call's sound over Bluetooth). The presenter dot and the Messages page
-   were already shared through core (`presenter`, `messages::Store`). Next: one dispatch of the
-   stock packets for every side (today each side's loop still matches packet types and calls the
-   engine), then the window's method table and probing per capability.
+   were already shared through core (`presenter`, `messages::Store`). Then one dispatch
+   (`dispatch::route`: every packet type to a `Route` each side's loop matches exhaustively, so a
+   plugin added to the engine can't go unhandled on one OS; `dispatch::Touchpad`, the touchpad's
+   switch, its refusals and its stretches of use in Activity, now on Linux too). Next: the
+   window's method table, then probing per capability.
 4. Hyprland and Windows were taken first (user, 2026-11-19); then the window's method table, then
    probing per capability and This PC's report.
 

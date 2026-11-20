@@ -7,6 +7,7 @@
 pub mod gamepad;
 pub mod calls;
 pub mod commands;
+pub mod dispatch;
 pub mod media;
 pub mod mousepad;
 pub mod notifications;

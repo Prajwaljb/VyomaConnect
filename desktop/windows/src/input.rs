@@ -14,7 +14,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput, VkKeyScanW,
 };
 
-pub use vyoma_engine::mousepad::{Button, MOUSEPAD_ECHO, MOUSEPAD_REQUEST, echo};
+pub use vyoma_engine::mousepad::{Button, MOUSEPAD_ECHO, MOUSEPAD_REQUEST};
 
 /// Virtual keys.
 pub const SHIFT: u16 = 0x10;
@@ -136,8 +136,14 @@ fn local(a: pad::Act) -> Vec<Act> {
 }
 
 /// What a mousepad packet does.
-pub fn acts(b: &Value) -> Vec<Act> {
-    pad::acts(b).into_iter().flat_map(local).collect()
+#[cfg(test)]
+fn acts(b: &Value) -> Vec<Act> {
+    mapped(pad::acts(b))
+}
+
+/// The engine's acts as this computer's.
+pub fn mapped(acts: Vec<pad::Act>) -> Vec<Act> {
+    acts.into_iter().flat_map(local).collect()
 }
 
 /// The live screen's touches (`vyoma.screen.input`/`touch`) as acts on the cast display: taps and

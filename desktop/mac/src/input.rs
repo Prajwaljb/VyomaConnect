@@ -14,7 +14,7 @@
 use serde_json::Value;
 use vyoma_engine::mousepad::{self as pad, Key, Mod};
 
-pub use vyoma_engine::mousepad::{Button, MOUSEPAD_ECHO, MOUSEPAD_REQUEST, echo};
+pub use vyoma_engine::mousepad::{Button, MOUSEPAD_ECHO, MOUSEPAD_REQUEST};
 
 /// CGEventFlags.
 pub const SHIFT: u64 = 0x2_0000;
@@ -99,8 +99,14 @@ fn local(a: pad::Act) -> Vec<Act> {
 }
 
 /// What a mousepad packet does.
-pub fn acts(b: &Value) -> Vec<Act> {
-    pad::acts(b).into_iter().flat_map(local).collect()
+#[cfg(test)]
+fn acts(b: &Value) -> Vec<Act> {
+    mapped(pad::acts(b))
+}
+
+/// The engine's acts as this computer's.
+pub fn mapped(acts: Vec<pad::Act>) -> Vec<Act> {
+    acts.into_iter().flat_map(local).collect()
 }
 
 /// A touch on this Mac's screen as the phone shows it (the engine's [pad::touch_acts]).
@@ -478,8 +484,8 @@ mod tests {
 
     #[test]
     fn echoes_only_when_asked() {
-        let e = echo(&json!({ "key": "a", "sendAck": true })).unwrap();
+        let e = pad::echo(&json!({ "key": "a", "sendAck": true })).unwrap();
         assert_eq!(e["body"], json!({ "key": "a", "isAck": true }));
-        assert!(echo(&json!({ "key": "a" })).is_none());
+        assert!(pad::echo(&json!({ "key": "a" })).is_none());
     }
 }

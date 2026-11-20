@@ -54,6 +54,7 @@ use vyoma_core::trust::TrustStore;
 use vyoma_companion::activity::Activity;
 use vyoma_companion::permits::{Permit, Permits};
 use vyoma_companion::platform::Linux;
+use vyoma_engine::dispatch::{self, Route};
 use vyoma_companion::session::{self as features, Host, Phone};
 use zbus::fdo;
 
@@ -710,8 +711,8 @@ struct Desk {
     host: Arc<Host>,
     /// How this PC does what the engine asks (and its media and walk-away rules).
     linux: Arc<Linux>,
-    /// When each phone's remote input was last refused (see [Permit::Control]).
-    refused_input: HashMap<String, std::time::Instant>,
+    /// The touchpad's switch and its stretches of use in Activity.
+    touchpad: vyoma_engine::dispatch::Touchpad,
     /// Device id to its running features session, which takes its vyoma.* packets.
     sessions: HashMap<String, mpsc::UnboundedSender<(Value, IpAddr)>>,
     /// Device id to the echo it was last sent and when, for the window's response time.
@@ -977,7 +978,7 @@ async fn daemon(dir: PathBuf) -> Result<()> {
         host,
         linux,
         texts,
-        refused_input: HashMap::new(),
+        touchpad: Default::default(),
         sessions: HashMap::new(),
         echoes: HashMap::new(),
         echo_n: 0,
@@ -1462,48 +1463,49 @@ impl Desk {
                 if packet["type"] == ECHO {
                     return self.on_echo(&id, &packet);
                 }
-                if packet["type"] == messages::UNLOCKED || packet["type"] == messages::LOCKED {
-                    tracing::info!("{id}: {}", packet["type"].as_str().unwrap_or(""));
-                    self.texts.on_packet(&id, &packet);
-                    return;
-                }
-                if packet["type"] == telephony::DONE {
-                    return self.on_call_done(&id, &packet).await;
-                }
-                if packet["type"].as_str().is_some_and(|t| t.starts_with("vyoma.")) {
-                    if let Some(session) = self.sessions.get(&id) {
-                        let _ = session.send((packet, from));
+                let kind = packet["type"].as_str().unwrap_or("").to_owned();
+                match dispatch::route(&kind) {
+                    Route::TextsLock => {
+                        tracing::info!("{id}: {kind}");
+                        self.texts.on_packet(&id, &packet);
+                        return;
                     }
-                    return;
-                }
-                match packet["type"].as_str().unwrap_or("") {
-                    notifications::NOTIFICATION => {
+                    Route::CallDone => return self.on_call_done(&id, &packet).await,
+                    Route::Session => {
+                        if let Some(session) = self.sessions.get(&id) {
+                            let _ = session.send((packet, from));
+                        }
+                        return;
+                    }
+                    Route::Notification => {
                         if let Some(note) = self.on_note(id.clone(), &device, packet, from) {
                             self.show_note(&id, note).await;
                         }
                         return;
                     }
-                    media::MPRIS_REQUEST => {
+                    Route::Media => {
                         let _ = self.media.send((id, packet));
                         return;
                     }
-                    input::MOUSEPAD_REQUEST => {
-                        if !self.host.permits.allows(&id, Permit::Control) {
-                            // Said once a while, not for every move of the finger.
-                            let now = std::time::Instant::now();
-                            if self.refused_input.get(&id).is_none_or(|t| now.duration_since(*t) > Duration::from_secs(5)) {
-                                self.refused_input.insert(id.clone(), now);
-                                tracing::info!("{id}: remote input refused, control is off for this phone");
-                                if plugins::takes(&device, vyoma_companion::permits::DENIED) {
-                                    self.send(&id, vyoma_companion::permits::denied(Permit::Control, &packet));
-                                }
-                            }
-                            return;
-                        }
-                        let _ = self.input.send((std::time::Instant::now(), id, packet));
+                    Route::Volume => {
+                        let _ = self.volume.send((id, packet));
                         return;
                     }
-                    commands::RUNCOMMAND_REQUEST => {
+                    Route::Mousepad => {
+                        let name = features::phone_name(&device.name);
+                        match self.touchpad.gate(&self.host.permits, &self.host.activity, &id, &name, Permit::Control.name(), &packet) {
+                            Ok(()) => {
+                                let _ = self.input.send((std::time::Instant::now(), id, packet));
+                            }
+                            Err(refusal) => {
+                                if let Some(no) = refusal.filter(|_| plugins::takes(&device, vyoma_companion::permits::DENIED)) {
+                                    self.send(&id, no);
+                                }
+                            }
+                        }
+                        return;
+                    }
+                    Route::Commands => {
                         let a = vyoma_engine::commands::on_request(&self.run, &packet["body"], commands::failed);
                         if let Some(list) = a.list.clone() {
                             self.send(&id, list);
@@ -1522,34 +1524,17 @@ impl Desk {
                         }
                         return;
                     }
-                    volume::VOLUME_REQUEST => {
-                        let _ = self.volume.send((id, packet));
-                        return;
-                    }
-                    phonefiles::SFTP => {
-                        match phonefiles::parse(&packet) {
-                            phonefiles::Reply::Ready(server) => self.mount(id, &device, server),
-                            phonefiles::Reply::Failed(why) => {
-                                tracing::info!("{id}: files not browsable: {why}");
-                                self.kept.remove(&id);
-                                self.remounting.remove(&id);
-                                plugins::tell(&self.notifier, &format!("Can't open {}'s files", device.name), &why).await;
-                            }
-                            phonefiles::Reply::Nothing => {}
-                        }
-                        return;
-                    }
-                    messages::MESSAGES | messages::CONTACTS_UIDS_REPLY | messages::CONTACTS_VCARDS_REPLY => {
+                    Route::Texts => {
                         for p in self.texts.on_packet(&id, &packet) {
                             self.send(&id, p);
                         }
                         return;
                     }
-                    presenter::PRESENTER => {
+                    Route::Presenter => {
                         self.presenter.on_packet(&packet["body"]);
                         return;
                     }
-                    telephony::TELEPHONY => {
+                    Route::Call => {
                         if let Some(call) = telephony::parse(&packet) {
                             let mut line = self.calls.remove(&id).unwrap_or_default();
                             let steps = line.on_call(&call);
@@ -1560,8 +1545,25 @@ impl Desk {
                         return;
                     }
                     // Each file says how many there are too.
-                    SHARE_UPDATE => return,
-                    _ => {}
+                    Route::Stock if kind == SHARE_UPDATE => return,
+                    Route::Stock => {}
+                    Route::Other => {
+                        if kind == phonefiles::SFTP {
+                            match phonefiles::parse(&packet) {
+                                phonefiles::Reply::Ready(server) => self.mount(id, &device, server),
+                                phonefiles::Reply::Failed(why) => {
+                                    tracing::info!("{id}: files not browsable: {why}");
+                                    self.kept.remove(&id);
+                                    self.remounting.remove(&id);
+                                    plugins::tell(&self.notifier, &format!("Can't open {}'s files", device.name), &why).await;
+                                }
+                                phonefiles::Reply::Nothing => {}
+                            }
+                        } else {
+                            tracing::debug!("{id}: nothing here for {kind}");
+                        }
+                        return;
+                    }
                 }
                 let cx = plugins::Context {
                     notifier: &self.notifier,

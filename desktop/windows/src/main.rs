@@ -103,11 +103,12 @@ mod agent {
     use vyoma_core::lan::{Lan, Ports, Rules};
     use vyoma_core::link::packet;
     use vyoma_core::messages::{self, Store};
-    use vyoma_core::permits::{self, Permit, Permits};
+    use vyoma_core::permits::{Permit, Permits};
     use vyoma_core::release::REPO;
     use vyoma_core::share::{self, SHARE, SHARE_UPDATE};
     use vyoma_core::telephony;
     use vyoma_core::trust::TrustStore;
+    use vyoma_engine::dispatch::{self, Route, Touch};
     use vyoma_engine::session::{Host, Phone, phone_name};
 
     use crate::toast::{self, Button, Heard, Shown, Toast};
@@ -141,8 +142,6 @@ mod agent {
     const BATTERY_EVERY: Duration = Duration::from_secs(60);
     /// Unused texts lock again after a while.
     const TEXTS_EVERY: Duration = Duration::from_secs(3);
-    /// The touchpad counts as one use in Activity until it's left alone this long.
-    const TOUCHPAD_STRETCH: Duration = Duration::from_secs(10 * 60);
     /// The window's program, beside this one.
     const WINDOW_EXE: &str = "vyoma.exe";
     const SEND_ANY: &str = "--send-any";
@@ -309,13 +308,11 @@ mod agent {
         forward(activity.subscribe(), changes.clone(), "ActivityChanged");
         let texts = Arc::new(Store::default());
         forward(texts.subscribe(), changes.clone(), "MessagesChanged");
-        let mut refused: HashMap<(String, Permit), Instant> = HashMap::new();
-        let mut touched: HashMap<String, Instant> = HashMap::new();
+        let mut touchpad = dispatch::Touchpad::default();
         // Vyoma's own features: the engine runs each paired phone's session, Windows does the work.
         let pc = Arc::new(platform::Windows::default());
         let host = Arc::new(Host { me: me.clone(), permits: permits.clone(), activity: activity.clone() });
         let mut sessions: HashMap<String, mpsc::UnboundedSender<(Value, IpAddr)>> = HashMap::new();
-        let engine_takes = vyoma_engine::session::incoming_all();
         let window = Window { me: me.clone(), lan: lan.clone(), commands: commands.clone(), changes: changes.clone(), everyone, run: run_commands.clone(), texts: texts.clone(), permits: permits.clone(), activity: activity.clone(), requests: requests_tx, pending: Mutex::default(), updates: updates.clone(), clip_seen: ClipboardSeen::load(&dir) };
         let mut pointer = input::Pointer::default();
         let mut dot = presenter::Presenter::default();
@@ -327,7 +324,6 @@ mod agent {
             let wanted = media_wanted.clone();
             std::thread::Builder::new().name("vyoma-media".into()).spawn(move || media::run(wanted, media_rx, media_out_tx))?;
         }
-        let mut untrusted_told: Option<Instant> = None;
         // Calls on the phones: toasts, music paused for them.
         let calls = calls::start();
         // The USB cable: phones plugged in with USB debugging link through adb's tunnel.
@@ -460,51 +456,38 @@ mod agent {
                         Event::Packet { id, packet, from } => {
                             let Some(d) = devices.get_mut(&id) else { continue };
                             let kind = packet["type"].as_str().unwrap_or("").to_owned();
-                            if engine_takes.contains(&kind.as_str()) {
-                                // The engine checks the switches and keeps Activity for these itself.
-                                if let Some(session) = sessions.get(&id).filter(|_| d.paired) {
-                                    let _ = session.send((packet, from));
+                            match dispatch::route(&kind) {
+                                Route::Session => {
+                                    // The engine checks the switches and keeps Activity for these itself.
+                                    if let Some(session) = sessions.get(&id).filter(|_| d.paired) {
+                                        let _ = session.send((packet, from));
+                                    }
                                 }
-                                continue;
-                            }
-                            // Switched off in the window: the phone hears why (once in a while: streams repeat).
-                            if let Some(permit) = Permit::of(&kind).filter(|&p| !permits.allows(&id, p)) {
-                                let now = Instant::now();
-                                let last = refused.insert((id.clone(), permit), now);
-                                if last.is_none_or(|t| now.duration_since(t) > Duration::from_secs(2)) {
-                                    tracing::info!("{id}: {kind} refused, {} is off for this phone", permit.key());
-                                    activity.add(&id, &d.name, "refused", format!("Refused: \u{201c}{}\u{201d} is off", permit_words(permit).0));
-                                    send(&id, permits::denied(permit, &packet));
-                                }
-                                continue;
-                            }
-                            match kind.as_str() {
-                                media::MPRIS_REQUEST | media::VOLUME_REQUEST => {
+                                Route::Media | Route::Volume => {
                                     let _ = media_tx.send((id, packet));
                                 }
-                                presenter::PRESENTER => dot.on_packet(&packet["body"]),
-                                input::MOUSEPAD_REQUEST => {
-                                    let now = Instant::now();
-                                    if touched.insert(id.clone(), now).is_none_or(|t| now.duration_since(t) > TOUCHPAD_STRETCH) {
-                                        activity.add(&id, &d.name, "touchpad", "Used as touchpad");
-                                    }
-                                    if let Some(echo) = input::echo(&packet["body"]) {
-                                        send(&id, echo);
-                                    }
-                                    if let Err(e) = pointer.handle(&input::acts(&packet["body"])) {
-                                        // An administrator's window or the secure desktop in front: said
-                                        // on the phone every so often (moves stream).
-                                        let now = Instant::now();
-                                        if untrusted_told.is_none_or(|t| now.duration_since(t) > Duration::from_secs(15)) {
-                                            untrusted_told = Some(now);
-                                            tracing::info!("{id}: input refused: {e:#}");
-                                            let mut no = permits::denied(Permit::Control, &packet);
-                                            no["body"]["reason"] = json!("Windows isn't taking input right now (a window running as administrator, or the lock screen)");
+                                Route::Presenter => dot.on_packet(&packet["body"]),
+                                Route::Mousepad => match touchpad.on_packet(&permits, &activity, &id, &d.name, permit_words(Permit::Control).0, &packet) {
+                                    Touch::Refused(no) => {
+                                        if let Some(no) = no {
                                             send(&id, no);
                                         }
                                     }
-                                }
-                                RUNCOMMAND_REQUEST => {
+                                    Touch::Use { acts, echo } => {
+                                        if let Some(echo) = echo {
+                                            send(&id, echo);
+                                        }
+                                        // An administrator's window or the secure desktop in front: said
+                                        // on the phone every so often (moves stream).
+                                        if let Err(e) = pointer.handle(&input::mapped(acts))
+                                            && let Some(stuck) = touchpad.stuck(&packet, "Windows isn't taking input right now (a window running as administrator, or the lock screen)")
+                                        {
+                                            tracing::info!("{id}: input refused: {e:#}");
+                                            send(&id, stuck.refusal);
+                                        }
+                                    }
+                                },
+                                Route::Commands => {
                                     let a = commands::on_request(&run_commands, &packet["body"], |name, why| {
                                         let (title, body) = commands::failure(&name, why);
                                         tray::notify(&title, &body);
@@ -524,31 +507,26 @@ mod agent {
                                         tracing::info!("{id}: no command {key}");
                                     }
                                 }
-                                NOTIFICATION => phone_notification(&id, d, &packet["body"]),
-                                telephony::TELEPHONY => {
+                                Route::Notification => phone_notification(&id, d, &packet["body"]),
+                                Route::Call => {
                                     let _ = calls.send(calls::Order::Packet { id: id.clone(), phone: d.name.clone(), packet });
                                 }
-                                telephony::DONE => {
-                                    let b = &packet["body"];
-                                    match b["error"].as_str() {
-                                        Some(e) => tracing::info!("{id}: the phone couldn't {}: {e}", b["action"].as_str().unwrap_or("do that")),
-                                        None => tracing::info!("{id}: call {}", b["action"].as_str().unwrap_or("done")),
-                                    }
-                                }
-                                messages::UNLOCKED | messages::LOCKED => {
+                                Route::CallDone => tracing::info!("{id}: {}", dispatch::call_done(&packet["body"])),
+                                Route::TextsLock => {
                                     tracing::info!("{id}: {kind}");
                                     texts.on_packet(&id, &packet);
                                 }
-                                messages::MESSAGES | messages::CONTACTS_UIDS_REPLY | messages::CONTACTS_VCARDS_REPLY => {
+                                Route::Texts => {
                                     for p in texts.on_packet(&id, &packet) {
                                         send(&id, p);
                                     }
                                 }
-                                _ => {
+                                Route::Stock => {
                                     for reply in on_packet(&id, d, &packet, from, &me, &mut clip, &mut ringer, &activity, &arrivals).await {
                                         send(&id, reply);
                                     }
                                 }
+                                Route::Other => tracing::debug!("{}: nothing here for {kind}", d.name),
                             }
                         }
                     }
@@ -1306,14 +1284,9 @@ mod agent {
         }
     }
 
-    /// Handles one packet from a paired device; what to send back.
+    /// Handles one stock plugin's packet from a paired device; what to send back.
     #[allow(clippy::too_many_arguments)]
     async fn on_packet(id: &str, d: &mut Device, p: &Value, from: IpAddr, me: &Arc<Identity>, clip: &mut Clipboard, ringer: &mut win::Ringer, activity: &Arc<Activity>, arrivals: &Arc<stock::Arrivals>) -> Vec<Value> {
-        let kind = p["type"].as_str().unwrap_or("");
-        if !stock::handles(kind) {
-            tracing::debug!("{}: nothing here for {kind}", d.name);
-            return Vec::new();
-        }
         let mut phone = stock::Phone { name: d.name.clone(), battery: d.battery };
         let out = stock::on_packet(&mut WinDesk { ringer }, &mut phone, clip, p).await;
         d.battery = phone.battery;
