@@ -568,8 +568,14 @@ build, headless Xvfb display, private ports and pipe) and next on GitHub's runne
 - The DualSense on Windows: core `dualsense`, a HID gadget with the real pad's report descriptor,
   reports streamed at 250 a second, the calibration / address / firmware feature reports SDL and
   Steam read, rumble from output reports. Same limits: tested against a played host only.
-- Next: colour conversion on the GPU (the CPU still turns each picture into NV12), the mirror drawn with Direct3D
-  if GDI's scaling proves slow on large screens.
+- Colour conversion on the graphics card (2026-11-20, `windows/src/gpu.rs`): Direct3D 11's video
+  processor scales the duplicated desktop and makes NV12 (BT.601, video range), the pointer drawn
+  with GDI on a copy on the card; only the NV12 picture is read back (3 MB at 1080p instead of the
+  desktop's BGRA, and no per-pixel pass on the CPU). A turned display, a driver without a video
+  processor (Wine), or one that fails mid-stream goes through the CPU as before. Its test runs on
+  Windows' software card (WARP) on CI; Wine skips it.
+- Next: the NV12 picture handed to the hardware encoder as a texture (no read-back at all; needs the
+  encoder's Direct3D manager), the mirror drawn with Direct3D if GDI's scaling proves slow.
 
 ### Google Play
 - A `play` product flavor built as an AAB; the GitHub/F-Droid build stays as it is.

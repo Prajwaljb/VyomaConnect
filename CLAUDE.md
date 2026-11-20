@@ -104,7 +104,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   as payloads, Core Audio's default speaker; pause/resume/mute helpers for walk-away and calls), toasts (`toast.rs`: `AppUserModelId\dev.vyoma.Vyoma` + a COM activator class in HKCU, so
   buttons and the reply box work, `-Embedding` when Windows starts the agent for one; the pairing question, phone notifications with Reply
   and actions, Send to's phone choice; not registered when `VYOMA_DIR` is set unless `VYOMA_TOASTS=1`), engine features (stats, specs,
-  screenshots in `screen.rs`, the live screen in `cast.rs`: desktop duplication (a rotated display turned upright, `Turn`) or GDI, the
+  screenshots in `screen.rs`, the live screen in `cast.rs`: desktop duplication (a rotated display turned upright, `Turn`) or GDI, scaled and made NV12 on the graphics card's video processor (`gpu.rs`, the pointer drawn with GDI on the card's copy; else the CPU's `to_nv12`), the
   graphics card's H.264 encoder (an async Media Foundation transform) else the software one, the Mac's framing; files, power, wake, Task
   View, paste, brightness and app volumes in `pc.rs` (WMI for a laptop's screen, DDC/CI for monitors, Core Audio's sessions), the
   wallpaper's colours in `wallpaper.rs` (WIC), walk-away in `away.rs` (core `Rules`), the phone's screen in a window in `mirror.rs`

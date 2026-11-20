@@ -203,9 +203,10 @@ impl Pad {
         let port = listener.local_addr()?.port();
         vhci.stop_attempts(port);
         let (states, state_rx) = watch::channel(State { kind: asked, ..Default::default() });
+        let mut builder = dualsense::Reports::default();
         let first = match asked {
             Kind::Xbox => xbox360::report(&State::default()),
-            Kind::DualSense => dualsense::Reports::default().report(&State::default()),
+            Kind::DualSense => builder.report(&State::default()),
         };
         let (reports_tx, rx) = watch::channel(first);
         let (rumble_tx, rumbles) = mpsc::unbounded_channel();
@@ -213,7 +214,7 @@ impl Pad {
             Kind::Xbox => Box::new(Xbox360::new(rumble_tx)),
             Kind::DualSense => Box::new(DualSense::new(rumble_tx, rx.clone())),
         };
-        let fed = tokio::spawn(feed(asked, state_rx, reports_tx)).abort_handle();
+        let fed = tokio::spawn(feed(asked, state_rx, reports_tx, builder)).abort_handle();
         let (imported_tx, imported) = tokio::sync::oneshot::channel();
         let served = serve_pad(listener, gadget, rx, imported_tx).abort_handle();
         let attached = tokio::task::spawn_blocking(move || vhci.attach(port).map(|hub| (vhci, hub))).await?;
@@ -237,8 +238,9 @@ impl Pad {
 }
 
 /// Turns the phone's states into the pad's reports: the Xbox pad's as they change, the DualSense's
-/// streamed as the real pad does (each counted and timed, the newest state in each).
-async fn feed(kind: Kind, mut states: watch::Receiver<State>, reports: watch::Sender<Vec<u8>>) {
+/// streamed as the real pad does (each counted and timed, the newest state in each), going on from
+/// [builder], which made the first.
+async fn feed(kind: Kind, mut states: watch::Receiver<State>, reports: watch::Sender<Vec<u8>>, mut builder: dualsense::Reports) {
     match kind {
         Kind::Xbox => loop {
             let report = xbox360::report(&states.borrow_and_update());
@@ -248,11 +250,13 @@ async fn feed(kind: Kind, mut states: watch::Receiver<State>, reports: watch::Se
             }
         },
         Kind::DualSense => {
-            let mut builder = dualsense::Reports::default();
             let mut every = tokio::time::interval(dualsense::REPORT_EVERY);
             every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 every.tick().await;
+                if states.has_changed().is_err() {
+                    return;
+                }
                 let report = builder.report(&states.borrow());
                 if reports.send(report).is_err() {
                     return;
@@ -518,8 +522,9 @@ mod tests {
         let listener = bind().await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (states, state_rx) = watch::channel(State { kind: Kind::DualSense, ..Default::default() });
-        let (reports, rx) = watch::channel(dualsense::Reports::default().report(&State::default()));
-        tokio::spawn(feed(Kind::DualSense, state_rx, reports));
+        let mut builder = dualsense::Reports::default();
+        let (reports, rx) = watch::channel(builder.report(&State::default()));
+        tokio::spawn(feed(Kind::DualSense, state_rx, reports, builder));
         let (rumble_tx, _rumbles) = mpsc::unbounded_channel();
         let (imported_tx, imported) = tokio::sync::oneshot::channel();
         serve_pad(listener, Box::new(DualSense::new(rumble_tx, rx.clone())), rx, imported_tx);

@@ -6,7 +6,8 @@
 //! remote sessions, an old graphics driver) a GDI copy of the display at the frame rate instead.
 //! A display turned to portrait comes from duplication sideways and is turned upright ([Turn]).
 //! The pointer is drawn on top (neither shows it). Each picture is scaled to at most 1920 wide,
-//! turned into NV12 and encoded to H.264 by the graphics card's encoder where it has one that
+//! turned into NV12 (by the graphics card's video processor where it has one, [crate::gpu], else
+//! on the CPU, [to_nv12]) and encoded to H.264 by the graphics card's encoder where it has one that
 //! takes them, else Microsoft's software one ([Encoder]; real time, no B-frames, a keyframe to
 //! start), then framed as the Mac's [frame]: 4-byte lengths, the parameter
 //! sets before each keyframe, a timestamp unit before each picture for the phone's latency figures.
@@ -278,27 +279,32 @@ impl Canvas {
 
     /// The pointer where it is on [display], if it's showing.
     fn draw_pointer(&self, display: Area) {
-        // SAFETY: reading the cursor's state and drawing it into our DC; the icon's bitmaps that
-        // GetIconInfo makes are deleted.
-        unsafe {
-            let mut ci = CURSORINFO { cbSize: size_of::<CURSORINFO>() as u32, ..Default::default() };
-            if GetCursorInfo(&mut ci).is_err() || ci.flags.0 & CURSOR_SHOWING.0 == 0 {
-                return;
-            }
-            let mut icon = ICONINFO::default();
-            let (hx, hy) = if GetIconInfo(ci.hCursor.into(), &mut icon).is_ok() {
-                if !icon.hbmMask.is_invalid() {
-                    let _ = DeleteObject(icon.hbmMask.into());
-                }
-                if !icon.hbmColor.is_invalid() {
-                    let _ = DeleteObject(icon.hbmColor.into());
-                }
-                (icon.xHotspot as i32, icon.yHotspot as i32)
-            } else {
-                (0, 0)
-            };
-            let _ = DrawIconEx(self.dc, ci.ptScreenPos.x - display.left - hx, ci.ptScreenPos.y - display.top - hy, ci.hCursor.into(), 0, 0, 0, None, DI_NORMAL);
+        draw_pointer(self.dc, display);
+    }
+}
+
+/// The pointer where it is on [display] into [dc], if it's showing.
+fn draw_pointer(dc: HDC, display: Area) {
+    // SAFETY: reading the cursor's state and drawing it into the DC; the icon's bitmaps that
+    // GetIconInfo makes are deleted.
+    unsafe {
+        let mut ci = CURSORINFO { cbSize: size_of::<CURSORINFO>() as u32, ..Default::default() };
+        if GetCursorInfo(&mut ci).is_err() || ci.flags.0 & CURSOR_SHOWING.0 == 0 {
+            return;
         }
+        let mut icon = ICONINFO::default();
+        let (hx, hy) = if GetIconInfo(ci.hCursor.into(), &mut icon).is_ok() {
+            if !icon.hbmMask.is_invalid() {
+                let _ = DeleteObject(icon.hbmMask.into());
+            }
+            if !icon.hbmColor.is_invalid() {
+                let _ = DeleteObject(icon.hbmColor.into());
+            }
+            (icon.xHotspot as i32, icon.yHotspot as i32)
+        } else {
+            (0, 0)
+        };
+        let _ = DrawIconEx(dc, ci.ptScreenPos.x - display.left - hx, ci.ptScreenPos.y - display.top - hy, ci.hCursor.into(), 0, 0, 0, None, DI_NORMAL);
     }
 }
 
@@ -378,11 +384,19 @@ struct Duplication {
     /// The picture's size as it comes (before turning).
     w: i32,
     h: i32,
+    /// Whether a picture has come.
+    picture: bool,
+    /// The card's conversion to the stream's size, once tried on the first picture; None where
+    /// it can't, and then the staging copy for the CPU.
+    gpu: Option<crate::gpu::Converter>,
+    gpu_tried: bool,
+    out_size: (u32, u32),
+    fps: u32,
 }
 
 impl Duplication {
     /// The display at [display] on whichever graphics adapter shows it.
-    fn open(display: Area) -> Result<Duplication> {
+    fn open(display: Area, out_size: (u32, u32), fps: u32) -> Result<Duplication> {
         // SAFETY: DXGI and D3D11 calls with owned COM pointers.
         unsafe {
             let factory: IDXGIFactory1 = CreateDXGIFactory1()?;
@@ -397,14 +411,14 @@ impl Duplication {
                     if (r.left, r.top) != (display.left, display.top) {
                         continue;
                     }
-                    return Self::on(&adapter, &output.cast::<IDXGIOutput1>()?);
+                    return Self::on(&adapter, &output.cast::<IDXGIOutput1>()?, out_size, fps);
                 }
             }
             bail!("no graphics adapter shows the main display")
         }
     }
 
-    unsafe fn on(adapter: &IDXGIAdapter1, output: &IDXGIOutput1) -> Result<Duplication> {
+    unsafe fn on(adapter: &IDXGIAdapter1, output: &IDXGIOutput1, out_size: (u32, u32), fps: u32) -> Result<Duplication> {
         // SAFETY: the caller's; everything made here is owned.
         unsafe {
             let (mut device, mut context): (Option<ID3D11Device>, Option<ID3D11DeviceContext>) = (None, None);
@@ -412,13 +426,13 @@ impl Duplication {
             let (device, context) = (device.context("no Direct3D device")?, context.context("no Direct3D context")?);
             let dup = output.DuplicateOutput(&device).context("Windows wouldn't share the screen")?;
             let turn = Turn::of(dup.GetDesc().Rotation);
-            Ok(Duplication { device, context, dup, turn, staging: None, w: 0, h: 0 })
+            Ok(Duplication { device, context, dup, turn, staging: None, w: 0, h: 0, picture: false, gpu: None, gpu_tried: false, out_size, fps })
         }
     }
 
     /// The desktop's size, once a picture came.
     fn size(&self) -> Option<(i32, i32)> {
-        self.staging.as_ref().map(|_| self.turn.upright((self.w, self.h)))
+        self.picture.then(|| self.turn.upright((self.w, self.h)))
     }
 
     /// Waits up to [wait] for a change; true if there's a new picture. Err when the duplication is
@@ -435,11 +449,33 @@ impl Duplication {
                 Err(e) => return Err(e),
             }
             let mut copied = false;
-            if (info.LastPresentTime != 0 || self.staging.is_none())
+            if (info.LastPresentTime != 0 || !self.picture)
                 && let Some(tex) = resource.as_ref().and_then(|r| r.cast::<ID3D11Texture2D>().ok())
             {
                 let mut desc = D3D11_TEXTURE2D_DESC::default();
                 tex.GetDesc(&mut desc);
+                let size = (desc.Width, desc.Height);
+                // The card converts upright pictures of the size it was made for; a turned display
+                // (rare) and a changed mode go through the CPU.
+                if !self.gpu_tried && self.turn == Turn::None {
+                    self.gpu_tried = true;
+                    match crate::gpu::Converter::new(&self.device, &self.context, size, self.out_size, self.fps) {
+                        Ok(c) => {
+                            tracing::info!("converting on the graphics card");
+                            self.gpu = Some(c);
+                        }
+                        Err(e) => tracing::info!("converting on the CPU: {e:#}"),
+                    }
+                }
+                if self.gpu.as_ref().is_some_and(|g| g.input_size != size) {
+                    self.gpu = None;
+                }
+                if let Some(gpu) = &self.gpu {
+                    gpu.load(&tex);
+                    (self.w, self.h, self.picture) = (desc.Width as i32, desc.Height as i32, true);
+                    let _ = self.dup.ReleaseFrame();
+                    return Ok(true);
+                }
                 if self.staging.is_none() || (desc.Width as i32, desc.Height as i32) != (self.w, self.h) {
                     let want = D3D11_TEXTURE2D_DESC {
                         MipLevels: 1,
@@ -458,12 +494,24 @@ impl Duplication {
                 }
                 if let Some(staging) = &self.staging {
                     self.context.CopyResource(staging, &tex);
-                    copied = true;
+                    (copied, self.picture) = (true, true);
                 }
             }
             let _ = self.dup.ReleaseFrame();
             Ok(copied)
         }
+    }
+
+    /// The last picture with the pointer, as NV12 through the card; None when the card doesn't
+    /// convert (then [copy_into] and the CPU). A card that fails is left for the CPU from then on.
+    fn convert(&mut self, display: Area, out: &mut Vec<u8>) -> Option<Result<()>> {
+        let result = self.gpu.as_ref()?.convert(|dc| draw_pointer(dc, display), out);
+        if let Err(e) = &result {
+            tracing::warn!("the graphics card stopped converting, the CPU goes on: {e:#}");
+            // The next picture goes to the staging copy instead.
+            (self.gpu, self.picture) = (None, false);
+        }
+        Some(result)
     }
 
     /// The last picture into [canvas], upright; Err if it isn't the canvas's size (the display
@@ -827,7 +875,8 @@ fn capture(display: Area, (w, h): (i32, i32), fps: u32, stop: Arc<AtomicBool>, p
             return;
         }
     };
-    let mut source = match Duplication::open(display) {
+    let out_size = (w as u32, h as u32);
+    let mut source = match Duplication::open(display, out_size, fps) {
         Ok(d) => Source::Duplication(d),
         Err(e) => {
             tracing::info!("no desktop duplication, copying the screen instead: {e:#}");
@@ -844,6 +893,7 @@ fn capture(display: Area, (w, h): (i32, i32), fps: u32, stop: Arc<AtomicBool>, p
         let changed = match &mut source {
             Source::Duplication(d) => match d.next(every) {
                 Ok(false) => false,
+                Ok(true) if d.gpu.is_some() => true,
                 Ok(true) => match d.copy_into(&mut canvas) {
                     Ok(()) => true,
                     Err(e) => {
@@ -857,7 +907,7 @@ fn capture(display: Area, (w, h): (i32, i32), fps: u32, stop: Arc<AtomicBool>, p
                     // The lock screen or a new display mode: wait, then duplicate again.
                     tracing::debug!("duplication lost: {e}");
                     std::thread::sleep(RETRY);
-                    if let Ok(d) = Duplication::open(display) {
+                    if let Ok(d) = Duplication::open(display, out_size, fps) {
                         source = Source::Duplication(d);
                     }
                     false
@@ -882,7 +932,7 @@ fn capture(display: Area, (w, h): (i32, i32), fps: u32, stop: Arc<AtomicBool>, p
         if moved {
             last_pointer = pointer;
             if let Source::Duplication(d) = &source
-                && (d.size().is_none() || d.copy_into(&mut canvas).is_err())
+                && (d.size().is_none() || (d.gpu.is_none() && d.copy_into(&mut canvas).is_err()))
             {
                 continue;
             }
@@ -890,8 +940,19 @@ fn capture(display: Area, (w, h): (i32, i32), fps: u32, stop: Arc<AtomicBool>, p
         if pending.load(Ordering::Relaxed) > MAX_PENDING {
             continue;
         }
-        canvas.draw_pointer(display);
-        to_nv12(canvas.pixels(), display.width as usize * 4, display.width as usize, display.height as usize, w as usize, h as usize, &mut nv12);
+        let on_card = match &mut source {
+            Source::Duplication(d) => d.convert(display, &mut nv12),
+            Source::Copy => None,
+        };
+        match on_card {
+            Some(Ok(())) => {}
+            // The CPU takes over from the next picture.
+            Some(Err(_)) => continue,
+            None => {
+                canvas.draw_pointer(display);
+                to_nv12(canvas.pixels(), display.width as usize * 4, display.width as usize, display.height as usize, w as usize, h as usize, &mut nv12);
+            }
+        }
         match encoder.encode(&nv12) {
             Ok(annexb) if !annexb.is_empty() => {
                 let piece = framer.frame(&annexb, now_us());

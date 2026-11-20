@@ -39,6 +39,8 @@ mod firewall;
 #[cfg(windows)]
 mod gamepad;
 #[cfg(windows)]
+mod gpu;
+#[cfg(windows)]
 mod input;
 #[cfg(windows)]
 mod media;
