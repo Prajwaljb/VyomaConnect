@@ -5,7 +5,11 @@
 //! desktops allow.
 
 pub mod gamepad;
+pub mod calls;
+pub mod commands;
+pub mod media;
 pub mod mousepad;
+pub mod notifications;
 pub mod platform;
 pub mod session;
 pub mod stock;

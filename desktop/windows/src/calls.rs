@@ -1,26 +1,16 @@
-//! Calls on the phone, told on this PC: who is ringing in a toast with Silence (the phone's
-//! ringer, the stock request) and Decline (where the phone lets this PC answer for it), a missed
-//! call left as a toast until the phone clears it, and what's playing paused for the call and
-//! resumed after it (only what this paused). Answering stays on the phone: without a hands-free
-//! link the call's sound couldn't come here. One task takes the phone's packets in order (core's
-//! [Line]), so a call that ends at once can't resume before its pause. Names and numbers never go
-//! to the log.
+//! Calls on the phone, told on this PC (the engine's call task): who is ringing in a toast with
+//! Silence (the phone's ringer, the stock request) and Decline (where the phone lets this PC
+//! answer for it), a missed call left as a toast until the phone clears it, and what's playing
+//! paused for the call and resumed after it (only what this paused). Answering stays on the
+//! phone: without a hands-free link the call's sound couldn't come here.
 
-use std::collections::HashMap;
-
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::mpsc;
-use vyoma_core::link::packet;
-use vyoma_core::telephony::{self, Call, Line, Steps};
+pub use vyoma_engine::calls::Order;
+use vyoma_engine::calls::{self, Call, Ringer};
 
 use crate::toast::{self, Button, Shown, Toast};
 use crate::{media, tray};
-
-pub enum Order {
-    Packet { id: String, phone: String, packet: Value },
-    /// The phone's gone: nothing will say the call ended.
-    Gone(String),
-}
 
 const RINGING: &str = "call";
 const MISSED: &str = "missed-call";
@@ -51,8 +41,8 @@ pub fn missed_toast(id: &str, phone: &str, call: &Call) -> Toast {
 /// What a ringing toast's button asks the phone.
 pub fn request(what: &str) -> Option<Value> {
     match what {
-        "mute" => Some(packet(telephony::MUTE, json!({}))),
-        "decline" => Some(packet(telephony::REQUEST, json!({ "action": "decline" }))),
+        "mute" => Some(calls::mute_packet()),
+        "decline" => Some(calls::request_packet("decline")),
         _ => None,
     }
 }
@@ -64,71 +54,49 @@ fn tell(t: &Toast) {
     }
 }
 
-/// One phone's calls (core's [Line]) and what this PC paused for them.
-#[derive(Default)]
-struct Phone {
-    line: Line,
-    paused: Vec<String>,
-}
+struct WinRinger;
 
-impl Phone {
-    async fn carry_out(&mut self, id: &str, steps: Steps, call: Option<(&Call, &str)>) {
-        let group = toast::short(id);
-        if steps.stop_ringing {
-            toast::remove(RINGING, &group);
-        }
-        if steps.clear_missed {
-            toast::remove(MISSED, &group);
-        }
-        if let Some((call, phone)) = call {
-            if steps.ring {
-                tell(&ringing_toast(id, phone, call));
-            }
-            if steps.missed {
-                tell(&missed_toast(id, phone, call));
-            }
-        }
-        if steps.pause {
-            self.paused = tokio::task::spawn_blocking(media::pause_playing).await.unwrap_or_default();
-        }
-        if steps.resume {
-            let paused = std::mem::take(&mut self.paused);
-            if !paused.is_empty() {
-                let _ = tokio::task::spawn_blocking(move || media::resume(&paused)).await;
-            }
+impl Ringer for WinRinger {
+    /// The paused players' app ids.
+    type Paused = Vec<String>;
+
+    async fn ring(&mut self, id: &str, phone: &str, call: &Call) {
+        tell(&ringing_toast(id, phone, call));
+    }
+
+    async fn stop_ringing(&mut self, id: &str) {
+        toast::remove(RINGING, &toast::short(id));
+    }
+
+    async fn missed(&mut self, id: &str, phone: &str, call: &Call) {
+        tell(&missed_toast(id, phone, call));
+    }
+
+    async fn clear_missed(&mut self, id: &str) {
+        toast::remove(MISSED, &toast::short(id));
+    }
+
+    async fn pause(&mut self) -> Vec<String> {
+        tokio::task::spawn_blocking(media::pause_playing).await.unwrap_or_default()
+    }
+
+    async fn resume(&mut self, paused: Vec<String>) {
+        if !paused.is_empty() {
+            let _ = tokio::task::spawn_blocking(move || media::resume(&paused)).await;
         }
     }
 }
 
 /// Starts the task that handles calls; it ends when the sender is dropped.
 pub fn start() -> mpsc::UnboundedSender<Order> {
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    tokio::spawn(async move {
-        let mut phones: HashMap<String, Phone> = HashMap::new();
-        while let Some(order) = rx.recv().await {
-            match order {
-                Order::Packet { id, phone, packet } => {
-                    let Some(call) = telephony::parse(&packet) else { continue };
-                    tracing::info!("{id}: call {:?}{}", call.kind, if call.over { ", over" } else { "" });
-                    let p = phones.entry(id.clone()).or_default();
-                    let steps = p.line.on_call(&call);
-                    p.carry_out(&id, steps, Some((&call, &phone))).await;
-                }
-                Order::Gone(id) => {
-                    if let Some(p) = phones.get_mut(&id) {
-                        let steps = p.line.gone();
-                        p.carry_out(&id, steps, None).await;
-                    }
-                }
-            }
-        }
-    });
-    tx
+    calls::start(WinRinger)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use vyoma_core::telephony;
 
     fn call(answerable: bool) -> Call {
         telephony::parse(&json!({ "type": telephony::TELEPHONY, "body": { "event": "ringing", "contactName": "Sam", "phoneNumber": "123", "vyomaAnswer": answerable } })).unwrap()

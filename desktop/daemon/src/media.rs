@@ -12,13 +12,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::mpsc;
-use vyoma_core::link::packet;
 use zbus::{Connection, MatchRule, MessageStream, OwnedVariant, Variant};
 
-pub const MPRIS: &str = "kdeconnect.mpris";
-pub const MPRIS_REQUEST: &str = "kdeconnect.mpris.request";
+pub use vyoma_engine::media::{MPRIS, MPRIS_REQUEST};
+use vyoma_engine::media::{self, Do, Repeat};
 
 const PREFIX: &str = "org.mpris.MediaPlayer2.";
 const PATH: &str = "/org/mpris/MediaPlayer2";
@@ -29,7 +28,6 @@ const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 const PLAYER_TIMEOUT: Duration = Duration::from_secs(3);
 /// The most the phone takes for a cover.
 const MAX_ART: u64 = 8 << 20;
-const ACTIONS: &[&str] = &["PlayPause", "Play", "Pause", "Stop", "Next", "Previous"];
 
 /// What the media side has for the devices.
 pub enum Out {
@@ -88,32 +86,27 @@ impl State {
     }
 
     fn packet(&self, player: &str) -> Value {
-        let mut body = json!({
-            "player": player,
-            "isPlaying": self.playing,
-            "pos": self.pos_ms,
-            "length": self.length_ms,
-            "canPlay": self.can_play,
-            "canPause": self.can_pause,
-            "canGoNext": self.can_next,
-            "canGoPrevious": self.can_previous,
-            "canSeek": self.can_seek,
-            "title": self.title,
-            "artist": self.artist,
-            "album": self.album,
-            "albumArtUrl": self.art,
-            "url": self.url,
-            "volume": self.volume,
-            // For old phones that only read this.
-            "nowPlaying": if self.artist.is_empty() { self.title.clone() } else { format!("{} - {}", self.artist, self.title) },
-        });
-        if let Some(l) = &self.loop_status {
-            body["loopStatus"] = json!(l);
-        }
-        if let Some(s) = self.shuffle {
-            body["shuffle"] = json!(s);
-        }
-        packet(MPRIS, body)
+        media::track_packet(
+            player,
+            &media::Track {
+                playing: self.playing,
+                title: self.title.clone(),
+                artist: self.artist.clone(),
+                album: self.album.clone(),
+                art: self.art.clone(),
+                url: self.url.clone(),
+                length_ms: self.length_ms,
+                pos_ms: self.pos_ms,
+                volume: self.volume,
+                can_play: self.can_play,
+                can_pause: self.can_pause,
+                can_next: self.can_next,
+                can_previous: self.can_previous,
+                can_seek: self.can_seek,
+                shuffle: self.shuffle,
+                repeat: self.loop_status.as_deref().and_then(Repeat::from_word),
+            },
+        )
     }
 }
 
@@ -188,7 +181,7 @@ impl Media {
     fn list(&self) -> Value {
         let mut names: Vec<&str> = self.players.values().map(|p| p.name.as_str()).collect();
         names.sort();
-        packet(MPRIS, json!({ "playerList": names, "supportAlbumArtPayload": true }))
+        media::list_packet(&names, true)
     }
 
     fn by_name(&self, name: &str) -> Option<&Player> {
@@ -226,43 +219,43 @@ impl Media {
     }
 
     async fn on_request(&mut self, id: &str, body: &Value) {
-        if body["requestPlayerList"].as_bool() == Some(true) {
+        let r = media::request(body);
+        if r.list {
             self.send(Out::To(id.to_owned(), self.list()));
         }
-        let Some(name) = body["player"].as_str() else { return };
+        let Some(name) = r.player.as_deref() else { return };
         let Some(player) = self.by_name(name) else { return };
         let (bus, state) = (player.bus.clone(), player.state.clone());
         let bus = bus.as_str();
 
-        if let Some(action) = body["action"].as_str().filter(|a| ACTIONS.contains(a)) {
-            self.player_call(bus, action, &()).await;
-        }
-        if let Some(v) = body["setVolume"].as_i64() {
-            self.set(bus, "Volume", Variant::from(v.clamp(0, 100) as f64 / 100.0)).await;
-        }
-        if let Some(us) = body["Seek"].as_i64() {
-            self.player_call(bus, "Seek", &us).await;
-        }
-        if let Some(ms) = body["SetPosition"].as_i64() {
-            let us = ms.max(0) * 1000;
-            match zbus::ObjectPath::try_from(state.track.as_str()) {
-                Ok(track) if !state.track.is_empty() => self.player_call(bus, "SetPosition", &(track, us)).await,
-                // No track id to name: a seek by the difference does the same.
-                _ => self.player_call(bus, "Seek", &(us - state.pos_ms * 1000)).await,
+        for d in &r.does {
+            match d {
+                Do::PlayPause => self.player_call(bus, "PlayPause", &()).await,
+                Do::Play => self.player_call(bus, "Play", &()).await,
+                Do::Pause => self.player_call(bus, "Pause", &()).await,
+                Do::Stop => self.player_call(bus, "Stop", &()).await,
+                Do::Next => self.player_call(bus, "Next", &()).await,
+                Do::Previous => self.player_call(bus, "Previous", &()).await,
+                Do::Volume(v) => self.set(bus, "Volume", Variant::from(*v as f64 / 100.0)).await,
+                Do::Seek(us) => self.player_call(bus, "Seek", us).await,
+                Do::SetPosition(ms) => {
+                    let us = ms * 1000;
+                    match zbus::ObjectPath::try_from(state.track.as_str()) {
+                        Ok(track) if !state.track.is_empty() => self.player_call(bus, "SetPosition", &(track, us)).await,
+                        // No track id to name: a seek by the difference does the same.
+                        _ => self.player_call(bus, "Seek", &(us - state.pos_ms * 1000)).await,
+                    }
+                }
+                Do::Repeat(l) => self.set(bus, "LoopStatus", Variant::from(l.word())).await,
+                Do::Shuffle(s) => self.set(bus, "Shuffle", Variant::from(*s)).await,
             }
         }
-        if let Some(l) = body["setLoopStatus"].as_str().filter(|l| ["None", "Track", "Playlist"].contains(l)) {
-            self.set(bus, "LoopStatus", Variant::from(l)).await;
-        }
-        if let Some(s) = body["setShuffle"].as_bool() {
-            self.set(bus, "Shuffle", Variant::from(s)).await;
-        }
-        if body["requestNowPlaying"].as_bool() == Some(true) || body["requestVolume"].as_bool() == Some(true) {
+        if r.now {
             // Read afresh: the position isn't signalled.
             let now = self.props(bus).await.map(|p| State::from_props(&p)).unwrap_or_else(|_| state.clone());
             self.send(Out::To(id.to_owned(), now.packet(name)));
         }
-        if let Some(url) = body["albumArtUrl"].as_str() {
+        if let Some(url) = r.art.as_deref() {
             // Only the cover the player itself shows: never any file a device names.
             if url == state.art
                 && let Some(path) = file_path(url)
@@ -270,8 +263,7 @@ impl Media {
                 && meta.is_file()
                 && meta.len() <= MAX_ART
             {
-                let packet = packet(MPRIS, json!({ "player": name, "transferringAlbumArt": true, "albumArtUrl": url }));
-                self.send(Out::Art { id: id.to_owned(), packet, path, size: meta.len() });
+                self.send(Out::Art { id: id.to_owned(), packet: media::art_packet(name, url), path, size: meta.len() });
             } else {
                 tracing::info!("{id}: album art for {name} refused: not its cover, or not a local file under {} MiB", MAX_ART >> 20);
             }

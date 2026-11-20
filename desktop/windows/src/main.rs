@@ -96,7 +96,7 @@ mod agent {
     use tokio::sync::{broadcast, mpsc};
     use vyoma_core::activity::Activity;
     use vyoma_core::clipboard::{CLIPBOARD, CLIPBOARD_CONNECT, Clipboard, MAX_TEXT};
-    use vyoma_core::commands::{Commands, RUNCOMMAND, RUNCOMMAND_REQUEST};
+    use vyoma_engine::commands::{self, Commands, RUNCOMMAND, RUNCOMMAND_REQUEST};
     use vyoma_core::device::{Command, Event, Hub};
     use vyoma_core::identity::Identity;
     use vyoma_core::invite::Invite;
@@ -115,11 +115,7 @@ mod agent {
     use vyoma_core::adb::ClipboardSeen;
 
     use vyoma_engine::stock::{self, BATTERY, Desk, FIND, LOCK_REQUEST, PING, battery_packet};
-    pub const NOTIFICATION: &str = "kdeconnect.notification";
-    /// PC → phone: `{cancel: id}` (closed here), the reply typed in a toast, one of its buttons.
-    const NOTIFICATION_REQUEST: &str = "kdeconnect.notification.request";
-    const NOTIFICATION_REPLY: &str = "kdeconnect.notification.reply";
-    const NOTIFICATION_ACTION: &str = "kdeconnect.notification.action";
+    use vyoma_engine::notifications::{self, Incoming, NOTIFICATION, NOTIFICATION_ACTION, NOTIFICATION_REPLY, NOTIFICATION_REQUEST};
     pub const KEYBOARDSTATE: &str = "kdeconnect.mousepad.keyboardstate";
     /// PC → phone just before the agent stops (`why`: stop): the phone stops looking for it.
     pub const LEAVING: &str = "vyoma.pc.leaving";
@@ -509,23 +505,23 @@ mod agent {
                                     }
                                 }
                                 RUNCOMMAND_REQUEST => {
-                                    let body = &packet["body"];
-                                    if body["requestCommandList"].as_bool() == Some(true) {
-                                        send(&id, run_commands.list_packet());
+                                    let a = commands::on_request(&run_commands, &packet["body"], |name, why| {
+                                        let (title, body) = commands::failure(&name, why);
+                                        tray::notify(&title, &body);
+                                    });
+                                    if let Some(list) = a.list.clone() {
+                                        send(&id, list);
                                     }
                                     // The phone's "add command": the editor is Vyoma's window.
-                                    if body["setup"].as_bool() == Some(true) {
+                                    if a.setup {
                                         open_window(&["--page", "commands"]);
                                     }
-                                    if let Some(key) = body["key"].as_str() {
-                                        let ran = run_commands.run(key, |name, why| tray::notify(&format!("\u{201c}{name}\u{201d} didn't run"), &format!("{why}. Check it in Vyoma's Commands.")));
-                                        match ran {
-                                            Some(name) => {
-                                                tracing::info!("{id}: ran a command");
-                                                activity.add(&id, &d.name, "command", format!("Ran \u{201c}{name}\u{201d}"));
-                                            }
-                                            None => tracing::info!("{id}: no command {key}"),
-                                        }
+                                    if let Some(line) = a.activity() {
+                                        tracing::info!("{id}: ran a command");
+                                        activity.add(&id, &d.name, "command", line);
+                                    }
+                                    if let Some(key) = a.unknown {
+                                        tracing::info!("{id}: no command {key}");
                                     }
                                 }
                                 NOTIFICATION => phone_notification(&id, d, &packet["body"]),
@@ -611,7 +607,7 @@ mod agent {
                             if let Some(text) = reply.filter(|r| !r.trim().is_empty())
                                 && d.is_some_and(|d| d.takes(NOTIFICATION_REPLY))
                             {
-                                send(&id, packet(NOTIFICATION_REPLY, json!({ "requestReplyId": get("rid"), "message": text })));
+                                send(&id, notifications::reply_packet(&get("rid"), &text));
                             }
                         }
                         // A ringing toast's Silence or Decline.
@@ -624,7 +620,7 @@ mod agent {
                         }
                         ("action", false) => {
                             if d.is_some_and(|d| d.takes(NOTIFICATION_ACTION)) {
-                                send(&id, packet(NOTIFICATION_ACTION, json!({ "key": get("key"), "action": get("action") })));
+                                send(&id, notifications::action_packet(&get("key"), &get("action")));
                             }
                         }
                         ("send", false) => {
@@ -636,7 +632,7 @@ mod agent {
                         // A phone's notification closed here: gone on the phone too, if it can be.
                         ("note", true) => {
                             if get("clear") == "1" && d.is_some_and(|d| d.takes(NOTIFICATION_REQUEST)) {
-                                send(&id, packet(NOTIFICATION_REQUEST, json!({ "cancel": get("key") })));
+                                send(&id, notifications::dismiss_packet(&get("key")));
                             }
                         }
                         // The cable's question: Allow or Not now (the toast itself opens Vyoma).
@@ -1243,29 +1239,24 @@ mod agent {
     /// buttons (three at most, as on Linux). Pressing them, or closing it, comes back with what to
     /// tell the phone in the arguments, so nothing is kept here.
     fn note_toast(id: &str, phone: &str, b: &Value) -> Option<Toast> {
-        let s = |k: &str| b[k].as_str().unwrap_or("").trim().to_owned();
-        let (key, app, title, text) = (s("id"), s("appName"), s("title"), s("text"));
-        if key.is_empty() || (title.is_empty() && text.is_empty()) {
-            return None;
-        }
-        let rid = s("requestReplyId");
+        let Incoming::Show(note) = notifications::parse(&json!({ "body": b })) else { return None };
+        let key = note.id.as_str();
         let mut buttons = Vec::new();
-        if !rid.is_empty() {
-            buttons.push(Button { label: "Send".into(), args: toast::args(&[("do", "reply"), ("dev", id), ("rid", &rid)]), with_reply: true });
+        if let Some(rid) = &note.reply {
+            buttons.push(Button { label: "Send".into(), args: toast::args(&[("do", "reply"), ("dev", id), ("rid", rid)]), with_reply: true });
         }
-        for action in b["actions"].as_array().into_iter().flatten().filter_map(|a| a.as_str()).take(3) {
-            buttons.push(Button { label: action.to_owned(), args: toast::args(&[("do", "action"), ("dev", id), ("key", &key), ("action", action)]), with_reply: false });
+        for action in &note.actions {
+            buttons.push(Button { label: action.clone(), args: toast::args(&[("do", "action"), ("dev", id), ("key", key), ("action", action)]), with_reply: false });
         }
-        let clear = if b["isClearable"].as_bool() == Some(true) { "1" } else { "0" };
-        let to = if title.is_empty() { app.clone() } else { title.clone() };
+        let clear = if note.clearable { "1" } else { "0" };
         Some(Toast {
-            tag: toast::short(&key),
+            tag: toast::short(key),
             group: toast::short(id),
-            title: if title.is_empty() { app.clone() } else { title },
-            body: text,
-            attribution: if app.is_empty() { phone.to_owned() } else { format!("{app} \u{b7} {phone}") },
-            launch: toast::args(&[("do", "note"), ("dev", id), ("key", &key), ("clear", clear)]),
-            reply: (!rid.is_empty()).then(|| format!("Reply to {to}")),
+            title: note.title_or_app().to_owned(),
+            body: note.text.clone(),
+            attribution: note.from_line(phone),
+            launch: toast::args(&[("do", "note"), ("dev", id), ("key", key), ("clear", clear)]),
+            reply: note.reply.as_ref().map(|_| note.reply_hint()),
             buttons,
             urgent: false,
         })
@@ -1274,13 +1265,8 @@ mod agent {
     /// A notification from the phone: a toast (taken down when the phone dismisses it), or a
     /// balloon where there are no toasts. The backlog the phone sends when asked (`silent`) isn't shown.
     fn phone_notification(id: &str, d: &Device, b: &Value) {
-        if b["isCancel"].as_bool() == Some(true) {
-            if let Some(key) = b["id"].as_str() {
-                toast::remove(&toast::short(key), &toast::short(id));
-            }
-            return;
-        }
-        if b["silent"].as_bool() == Some(true) {
+        if let Incoming::Cancel(key) = notifications::parse(&json!({ "body": b })) {
+            toast::remove(&toast::short(&key), &toast::short(id));
             return;
         }
         let Some(t) = note_toast(id, &d.name, b) else { return };

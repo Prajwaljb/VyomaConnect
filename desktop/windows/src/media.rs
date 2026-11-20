@@ -14,9 +14,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::mpsc;
-use vyoma_core::link::packet;
 use windows::ApplicationModel::AppInfo;
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession as Session, GlobalSystemMediaTransportControlsSessionManager as Manager,
@@ -31,45 +30,18 @@ use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVaria
 use windows::Win32::System::Com::{CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, STGM_READ};
 use windows::core::HSTRING;
 
-pub const MPRIS: &str = "kdeconnect.mpris";
-pub const MPRIS_REQUEST: &str = "kdeconnect.mpris.request";
-pub const VOLUME: &str = "kdeconnect.systemvolume";
-pub const VOLUME_REQUEST: &str = "kdeconnect.systemvolume.request";
+pub use vyoma_engine::media::{MPRIS, MPRIS_REQUEST, Track, VOLUME, VOLUME_REQUEST};
+use vyoma_engine::media::{self, Do, Repeat, Sink, changed, track_packet};
 
 /// How often the players and the volume are read while a phone listens (cheap calls, no polling
 /// of the apps themselves).
 pub const EVERY: Duration = Duration::from_secs(1);
-/// 100%, as the Linux app (PulseAudio's scale) and kdeconnectd send it.
-const NORMAL: i64 = 65536;
 /// The one output the phone is shown: Windows' default speaker, whichever that is.
 const SINK: &str = "default";
 /// Covers past this aren't sent (the phone refuses more than a few MiB anyway).
 const MAX_ART: usize = 4 << 20;
 /// Windows' clock (100 ns since 1601) at the Unix epoch.
 const EPOCH_TICKS: i64 = 116_444_736_000_000_000;
-
-/// A player's state, as the phone is told it.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Track {
-    pub playing: bool,
-    pub title: String,
-    pub artist: String,
-    pub album: String,
-    pub length_ms: i64,
-    pub pos_ms: i64,
-    pub can_play: bool,
-    pub can_pause: bool,
-    pub can_next: bool,
-    pub can_previous: bool,
-    pub can_seek: bool,
-    pub shuffle: Option<bool>,
-    /// MPRIS' words: None, Track, Playlist.
-    pub repeat: Option<&'static str>,
-    /// The cover's made-up name, empty without one.
-    pub art: String,
-    /// The speaker's volume, 0-100 (players have none of their own on Windows).
-    pub volume: i64,
-}
 
 /// One app in Windows' media controls: the phone's name for it, and Windows' (its app id).
 #[derive(Clone, Debug, PartialEq)]
@@ -162,117 +134,22 @@ fn art_name(bytes: &[u8]) -> String {
     format!("file:///vyoma-art/{hash:016x}.img")
 }
 
-pub fn track_packet(player: &str, t: &Track) -> Value {
-    let mut body = json!({
-        "player": player,
-        "isPlaying": t.playing,
-        "pos": t.pos_ms,
-        "length": t.length_ms,
-        "canPlay": t.can_play,
-        "canPause": t.can_pause,
-        "canGoNext": t.can_next,
-        "canGoPrevious": t.can_previous,
-        "canSeek": t.can_seek && t.length_ms > 0,
-        "title": t.title,
-        "artist": t.artist,
-        "album": t.album,
-        "albumArtUrl": t.art,
-        "url": "",
-        "volume": t.volume,
-        "nowPlaying": if t.artist.is_empty() { t.title.clone() } else { format!("{} - {}", t.artist, t.title) },
-    });
-    if let Some(s) = t.shuffle {
-        body["shuffle"] = json!(s);
-    }
-    if let Some(r) = t.repeat {
-        body["loopStatus"] = json!(r);
-    }
-    packet(MPRIS, body)
-}
-
-pub fn list_packet(players: &[Player]) -> Value {
+fn list_packet(players: &[Player]) -> Value {
     let names: Vec<&str> = players.iter().map(|p| p.name.as_str()).collect();
-    packet(MPRIS, json!({ "playerList": names, "supportAlbumArtPayload": true }))
+    media::list_packet(&names, true)
 }
 
-/// Worth telling the phone: anything but the position moving on as it plays, which it counts
-/// itself; a seek (a jump of a few seconds) is told.
-pub fn changed(old: &Track, new: &Track, elapsed_ms: i64) -> bool {
-    let expected = old.pos_ms + if old.playing { elapsed_ms } else { 0 };
-    Track { pos_ms: 0, ..old.clone() } != Track { pos_ms: 0, ..new.clone() } || (new.pos_ms - expected).abs() > 2500
+/// The speaker as the phone's one output.
+fn sink(s: &Sound) -> Sink {
+    Sink::from_percent(SINK, if s.name.is_empty() { "This PC" } else { &s.name }, s.percent, s.muted)
 }
 
 pub fn sinks_packet(s: Option<&Sound>) -> Value {
-    let list: Vec<Value> = s
-        .iter()
-        .map(|s| {
-            let description = if s.name.is_empty() { "This PC" } else { s.name.as_str() };
-            json!({ "name": SINK, "description": description, "volume": s.percent * NORMAL / 100, "maxVolume": NORMAL, "muted": s.muted, "enabled": true })
-        })
-        .collect();
-    packet(VOLUME, json!({ "sinkList": list }))
+    media::sinks_packet(&s.map(sink).into_iter().collect::<Vec<_>>())
 }
 
 pub fn sound_packet(s: &Sound) -> Value {
-    packet(VOLUME, json!({ "name": SINK, "volume": s.percent * NORMAL / 100, "muted": s.muted, "enabled": true }))
-}
-
-/// A volume request as (percent, muted) to set; only for [SINK].
-fn sound_change(body: &Value) -> (Option<i64>, Option<bool>) {
-    if body["name"].as_str() != Some(SINK) {
-        return (None, None);
-    }
-    (body["volume"].as_i64().map(|v| v.clamp(0, NORMAL) * 100 / NORMAL), body["muted"].as_bool())
-}
-
-/// The things a player request asks for, in order.
-#[derive(Debug, PartialEq)]
-enum Do {
-    PlayPause,
-    Play,
-    Pause,
-    Stop,
-    Next,
-    Previous,
-    /// Milliseconds from the start.
-    SetPosition(i64),
-    /// Microseconds from here, as MPRIS' Seek.
-    Seek(i64),
-    Shuffle(bool),
-    Repeat(MediaPlaybackAutoRepeatMode),
-    Volume(i64),
-}
-
-fn requested(body: &Value) -> Vec<Do> {
-    let mut out = Vec::new();
-    match body["action"].as_str() {
-        Some("PlayPause") => out.push(Do::PlayPause),
-        Some("Play") => out.push(Do::Play),
-        Some("Pause") => out.push(Do::Pause),
-        Some("Stop") => out.push(Do::Stop),
-        Some("Next") => out.push(Do::Next),
-        Some("Previous") => out.push(Do::Previous),
-        _ => {}
-    }
-    if let Some(ms) = body["SetPosition"].as_i64() {
-        out.push(Do::SetPosition(ms.max(0)));
-    }
-    if let Some(us) = body["Seek"].as_i64() {
-        out.push(Do::Seek(us));
-    }
-    if let Some(s) = body["setShuffle"].as_bool() {
-        out.push(Do::Shuffle(s));
-    }
-    match body["setLoopStatus"].as_str() {
-        Some("None") => out.push(Do::Repeat(MediaPlaybackAutoRepeatMode::None)),
-        Some("Track") => out.push(Do::Repeat(MediaPlaybackAutoRepeatMode::Track)),
-        Some("Playlist") => out.push(Do::Repeat(MediaPlaybackAutoRepeatMode::List)),
-        _ => {}
-    }
-    if let Some(v) = body["setVolume"].as_i64() {
-        out.push(Do::Volume(v.clamp(0, 100)));
-    }
-    out
+    sink(s).packet()
 }
 
 struct Cover {
@@ -354,7 +231,7 @@ impl Controls {
                     session.TryChangePlaybackPositionAsync((pos + us * 10).max(0)).and_then(|a| a.join())
                 }
                 Do::Shuffle(on) => session.TryChangeShuffleActiveAsync(*on).and_then(|a| a.join()),
-                Do::Repeat(mode) => session.TryChangeAutoRepeatModeAsync(*mode).and_then(|a| a.join()),
+                Do::Repeat(r) => session.TryChangeAutoRepeatModeAsync(repeat_mode(*r)).and_then(|a| a.join()),
                 Do::Volume(v) => {
                     set_sound(Some(*v), None);
                     Ok(true)
@@ -364,6 +241,14 @@ impl Controls {
                 tracing::info!("the player didn't take {d:?}");
             }
         }
+    }
+}
+
+fn repeat_mode(r: Repeat) -> MediaPlaybackAutoRepeatMode {
+    match r {
+        Repeat::None => MediaPlaybackAutoRepeatMode::None,
+        Repeat::Track => MediaPlaybackAutoRepeatMode::Track,
+        Repeat::Playlist => MediaPlaybackAutoRepeatMode::List,
     }
 }
 
@@ -400,12 +285,11 @@ fn read(s: &Session, now: i64) -> Option<Track> {
         can_seek: can(|c| c.IsPlaybackPositionEnabled()),
         shuffle: info.IsShuffleActive().ok().and_then(|r| r.Value().ok()),
         repeat: info.AutoRepeatMode().ok().and_then(|r| r.Value().ok()).map(|m| match m {
-            MediaPlaybackAutoRepeatMode::Track => "Track",
-            MediaPlaybackAutoRepeatMode::List => "Playlist",
-            _ => "None",
+            MediaPlaybackAutoRepeatMode::Track => Repeat::Track,
+            MediaPlaybackAutoRepeatMode::List => Repeat::Playlist,
+            _ => Repeat::None,
         }),
-        art: String::new(),
-        volume: 0,
+        ..Default::default()
     })
 }
 
@@ -568,14 +452,15 @@ pub fn run(wanted: Arc<AtomicBool>, requests: std::sync::mpsc::Receiver<(String,
             let body = &p["body"];
             match p["type"].as_str() {
                 Some(MPRIS_REQUEST) => {
-                    if let Some(player) = known.iter().find(|k| Some(k.name.as_str()) == body["player"].as_str()) {
-                        c.apply(&player.app, &requested(body));
+                    let r = media::request(body);
+                    if let Some(player) = known.iter().find(|k| r.player.as_deref() == Some(k.name.as_str())) {
+                        c.apply(&player.app, &r.does);
                     }
                 }
                 Some(VOLUME_REQUEST) => {
-                    let (percent, muted) = sound_change(body);
-                    if percent.is_some() || muted.is_some() {
-                        set_sound(percent, muted);
+                    let r = media::sink_request(body);
+                    if r.name.as_deref() == Some(SINK) && (r.volume.is_some() || r.muted.is_some()) {
+                        set_sound(r.percent(), r.muted);
                     }
                 }
                 _ => {}
@@ -601,23 +486,23 @@ pub fn run(wanted: Arc<AtomicBool>, requests: std::sync::mpsc::Receiver<(String,
         let Some((id, p)) = asked else { continue };
         let body = &p["body"];
         if p["type"] == MPRIS_REQUEST {
-            if body["requestPlayerList"].as_bool() == Some(true) {
+            let r = media::request(body);
+            if r.list {
                 let _ = out.send(Out::Packet(Some(id.clone()), list_packet(&known)));
             }
-            let Some(player) = known.iter().find(|k| Some(k.name.as_str()) == body["player"].as_str()) else { continue };
-            if body["requestNowPlaying"].as_bool() == Some(true) || body["requestVolume"].as_bool() == Some(true) {
+            let Some(player) = known.iter().find(|k| r.player.as_deref() == Some(k.name.as_str())) else { continue };
+            if r.now {
                 let _ = out.send(Out::Packet(Some(id.clone()), track_packet(&player.name, &player.track)));
             }
-            if let Some(url) = body["albumArtUrl"].as_str() {
+            if let Some(url) = &r.art {
                 match c.cover_named(&player.name, url) {
                     Some(bytes) => {
-                        let packet = packet(MPRIS, json!({ "player": player.name, "transferringAlbumArt": true, "albumArtUrl": url }));
-                        let _ = out.send(Out::Art { id, packet, bytes });
+                        let _ = out.send(Out::Art { id, packet: media::art_packet(&player.name, url), bytes });
                     }
                     None => tracing::info!("{id}: no such cover for {}", player.name),
                 }
             }
-        } else if p["type"] == VOLUME_REQUEST && body["requestSinks"].as_bool() == Some(true) {
+        } else if p["type"] == VOLUME_REQUEST && media::sink_request(body).list {
             let _ = out.send(Out::Packet(Some(id), sinks_packet(volume.as_ref())));
         }
     }
@@ -626,6 +511,7 @@ pub fn run(wanted: Arc<AtomicBool>, requests: std::sync::mpsc::Receiver<(String,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn players_get_names_people_know() {
@@ -651,22 +537,19 @@ mod tests {
     }
 
     #[test]
-    fn requests_become_actions() {
-        assert_eq!(requested(&json!({ "action": "PlayPause" })), [Do::PlayPause]);
-        assert_eq!(requested(&json!({ "action": "Raise" })), []);
-        assert_eq!(requested(&json!({ "SetPosition": 61000, "setVolume": 300 })), [Do::SetPosition(61000), Do::Volume(100)]);
-        assert_eq!(requested(&json!({ "setLoopStatus": "Playlist", "setShuffle": true })), [Do::Shuffle(true), Do::Repeat(MediaPlaybackAutoRepeatMode::List)]);
-        assert_eq!(sound_change(&json!({ "name": SINK, "volume": NORMAL / 4, "muted": true })), (Some(25), Some(true)));
-        assert_eq!(sound_change(&json!({ "name": "other", "volume": 1 })), (None, None));
+    fn repeats_as_windows_has_them() {
+        assert_eq!(repeat_mode(Repeat::Playlist), MediaPlaybackAutoRepeatMode::List);
+        assert_eq!(repeat_mode(Repeat::Track), MediaPlaybackAutoRepeatMode::Track);
     }
 
     #[test]
     fn packets_as_the_linux_app_sends_them() {
         let s = Sound { percent: 50, muted: false, name: "Speakers".into() };
         let sinks = sinks_packet(Some(&s));
-        assert_eq!((sinks["body"]["sinkList"][0]["volume"].as_i64(), sinks["body"]["sinkList"][0]["description"].as_str()), (Some(NORMAL / 2), Some("Speakers")));
+        assert_eq!((sinks["body"]["sinkList"][0]["volume"].as_i64(), sinks["body"]["sinkList"][0]["description"].as_str()), (Some(media::NORMAL / 2), Some("Speakers")));
+        assert_eq!(sinks_packet(Some(&Sound { name: String::new(), ..s }))["body"]["sinkList"][0]["description"], "This PC");
         assert_eq!(sinks_packet(None)["body"]["sinkList"], json!([]));
-        let t = Track { title: "Song".into(), artist: "Band".into(), shuffle: Some(true), repeat: Some("Track"), can_seek: true, length_ms: 1000, ..Default::default() };
+        let t = Track { title: "Song".into(), artist: "Band".into(), shuffle: Some(true), repeat: Some(Repeat::Track), can_seek: true, length_ms: 1000, ..Default::default() };
         let p = track_packet("Spotify", &t);
         assert_eq!((p["body"]["nowPlaying"].as_str(), p["body"]["shuffle"].as_bool(), p["body"]["loopStatus"].as_str()), (Some("Band - Song"), Some(true), Some("Track")));
         assert_eq!(p["body"]["canSeek"], true);

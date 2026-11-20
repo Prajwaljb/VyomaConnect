@@ -15,17 +15,12 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
-use vyoma_core::link::packet;
 
-pub const MPRIS: &str = "kdeconnect.mpris";
-pub const MPRIS_REQUEST: &str = "kdeconnect.mpris.request";
-pub const VOLUME: &str = "kdeconnect.systemvolume";
-pub const VOLUME_REQUEST: &str = "kdeconnect.systemvolume.request";
+pub use vyoma_engine::media::{MPRIS, MPRIS_REQUEST, VOLUME, VOLUME_REQUEST};
+use vyoma_engine::media::{self, Do, Sink};
 
 /// How often the players and the volume are read while a phone listens.
 pub const EVERY: Duration = Duration::from_secs(3);
-/// 100%, as the Linux app (PulseAudio's scale) and kdeconnectd send it.
-const NORMAL: i64 = 65536;
 /// The one output the phone is shown: macOS's own volume follows the output in use.
 const SINK: &str = "mac";
 /// Field and record separators in what the scripts print (no title has them).
@@ -73,14 +68,14 @@ return \"\"",
     }
 
     /// The script for one of the phone's actions; [None] for anything else.
-    fn action_script(self, action: &str) -> Option<String> {
+    fn action_script(self, action: &Do) -> Option<String> {
         let verb = match (action, self) {
-            ("PlayPause", _) => "playpause",
-            ("Play", _) => "play",
-            ("Pause", _) | ("Stop", Player::Spotify) => "pause",
-            ("Stop", Player::Music) => "stop",
-            ("Next", _) => "next track",
-            ("Previous", _) => "previous track",
+            (Do::PlayPause, _) => "playpause",
+            (Do::Play, _) => "play",
+            (Do::Pause, _) | (Do::Stop, Player::Spotify) => "pause",
+            (Do::Stop, Player::Music) => "stop",
+            (Do::Next, _) => "next track",
+            (Do::Previous, _) => "previous track",
             _ => return None,
         };
         Some(format!("tell application \"{}\" to {verb}", self.name()))
@@ -122,41 +117,39 @@ fn parse(out: &str) -> Option<Track> {
     })
 }
 
-/// The packet for [player] in state [t].
+/// The packet for [player] in state [t]: Music and Spotify take every control.
 pub fn track_packet(player: &str, t: &Track) -> Value {
-    packet(
-        MPRIS,
-        json!({
-            "player": player,
-            "isPlaying": t.playing,
-            "pos": t.pos_ms,
-            "length": t.length_ms,
-            "canPlay": true,
-            "canPause": true,
-            "canGoNext": true,
-            "canGoPrevious": true,
-            "canSeek": t.length_ms > 0,
-            "title": t.title,
-            "artist": t.artist,
-            "album": t.album,
-            "albumArtUrl": t.art,
-            "url": "",
-            "volume": t.volume,
-            "nowPlaying": if t.artist.is_empty() { t.title.clone() } else { format!("{} - {}", t.artist, t.title) },
-        }),
-    )
+    media::track_packet(player, &media::Track {
+        playing: t.playing,
+        title: t.title.clone(),
+        artist: t.artist.clone(),
+        album: t.album.clone(),
+        art: t.art.clone(),
+        length_ms: t.length_ms,
+        pos_ms: t.pos_ms,
+        volume: t.volume,
+        can_play: true,
+        can_pause: true,
+        can_next: true,
+        can_previous: true,
+        can_seek: true,
+        ..Default::default()
+    })
 }
 
 pub fn list_packet(players: &[(Player, Track)]) -> Value {
     let names: Vec<&str> = players.iter().map(|(p, _)| p.name()).collect();
-    packet(MPRIS, json!({ "playerList": names, "supportAlbumArtPayload": false }))
+    media::list_packet(&names, false)
 }
 
 /// Worth telling the phone: anything but the position moving on as it plays, which it counts
 /// itself; a seek (a jump of more than [EVERY] and a bit) is told.
 pub fn changed(old: &Track, new: &Track) -> bool {
-    let expected = old.pos_ms + if old.playing { EVERY.as_millis() as i64 } else { 0 };
-    Track { pos_ms: 0, ..old.clone() } != Track { pos_ms: 0, ..new.clone() } || (new.pos_ms - expected).abs() > 2500
+    media::changed(&track(old), &track(new), EVERY.as_millis() as i64)
+}
+
+fn track(t: &Track) -> media::Track {
+    media::Track { playing: t.playing, title: t.title.clone(), artist: t.artist.clone(), album: t.album.clone(), art: t.art.clone(), length_ms: t.length_ms, pos_ms: t.pos_ms, volume: t.volume, ..Default::default() }
 }
 
 /// The output volume: percent and muted. None when the output has no volume (some displays).
@@ -174,25 +167,29 @@ fn parse_sound(out: &str) -> Option<Sound> {
     Some(Sound { percent: v.trim().parse::<i64>().ok()?.clamp(0, 100), muted: m.trim() == "true" })
 }
 
+fn sink(s: Sound) -> Sink {
+    Sink::from_percent(SINK, "This Mac", s.percent, s.muted)
+}
+
 pub fn sinks_packet(s: Option<Sound>) -> Value {
-    let list: Vec<Value> = s.iter().map(|s| json!({ "name": SINK, "description": "This Mac", "volume": s.percent * NORMAL / 100, "maxVolume": NORMAL, "muted": s.muted, "enabled": true })).collect();
-    packet(VOLUME, json!({ "sinkList": list }))
+    media::sinks_packet(&s.map(sink).into_iter().collect::<Vec<_>>())
 }
 
 pub fn sound_packet(s: Sound) -> Value {
-    packet(VOLUME, json!({ "name": SINK, "volume": s.percent * NORMAL / 100, "muted": s.muted, "enabled": true }))
+    sink(s).packet()
 }
 
 /// The scripts a volume request runs, with their argument.
 fn sound_scripts(body: &Value) -> Vec<(&'static str, Option<String>)> {
-    if body["name"].as_str() != Some(SINK) {
+    let r = media::sink_request(body);
+    if r.name.as_deref() != Some(SINK) {
         return Vec::new();
     }
     let mut out = Vec::new();
-    if let Some(v) = body["volume"].as_i64() {
-        out.push(("on run argv\nset volume output volume ((item 1 of argv) as integer)\nend run", Some((v.clamp(0, NORMAL) * 100 / NORMAL).to_string())));
+    if let Some(v) = r.percent() {
+        out.push(("on run argv\nset volume output volume ((item 1 of argv) as integer)\nend run", Some(v.to_string())));
     }
-    match body["muted"].as_bool() {
+    match r.muted {
         Some(true) => out.push(("set volume with output muted", None)),
         Some(false) => out.push(("set volume without output muted", None)),
         None => {}
@@ -203,14 +200,12 @@ fn sound_scripts(body: &Value) -> Vec<(&'static str, Option<String>)> {
 /// The scripts a player request runs (an action, volume, a seek), with their argument.
 fn player_scripts(p: Player, body: &Value) -> Vec<(String, Option<String>)> {
     let mut out = Vec::new();
-    if let Some(s) = body["action"].as_str().and_then(|a| p.action_script(a)) {
-        out.push((s, None));
-    }
-    if let Some(v) = body["setVolume"].as_i64() {
-        out.push((format!("on run argv\ntell application \"{}\" to set sound volume to ((item 1 of argv) as integer)\nend run", p.name()), Some(v.clamp(0, 100).to_string())));
-    }
-    if let Some(ms) = body["SetPosition"].as_i64() {
-        out.push((format!("on run argv\ntell application \"{}\" to set player position to ((item 1 of argv) as integer) / 1000\nend run", p.name()), Some(ms.max(0).to_string())));
+    for d in media::request(body).does {
+        match d {
+            Do::Volume(v) => out.push((format!("on run argv\ntell application \"{}\" to set sound volume to ((item 1 of argv) as integer)\nend run", p.name()), Some(v.to_string()))),
+            Do::SetPosition(ms) => out.push((format!("on run argv\ntell application \"{}\" to set player position to ((item 1 of argv) as integer) / 1000\nend run", p.name()), Some(ms.to_string()))),
+            d => out.extend(p.action_script(&d).map(|s| (s, None))),
+        }
     }
     out
 }
@@ -311,15 +306,16 @@ pub async fn run(wanted: Arc<AtomicBool>, mut requests: mpsc::UnboundedReceiver<
         let Some((id, p)) = asked else { continue };
         let body = &p["body"];
         if p["type"] == MPRIS_REQUEST {
-            if body["requestPlayerList"].as_bool() == Some(true) {
+            let r = media::request(body);
+            if r.list {
                 let _ = out.send((Some(id.clone()), list_packet(&known)));
             }
-            if (body["requestNowPlaying"].as_bool() == Some(true) || body["requestVolume"].as_bool() == Some(true))
-                && let Some((p, t)) = known.iter().find(|(p, _)| Some(p.name()) == body["player"].as_str())
+            if r.now
+                && let Some((p, t)) = known.iter().find(|(p, _)| r.player.as_deref() == Some(p.name()))
             {
                 let _ = out.send((Some(id.clone()), track_packet(p.name(), t)));
             }
-        } else if p["type"] == VOLUME_REQUEST && body["requestSinks"].as_bool() == Some(true) {
+        } else if p["type"] == VOLUME_REQUEST && media::sink_request(body).list {
             let _ = out.send((Some(id), sinks_packet(volume)));
         }
     }
@@ -422,9 +418,9 @@ mod tests {
     #[test]
     fn the_volume_is_the_linux_apps_scale() {
         let s = Sound { percent: 50, muted: false };
-        assert_eq!(sinks_packet(Some(s))["body"]["sinkList"][0]["volume"], NORMAL / 2);
+        assert_eq!(sinks_packet(Some(s))["body"]["sinkList"][0]["volume"], media::NORMAL / 2);
         assert_eq!(sinks_packet(None)["body"]["sinkList"], json!([]));
-        let scripts = sound_scripts(&json!({ "name": SINK, "volume": NORMAL / 4, "muted": true }));
+        let scripts = sound_scripts(&json!({ "name": SINK, "volume": media::NORMAL / 4, "muted": true }));
         assert_eq!(scripts[0].1.as_deref(), Some("25"));
         assert_eq!(scripts[1].0, "set volume with output muted");
         assert!(sound_scripts(&json!({ "name": "other", "volume": 1 })).is_empty());

@@ -1314,11 +1314,11 @@ impl Desk {
 
     async fn show_note(&mut self, id: &str, note: Note) {
         let heading = note.heading();
-        let buttons = note.buttons();
+        let buttons = notifications::buttons(&note);
         let actions: Vec<(&str, &str)> = buttons.iter().map(|(k, l)| (k.as_str(), l.as_str())).collect();
         let image = note.icon.as_deref().map(notifications::icon_path).filter(|p| p.exists());
         let notice = Notice { icon: "smartphone", title: &heading, body: &note.text, actions: &actions, sticky: false, replaces: self.mirror.showing(id, &note.id) };
-        let reply = note.replies().then(|| format!("Reply to {}", if note.title.is_empty() { &note.app } else { &note.title }));
+        let reply = note.reply.is_some().then(|| note.reply_hint());
         match self.notifier.show_with(notice, image.as_deref(), reply.as_deref()).await {
             Ok(n) => self.mirror.shown(id, note, n),
             Err(e) => tracing::warn!("couldn't show a notification from {id}: {e:#}"),
@@ -1504,23 +1504,21 @@ impl Desk {
                         return;
                     }
                     commands::RUNCOMMAND_REQUEST => {
-                        let body = &packet["body"];
-                        if body["requestCommandList"].as_bool() == Some(true) {
-                            self.send(&id, self.run.list_packet());
+                        let a = vyoma_engine::commands::on_request(&self.run, &packet["body"], commands::failed);
+                        if let Some(list) = a.list.clone() {
+                            self.send(&id, list);
                         }
                         // The phone's "add command": the editor is Vyoma's window.
-                        if body["setup"].as_bool() == Some(true) {
+                        if a.setup {
                             tracing::info!("{id}: opening the command editor");
                             tokio::spawn(window::open("commands"));
                         }
-                        if let Some(key) = body["key"].as_str() {
-                            match self.run.run(key, commands::failed) {
-                                Some(name) => {
-                                    tracing::info!("{id}: ran {name}");
-                                    self.host.activity.add(&id, &features::phone_name(&device.name), "command", format!("Ran \u{201c}{name}\u{201d}"));
-                                }
-                                None => tracing::info!("{id}: no command {key}"),
-                            }
+                        if let Some(line) = a.activity() {
+                            tracing::info!("{id}: ran a command");
+                            self.host.activity.add(&id, &features::phone_name(&device.name), "command", line);
+                        }
+                        if let Some(key) = a.unknown {
+                            tracing::info!("{id}: no command {key}");
                         }
                         return;
                     }
@@ -1743,11 +1741,11 @@ impl Desk {
         match action {
             "mute" => {
                 tracing::info!("{id}: muting the ringer");
-                self.send(&id, packet(telephony::MUTE, json!({})));
+                self.send(&id, vyoma_engine::calls::mute_packet());
             }
             "answer" | "decline" | "hangup" => {
                 tracing::info!("{id}: asking the phone to {action}");
-                self.send(&id, packet(telephony::REQUEST, json!({ "action": action })));
+                self.send(&id, vyoma_engine::calls::request_packet(action));
                 match action {
                     "answer" => {
                         line.answered = true;
@@ -1777,7 +1775,7 @@ impl Desk {
     fn dial(&mut self, id: String, number: String) {
         tracing::info!("{id}: asking the phone to make a call");
         self.calls.entry(id.clone()).or_default().dialled = true;
-        self.send(&id, packet(telephony::DIAL, json!({ "number": number })));
+        self.send(&id, vyoma_engine::calls::dial_packet(&number));
     }
 
     /// Connects this PC as the phone's headset for the call, in the background.

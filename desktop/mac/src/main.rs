@@ -42,7 +42,7 @@ use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
 use vyoma_core::activity::Activity;
 use vyoma_core::clipboard::{CLIPBOARD, CLIPBOARD_CONNECT, Clipboard, MAX_TEXT};
-use vyoma_core::commands::{Commands, RUNCOMMAND, RUNCOMMAND_REQUEST};
+use vyoma_engine::commands::{self, Commands, RUNCOMMAND, RUNCOMMAND_REQUEST};
 use vyoma_core::device::{Command, Event, Hub};
 use vyoma_core::identity::Identity;
 use vyoma_core::invite::Invite;
@@ -56,7 +56,8 @@ use vyoma_engine::session::{Host, Phone, phone_name};
 
 pub use vyoma_engine::stock::{BATTERY, FIND, LOCK_REQUEST, PING, battery_packet};
 use vyoma_engine::stock::{self, Desk};
-pub const NOTIFICATION: &str = "kdeconnect.notification";
+pub use vyoma_engine::notifications::NOTIFICATION;
+use vyoma_engine::notifications::{self, Incoming};
 pub const KEYBOARDSTATE: &str = "kdeconnect.mousepad.keyboardstate";
 
 /// What we take and send. No lock state outward: macOS doesn't tell other apps whether it's locked.
@@ -458,23 +459,23 @@ async fn run(dir: PathBuf) -> Result<()> {
                             }
                         }
                         RUNCOMMAND_REQUEST => {
-                            let body = &packet["body"];
-                            if body["requestCommandList"].as_bool() == Some(true) {
-                                send(&id, run_commands.list_packet());
+                            let a = commands::on_request(&run_commands, &packet["body"], |name, why| {
+                                let (title, body) = commands::failure(&name, why);
+                                mac::notify_now(&title, &body);
+                            });
+                            if let Some(list) = a.list.clone() {
+                                send(&id, list);
                             }
                             // The phone's "add command": the editor is Vyoma's window.
-                            if body["setup"].as_bool() == Some(true) {
+                            if a.setup {
                                 mac::open_app();
                             }
-                            if let Some(key) = body["key"].as_str() {
-                                let ran = run_commands.run(key, |name, why| mac::notify_now(&format!("\u{201c}{name}\u{201d} didn't run"), &format!("{why}. Check it in Vyoma's Commands.")));
-                                match ran {
-                                    Some(name) => {
-                                        tracing::info!("{id}: ran a command");
-                                        activity.add(&id, &d.name, "command", format!("Ran \u{201c}{name}\u{201d}"));
-                                    }
-                                    None => tracing::info!("{id}: no command {key}"),
-                                }
+                            if let Some(line) = a.activity() {
+                                tracing::info!("{id}: ran a command");
+                                activity.add(&id, &d.name, "command", line);
+                            }
+                            if let Some(key) = a.unknown {
+                                tracing::info!("{id}: no command {key}");
                             }
                         }
                         NOTIFICATION => phone_notification(&id, d, &packet["body"]).await,
@@ -1101,24 +1102,13 @@ fn started(d: &Device, battery: Option<mac::Battery>, clip: &Clipboard) -> Vec<V
 /// A notification from the phone, shown as the Mac's own, or taken down when the phone's went.
 /// The backlog the phone sends when asked (`silent`) isn't shown: it would arrive all at once.
 async fn phone_notification(id: &str, d: &Device, b: &Value) {
-    let Some(note) = b["id"].as_str() else { return };
     // Its own per phone, so two phones' ids never meet.
-    let key = format!("phone-{id}-{note}");
-    if b["isCancel"].as_bool() == Some(true) {
-        mac::withdraw(&key);
-        return;
+    let key = |note: &str| format!("phone-{id}-{note}");
+    match notifications::parse(&json!({ "body": b })) {
+        Incoming::Cancel(note) => mac::withdraw(&key(&note)),
+        Incoming::Show(note) => mac::phone_notification(&key(&note.id), &note.from_line(&d.name), note.title_or_app(), &note.text).await,
+        Incoming::Ignore => {}
     }
-    if b["silent"].as_bool() == Some(true) {
-        return;
-    }
-    let s = |k: &str| b[k].as_str().unwrap_or("").trim().to_owned();
-    let (app, title, text) = (s("appName"), s("title"), s("text"));
-    if title.is_empty() && text.is_empty() {
-        return;
-    }
-    let title = if title.is_empty() { app.clone() } else { title };
-    let from = if app.is_empty() { d.name.clone() } else { format!("{app} \u{b7} {}", d.name) };
-    mac::phone_notification(&key, &from, &title, &text).await;
 }
 
 /// The stock plugins on the Mac: its notifications, the ringer with a Found it dialog, display

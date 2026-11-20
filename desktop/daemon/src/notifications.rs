@@ -12,90 +12,23 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::io::AsyncReadExt;
 use vyoma_core::identity::Identity;
-use vyoma_core::link::packet;
 use vyoma_core::payload;
 
 use crate::notify::Heard;
 
-pub const NOTIFICATION: &str = "kdeconnect.notification";
-pub const NOTIFICATION_REQUEST: &str = "kdeconnect.notification.request";
-pub const NOTIFICATION_REPLY: &str = "kdeconnect.notification.reply";
-pub const NOTIFICATION_ACTION: &str = "kdeconnect.notification.action";
+pub use vyoma_engine::notifications::{Incoming, NOTIFICATION, NOTIFICATION_ACTION, NOTIFICATION_REPLY, NOTIFICATION_REQUEST, Note, parse, reply_packet};
 
 /// Notifications remembered, to match their buttons; older ones are long off the screen.
 const KEPT: usize = 256;
 /// The most an icon may be.
 const MAX_ICON: u64 = 1 << 20;
 
-/// What a notification packet asks.
-#[derive(Debug, PartialEq)]
-pub enum Incoming {
-    Show(Note),
-    /// Gone from the phone.
-    Cancel(String),
-    Ignore,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Note {
-    pub id: String,
-    pub app: String,
-    pub title: String,
-    pub text: String,
-    clearable: bool,
-    reply: Option<String>,
-    actions: Vec<String>,
-    /// Its icon's name in the cache, when the packet carries one.
-    pub icon: Option<String>,
-}
-
-impl Note {
-    /// "App: Title", or whichever of them there is.
-    pub fn heading(&self) -> String {
-        match (self.app.is_empty(), self.title.is_empty() || self.title == self.app) {
-            (_, true) => self.app.clone(),
-            (true, false) => self.title.clone(),
-            (false, false) => format!("{}: {}", self.app, self.title),
-        }
-    }
-
-    /// Its buttons: key and label.
-    pub fn buttons(&self) -> Vec<(String, String)> {
-        self.actions.iter().enumerate().map(|(i, a)| (format!("phone-action-{i}"), a.clone())).collect()
-    }
-
-    pub fn replies(&self) -> bool {
-        self.reply.is_some()
-    }
-}
-
-pub fn parse(p: &Value) -> Incoming {
-    let b = &p["body"];
-    let Some(id) = b["id"].as_str().filter(|id| !id.is_empty()) else { return Incoming::Ignore };
-    if b["isCancel"].as_bool() == Some(true) {
-        return Incoming::Cancel(id.to_owned());
-    }
-    if b["silent"].as_bool() == Some(true) {
-        return Incoming::Ignore;
-    }
-    let s = |k: &str| b[k].as_str().unwrap_or("").to_owned();
-    let note = Note {
-        id: id.to_owned(),
-        app: s("appName"),
-        title: s("title"),
-        text: s("text"),
-        clearable: b["isClearable"].as_bool().unwrap_or(false),
-        reply: b["requestReplyId"].as_str().filter(|r| !r.is_empty()).map(str::to_owned),
-        actions: b["actions"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).take(3).collect()).unwrap_or_default(),
-        icon: b["payloadHash"].as_str().filter(|h| (8..=64).contains(&h.len()) && h.bytes().all(|c| c.is_ascii_hexdigit())).map(str::to_lowercase),
-    };
-    if note.title.is_empty() && note.text.is_empty() {
-        return Incoming::Ignore;
-    }
-    Incoming::Show(note)
+/// A phone notification's buttons here: key and label.
+pub fn buttons(note: &Note) -> Vec<(String, String)> {
+    note.actions.iter().enumerate().map(|(i, a)| (format!("phone-action-{i}"), a.clone())).collect()
 }
 
 struct Shown {
@@ -116,7 +49,7 @@ pub struct ReplyAsk {
 
 impl ReplyAsk {
     pub fn packet(&self, message: &str) -> Value {
-        packet(NOTIFICATION_REPLY, json!({ "requestReplyId": self.reply_id, "message": message }))
+        reply_packet(&self.reply_id, message)
     }
 }
 
@@ -162,9 +95,8 @@ impl Mirror {
     pub fn take_reply(&mut self, notice: u32) -> Option<ReplyAsk> {
         self.by_notice.get(&notice)?.note.reply.as_ref()?;
         let s = self.forget(notice)?;
-        let heading = s.note.heading();
-        let to = if s.note.title.is_empty() { s.note.app.clone() } else { s.note.title.clone() };
-        Some(ReplyAsk { device: s.device, reply_id: s.note.reply.unwrap_or_default(), heading, text: s.note.text, placeholder: format!("Reply to {to}") })
+        let (heading, placeholder) = (s.note.heading(), s.note.reply_hint());
+        Some(ReplyAsk { device: s.device, reply_id: s.note.reply.unwrap_or_default(), heading, text: s.note.text, placeholder })
     }
 
     /// What to tell which phone after something happened to one of ours.
@@ -173,16 +105,16 @@ impl Mirror {
             Heard::Pressed { notification, action } => {
                 let s = self.by_notice.get(notification)?;
                 let i: usize = action.strip_prefix("phone-action-")?.parse().ok()?;
-                let label = s.note.actions.get(i)?;
-                Some((s.device.clone(), packet(NOTIFICATION_ACTION, json!({ "key": s.note.id, "action": label }))))
+                Some((s.device.clone(), s.note.action_packet(i)?))
             }
             Heard::Replied { notification, text } => {
                 let s = self.by_notice.get(notification)?;
-                Some((s.device.clone(), packet(NOTIFICATION_REPLY, json!({ "requestReplyId": s.note.reply.as_ref()?, "message": text }))))
+                Some((s.device.clone(), s.note.reply_packet(text)?))
             }
             Heard::Closed { notification, by_user } => {
                 let s = self.forget(*notification)?;
-                (*by_user && s.note.clearable).then(|| (s.device, packet(NOTIFICATION_REQUEST, json!({ "cancel": s.note.id }))))
+                let dismissed = s.note.dismiss_packet().filter(|_| *by_user)?;
+                Some((s.device, dismissed))
             }
         }
     }
@@ -235,6 +167,8 @@ pub async fn fetch_icon(me: &Identity, pinned: &[u8], from: IpAddr, p: &Value, p
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use vyoma_core::link::packet;
 
     fn post(body: Value) -> Value {
         packet(NOTIFICATION, body)

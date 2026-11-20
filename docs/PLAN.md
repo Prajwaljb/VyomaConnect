@@ -439,8 +439,19 @@ Progress (2026-11-19):
    (Linux a Copy button, the Mac and Windows copy at once), and hands files to the side to fetch
    (`stock::fetch` into Downloads); `Arrivals` counts each phone's batch, so the activity log and
    the Mac's and Windows' notification say a batch once it's all in ("2 of 3 files are in
-   Downloads") instead of a line per file. Next: notifications, MPRIS and volume, run command,
-   telephony, presenter, messages.
+   Downloads") instead of a line per file. Then the phone's notifications (`notifications`: what a
+   packet asks, the note in plain fields, the reply/button/dismiss packets; each side shows it its
+   own way) and the players and volume (`media`: the track as the phone is told it, a request read
+   into steps in the protocol's order with only its words, outputs and their changes; each side
+   finds and drives its players). Linux's players now show seeking only with a length, as Windows'
+   and the Mac's did. Then run command (`commands`: list, the phone's "add command", running one
+   and its activity line; each side opens its own editor and says a command that couldn't start)
+   and calls (`calls`: the Mac's and Windows' call task once, behind a `Ringer` each side gives
+   its notifications and pausing; the packets a PC sends about a call; Linux keeps its fuller line
+   for answering here and the call's sound over Bluetooth). The presenter dot and the Messages page
+   were already shared through core (`presenter`, `messages::Store`). Next: one dispatch of the
+   stock packets for every side (today each side's loop still matches packet types and calls the
+   engine), then the window's method table and probing per capability.
 4. Hyprland and Windows were taken first (user, 2026-11-19); then the window's method table, then
    probing per capability and This PC's report.
 

@@ -6,28 +6,16 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
-use vyoma_core::link::packet;
 
-pub const VOLUME: &str = "kdeconnect.systemvolume";
-pub const VOLUME_REQUEST: &str = "kdeconnect.systemvolume.request";
+pub use vyoma_engine::media::{Sink, VOLUME, VOLUME_REQUEST};
+use vyoma_engine::media::{self, NORMAL, sink_changes, sinks_packet};
 
-/// 100%: the top of the phone's slider, as kdeconnectd sends it, so its percent is the PC's.
-const NORMAL: i64 = 65536;
 /// The most a device may set, whatever it sends.
 const MAX_VOLUME: i64 = NORMAL * 3 / 2;
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Sink {
-    name: String,
-    description: String,
-    volume: i64,
-    muted: bool,
-    default: bool,
-}
 
 /// `pactl -f json list sinks` with the default's name: the loudest channel is the volume.
 fn parse(json: &str, default: &str) -> Result<Vec<Sink>> {
@@ -41,7 +29,7 @@ fn parse(json: &str, default: &str) -> Result<Vec<Sink>> {
                 description: s["description"].as_str().filter(|d| !d.is_empty()).unwrap_or(&name).to_owned(),
                 volume,
                 muted: s["mute"].as_bool().unwrap_or(false),
-                default: name == default,
+                enabled: name == default,
                 name,
             })
         })
@@ -61,21 +49,6 @@ async fn sinks() -> Result<Vec<Sink>> {
     parse(&pactl(&["-f", "json", "list", "sinks"]).await?, default.trim())
 }
 
-pub fn list_packet(sinks: &[Sink]) -> Value {
-    let list: Vec<Value> = sinks.iter().map(|s| json!({ "name": s.name, "description": s.description, "volume": s.volume, "maxVolume": NORMAL, "muted": s.muted, "enabled": s.default })).collect();
-    packet(VOLUME, json!({ "sinkList": list }))
-}
-
-/// What the devices are told after [old] became [new]: the whole list if sinks came or went,
-/// else one packet per sink that changed.
-fn changes(old: &[Sink], new: &[Sink]) -> Vec<Value> {
-    let names = |s: &[Sink]| s.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
-    if names(old) != names(new) {
-        return vec![list_packet(new)];
-    }
-    old.iter().zip(new).filter(|(a, b)| a != b).map(|(_, s)| packet(VOLUME, json!({ "name": s.name, "volume": s.volume, "muted": s.muted, "enabled": s.default }))).collect()
-}
-
 /// Follows the outputs and answers [requests] (device id, packet). [out]: (to whom, or every
 /// device that takes it; packet).
 pub async fn run(mut requests: mpsc::UnboundedReceiver<(String, Value)>, out: mpsc::UnboundedSender<(Option<String>, Value)>) -> Result<()> {
@@ -85,12 +58,12 @@ pub async fn run(mut requests: mpsc::UnboundedReceiver<(String, Value)>, out: mp
     loop {
         tokio::select! {
             Some((id, p)) = requests.recv() => {
-                let body = &p["body"];
-                if body["requestSinks"].as_bool() == Some(true) {
-                    let _ = out.send((Some(id.clone()), list_packet(&known)));
+                let r = media::sink_request(&p["body"]);
+                if r.list {
+                    let _ = out.send((Some(id.clone()), sinks_packet(&known)));
                 }
-                if let Some(name) = body["name"].as_str() {
-                    apply(&known, &id, name, body).await;
+                if r.name.is_some() {
+                    apply(&known, &id, &r).await;
                 }
             }
             line = lines.next_line() => {
@@ -102,7 +75,7 @@ pub async fn run(mut requests: mpsc::UnboundedReceiver<(String, Value)>, out: mp
                 // A slider sends a burst: read once it settles.
                 tokio::time::sleep(Duration::from_millis(80)).await;
                 let Ok(now) = sinks().await else { continue };
-                for p in changes(&known, &now) {
+                for p in sink_changes(&known, &now) {
                     let _ = out.send((None, p));
                 }
                 known = now;
@@ -112,19 +85,21 @@ pub async fn run(mut requests: mpsc::UnboundedReceiver<(String, Value)>, out: mp
 }
 
 /// A device's change to sink [name], which must be one we listed.
-async fn apply(known: &[Sink], id: &str, name: &str, body: &Value) {
-    if !known.iter().any(|s| s.name == name) {
+async fn apply(known: &[Sink], id: &str, r: &media::SinkRequest) {
+    let Some(name) = r.name.as_deref() else { return };
+    let Some(sink) = known.iter().find(|s| s.name == name) else {
         tracing::info!("{id}: no sink {name}");
         return;
-    }
+    };
+    let volume = r.volume.map(|v| v.clamp(0, MAX_VOLUME));
     let mut done = Ok(String::new());
-    if let Some(v) = body["volume"].as_i64() {
-        done = done.and(pactl(&["set-sink-volume", name, &v.clamp(0, MAX_VOLUME).to_string()]).await);
+    if let Some(v) = volume {
+        done = done.and(pactl(&["set-sink-volume", name, &v.to_string()]).await);
     }
-    if let Some(m) = body["muted"].as_bool() {
+    if let Some(m) = r.muted {
         done = done.and(pactl(&["set-sink-mute", name, if m { "1" } else { "0" }]).await);
     }
-    if body["enabled"].as_bool() == Some(true) {
+    if r.enable {
         done = done.and(pactl(&["set-default-sink", name]).await);
     }
     if let Err(e) = done {
@@ -133,11 +108,8 @@ async fn apply(known: &[Sink], id: &str, name: &str, body: &Value) {
     }
     // GNOME shows no pop-up for a change it didn't make (Plasma does): ask its shell for one, for
     // the output that's playing, as its volume keys show it.
-    let Some(sink) = known.iter().find(|s| s.name == name) else { return };
-    if vyoma_companion::desktop::is_gnome() && (sink.default || body["enabled"].as_bool() == Some(true)) && (body.get("volume").is_some() || body.get("muted").is_some()) {
-        let volume = body["volume"].as_i64().map_or(sink.volume, |v| v.clamp(0, MAX_VOLUME));
-        let muted = body["muted"].as_bool().unwrap_or(sink.muted);
-        let (icon, level, max) = osd(volume, muted);
+    if vyoma_companion::desktop::is_gnome() && (sink.enabled || r.enable) && (volume.is_some() || r.muted.is_some()) {
+        let (icon, level, max) = osd(volume.unwrap_or(sink.volume), r.muted.unwrap_or(sink.muted));
         let _ = vyoma_companion::shell::show_osd(icon, level, max, None).await;
     }
 }
@@ -159,6 +131,7 @@ fn osd(volume: i64, muted: bool) -> (&'static str, f64, f64) {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
     use super::*;
 
     const LIST: &str = r#"[
@@ -177,18 +150,18 @@ mod tests {
     #[test]
     fn sinks_and_their_changes() {
         let sinks = parse(LIST, "speakers").unwrap();
-        assert_eq!(sinks[0], Sink { name: "hdmi".into(), description: "HDMI".into(), volume: 32000, muted: false, default: false });
-        assert_eq!((sinks[1].description.as_str(), sinks[1].muted, sinks[1].default), ("speakers", true, true));
-        let list = list_packet(&sinks);
+        assert_eq!(sinks[0], Sink { name: "hdmi".into(), description: "HDMI".into(), volume: 32000, muted: false, enabled: false });
+        assert_eq!((sinks[1].description.as_str(), sinks[1].muted, sinks[1].enabled), ("speakers", true, true));
+        let list = sinks_packet(&sinks);
         assert_eq!(list["body"]["sinkList"][1]["maxVolume"], NORMAL);
 
         let mut louder = sinks.clone();
         louder[0].volume = 40000;
-        let c = changes(&sinks, &louder);
+        let c = sink_changes(&sinks, &louder);
         assert_eq!(c.len(), 1);
         assert_eq!(c[0]["body"], json!({ "name": "hdmi", "volume": 40000, "muted": false, "enabled": false }));
-        assert!(changes(&sinks, &sinks).is_empty());
-        assert!(changes(&sinks, &sinks[..1]).first().unwrap()["body"]["sinkList"].is_array(), "a sink went: the whole list");
+        assert!(sink_changes(&sinks, &sinks).is_empty());
+        assert!(sink_changes(&sinks, &sinks[..1]).first().unwrap()["body"]["sinkList"].is_array(), "a sink went: the whole list");
     }
 }
 
@@ -197,6 +170,8 @@ mod tests {
 #[cfg(test)]
 mod live {
     use super::*;
+    use serde_json::json;
+    use vyoma_core::link::packet;
 
     #[tokio::test]
     #[ignore]
