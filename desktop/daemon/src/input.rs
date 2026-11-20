@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::mpsc;
 use zbus::{Connection, MatchRule, MessageStream, OwnedObjectPath, OwnedVariant, Variant};
 
@@ -479,6 +479,7 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn packets_as_portal_calls() {

@@ -4,7 +4,10 @@
 //!
 //! A packet only goes to a paired device whose identity says it takes that type.
 
+use std::collections::HashMap;
+
 use serde_json::Value;
+use tokio::sync::mpsc;
 
 use crate::DeviceView;
 use crate::clipboard::{CLIPBOARD, CLIPBOARD_CONNECT};
@@ -20,7 +23,7 @@ use crate::presenter::PRESENTER;
 use crate::phonefiles::{SFTP, SFTP_REQUEST};
 use crate::notify::{Notice, Notifier};
 use crate::system::{Battery, Ringer, Session};
-use vyoma_engine::stock::{self, Desk};
+use vyoma_engine::stock::{self, Clipboard, Desk, Outcome};
 pub use vyoma_engine::stock::{BATTERY, FIND, LOCK, LOCK_REQUEST, PING, battery_packet, lock_packet};
 
 /// What we take. Not lock requests outward: phones can't be locked that way, and a KDE PC would lock.
@@ -56,6 +59,10 @@ pub struct Context<'a> {
     pub ringer: &'a mut Ringer,
     /// The notification for the ring on screen, to take down with it.
     pub ring_notice: &'a mut Option<u32>,
+    /// What goes onto this PC's clipboard, in order.
+    pub paste: &'a mpsc::UnboundedSender<String>,
+    /// What notifications' buttons open.
+    pub opens: &'a mut HashMap<u32, crate::Open>,
 }
 
 impl Desk for Context<'_> {
@@ -78,16 +85,36 @@ impl Desk for Context<'_> {
     async fn locked(&mut self) -> Option<bool> {
         self.session?.locked().await.ok()
     }
+
+    async fn copy(&mut self, text: &str) -> anyhow::Result<()> {
+        self.paste.send(text.to_owned()).map_err(|_| anyhow::anyhow!("the clipboard's writer stopped"))
+    }
+
+    async fn open_link(&mut self, url: &str) {
+        crate::share::open(url);
+    }
+
+    /// Offered with a Copy button rather than copied: what's on the clipboard stays until asked.
+    async fn shared_text(&mut self, phone: &str, text: &str) -> bool {
+        let title = format!("Text from {phone}");
+        let shown: String = text.chars().take(400).collect();
+        let notice = Notice { icon: "edit-paste", title: &title, body: &shown, actions: &[("copy", "Copy")], sticky: false, replaces: None };
+        crate::show_open(self.notifier, self.opens, notice, crate::Open::Copy(text.to_owned())).await;
+        false
+    }
 }
 
-/// Handles one packet from a paired device; what to send back.
-pub async fn on_packet(mut cx: Context<'_>, device: &mut DeviceView, p: &Value) -> Vec<Value> {
+/// Handles one packet from a paired device; what to send back, a file to fetch.
+pub async fn on_packet(mut cx: Context<'_>, device: &mut DeviceView, clip: &mut Clipboard, p: &Value) -> Outcome {
     let kind = p["type"].as_str().unwrap_or("");
     if !stock::handles(kind) {
         tracing::debug!("{}: no plugin for {kind}", device.name);
-        return Vec::new();
+        return Outcome::default();
     }
-    stock::on_packet(&mut cx, &device.name, &mut device.battery, p).await
+    let mut phone = stock::Phone { name: device.name.clone(), battery: device.battery };
+    let out = stock::on_packet(&mut cx, &mut phone, clip, p).await;
+    device.battery = phone.battery;
+    out
 }
 
 /// Stops a ring started by a device and takes its notification down.

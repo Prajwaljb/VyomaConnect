@@ -50,7 +50,7 @@ use vyoma_core::lan::{Lan, Ports, Rules, UDP_PORT};
 use vyoma_core::messages::{self, Store};
 use vyoma_core::link::packet;
 use vyoma_core::permits::{self, Permit, Permits};
-use vyoma_core::share::{self, SHARE, SHARE_UPDATE, Shared};
+use vyoma_core::share::{self, SHARE, SHARE_UPDATE};
 use vyoma_core::trust::TrustStore;
 use vyoma_engine::session::{Host, Phone, phone_name};
 
@@ -306,6 +306,7 @@ async fn run(dir: PathBuf) -> Result<()> {
     let mut prompts: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
     let (found_tx, mut found) = mpsc::unbounded_channel::<()>();
     let mut ringer = mac::Ringer::default();
+    let arrivals = Arc::new(stock::Arrivals::default());
 
     loop {
         tokio::select! {
@@ -491,7 +492,7 @@ async fn run(dir: PathBuf) -> Result<()> {
                         }
                         presenter::PRESENTER if d.paired => pointer_dot.on_packet(&packet["body"]),
                         _ => {
-                            for reply in on_packet(&id, d, &packet, from, &me, &mut clip, &mut ringer, &found_tx, &activity).await {
+                            for reply in on_packet(&id, d, &packet, from, &me, &mut clip, &mut ringer, &found_tx, &activity, &arrivals).await {
                                 send(&id, reply);
                             }
                         }
@@ -1150,55 +1151,41 @@ impl Desk for MacDesk<'_> {
         }
         Some(mac::sleep_display().await)
     }
+
+    async fn copy(&mut self, text: &str) -> Result<()> {
+        mac::set_clipboard(text).await
+    }
+
+    async fn open_link(&mut self, url: &str) {
+        mac::open(url);
+    }
 }
 
 /// Handles one packet from a paired device; what to send back.
 #[allow(clippy::too_many_arguments)]
-async fn on_packet(id: &str, d: &mut Device, p: &Value, from: IpAddr, me: &Arc<Identity>, clip: &mut Clipboard, ringer: &mut mac::Ringer, found: &mpsc::UnboundedSender<()>, activity: &Arc<Activity>) -> Vec<Value> {
+async fn on_packet(id: &str, d: &mut Device, p: &Value, from: IpAddr, me: &Arc<Identity>, clip: &mut Clipboard, ringer: &mut mac::Ringer, found: &mpsc::UnboundedSender<()>, activity: &Arc<Activity>, arrivals: &Arc<stock::Arrivals>) -> Vec<Value> {
     let kind = p["type"].as_str().unwrap_or("");
-    if stock::handles(kind) {
-        return stock::on_packet(&mut MacDesk { ringer, found }, &d.name, &mut d.battery, p).await;
+    if !stock::handles(kind) {
+        tracing::debug!("{}: nothing here for {kind}", d.name);
+        return Vec::new();
     }
-    match kind {
-        CLIPBOARD | CLIPBOARD_CONNECT => {
-            if let Some(text) = clip.received(p)
-                && let Err(e) = mac::set_clipboard(&text).await
-            {
-                tracing::warn!("couldn't set the clipboard: {e:#}");
+    let mut phone = stock::Phone { name: d.name.clone(), battery: d.battery };
+    let out = stock::on_packet(&mut MacDesk { ringer, found }, &mut phone, clip, p).await;
+    d.battery = phone.battery;
+    if let Some(incoming) = out.fetch {
+        let (me, cert, phone, packet, activity, arrivals, id) = (me.clone(), d.cert.clone(), d.name.clone(), p.clone(), activity.clone(), arrivals.clone(), id.to_owned());
+        let from = d.remote.unwrap_or(from);
+        tokio::spawn(async move {
+            let landed = stock::fetch(&me, &cert, from, &packet, &mac::downloads(), incoming, &arrivals, &id, &phone, "this Mac").await;
+            if let Some(text) = landed.activity.clone() {
+                activity.add(&id, &phone, "share", text);
             }
-        }
-        SHARE => match share::classify(p) {
-            Shared::File { name, .. } => {
-                let (me, cert, phone, packet, activity, id) = (me.clone(), d.cert.clone(), d.name.clone(), p.clone(), activity.clone(), id.to_owned());
-                let from = d.remote.unwrap_or(from);
-                tokio::spawn(async move {
-                    match share::receive(&me, &cert, from, &packet, &mac::downloads()).await {
-                        Ok(path) => {
-                            let saved = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(name);
-                            activity.add(&id, &phone, "share", format!("Shared \u{201c}{saved}\u{201d} with this Mac"));
-                            mac::notify(&format!("From {phone}"), &format!("{saved} is in Downloads")).await;
-                        }
-                        Err(e) => {
-                            tracing::warn!("{name} from {phone}: {e:#}");
-                            mac::notify(&format!("{name} didn't arrive"), "The phone stopped sending it. Try again.").await;
-                        }
-                    }
-                });
+            if let Some((title, body)) = landed.summary() {
+                mac::notify(&title, &body).await;
             }
-            Shared::Url(url) => mac::open(&url),
-            Shared::Text(text) => {
-                if mac::set_clipboard(&text).await.is_ok() {
-                    // Ours, so the poll doesn't send it straight back.
-                    clip.changed(text);
-                    mac::notify(&format!("Text from {}", d.name), "Copied. Paste it anywhere.").await;
-                }
-            }
-            Shared::Nothing => {}
-        },
-        SHARE_UPDATE => {}
-        other => tracing::debug!("{}: nothing here for {other}", d.name),
+        });
     }
-    Vec::new()
+    out.send
 }
 
 #[cfg(test)]

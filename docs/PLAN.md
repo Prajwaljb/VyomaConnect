@@ -434,9 +434,13 @@ Progress (2026-11-19):
    Windows too) and `engine::mousepad` (the touchpad, keyboard and live-screen touches read once, in
    the phone's terms: buttons, named keys, the phone's modifiers, shortcuts by character, text; each
    side maps them to its own key codes, Linux through the layout). Linux, the Mac and Windows all use
-   both; each side's own input tests pass unchanged on top. Next: clipboard and share (the file's
-   landing and its notifications), notifications, MPRIS and volume, run command, telephony,
-   presenter, messages.
+   both; each side's own input tests pass unchanged on top. Then the clipboard from the phone and
+   shares: `stock` copies (the `Desk`'s clipboard), opens web links, offers or copies shared text
+   (Linux a Copy button, the Mac and Windows copy at once), and hands files to the side to fetch
+   (`stock::fetch` into Downloads); `Arrivals` counts each phone's batch, so the activity log and
+   the Mac's and Windows' notification say a batch once it's all in ("2 of 3 files are in
+   Downloads") instead of a line per file. Next: notifications, MPRIS and volume, run command,
+   telephony, presenter, messages.
 4. Hyprland and Windows were taken first (user, 2026-11-19); then the window's method table, then
    probing per capability and This PC's report.
 
@@ -579,8 +583,9 @@ build, headless Xvfb display, private ports and pipe) and next on GitHub's runne
   processor scales the duplicated desktop and makes NV12 (BT.601, video range), the pointer drawn
   with GDI on a copy on the card; only the NV12 picture is read back (3 MB at 1080p instead of the
   desktop's BGRA, and no per-pixel pass on the CPU). A turned display, a driver without a video
-  processor (Wine), or one that fails mid-stream goes through the CPU as before. Its test runs on
-  Windows' software card (WARP) on CI; Wine skips it.
+  processor (Wine), or one that fails mid-stream goes through the CPU as before. Untested: GitHub's
+  runners have only Windows' software card, which has no video processor (the test checks nothing
+  there), and Wine's claims one it can't make; it waits for a PC with a graphics card.
 - Next: the NV12 picture handed to the hardware encoder as a texture (no read-back at all; needs the
   encoder's Direct3D manager), the mirror drawn with Direct3D if GDI's scaling proves slow.
 

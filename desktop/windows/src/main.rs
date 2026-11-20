@@ -105,7 +105,7 @@ mod agent {
     use vyoma_core::messages::{self, Store};
     use vyoma_core::permits::{self, Permit, Permits};
     use vyoma_core::release::REPO;
-    use vyoma_core::share::{self, SHARE, SHARE_UPDATE, Shared};
+    use vyoma_core::share::{self, SHARE, SHARE_UPDATE};
     use vyoma_core::telephony;
     use vyoma_core::trust::TrustStore;
     use vyoma_engine::session::{Host, Phone, phone_name};
@@ -379,6 +379,7 @@ mod agent {
         // Answers to the pairing questions on screen: the phone, the code asked about, yes or no.
         let (answers_tx, mut answers) = mpsc::unbounded_channel::<(String, String, bool)>();
         let mut ringer = win::Ringer::default();
+        let arrivals = Arc::new(stock::Arrivals::default());
 
         loop {
             tokio::select! {
@@ -548,7 +549,7 @@ mod agent {
                                     }
                                 }
                                 _ => {
-                                    for reply in on_packet(&id, d, &packet, from, &me, &mut clip, &mut ringer, &activity).await {
+                                    for reply in on_packet(&id, d, &packet, from, &me, &mut clip, &mut ringer, &activity, &arrivals).await {
                                         send(&id, reply);
                                     }
                                 }
@@ -1307,63 +1308,43 @@ mod agent {
             // Windows can be locked from outside, never unlocked.
             lock.then(win::lock)
         }
+
+        async fn copy(&mut self, text: &str) -> Result<()> {
+            win::set_clipboard(text)
+        }
+
+        async fn open_link(&mut self, url: &str) {
+            if win::openable(url) {
+                win::open(url);
+            }
+        }
     }
 
     /// Handles one packet from a paired device; what to send back.
     #[allow(clippy::too_many_arguments)]
-    async fn on_packet(id: &str, d: &mut Device, p: &Value, from: IpAddr, me: &Arc<Identity>, clip: &mut Clipboard, ringer: &mut win::Ringer, activity: &Arc<Activity>) -> Vec<Value> {
+    async fn on_packet(id: &str, d: &mut Device, p: &Value, from: IpAddr, me: &Arc<Identity>, clip: &mut Clipboard, ringer: &mut win::Ringer, activity: &Arc<Activity>, arrivals: &Arc<stock::Arrivals>) -> Vec<Value> {
         let kind = p["type"].as_str().unwrap_or("");
-        if stock::handles(kind) {
-            return stock::on_packet(&mut WinDesk { ringer }, &d.name, &mut d.battery, p).await;
+        if !stock::handles(kind) {
+            tracing::debug!("{}: nothing here for {kind}", d.name);
+            return Vec::new();
         }
-        match kind {
-            CLIPBOARD | CLIPBOARD_CONNECT => {
-                if let Some(text) = clip.received(p)
-                    && let Err(e) = win::set_clipboard(&text)
-                {
-                    tracing::warn!("couldn't set the clipboard: {e:#}");
+        let mut phone = stock::Phone { name: d.name.clone(), battery: d.battery };
+        let out = stock::on_packet(&mut WinDesk { ringer }, &mut phone, clip, p).await;
+        d.battery = phone.battery;
+        if let Some(incoming) = out.fetch {
+            let (me, cert, phone, packet, activity, arrivals, id) = (me.clone(), d.cert.clone(), d.name.clone(), p.clone(), activity.clone(), arrivals.clone(), id.to_owned());
+            let from = d.remote.unwrap_or(from);
+            tokio::spawn(async move {
+                let landed = stock::fetch(&me, &cert, from, &packet, &win::downloads(), incoming, &arrivals, &id, &phone, "this PC").await;
+                if let Some(text) = landed.activity.clone() {
+                    activity.add(&id, &phone, "share", text);
                 }
-            }
-            SHARE => match share::classify(p) {
-                Shared::File { name, .. } => {
-                    let (me, cert, phone, packet, activity, id) = (me.clone(), d.cert.clone(), d.name.clone(), p.clone(), activity.clone(), id.to_owned());
-                    let from = d.remote.unwrap_or(from);
-                    tokio::spawn(async move {
-                        match share::receive(&me, &cert, from, &packet, &win::downloads()).await {
-                            Ok(path) => {
-                                let saved = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(name);
-                                activity.add(&id, &phone, "share", format!("Shared \u{201c}{saved}\u{201d} with this PC"));
-                                tray::notify(&format!("From {phone}"), &format!("{saved} is in Downloads"));
-                            }
-                            Err(e) => {
-                                tracing::warn!("{name} from {phone}: {e:#}");
-                                tray::notify(&format!("{name} didn't arrive"), "The phone stopped sending it. Try again.");
-                            }
-                        }
-                    });
+                if let Some((title, body)) = landed.summary() {
+                    tray::notify(&title, &body);
                 }
-                Shared::Url(url) => {
-                    if win::openable(&url) {
-                        win::open(&url);
-                    } else {
-                        // Not a web page: on the clipboard instead, for the person to decide.
-                        let _ = win::set_clipboard(&url);
-                        tray::notify(&format!("Link from {}", d.name), "Copied. It isn't a web page, so it wasn't opened.");
-                    }
-                }
-                Shared::Text(text) => {
-                    if win::set_clipboard(&text).is_ok() {
-                        // Ours, so the poll doesn't send it straight back.
-                        clip.changed(text);
-                        tray::notify(&format!("Text from {}", d.name), "Copied. Paste it anywhere.");
-                    }
-                }
-                Shared::Nothing => {}
-            },
-            SHARE_UPDATE => {}
-            other => tracing::debug!("{}: nothing here for {other}", d.name),
+            });
         }
-        Vec::new()
+        out.send
     }
 
     #[cfg(test)]
