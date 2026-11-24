@@ -21,7 +21,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const BUS = 'dev.vyoma.Shell';
 const PATH = '/dev/vyoma/Shell';
-const VERSION = 4;
+const VERSION = 5;
 
 const IFACE = `<node>
   <interface name="dev.vyoma.Shell1">
@@ -37,6 +37,7 @@ const IFACE = `<node>
     </method>
     <method name="Screenshot"><arg type="ay" direction="out"/></method>
     <method name="Screens"><arg type="a(ii)" direction="out"/></method>
+    <method name="Wake"/>
     <method name="AskReply">
       <arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="s" direction="in"/>
       <arg type="s" direction="out"/>
@@ -128,6 +129,15 @@ export default class VyomaExtension extends Extension {
             const text = await new Promise(resolve =>
                 this._clipboard.get_text(St.ClipboardType.CLIPBOARD, (_c, t) => resolve(t ?? '')));
             return new GLib.Variant('(s)', [text]);
+        });
+    }
+
+    // A screen cast gets a picture only when the stage repaints, so on a still desktop the phone's
+    // view stayed empty: one full repaint gives the stream its first picture.
+    WakeAsync(_params, invocation) {
+        this._answer(invocation, async () => {
+            global.stage.queue_redraw();
+            return null;
         });
     }
 

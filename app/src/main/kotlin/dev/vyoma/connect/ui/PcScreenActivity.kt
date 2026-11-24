@@ -602,7 +602,22 @@ private fun ScreenView(
                 Text(phase.reason, color = Color.White, fontSize = 15.sp, lineHeight = 21.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 48.dp))
                 PillButton("Try again", onClick = onRetry)
             }
-            is PcScreenActivity.Phase.Live -> Unit
+            is PcScreenActivity.Phase.Live -> if (!phase.showing) {
+                // GNOME and Hyprland send a picture only when something on the screen changes; the PC
+                // nudges them, but without Vyoma's GNOME extension a still desktop stays dark.
+                var slow by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) { delay(4_000); slow = true }
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    CircularProgressIndicator(color = Color.White, strokeWidth = 2.5.dp, modifier = Modifier.size(30.dp))
+                    if (slow) Text(
+                        "Waiting for the PC's picture…\nMove the mouse on the PC if it stays dark.",
+                        color = Color.White.copy(alpha = 0.75f),
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
         }
 
         val shown = chrome || live?.showing != true
