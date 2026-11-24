@@ -173,7 +173,7 @@ pub fn local_addresses() -> Vec<std::net::IpAddr> {
 /// Windows names its virtual adapters in words: Hyper-V's and WSL's "vEthernet (...)", VirtualBox's
 /// and VMware's, and VPNs' (their descriptions say TAP, WireGuard, Tailscale, ZeroTier...).
 #[cfg_attr(not(windows), allow(dead_code))]
-fn windows_adapter_skipped(name: &str, description: &str) -> bool {
+pub(crate) fn windows_adapter_skipped(name: &str, description: &str) -> bool {
     const WORDS: &[&str] = &["vethernet", "hyper-v", "virtualbox", "vmware", "virtual", "tap-", "wireguard", "tailscale", "zerotier", "openvpn", "wintun", "vpn", "bluetooth"];
     let all = format!("{name} {description}").to_lowercase();
     WORDS.iter().any(|w| all.contains(w))
@@ -182,7 +182,7 @@ fn windows_adapter_skipped(name: &str, description: &str) -> bool {
 pub const MAX_ADDRESSES: usize = 3;
 /// Interfaces of containers, VMs and VPNs, by name.
 #[cfg(unix)]
-const SKIP: &[&str] = &["docker", "br-", "veth", "virbr", "vmnet", "vboxnet", "lxc", "lxd", "podman", "cni", "flannel", "tun", "tap", "wg", "tailscale", "zt"];
+pub(crate) const SKIP: &[&str] = &["docker", "br-", "veth", "virbr", "vmnet", "vboxnet", "lxc", "lxd", "podman", "cni", "flannel", "tun", "tap", "wg", "tailscale", "zt"];
 
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()

@@ -59,13 +59,23 @@ unsafe extern "C" {
     fn xkb_keysym_get_name(keysym: u32, buffer: *mut libc::c_char, size: usize) -> libc::c_int;
 }
 
-/// Whether this session's compositor offers a virtual pointer and keyboard. Asked each time an
-/// input session opens (cheap: one round trip), so it follows the session it's in.
+/// Whether this session's compositor offers a virtual pointer and keyboard. Looked at again after
+/// a few seconds, so it follows the session it's in; in between the answer is kept, as one cast
+/// asks several times and each look is a new Wayland connection, made on the caller's thread.
 pub fn offered() -> bool {
+    static SEEN: std::sync::Mutex<Option<(std::time::Instant, bool)>> = std::sync::Mutex::new(None);
     if crate::x11::active() {
         return false;
     }
-    globals().is_some_and(|names| names.iter().any(|n| n == POINTER) && names.iter().any(|n| n == KEYBOARD))
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, answer)) = *seen
+        && at.elapsed() < std::time::Duration::from_secs(5)
+    {
+        return answer;
+    }
+    let answer = globals().is_some_and(|names| names.iter().any(|n| n == POINTER) && names.iter().any(|n| n == KEYBOARD));
+    *seen = Some((std::time::Instant::now(), answer));
+    answer
 }
 
 /// The protocols this session's Wayland compositor offers (one round trip); None off Wayland.

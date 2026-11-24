@@ -251,6 +251,12 @@ pub async fn wake() -> Result<()> {
         .call_method(Some("org.freedesktop.login1"), "/org/freedesktop/login1/session/auto", Some("org.freedesktop.login1.Session"), "Unlock", &())
         .await
         .context("logind refused to unlock")?;
+    // Hyprland's lock screens don't all follow logind (hyprlock without hypridle's unlock_cmd).
+    if crate::hypr::active()
+        && let Err(e) = crate::hypr::follow_logind(false).await
+    {
+        warn!("{e:#}");
+    }
     Ok(())
 }
 

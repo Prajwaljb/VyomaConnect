@@ -94,6 +94,9 @@ pub fn on_ac() -> Option<bool> {
 }
 
 /// Locks the session, as Windows+L does.
+/// Why the phone's Unlock does nothing here (Windows lets no app unlock it).
+pub const CANT_UNLOCK: &str = "Windows doesn't let apps unlock it. Unlock it at the PC.";
+
 pub fn lock() -> Result<()> {
     // SAFETY: no arguments; it only asks Windows to lock.
     if unsafe { windows_sys::Win32::System::Shutdown::LockWorkStation() } == 0 {

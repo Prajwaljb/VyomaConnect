@@ -2,6 +2,7 @@
 //! standalone desktop app (`desktop/daemon`) both serve phones with [session::serve].
 
 pub mod accessory;
+pub mod addresses;
 pub mod activity;
 pub mod away;
 pub mod bluetooth;
@@ -22,6 +23,7 @@ pub mod permits;
 pub mod platform;
 pub mod pointer;
 pub mod portal;
+pub mod run;
 pub mod screen;
 pub mod screenshot;
 pub mod session;

@@ -85,7 +85,7 @@ fn current() -> Option<PathBuf> {
 }
 
 fn gsetting(schema: &str, key: &str) -> Option<String> {
-    let out = std::process::Command::new("gsettings").args(["get", schema, key]).output().ok()?;
+    let out = crate::run::output(std::process::Command::new("gsettings").args(["get", schema, key]), crate::run::QUICK)?;
     let v = String::from_utf8_lossy(&out.stdout).trim().trim_matches('\'').to_owned();
     (out.status.success() && !v.is_empty()).then_some(v)
 }
@@ -97,11 +97,11 @@ fn from_uri(uri: &str) -> Option<PathBuf> {
 
 /// Xfce's: the first monitor's first workspace's `last-image` in xfconf.
 fn xfce() -> Option<PathBuf> {
-    let list = std::process::Command::new("xfconf-query").args(["-c", "xfce4-desktop", "-l"]).output().ok()?;
+    let list = crate::run::output(std::process::Command::new("xfconf-query").args(["-c", "xfce4-desktop", "-l"]), crate::run::QUICK)?;
     let mut props: Vec<String> = String::from_utf8_lossy(&list.stdout).lines().filter(|l| l.ends_with("/last-image")).map(str::to_owned).collect();
     props.sort_by_key(|p| (!p.contains("workspace0"), p.clone()));
     let prop = props.first()?;
-    let out = std::process::Command::new("xfconf-query").args(["-c", "xfce4-desktop", "-p", prop]).output().ok()?;
+    let out = crate::run::output(std::process::Command::new("xfconf-query").args(["-c", "xfce4-desktop", "-p", prop]), crate::run::QUICK)?;
     resolve(Path::new(String::from_utf8_lossy(&out.stdout).trim()))
 }
 

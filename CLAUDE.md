@@ -66,7 +66,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   bus as `dev.vyoma.Shell1` (client: `companion/src/shell.rs`): the clipboard (GNOME has no data-control protocol;
   `companion/src/clip.rs` picks it or wl-clipboard), the presenter dot (Cairo, drawn as presenter.rs draws it), the
   Overview steps and workspace switch, the screenshot (GNOME lets only its own parts capture silently; Spectacle on
-  Plasma), screen sizes, the notification Reply dialog (GNOME has no inline reply; zenity on other such desktops), and the volume/brightness pop-up for changes the phone makes (`ShowOsd`; GNOME shows it only for its own keys).
+  Plasma), screen sizes, the notification Reply dialog (GNOME has no inline reply; zenity on other such desktops), the volume/brightness pop-up for changes the phone makes (`ShowOsd`; GNOME shows it only for its own keys), and `Wake` (a stage repaint: Mutter's cast, like Hyprland's, sends nothing on a still desktop, so `screen::wake` asks until the first picture).
   Bump its `VERSION` with `shell::VERSION` on any change: a running older one stays until the next login. It
   answers only vyoma-desktop/vyoma-companion (the caller's /proc/<pid>/exe). `install.sh` copies it (packaged:
   /usr/share/gnome-shell/extensions), enables it with gsettings and turns GSConnect off (back on with `--undo`);
@@ -107,7 +107,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   `pgrep -x kwin_wayland` to stop it (the real KWin matches): kill by pid.
 - `desktop/windows` (`vyoma-windows`, `docs/PLAN.md` section 11, Windows): the PC side on Windows on core and the engine
   (`platform.rs` `Windows::offers`): a notification-area agent (`tray.rs`: icon, Open/Quit, balloons where there are no toasts, the session
-  ending), one per session (`system.rs`: named mutex, Run-key `--install`, power, wake; `--quit` closes the window and stops the agent
+  ending, the session's lock (WTS notifications, sent to phones; Unlock is refused with the reason: Windows lets no app unlock it)), one per session (`system.rs`: named mutex, Run-key `--install`, power, wake; `--quit` closes the window and stops the agent
   for the installer), the window's named pipe `\\.\pipe\vyoma-<user>` (`control.rs`, this user's SID only, no remote clients; the window's
   `socket.rs` opens it as a file), stock plugins (`win.rs`: clipboard, battery, lock, Downloads, only http(s) links opened, HKCU registry
   helpers; `input.rs`: SendInput, the live screen's absolute touches), media (`media.rs`: Windows' media controls as MPRIS players, covers
@@ -179,7 +179,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   Mac: `.github/workflows/macos.yml` builds and tests core, mac and the window on GitHub's runners and keeps Vyoma.app
   (universal) as an artifact; it compiles and tests on Linux too (`cd desktop/mac && cargo test --release`). Not yet run on a Mac.
 - `desktop/icon/gen.py`: Vyoma's icon ("Moon": the PC as a white glass orb, the phone as a small orb in a gap of one ring, on a sky tile) for every place from one geometry: Android adaptive layers, monochrome, notification glyph, splash; the desktop's `dist/vyoma.svg` (installed into hicolor) and the window's `ui/icons/vyoma.svg`. Run `python3 desktop/icon/gen.py .` from the repo root after changing it.
-- `desktop/companion`: lib + bin (the session loop is the engine's, `session.rs` re-exports it; `platform.rs` is Linux's side); the bin is the Rust daemon beside stock kdeconnectd, built on `vyoma-core`. Dials only phones kdeconnectd trusts (mDNS), pairs with
+- `desktop/companion`: lib + bin (the session loop is the engine's, `session.rs` re-exports it; `platform.rs` is Linux's side; `run::output` runs a helper program (gsettings, hyprctl, swww...) with a deadline, for anything asked often or from a watch; the live screen (`screen.rs`) encodes with VA-API where a test picture works, else x264/OpenH264 at up to 60 fps, and offers the compositor its rate, then 60, 30, then none (Mutter caps at the refresh rate: a fixed 120 failed every GNOME cast); test it headless on GNOME as described under gnome-extension, accepting the portal dialog with Mutter's own RemoteDesktop D-Bus API); the bin is the Rust daemon beside stock kdeconnectd, built on `vyoma-core`. Dials only phones kdeconnectd trusts (mDNS), pairs with
   no prompt via `CompanionProof` (signed with kdeconnectd's key; phone verifies against the pinned PC cert), speaks
   `vyoma.*` packets. Phone folds it into its PC (`DeviceIdentity.companionOf`, `DeviceState.isCompanion`).
   Also watches sysfs for an adb USB interface and, for phones with Vyoma installed, runs `adb reverse tcp:1765 tcp:1716`
@@ -214,6 +214,12 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   `crypto/QrInvite.kt`) dials those addresses, checks the fingerprint and sends the pair request with `vyomaInvite` =
   HMAC over both certs; the hub pairs on it with no prompt (one phone per secret), else prompts as usual.
   `vyoma://pair?...` opens the scanner too, asking first. Live check: `QrPairLiveTest` with `VYOMA_QR_CODE` (it unpairs after).
+- The phone's hotspot (or USB/Bluetooth tethering) is a local network with no Wi-Fi: `AndroidNetwork.hosting()`
+  (an up interface with a broadcast address no Android network owns), followed by `watchHosting`; outdoor mode
+  doesn't stop while it's on, and the doctor says "isn't on this phone's hotspot". `route()` refuses a private
+  address on no local network (it went out over mobile data, waking the modem each retry), unless a VPN is up. Every PC side
+  announces again on a new address or after sleep (`vyoma_core::networks::follow`; Linux's daemon by netlink,
+  `companion/src/addresses.rs`) and to each interface's own broadcast (`networks::broadcasts`).
 - Connection doctor: a PC away on the phone (Home's card, the Connection page) runs `service/ConnectionDoctor.kt`: Wi-Fi,
   VPN, local network permission, the PC's last address on this subnet, and a TCP knock on it (answers / refused = Vyoma
   not running / instant "no route" = its firewall / silence), each cause in plain words with its fix. The PC's Firewall
@@ -224,6 +230,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   the draft), then the PKGBUILD's pkgver and sha256 (`makepkg -g`) and `makepkg --printsrcinfo > .SRCINFO`.
 
 ## Conventions
+- Every PC program calls `vyoma_core::panics::log()` after setting up its log, and its default filter names `vyoma_engine` (the vyoma.* session logs there; without it a failed cast left nothing in the journal).
 - Protocol details and extension rules: the `protocol-ref` skill. Design rules: the `oneui-design` skill.
 - Device/plugin state is mutated only on the device's serial dispatcher; never block in `Plugin.onPacket`.
 - Widgets and tiles never do network I/O; they read cached state and send intents to the service.

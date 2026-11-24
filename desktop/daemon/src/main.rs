@@ -759,8 +759,11 @@ fn import_kde(dir: &std::path::Path) -> Result<()> {
 #[tokio::main]
 async fn daemon(dir: PathBuf) -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "vyoma_desktop=info,vyoma_core=info,vyoma_companion=info".into()))
+        // The engine too (the vyoma.* session: casts, files, controller...), and other crates' errors:
+        // without it a failed screen cast left nothing in the journal.
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "error,vyoma_desktop=info,vyoma_core=info,vyoma_companion=info,vyoma_engine=info".into()))
         .init();
+    vyoma_core::panics::log();
 
     // The companion's features keep their tokens and caches here too.
     vyoma_core::identity::use_dir(dir.clone());
@@ -993,10 +996,32 @@ async fn daemon(dir: PathBuf) -> Result<()> {
 
     tokio::spawn(window::follow(desk.window_open.clone()));
     let (power_tx, mut power_changes) = mpsc::unbounded_channel();
-    tokio::spawn(power::watch(power_tx));
+    tokio::spawn(power::watch(power_tx.clone()));
+    // Joined a network (the phone's hotspot, another Wi-Fi): announced there at once, as after
+    // waking, instead of waiting for phones to look again.
+    let (gained_tx, mut gained) = mpsc::unbounded_channel();
+    match vyoma_companion::addresses::watch(gained_tx) {
+        Ok(()) => {
+            tokio::spawn(async move {
+                while gained.recv().await.is_some() {
+                    tracing::info!("on a new network: telling the phones");
+                    if power_tx.send(power::Change::Back).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+        Err(e) => tracing::warn!("phones find this PC on a new network only when they look again: {e:#}"),
+    }
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     // Here: to the network, and straight to each phone (a sleeping one's Wi-Fi drops broadcasts).
-    let everywhere = |desk: &Desk| [targets.clone(), desk.addresses.targets(UDP_PORT)].concat();
+    // Each interface's own broadcast too (looked up each time: interfaces come and go), unless
+    // VYOMA_ANNOUNCE names the targets.
+    let only_named = std::env::var_os("VYOMA_ANNOUNCE").is_some();
+    let everywhere = |desk: &Desk| {
+        let own: Vec<SocketAddr> = if only_named { Vec::new() } else { vyoma_core::networks::broadcasts().into_iter().map(|b| SocketAddr::from((b, UDP_PORT))).collect() };
+        [targets.clone(), own, desk.addresses.targets(UDP_PORT)].concat()
+    };
     lan.announce(&everywhere(&desk)).await?;
     tracing::info!("{} is up as {}", env!("CARGO_PKG_NAME"), me.device_id);
     phonefiles::tidy(&dir).await;
@@ -2016,10 +2041,8 @@ fn gnome_extension(running: Option<u32>) -> serde_json::Value {
         "Updated. Log out and back in once to finish: until then, the newest touchpad gestures wait."
     } else if ![menus::data_home(), PathBuf::from("/usr/share")].into_iter().map(|d| d.join("gnome-shell/extensions").join(UUID)).any(|d| d.join("extension.js").exists()) {
         "Not installed. Reinstall Vyoma to add it: clipboard sync and the presenter's pointer need it."
-    } else if std::process::Command::new("gsettings")
-        .args(["get", "org.gnome.shell", "enabled-extensions"])
-        .output()
-        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("'{UUID}'")))
+    } else if vyoma_companion::run::output(std::process::Command::new("gsettings").args(["get", "org.gnome.shell", "enabled-extensions"]), vyoma_companion::run::QUICK)
+        .is_some_and(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("'{UUID}'")))
     {
         "Log out and back in once to turn it on: clipboard sync and the presenter's pointer need it."
     } else {

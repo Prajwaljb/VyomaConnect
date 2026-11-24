@@ -32,6 +32,8 @@ pub enum Said {
     Quit,
     /// Windows is shutting down, restarting or signing out.
     Ending,
+    /// The session was locked (true) or unlocked.
+    Locked(bool),
 }
 
 /// The hidden window's class (Vyoma's window shares its title, "Vyoma").
@@ -44,6 +46,49 @@ const OPEN: usize = 1;
 const QUIT: usize = 2;
 /// Windows waits for WM_ENDSESSION's answer; this long lets the agent tell phones it's leaving.
 const GOODBYE: Duration = Duration::from_millis(600);
+/// The session's lock changes (WTSRegisterSessionNotification): WM_WTSSESSION_CHANGE's lock and unlock.
+const WM_WTSSESSION_CHANGE: u32 = 0x02B1;
+const WTS_SESSION_LOCK: usize = 7;
+const WTS_SESSION_UNLOCK: usize = 8;
+/// The lock as last known: 0 unknown, 1 unlocked, 2 locked.
+static LOCK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Whether the session is locked, once it's known (asked as the agent starts, then followed).
+pub fn locked() -> Option<bool> {
+    match LOCK.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => Some(false),
+        2 => Some(true),
+        _ => None,
+    }
+}
+
+fn set_lock(locked: bool) {
+    LOCK.store(if locked { 2 } else { 1 }, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The session's lock now, from Windows' session information (Windows 10 and later report it
+/// the right way round; 7 and Server 2008 R2 had it inverted). None where Windows won't say (Wine).
+fn session_locked() -> Option<bool> {
+    use windows_sys::Win32::System::RemoteDesktop::{
+        WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTS_SESSIONSTATE_LOCK, WTS_SESSIONSTATE_UNLOCK, WTSFreeMemory, WTSINFOEXW, WTSQuerySessionInformationW,
+        WTSSessionInfoEx,
+    };
+    let (mut buf, mut len) = (std::ptr::null_mut::<u16>(), 0u32);
+    // SAFETY: Windows allocates the buffer, read as its WTSINFOEXW and freed with WTSFreeMemory.
+    unsafe {
+        if WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTSSessionInfoEx, &mut buf, &mut len) == 0 || buf.is_null() {
+            return None;
+        }
+        let info = &*(buf as *const WTSINFOEXW);
+        let flags = if info.Level == 1 && len as usize >= std::mem::size_of::<WTSINFOEXW>() { Some(info.Data.WTSInfoExLevel1.SessionFlags as u32) } else { None };
+        WTSFreeMemory(buf.cast());
+        match flags {
+            Some(WTS_SESSIONSTATE_LOCK) => Some(true),
+            Some(WTS_SESSIONSTATE_UNLOCK) => Some(false),
+            _ => None,
+        }
+    }
+}
 
 struct State {
     said: mpsc::UnboundedSender<Said>,
@@ -139,6 +184,13 @@ fn make_window() -> Option<HWND> {
         RegisterClassExW(&wc);
         let title = wide("Vyoma");
         let hwnd = CreateWindowExW(0, class.as_ptr(), title.as_ptr(), 0, CW_USEDEFAULT, CW_USEDEFAULT, 0, 0, std::ptr::null_mut(), std::ptr::null_mut(), instance, std::ptr::null());
+        if !hwnd.is_null() {
+            // Lock and unlock come to this window from now on; what it is now, asked once.
+            windows_sys::Win32::System::RemoteDesktop::WTSRegisterSessionNotification(hwnd, windows_sys::Win32::System::RemoteDesktop::NOTIFY_FOR_THIS_SESSION);
+            if let Some(locked) = session_locked() {
+                set_lock(locked);
+            }
+        }
         (!hwnd.is_null()).then_some(hwnd)
     }
 }
@@ -240,6 +292,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             },
             _ => {}
         },
+        WM_WTSSESSION_CHANGE if matches!(wparam, WTS_SESSION_LOCK | WTS_SESSION_UNLOCK) => {
+            let locked = wparam == WTS_SESSION_LOCK;
+            set_lock(locked);
+            say(Said::Locked(locked));
+        }
         WM_QUERYENDSESSION => return 1,
         WM_ENDSESSION => {
             if wparam != 0 {
