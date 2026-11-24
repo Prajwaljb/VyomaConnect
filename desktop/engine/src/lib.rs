@@ -11,6 +11,8 @@ pub mod dispatch;
 pub mod media;
 pub mod mousepad;
 pub mod notifications;
+#[cfg(feature = "phone-files")]
+pub mod phonefiles;
 pub mod platform;
 pub mod session;
 pub mod stock;

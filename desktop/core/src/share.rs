@@ -50,7 +50,8 @@ pub fn classify(p: &Value) -> Shared {
 /// A name from a device as a plain file name here: no folders, not hidden, not too long.
 pub fn safe_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
-    let clean: String = base.chars().filter(|c| !c.is_control()).collect();
+    // Windows refuses these in a name (a phone's file may carry them: "notes: 2026.txt").
+    let clean: String = base.chars().filter(|c| !c.is_control()).map(|c| if cfg!(windows) && r#":*?"<>|"#.contains(c) { '_' } else { c }).collect();
     let mut clean = clean.trim().trim_start_matches('.').trim().to_owned();
     while clean.len() > 200 {
         clean.pop();
@@ -83,6 +84,23 @@ pub async fn receive(me: &Identity, pinned: &[u8], from: std::net::IpAddr, p: &V
     let file = file.into_std().await;
     if let Some(ms) = p["body"]["lastModified"].as_u64().filter(|ms| *ms > 0) {
         let _ = file.set_modified(UNIX_EPOCH + Duration::from_millis(ms));
+    }
+    drop(file);
+    settle(&part.0, dir, &name).await
+}
+
+/// Reads [from] to its end into a free name in [dir] made from [name] (as a received share lands:
+/// a hidden part file first, never over another file); where it landed.
+pub async fn land<R: tokio::io::AsyncRead + Unpin>(from: &mut R, dir: &Path, name: &str, modified: Option<std::time::SystemTime>) -> Result<PathBuf> {
+    let name = safe_name(name);
+    tokio::fs::create_dir_all(dir).await.with_context(|| format!("couldn't make {}", dir.display()))?;
+    let part = Part(dir.join(format!(".{name}.{}-{}.vyoma-part", std::process::id(), next())));
+    let mut file = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&part.0).await?;
+    tokio::io::copy(from, &mut file).await?;
+    file.flush().await?;
+    let file = file.into_std().await;
+    if let Some(t) = modified {
+        let _ = file.set_modified(t);
     }
     drop(file);
     settle(&part.0, dir, &name).await
@@ -309,6 +327,9 @@ mod tests {
         assert_eq!(safe_name("C:\\x\\a.txt"), "a.txt");
         assert_eq!(safe_name(".."), "file");
         assert_eq!(safe_name("a\nb\u{7}.txt"), "ab.txt");
+        if cfg!(windows) {
+            assert_eq!(safe_name("notes: a?.txt"), "notes_ a_.txt", "what Windows refuses in a name");
+        }
         assert!(safe_name(&"é".repeat(300)).len() <= 200);
     }
 
@@ -336,6 +357,13 @@ mod tests {
         assert_eq!(got, dir.join("a (2).txt"));
         assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "old");
         assert_eq!(std::fs::read_to_string(got).unwrap(), "new");
+        // A file read from elsewhere (the phone's files) lands the same way, with its time.
+        let when = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let landed = land(&mut &b"fetched"[..], &dir, "../a.txt", Some(when)).await.unwrap();
+        assert_eq!(landed, dir.join("a (3).txt"));
+        assert_eq!(std::fs::read_to_string(&landed).unwrap(), "fetched");
+        assert_eq!(std::fs::metadata(&landed).unwrap().modified().unwrap(), when);
+        assert!(!std::fs::read_dir(&dir).unwrap().flatten().any(|e| e.file_name().to_string_lossy().ends_with(".vyoma-part")), "no part file left");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

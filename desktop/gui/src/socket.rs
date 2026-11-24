@@ -19,11 +19,13 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use crate::daemon::{ActivityEntry, CommandData, Daemon, Event, Found, Health, Inbox, People, Permission, PhoneData, ThreadData};
+use crate::daemon::{ActivityEntry, CommandData, Daemon, Event, Folder, Found, Health, Inbox, People, Permission, PhoneData, ThreadData};
 
 const NOT_RUNNING: &str = "Vyoma isn't running here right now. It restarts by itself; if it doesn't, use Start Vyoma";
 /// A call the daemon takes longer than this over has hung.
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// Copying the phone's files: a long video over Wi-Fi takes a while.
+const COPY_TIMEOUT: Duration = Duration::from_secs(3600);
 
 #[cfg(windows)]
 type Stream = std::fs::File;
@@ -50,12 +52,12 @@ fn open(path: &std::path::Path) -> std::io::Result<Stream> {
 
 /// A call that takes longer than [CALL_TIMEOUT] has hung (Windows pipes opened as files have no
 /// read timeout: there the agent's own answers bound it).
-fn time_limit(stream: &Stream) -> std::io::Result<()> {
+fn time_limit(stream: &Stream, limit: Duration) -> std::io::Result<()> {
     #[cfg(unix)]
-    return stream.set_read_timeout(Some(CALL_TIMEOUT));
+    return stream.set_read_timeout(Some(limit));
     #[cfg(windows)]
     {
-        let _ = (stream, CALL_TIMEOUT);
+        let _ = (stream, limit);
         Ok(())
     }
 }
@@ -100,8 +102,12 @@ impl SocketDaemon {
     }
 
     fn call(&self, method: &str, args: Value) -> Result<Value> {
+        self.call_within(method, args, CALL_TIMEOUT)
+    }
+
+    fn call_within(&self, method: &str, args: Value, limit: Duration) -> Result<Value> {
         let mut stream = open(&self.path).map_err(|_| anyhow!(NOT_RUNNING))?;
-        time_limit(&stream)?;
+        time_limit(&stream, limit)?;
         writeln!(stream, "{}", json!({ "method": method, "args": args }))?;
         let mut line = String::new();
         BufReader::new(stream).read_line(&mut line).map_err(|_| anyhow!("Vyoma didn't answer in time. Try again"))?;
@@ -269,6 +275,27 @@ impl Daemon for SocketDaemon {
 
     fn call_number(&self, id: &str, number: &str) -> Result<()> {
         self.unit("Call", json!([id, number]))
+    }
+
+    fn phone_files(&self, id: &str, path: Option<&str>) -> Result<Folder> {
+        // The first look asks the phone to start its server and signs in: longer than a plain call.
+        Ok(Folder::from_json(&self.call_within("PhoneFiles", json!([id, path]), Duration::from_secs(60))?))
+    }
+
+    fn fetch_phone_file(&self, id: &str, path: &str) -> Result<String> {
+        Ok(self.call_within("FetchPhoneFile", json!([id, path]), COPY_TIMEOUT)?.as_str().unwrap_or_default().to_owned())
+    }
+
+    fn put_phone_files(&self, id: &str, dir: &str, paths: Vec<String>) -> Result<u64> {
+        Ok(self.call_within("PutPhoneFiles", json!([id, dir, paths]), COPY_TIMEOUT)?.as_u64().unwrap_or(0))
+    }
+
+    fn new_phone_folder(&self, id: &str, path: &str) -> Result<()> {
+        self.call_within("NewPhoneFolder", json!([id, path]), Duration::from_secs(60)).map(drop)
+    }
+
+    fn delete_phone_file(&self, id: &str, path: &str) -> Result<()> {
+        self.call_within("DeletePhoneFile", json!([id, path]), COPY_TIMEOUT).map(drop)
     }
 
     fn next_event(&self) -> Result<Event> {

@@ -146,6 +146,9 @@ pub fn run(path: &str, dark: bool, plain: bool, scene: &str, size: Option<(u32, 
     if scene.starts_with("messages") {
         messages(&ui, scene, noon);
     }
+    if scene.starts_with("files") {
+        files(&ui, scene, noon);
+    }
     if scene == "notice" {
         ui.set_notice("Opening the phone's files…".into());
         ui.set_notice_on(true);
@@ -247,6 +250,60 @@ fn health(missing: bool) -> Health {
 }
 
 /// Made-up texts: messages (the list), messages-thread, messages-silent, messages-loading, and the phone's texts
+/// The phone's files (the Mac and Windows): files, files-loading, files-error, files-busy,
+/// files-delete, files-new, files-empty.
+fn files(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>) {
+    use crate::daemon::{FileEntry, Folder};
+    crate::files::wire(ui);
+    crate::files::start(ui, "a");
+    if scene == "files-loading" {
+        return;
+    }
+    if scene == "files-error" {
+        ui.set_files_error("Turn on \u{201c}Browse this phone from your PC\u{201d} in Vyoma's settings on the phone".into());
+        ui.set_files_state("error".into());
+        return;
+    }
+    let t = |mins_ago: i64| (noon - chrono::Duration::minutes(mins_ago)).timestamp();
+    let e = |name: &str, folder: bool, size: u64, mins: i64| FileEntry { name: name.into(), folder, size, modified: t(mins) };
+    let entries = if scene == "files-empty" {
+        vec![]
+    } else {
+        vec![
+            e("Camera", true, 0, 30),
+            e("Screenshots", true, 0, 60 * 26),
+            e("Trips 2026", true, 0, 60 * 24 * 40),
+            e("IMG_20261124_101532.jpg", false, 3_412_118, 45),
+            e("PXL_20261120_183005123.mp4", false, 148_200_000, 60 * 24 * 4),
+            e("Boarding pass, Bengaluru to Lisbon, 12 December.pdf", false, 212_400, 60 * 24 * 400),
+            e("notes.txt", false, 812, 60 * 24 * 9),
+        ]
+    };
+    let folder = Folder {
+        path: "/DCIM".into(),
+        name: "DCIM".into(),
+        parent: Some("/".into()),
+        roots: vec![("/".into(), "Internal storage".into())],
+        entries,
+    };
+    crate::files::show_folder(ui, &folder);
+    match scene {
+        "files-busy" => ui.set_files_busy("Copying PXL_20261120_183005123.mp4\u{2026}".into()),
+        "files-delete" => {
+            let list = ui.get_files_list();
+            if let Some(f) = slint::Model::row_data(&list, 0) {
+                ui.set_files_target(f);
+            }
+            ui.set_confirm_delete_file(true);
+        }
+        "files-new" => {
+            ui.set_new_folder_name("Trips 2027".into());
+            ui.set_naming_folder(true);
+        }
+        _ => {}
+    }
+}
+
 /// lock: messages-asking, messages-declined, messages-locked.
 fn messages(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>) {
     use crate::daemon::{Conversation, Inbox, TextData, ThreadData};

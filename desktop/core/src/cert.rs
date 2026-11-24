@@ -81,6 +81,43 @@ pub fn public_key(der: &[u8]) -> Option<&[u8]> {
     subject_and_key(der).map(|(_, key)| key.whole)
 }
 
+/// The certificate's RSA key as SSH writes it on the wire (`string "ssh-rsa", mpint e, mpint n`):
+/// a phone's SSH host key is its TLS key, so this is the only host key its file server may show.
+/// None if the key isn't RSA or doesn't read.
+pub fn ssh_rsa_key(der: &[u8]) -> Option<Vec<u8>> {
+    const RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
+    let (_, spki) = subject_and_key(der)?;
+    let (algorithm, rest) = element(spki.content).filter(|(e, _)| e.tag == SEQUENCE)?;
+    let (oid, _) = element(algorithm.content).filter(|(e, _)| e.tag == 0x06)?;
+    if oid.content != RSA {
+        return None;
+    }
+    // BIT STRING: no unused bits, then RSAPublicKey ::= SEQUENCE { modulus, publicExponent }.
+    let (bits, _) = element(rest).filter(|(e, _)| e.tag == 0x03)?;
+    let (&0, key) = bits.content.split_first()? else { return None };
+    let (key, _) = element(key).filter(|(e, _)| e.tag == SEQUENCE)?;
+    let (n, rest) = element(key.content).filter(|(e, _)| e.tag == 0x02)?;
+    let (e, _) = element(rest).filter(|(e, _)| e.tag == 0x02)?;
+    let mut out = Vec::new();
+    for field in [&b"ssh-rsa"[..], &mpint(e.content), &mpint(n.content)] {
+        out.extend_from_slice(&(field.len() as u32).to_be_bytes());
+        out.extend_from_slice(field);
+    }
+    Some(out)
+}
+
+/// An SSH mpint from a DER INTEGER's positive value: no leading zeros, one zero byte in front when
+/// the top bit is set.
+fn mpint(n: &[u8]) -> Vec<u8> {
+    let n = &n[n.iter().position(|&b| b != 0).unwrap_or(n.len())..];
+    let mut out = Vec::with_capacity(n.len() + 1);
+    if n.first().is_some_and(|&b| b & 0x80 != 0) {
+        out.push(0);
+    }
+    out.extend_from_slice(n);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,5 +145,33 @@ mod tests {
         assert_eq!(public_key(b"not a certificate"), None);
         let (der, _) = cert("abc");
         assert_eq!(common_name(&der[..der.len() / 2]), None);
+    }
+
+    /// A throwaway RSA certificate (openssl) and its public key as ssh-keygen -y writes it: what
+    /// the phone's file server must show as its host key.
+    #[test]
+    fn an_rsa_certificate_gives_the_ssh_host_key_openssh_derives() {
+        let hex: String = [
+        "3082022d30820196a00302010202142c1888232d8edf42169d3f88e0cf7443c7f7aa2b300d06092a864886f70d01010b",
+        "05003039310c300a060355040a0c034b444531143012060355040b0c0b4b646520636f6e6e6563743113301106035504",
+        "030c0a746573745f70686f6e65301e170d3236313132343135333833335a170d3236313132353135333833335a303931",
+        "0c300a060355040a0c034b444531143012060355040b0c0b4b646520636f6e6e6563743113301106035504030c0a7465",
+        "73745f70686f6e6530819f300d06092a864886f70d010101050003818d0030818902818100c608cf86dd8ae604997136",
+        "8cb3bcb661415482ed418cf778892490e140e93e86f0d0ffba1b966903850527cd49c78e3545e44bdf3a4ad2df5894fd",
+        "5949fcf32fa44183493260d012e25db2a800dfde071f48e05bbc322911d611a16e3122331d60e3906ab227eec06851ab",
+        "cf28bf6af0c2f8832e9fc3ec41e5ab36e17fc42b2b0203010001a3323030301d0603551d0e0416041423e9c269b44b6b",
+        "5649a94d8a6219d7b219b92188300f0603551d130101ff040530030101ff300d06092a864886f70d01010b0500038181",
+        "006954e74f701cdb163620841deddc075baab299a38c29518df7344f3f8d492e3255dd78027fccd8ffd2730e1fb1573d",
+        "38a0d60193c64fc9fa04b04675acd3225502317dee8fa0aef99438b73cb1011367d639a854c3df0bf522ca2f3ec098d7",
+        "a90a581211fd8178fcec4daf8d42a8378839d2445db038e90a964516daac85a0e3",
+        ]
+        .concat();
+        let der: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
+        let openssh = "AAAAB3NzaC1yc2EAAAADAQABAAAAgQDGCM+G3YrmBJlxNoyzvLZhQVSC7UGM93iJJJDhQOk+hvDQ/7oblmkDhQUnzUnHjjVF5EvfOkrS31iU/VlJ/PMvpEGDSTJg0BLiXbKoAN/eBx9I4Fu8MikR1hGhbjEiMx1g45BqsifuwGhRq88ov2rwwviDLp/D7EHlqzbhf8QrKw==";
+        assert_eq!(ssh_rsa_key(&der).map(|k| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, k)).as_deref(), Some(openssh));
+        assert_eq!(common_name(&der).as_deref(), Some("test_phone"));
+        assert_eq!(ssh_rsa_key(&cert("x").0), None, "an EC key isn't one");
+        assert_eq!(mpint(&[0, 0, 0x81]), vec![0, 0x81]);
+        assert_eq!(mpint(&[0x01, 0x00, 0x01]), vec![1, 0, 1]);
     }
 }

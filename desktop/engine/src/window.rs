@@ -135,7 +135,7 @@ pub fn details<S: Side>(id: &str, d: &Device, permits: &Permits, clip_seen: &Cli
     let mut v = json!({
         "id": id, "name": d.name, "paired": d.paired, "linked": d.linked, "key": d.key, "asking": d.asking,
         "via": via,
-        "can": { "share": d.takes(SHARE), "ring": d.takes(FIND), "browse": false, "text": d.takes(messages::REQUEST) },
+        "can": { "share": d.takes(SHARE), "ring": d.takes(FIND), "browse": cfg!(feature = "phone-files") && d.takes("kdeconnect.sftp.request"), "text": d.takes(messages::REQUEST) },
         // The cable's one-time Allow for background clipboard sync (the window's Clipboard card).
         "clipboardSync": clip_seen.state(id, d.paired && d.linked && (via == "cable" || linked == 1)),
         "permits": S::PERMITS.iter().map(|&p| {

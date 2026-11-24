@@ -17,7 +17,7 @@ png = "0.17"
 # dlopen: ScreenCaptureKit is loaded when first used (macOS 12.3+), so older Macs still start.
 libc = "0.2"
 vyoma-core = { path = "../core" }
-vyoma-engine = { path = "../engine" }
+vyoma-engine = { path = "../engine", features = ["phone-files"] }
 
 # Notifications under Vyoma's own name when it runs from Vyoma.app (macOS's UserNotifications).
 # objc2 crates: MIT, or Zlib/Apache-2.0/MIT.

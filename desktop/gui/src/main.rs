@@ -1,12 +1,13 @@
 //! Vyoma's desktop window. It only shows and asks: the daemon (`vyoma-desktop`) owns the links,
 //! so closing or crashing this never drops a phone. `--snapshot <png>` renders it offscreen with
-//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|away|unpair|add-done|notice|cable|pc|pc-setup|activity|commands|commands-empty|commands-edit|messages|messages-thread|messages-search|messages-contacts|messages-call|messages-silent|messages-loading|messages-asking|messages-declined|messages-locked|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|add|down`, `--setup` to open on setup). `--page commands|this-pc|activity|<phone id>` opens on that page;
+//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|away|unpair|add-done|notice|cable|pc|pc-setup|activity|commands|commands-empty|commands-edit|messages|messages-thread|messages-search|messages-contacts|messages-call|messages-silent|messages-loading|messages-asking|messages-declined|messages-locked|files|files-loading|files-error|files-busy|files-delete|files-new|files-empty|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|add|down`, `--setup` to open on setup). `--page commands|this-pc|activity|<phone id>` opens on that page;
 //! a window already open shows it instead (`instance.rs`).
 
 // No console window behind Vyoma's on Windows.
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
 mod daemon;
+mod files;
 #[cfg(target_os = "linux")]
 mod instance;
 #[cfg(windows)]
@@ -115,6 +116,7 @@ fn main() -> anyhow::Result<()> {
     wire(&ui);
     qr::wire(&ui);
     texts::wire(&ui);
+    files::wire(&ui);
     // On a Mac, opening the app is what sets Vyoma up: the first open (or the first after the app
     // moved) starts the background part from inside it, which then starts at login. After an update
     // the old background part is still running from before, and the phone and this window would
@@ -235,7 +237,15 @@ fn wire(ui: &MainWindow) {
     ui.on_reject(act(ui, "Reject", None));
     ui.on_unpair(act(ui, "Unpair", Some("Unpaired")));
     ui.on_ring(act(ui, "Ring", Some("Ringing the phone")));
-    ui.on_browse(act(ui, "Browse", Some("Opening the phone's files…")));
+    // Linux mounts the phone's files in the file manager; the Mac and Windows show them here.
+    if cfg!(target_os = "linux") {
+        ui.on_browse(act(ui, "Browse", Some("Opening the phone's files…")));
+    } else {
+        ui.on_browse({
+            let ui = ui.as_weak();
+            move |id| files::show(&ui, &id)
+        });
+    }
     ui.on_show_pc({
         let ui = ui.as_weak();
         move || {

@@ -5,7 +5,7 @@
 #[cfg(target_os = "linux")]
 use std::sync::{Mutex, OnceLock};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 #[cfg(target_os = "linux")]
 use anyhow::Context;
 #[cfg(target_os = "linux")]
@@ -406,6 +406,45 @@ pub enum Event {
 }
 
 /// What the window asks of the daemon.
+/// A folder on the phone, as the agent reads it (`PhoneFiles`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Folder {
+    pub path: String,
+    pub name: String,
+    /// The folder above, unless it's a top folder.
+    pub parent: Option<String>,
+    /// The phone's top folders: path and name.
+    pub roots: Vec<(String, String)>,
+    pub entries: Vec<FileEntry>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FileEntry {
+    pub name: String,
+    pub folder: bool,
+    pub size: u64,
+    /// Seconds since 1970; 0 unknown.
+    pub modified: i64,
+}
+
+impl Folder {
+    pub fn from_json(v: &Value) -> Folder {
+        let s = |v: &Value| v.as_str().unwrap_or_default().to_owned();
+        Folder {
+            path: s(&v["path"]),
+            name: s(&v["name"]),
+            parent: v["parent"].as_str().map(str::to_owned),
+            roots: v["roots"].as_array().into_iter().flatten().map(|r| (s(&r["path"]), s(&r["name"]))).collect(),
+            entries: v["entries"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|e| FileEntry { name: s(&e["name"]), folder: e["folder"].as_bool().unwrap_or(false), size: e["size"].as_u64().unwrap_or(0), modified: e["modified"].as_i64().unwrap_or(0) })
+                .collect(),
+        }
+    }
+}
+
 pub trait Daemon: Send + Sync {
     fn phones(&self) -> Result<Vec<PhoneData>>;
     /// One of the per-device calls: Pair, Accept, Reject, Unpair, Ring, Browse.
@@ -455,6 +494,26 @@ pub trait Daemon: Send + Sync {
     fn thread_for(&self, id: &str, number: &str) -> Result<i64>;
     /// Calls [number] from the phone.
     fn call_number(&self, id: &str, number: &str) -> Result<()>;
+    /// A folder on the phone ([path], else its first top folder). The Mac and Windows; Linux mounts
+    /// the phone's files in the file manager instead (Browse).
+    fn phone_files(&self, _id: &str, _path: Option<&str>) -> Result<Folder> {
+        bail!("Browse opens the phone's files in your file manager here")
+    }
+    /// Copies the phone's file into Downloads; where it landed.
+    fn fetch_phone_file(&self, _id: &str, _path: &str) -> Result<String> {
+        bail!("Not here")
+    }
+    /// Copies files and folders from here into the phone's folder [dir]; how many files went.
+    fn put_phone_files(&self, _id: &str, _dir: &str, _paths: Vec<String>) -> Result<u64> {
+        bail!("Not here")
+    }
+    fn new_phone_folder(&self, _id: &str, _path: &str) -> Result<()> {
+        bail!("Not here")
+    }
+    /// Deletes a file, or a folder with everything in it, on the phone.
+    fn delete_phone_file(&self, _id: &str, _path: &str) -> Result<()> {
+        bail!("Not here")
+    }
     /// Blocks until the daemon says something (an error once it's gone away).
     fn next_event(&self) -> Result<Event>;
 }

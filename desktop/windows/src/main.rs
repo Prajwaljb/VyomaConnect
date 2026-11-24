@@ -290,6 +290,8 @@ mod agent {
         let pc = Arc::new(platform::Windows::default());
         let host = Arc::new(Host { me: me.clone(), permits: permits.clone(), activity: activity.clone() });
         let mut sessions: HashMap<String, mpsc::UnboundedSender<(Value, IpAddr)>> = HashMap::new();
+        // The phone's files in the window (its file server, over SFTP).
+        let files = vyoma_engine::phonefiles::PhoneFiles::new(&me, commands.clone());
         let window = Window {
             me: me.clone(),
             lan: lan.clone(),
@@ -404,6 +406,7 @@ mod agent {
                             if let Some(d) = devices.get_mut(&id) {
                                 d.linked = false;
                             }
+                            files.forget(&id);
                             sessions.remove(&id);
                             texts.gone(&id);
                             pc.away.gone(&id, Arc::new(away::Hands));
@@ -450,6 +453,7 @@ mod agent {
                             if let Some(d) = devices.get_mut(&id) {
                                 d.paired = false;
                             }
+                            files.forget(&id);
                             sessions.remove(&id);
                             texts.forget(&id);
                             permits.forget(&id);
@@ -532,7 +536,8 @@ mod agent {
                                         send(&id, reply);
                                     }
                                 }
-                                Route::Other => tracing::debug!("{}: nothing here for {kind}", d.name),
+                                Route::Other if kind == vyoma_engine::phonefiles::SFTP => files.reply(&id, &packet),
+                        Route::Other => tracing::debug!("{}: nothing here for {kind}", d.name),
                             }
                         }
                     }
@@ -564,6 +569,13 @@ mod agent {
                     if req.method == "Quit" {
                         let _ = req.reply.send(Ok(Value::Null));
                         break;
+                    }
+                    // Listing or copying the phone's files takes a while: not in this loop.
+                    if let Some(job) = vyoma_engine::phonefiles::request(&files, &req.method, &req.args, &devices, crate::win::downloads()) {
+                        tokio::spawn(async move {
+                            let _ = req.reply.send(job.await);
+                        });
+                        continue;
                     }
                     let answer = window.answer(&req.method, &req.args, &mut devices).await;
                     // Only what the window would show differently: a reread after a read would come

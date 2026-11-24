@@ -14,7 +14,7 @@ tokio = { version = "1.54.1", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 vyoma-core = { path = "../core" }
-vyoma-engine = { path = "../engine" }
+vyoma-engine = { path = "../engine", features = ["phone-files"] }
 sysinfo = "0.40.0"
 # The controller driver download's SHA-256 (Apache-2.0/ISC, as core's).
 ring = "0.17.14"
