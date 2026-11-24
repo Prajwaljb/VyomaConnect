@@ -630,7 +630,7 @@ impl Side for MacSide {
     async fn answer(w: &Window, method: &str, args: &Value, _: &mut Devices) -> Option<Answer> {
         Some(match method {
             "Health" => Ok(json!({
-                "features": [], "installable": false, "checks": checks(), "notes": [],
+                "features": [], "installable": false, "checks": checks(), "ways": ways(), "notes": [],
                 "update": w.updates.status(), "version": VERSION.trim(),
             })),
             "FixCheck" => {
@@ -707,6 +707,25 @@ async fn restart_once_trusted() {
     tracing::info!("allowed in Accessibility: starting again so the touchpad works");
     tokio::time::sleep(Duration::from_millis(500)).await;
     std::process::exit(0);
+}
+
+/// This Mac's "How this Mac does it": macOS's own ways, which don't vary but for the live screen's
+/// framework (macOS 12.3); what macOS allows is the checks' part.
+fn ways() -> Value {
+    use vyoma_engine::ways::Way;
+    const SCREEN: &str = "Live screen";
+    vyoma_engine::ways::json(&[
+        Way::found("Touchpad and keyboard", "macOS's CGEvent (allowed in Accessibility)"),
+        Way::found("Clipboard", "macOS's pasteboard"),
+        if screen::capture_kit() {
+            Way::found(SCREEN, "ScreenCaptureKit, encoded by VideoToolbox")
+        } else {
+            Way::missing(SCREEN, "Needs macOS 12.3 or newer (ScreenCaptureKit)")
+        },
+        Way::found("Screenshots", "macOS's screencapture"),
+        Way::found("Pointer dot", "A click-through window above everything"),
+        Way::found("Desktops", "Mission Control and the Spaces shortcuts"),
+    ])
 }
 
 /// This Mac's checks for the window's This Mac page: the Accessibility Allow the touchpad needs,

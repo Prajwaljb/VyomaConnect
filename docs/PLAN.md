@@ -463,9 +463,9 @@ Progress (2026-11-19):
    Bluetooth, the companion). Then This PC's "How this PC does it" (`ways::Way`; Linux's
    `companion/src/ways.rs` asks the session what each part's own chooser asks, one row per
    capability with the way found or why there's none; the screenshot's choice is one function
-   both use). The Mac and Windows send none yet: the Mac's ways never vary (its checks say
-   what's allowed), and Windows' (the card's encoder or the software one) wants a real PC to
-   check. Then Hyprland checked again, nested and in a real session (below). Next: the Play
+   both use). The Mac and Windows send theirs too (2026-11-24): the Mac's never vary but for
+   ScreenCaptureKit (macOS 12.3), Windows' live screen row says the last cast's source and
+   encoder (`cast::way`), before the first the graphics card's encoder it will try first. Then Hyprland checked again, nested and in a real session (below). Next: the Play
    Store build.
 4. Hyprland and Windows were taken first (user, 2026-11-19); then the window's method table, then
    probing per capability and This PC's report.

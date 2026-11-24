@@ -125,6 +125,20 @@ pub async fn screenshot(sender: &Sender, me: &Identity, pinned: &[u8], phone: &s
     payload::offer(sender, me, pinned, packet(SCREENSHOT, json!({ "format": "png" })), image.len() as u64, image.as_slice()).await
 }
 
+/// Whether this macOS has ScreenCaptureKit (12.3 and newer), which the live screen needs.
+pub fn capture_kit() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: loading a system framework by its fixed path (as the live screen does).
+        let loaded = unsafe { libc::dlopen(c"/System/Library/Frameworks/ScreenCaptureKit.framework/ScreenCaptureKit".as_ptr(), libc::RTLD_LAZY) };
+        !loaded.is_null() && objc2::runtime::AnyClass::get(c"SCStream").is_some()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 /// Whether macOS lets Vyoma see the screen; with [ask], has macOS show its question if not.
 pub fn allowed(ask: bool) -> bool {
     #[cfg(target_os = "macos")]

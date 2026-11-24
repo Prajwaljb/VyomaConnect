@@ -814,8 +814,8 @@ mod agent {
             // The window's look: the wallpaper's colours.
             "Wallpaper" => tokio::task::spawn_blocking(crate::wallpaper::for_window).await.map_err(|e| e.to_string())?.map_err(|e| format!("{e:#}")),
             "Health" => {
-                let checks = tokio::task::spawn_blocking(checks).await.map_err(|e| e.to_string())?;
-                Ok(json!({ "features": [], "installable": false, "checks": checks, "notes": [], "update": w.updates.status(), "version": VERSION.trim() }))
+                let (checks, ways) = tokio::task::spawn_blocking(|| (checks(), ways())).await.map_err(|e| e.to_string())?;
+                Ok(json!({ "features": [], "installable": false, "checks": checks, "ways": ways, "notes": [], "update": w.updates.status(), "version": VERSION.trim() }))
             }
             "FixCheck" => match vyoma_engine::window::text(args, 0)?.as_str() {
                 AUTOSTART_CHECK => system::install().map(|_| Value::Null).map_err(|e| format!("{e:#}")),
@@ -868,6 +868,25 @@ mod agent {
             }
             _ => Err(w.not_here()),
         }
+    }
+
+    /// This PC's "How this PC does it" (blocking: the live screen's row lists the encoders). The
+    /// same ways the code takes: Windows' own for everything but the live screen's encoder.
+    fn ways() -> Value {
+        use vyoma_engine::ways::Way;
+        const SCREEN: &str = "Live screen";
+        let screen = match crate::cast::way() {
+            Ok(how) => Way::found(SCREEN, how),
+            Err(e) => Way::missing(SCREEN, format!("{e:#}")),
+        };
+        vyoma_engine::ways::json(&[
+            Way::found("Touchpad and keyboard", "Windows' SendInput"),
+            Way::found("Clipboard", "Windows' clipboard"),
+            screen,
+            Way::found("Screenshots", "Windows' screen copy (GDI)"),
+            Way::found("Pointer dot", "A click-through window above everything"),
+            Way::found("Desktops", "Task View and the virtual desktops' shortcuts"),
+        ])
     }
 
     /// This PC's checks for the window's This PC page (blocking: the firewall's rules are read).

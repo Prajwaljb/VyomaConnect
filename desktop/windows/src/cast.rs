@@ -557,6 +557,37 @@ enum Source {
     Copy,
 }
 
+/// How the last live screen was made, in This PC's words (None before the first).
+static LAST_WAY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn note_way(source: &Source, encoder: &Encoder) {
+    let words = way_words(matches!(source, Source::Duplication(_)), &encoder.name, encoder.hardware());
+    *LAST_WAY.lock().unwrap_or_else(|e| e.into_inner()) = Some(words);
+}
+
+fn way_words(duplication: bool, encoder: &str, hardware: bool) -> String {
+    let from = if duplication { "Desktop duplication" } else { "Screen copies (GDI)" };
+    format!("{from}, encoded by {encoder}{}", if hardware { "" } else { " (software)" })
+}
+
+/// This PC's "Live screen" row (blocking): how the last live screen was made, or before the first,
+/// what will be tried first. Err when Windows has no Media Foundation to encode with.
+pub fn way() -> Result<String> {
+    if let Some(last) = LAST_WAY.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return Ok(last);
+    }
+    // SAFETY: COM joined for this thread (harmless if it already was); Media Foundation started
+    // once more (it counts), as the encoder does.
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        MFStartup(MF_VERSION, MFSTARTUP_LITE).context("No Media Foundation to encode with (a Windows N edition needs the Media Feature Pack)")?;
+    }
+    Ok(match encoders(MFT_ENUM_FLAG_HARDWARE).unwrap_or_default().first().map(friendly_name) {
+        Some(card) => format!("Desktop duplication, encoded by {card} (tried first; else Windows' software encoder)"),
+        None => "Desktop duplication, encoded by Windows' software H.264 encoder".into(),
+    })
+}
+
 /// Windows' H.264 encoders: the graphics card's (Intel Quick Sync, NVIDIA NVENC, AMD VCE: an
 /// asynchronous Media Foundation transform that says through events when it wants a picture and
 /// when it has output) when there's one that takes our pictures, else Microsoft's software one,
@@ -889,6 +920,7 @@ fn capture(display: Area, (w, h): (i32, i32), fps: u32, stop: Arc<AtomicBool>, p
             Source::Copy
         }
     };
+    note_way(&source, &encoder);
     let _ = ready.send(Ok(()));
     let every = Duration::from_secs(1) / fps;
     let mut framer = Framer::default();
@@ -976,6 +1008,7 @@ fn capture(display: Area, (w, h): (i32, i32), fps: u32, stop: Arc<AtomicBool>, p
                     Ok(e) => {
                         encoder = e;
                         framer = Framer::default();
+                        note_way(&source, &encoder);
                     }
                     Err(e) => {
                         tracing::warn!("no software encoder either: {e:#}");
@@ -1113,6 +1146,13 @@ mod tests {
         // An ordinary picture: just the stamp and the slice.
         let p = f.frame(&[0, 0, 1, 0x41, 5], 9);
         assert_eq!(p.len(), 4 + 13 + 4 + 2);
+    }
+
+    #[test]
+    fn the_way_says_what_made_the_picture() {
+        assert_eq!(way_words(true, "NVIDIA H.264 Encoder MFT", true), "Desktop duplication, encoded by NVIDIA H.264 Encoder MFT");
+        assert_eq!(way_words(false, "H264 Encoder MFT", false), "Screen copies (GDI), encoded by H264 Encoder MFT (software)");
+        assert!(way().is_ok_and(|w| w.starts_with("Desktop duplication")), "{:?}", way());
     }
 
     #[test]
