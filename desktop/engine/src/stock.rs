@@ -387,7 +387,10 @@ mod tests {
         let (mut desk, mut battery) = (Notes { unlocks: true, ..Default::default() }, None);
         assert!(on(&mut desk, &mut battery, &p(LOCK_REQUEST, json!({ "setLocked": true }))).await.is_empty());
         let answer = on(&mut desk, &mut battery, &p(LOCK_REQUEST, json!({ "requestLocked": true }))).await;
-        assert_eq!(answer, [lock_packet(true)]);
+        // Type and body: the id is the clock's millisecond, which may tick between the two (often on Windows).
+        let expected = lock_packet(true);
+        assert_eq!(answer.len(), 1);
+        assert_eq!((&answer[0]["type"], &answer[0]["body"]), (&expected["type"], &expected["body"]));
         desk.lock_fails = true;
         let refused = on(&mut desk, &mut battery, &p(LOCK_REQUEST, json!({ "setLocked": true }))).await;
         assert_eq!((refused[0]["type"].as_str(), refused[0]["body"]["reason"].as_str()), (Some(DENIED), Some("no screen locker")));
