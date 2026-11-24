@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Privacy · Vyoma</title>
+<meta name="description" content="Vyoma has no accounts, no servers, no ads and no analytics. What it handles stays between your phone and the PCs you pair.">
+<link rel="canonical" href="https://prajwaljb.github.io/VyomaConnect/privacy.html">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/site.css">
+<style>
+  body { padding: 24px 16px 48px; }
+  .canvas { position: fixed; inset: 0; z-index: -1; }
+  .policy { max-width: 760px; margin: 0 auto; padding: 36px 32px; }
+  .policy header { display: flex; gap: 16px; align-items: center; margin-bottom: 8px; }
+  .policy header img { width: 56px; height: 56px; flex: none; }
+  .policy h1 { margin: 0; font-size: 34px; letter-spacing: -.03em; line-height: 1.1; }
+  .policy .date { margin: 0 0 24px; color: var(--text2); }
+  .policy h2 { margin: 32px 0 8px; max-width: none; text-align: left; font-size: 21px; letter-spacing: -.02em; }
+  .policy p, .policy li { line-height: 1.55; }
+  .policy p { margin: 0 0 12px; }
+  .policy ul { margin: 0 0 12px; padding-left: 20px; }
+  .policy li { margin-bottom: 8px; }
+  .policy .short { font-size: 18px; }
+  .policy a { color: inherit; }
+  .policy footer { margin-top: 32px; }
+  @media (max-width: 560px) { .policy { padding: 28px 20px; } .policy h1 { font-size: 28px; } }
+</style>
+</head>
+<body>
+<div class="canvas"></div>
+<main class="glass policy">
+  <header>
+    <img src="favicon.svg" alt="" width="56" height="56">
+    <h1>Vyoma's privacy policy</h1>
+  </header>
+  <p class="date">20 November 2026</p>
+
+  <p class="short">Vyoma has no accounts, no servers, no ads, no analytics and no trackers. What it handles goes
+  straight between your phone and the computers you pair it with, and nowhere else.</p>
+
+  <p>This covers the Vyoma app for Android, from Google Play, F-Droid, IzzyOnDroid or GitHub, and Vyoma's
+  apps for computers. Vyoma is free software: anyone can read
+  <a href="https://github.com/Prajwaljb/VyomaConnect">its source code</a> and check what is written here.</p>
+
+  <h2>How your data travels</h2>
+  <p>Your phone talks only to computers you have paired with it, over your own Wi-Fi, a USB cable or
+  Bluetooth. Every connection is encrypted (TLS), and each side checks the other's key, which you confirmed
+  when pairing. Nobody runs a server in between, so the developer never receives, sees or stores anything
+  you do with Vyoma.</p>
+
+  <h2>What the phone app handles, and why</h2>
+  <p>Each of these happens only when you use the feature and give Android's permission for it, and each can be
+  turned off again in Vyoma's settings.</p>
+  <ul>
+    <li><strong>Notifications:</strong> shown on your PC, where you can reply to or dismiss them.</li>
+    <li><strong>Texts and contacts:</strong> read so you can see and answer your conversations on your PC, and sent
+      from the phone when you write one there. Vyoma's PC app keeps them only in memory and shows them only after
+      you confirm on the phone with your fingerprint or PIN, and locks them away again when its screen locks.</li>
+    <li><strong>Calls and the call log:</strong> who is calling, shown on your PC, which can silence, answer or decline;
+      calls you start from the PC's Messages page.</li>
+    <li><strong>Clipboard:</strong> what you copy goes to your PC, and the PC's copies come to the phone. Copying in the
+      background, if you allow it from your PC once over a USB cable, works by reading Android's system log for the moment
+      something is copied; nothing from the log leaves the phone.</li>
+    <li><strong>Files:</strong> files you send, and, with all-files access, your PC browsing the phone's storage when
+      you open it there.</li>
+    <li><strong>Camera:</strong> scanning the pairing code your PC shows, and the phone as your PC's webcam when you turn
+      that on.</li>
+    <li><strong>Microphone:</strong> the webcam's sound, and the phone's own sound while its screen is shown on your PC
+      (Android counts capturing what's playing as recording).</li>
+    <li><strong>Screen:</strong> shown in a window on your PC while you choose to, with Android's own prompt each time.</li>
+    <li><strong>Accessibility service</strong> ("Vyoma PC control"): while the phone's screen is shown on your PC, it
+      performs the taps, swipes and typing that window sends. To type it reads and changes only the text field you
+      tapped; Ctrl+C there sends the text you selected to your PC. It reads nothing else and keeps nothing.</li>
+    <li><strong>Phone state and battery:</strong> your PC shows the phone's battery and signal.</li>
+    <li><strong>Bluetooth:</strong> a link to your PC when Wi-Fi isn't there, and your own automation rules that start
+      when a Bluetooth device connects.</li>
+  </ul>
+
+  <h2>The only things that reach the internet</h2>
+  <ul>
+    <li><strong>Album art:</strong> when your PC plays media, the phone may load its cover picture from the address the
+      PC's player gives (for a YouTube video, YouTube's thumbnail), as any browser would. That site sees your
+      internet address, as it does when you visit it.</li>
+    <li><strong>Links you open:</strong> a link your PC sends opens in your browser only when you tap it.</li>
+    <li><strong>Updates on computers:</strong> Vyoma's computer apps ask GitHub once a day whether a new release is out,
+      and you can turn that off on This PC. The phone app has no update check; your app store updates it.</li>
+  </ul>
+
+  <h2>What is kept, and where</h2>
+  <p>Settings, the PCs you paired and their keys, your automation rules and Vyoma's own log stay in the app's
+  private storage on your phone, and on your computers in Vyoma's folder there. Uninstalling removes them.
+  The log never leaves your device unless you share it yourself, for example with a bug report.</p>
+  <p>No data is sold, shared with anyone, or used for advertising.</p>
+
+  <h2>Children</h2>
+  <p>Vyoma isn't directed at children, and it collects nothing from anyone.</p>
+
+  <h2>Changes and questions</h2>
+  <p>If this policy changes, the new one appears here with a new date, and the change is in the project's history
+  on GitHub. Ask anything by <a href="https://github.com/Prajwaljb/VyomaConnect/issues">opening an issue</a>.</p>
+
+  <footer><a class="pill tinted" href="./">Back to Vyoma</a></footer>
+</main>
+</body>
+</html>

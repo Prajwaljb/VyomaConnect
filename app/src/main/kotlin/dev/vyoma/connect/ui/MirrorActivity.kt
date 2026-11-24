@@ -34,6 +34,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.vyoma.connect.container
 import dev.vyoma.connect.designsystem.BounceIconButton
 import dev.vyoma.connect.designsystem.CollapsingHeaderScaffold
+import dev.vyoma.connect.designsystem.DialogButton
+import dev.vyoma.connect.designsystem.GlassDialog
 import dev.vyoma.connect.designsystem.ListRow
 import dev.vyoma.connect.designsystem.PillButton
 import dev.vyoma.connect.designsystem.SectionCard
@@ -99,6 +101,10 @@ class MirrorActivity : ComponentActivity() {
                 else consent.launch(PhoneMirror.consentIntent(this))
             }
             fun openAccessibility() = startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            // What the accessibility service does, said and agreed to before Settings opens (Google
+            // Play's prominent disclosure; it isn't an accessibility tool). Turning it off goes straight there.
+            var disclosing by remember { mutableStateOf(false) }
+            fun askControl() = if (canControl) openAccessibility() else disclosing = true
             VyomaTheme(theme) {
                 CollapsingHeaderScaffold(
                     title = "Phone screen on PC",
@@ -153,8 +159,8 @@ class MirrorActivity : ComponentActivity() {
                                 else "Off: the PC can only watch. Turn on \"Vyoma PC control\" in Accessibility " +
                                     "(if it says restricted: App info > ⋮ > Allow restricted settings)",
                                 icon = Icons.Rounded.Mouse,
-                                trailing = { VyomaSwitch(canControl, { openAccessibility() }, contentDescription = "Control from the PC") },
-                                onClick = ::openAccessibility,
+                                trailing = { VyomaSwitch(canControl, { askControl() }, contentDescription = "Control from the PC") },
+                                onClick = ::askControl,
                             )
                         }
                     }
@@ -168,6 +174,29 @@ class MirrorActivity : ComponentActivity() {
                             modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
                         )
                     }
+                }
+                if (disclosing) {
+                    GlassDialog(
+                        onDismissRequest = { disclosing = false },
+                        title = { Text("Control from the PC?") },
+                        text = {
+                            Text(
+                                "Vyoma uses Android's Accessibility service for this. While this phone's screen is shown " +
+                                    "on your PC, it performs the taps, swipes, scrolling and typing your PC's window sends.\n\n" +
+                                    "To type, it reads and changes the text field you tapped, and only that field. Ctrl+C " +
+                                    "in the PC's window sends the text you selected there to your PC's clipboard.\n\n" +
+                                    "It reads nothing else, keeps nothing, and sends nothing anywhere but your own paired PC. " +
+                                    "It does nothing while the screen isn't shown.",
+                            )
+                        },
+                        confirmButton = {
+                            DialogButton(onClick = {
+                                disclosing = false
+                                openAccessibility()
+                            }) { Text("Agree") }
+                        },
+                        dismissButton = { DialogButton(onClick = { disclosing = false }) { Text("Not now") } },
+                    )
                 }
             }
         }

@@ -29,6 +29,7 @@ android {
         // One version for the phone app and the PC app (desktop/daemon reads it too).
         versionName = rootProject.file("VERSION").readText().trim()
         buildConfigField("boolean", "DEMO", "false")
+        buildConfigField("boolean", "PLAY", "false")
     }
 
     signingConfigs {
@@ -59,6 +60,14 @@ android {
             versionNameSuffix = "-demo"
             matchingFallbacks += "release"
             buildConfigField("boolean", "DEMO", "true")
+        }
+        // Google Play's build (`bundlePlay`, an AAB): the release with what Play's policies refuse
+        // taken out (src/play). The same id and key as the GitHub and F-Droid builds, so people can
+        // switch channels without reinstalling (when Play App Signing is given this key).
+        create("play") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
+            buildConfigField("boolean", "PLAY", "true")
         }
     }
 

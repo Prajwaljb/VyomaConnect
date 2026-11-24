@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Google Play's build: what its policies refuse comes out here (tools:node="remove"), each one
+     decided after Play reviews its declaration (docs/PLAN.md, Google Play). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools" />
