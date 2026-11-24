@@ -90,8 +90,10 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
 - Hyprland (and other compositors with wlr's virtual pointer + virtual keyboard: Sway, river, labwc...), by probing, not
   names: `companion/src/wlr.rs` is input there (before the portal; daemon `input.rs` `Sink::Wlr`, `screen.rs` `Via::Wlr`);
   `companion/src/hypr.rs` talks to Hyprland's IPC socket (a listening `$XDG_RUNTIME_DIR/hypr/*/.socket.sock`; 0.57 takes
-  dispatchers as Lua, `hl.dsp.*`, older the classic words; both tried): workspaces, dpms, log out, layout, hyprpaper/swww
-  wallpaper. Screenshots with grim where there's no Spectacle or GNOME; kernel backlight through logind where neither Plasma
+  dispatchers as Lua, `hl.dsp.*`, older the classic words; both tried): workspaces (a swipe goes as Hyprland's own: past the last
+  to a new one, no wrapping), dpms, log out, layout, hyprpaper/swww wallpaper, the lock (`j/locked`, whichever program locks; logind's
+  Lock/Unlock first, then `follow_logind`: hyprlock started through Hyprland or sent SIGUSR1 where nothing follows logind), and
+  the swipe up: hyprexpo's overview, else Caelestia's launcher (`qs -c caelestia ipc call drawers ...`). Screenshots with grim where there's no Spectacle or GNOME; kernel backlight through logind where neither Plasma
   nor Mutter dims. Test in a nested Hyprland inside `kwin_wayland --virtual` under `dbus-run-session`, with a short private
   XDG_RUNTIME_DIR (socket paths over 108 bytes fail) and XDG_CONFIG_HOME: `VYOMA_HYPR_TEST=1 VYOMA_WLR_TEST=1
   [VYOMA_WLR_OUTPUT=WxH VYOMA_HYPR_WALLPAPER=<path>] cargo test --release --lib -- hypr:: wlr::` in companion (the workspace test

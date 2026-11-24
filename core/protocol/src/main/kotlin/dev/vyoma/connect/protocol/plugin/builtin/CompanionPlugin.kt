@@ -755,8 +755,17 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         val reply = CompletableDeferred<NetworkPacket>()
         pendingScreen = reply
         if (!ctx.send(packet(SCREEN_REQUEST) { maxFps?.let { put("maxFps", it) } })) return Result.failure(IllegalStateException("The PC isn't reachable"))
-        val answer = withTimeoutOrNull(SCREEN_TIMEOUT_MS) { reply.await() }
-            ?: return Result.failure(IllegalStateException("The PC didn't answer. Is screen sharing waiting for you there?"))
+        val answer = try {
+            withTimeoutOrNull(SCREEN_TIMEOUT_MS) { reply.await() }
+        } finally {
+            // Given up on (timed out, or the viewer left): no longer waited for, and the PC stops asking
+            // (GNOME's and Plasma's sharing dialog stays up otherwise, and an answer there would cast to
+            // nobody until the next Try again).
+            if (!reply.isCompleted) {
+                if (pendingScreen === reply) pendingScreen = null
+                withContext(kotlinx.coroutines.NonCancellable) { ctx.send(packet(SCREEN_STOP)) }
+            }
+        } ?: return Result.failure(IllegalStateException("The PC didn't answer. Is screen sharing waiting for you there?"))
         answer.string("error")?.let { return Result.failure(IllegalStateException(it)) }
         if (!answer.hasPayload) return Result.failure(IllegalStateException("The PC sent no video"))
         return runCatching {
@@ -1315,7 +1324,12 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         if (packet.type == SCREENSHOT) screenshot.receive(packet)
         if (packet.type == CAMERA) photo.receive(packet)
         if (packet.type == HANDOFF) receiveHandoff(packet)
-        if (packet.type == SCREEN) pendingScreen?.also { pendingScreen = null }?.complete(packet)
+        if (packet.type == SCREEN) {
+            val waiting = pendingScreen
+            pendingScreen = null
+            // A stream nobody waits for any more (an answer after the viewer gave up): the PC stops casting.
+            if (waiting == null || !waiting.complete(packet)) { if (packet.hasPayload) ctx.send(packet(SCREEN_STOP)) }
+        }
         if (packet.type == FILES_LISTING) receiveListing(packet)
         if (packet.type == FILES_FILE) receiveFile(packet)
         if (packet.type == FILES_SAVED) receiveSaved(packet)

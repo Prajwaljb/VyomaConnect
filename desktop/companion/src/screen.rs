@@ -1,6 +1,7 @@
 //! Live PC screen on the phone. The ScreenCast portal hands us one monitor as a PipeWire stream
 //! (Plasma asks which screen the first time; after that a restore token skips the dialog), and
-//! GStreamer encodes it on the Intel GPU (VA-API H.264) into length-prefixed NAL units
+//! GStreamer encodes it on the graphics card (VA-API H.264; x264 or OpenH264 on the CPU where that
+//! fails, [encode]) into length-prefixed NAL units
 //! (4-byte big-endian sizes; SPS/PPS before every keyframe). That goes to
 //! the phone as an open-ended payload (`payloadSize` -1) over the usual pinned-TLS socket, and the
 //! phone decodes it in hardware. Closing the stream on either side ends the cast.
@@ -66,8 +67,13 @@ pub async fn stream(sender: &Sender, me: &Identity, pinned: &[u8], name: &str, f
     // X11 sessions have no ScreenCast portal: the X server's picture of the primary monitor instead,
     // with the pointer driven through XTEST (no dialog: X11 lets any app do both).
     let x11 = !test && crate::x11::active();
-    // Cast through a wlr compositor's portal (Hyprland, Sway...), which waits for a change.
-    let wakes = !x11 && !test && crate::wlr::offered();
+    // Cast through a wlr compositor's portal (Hyprland, Sway...) or GNOME's, which wait for a change.
+    let wakes = !x11 && !test && (crate::wlr::offered() || crate::desktop::is_gnome());
+    // The encoder's choice is made (once) while nothing waits on it yet.
+    let fps = match tokio::task::spawn_blocking(encode).await {
+        Ok(Encode::Va) => fps,
+        _ => fps.min(CPU_FPS),
+    };
     let prepared = if x11 {
         x11_cast().map(|(source, control, size)| (None, Some(source), control, Some(size)))
     } else if test {
@@ -197,22 +203,25 @@ async fn stamp(mut encoded: impl AsyncRead + Unpin, mut out: impl AsyncWrite + U
     }
 }
 
-/// Until [first] (the first picture): Hyprland's portal, as wlr screencopy, sends a picture only
-/// once part of the screen changes, so a still desktop would leave the phone's viewer empty. The
-/// screens are marked changed with an invisible overlay ([crate::wlr::touch_screens]) meanwhile.
+/// Until [first] (the first picture): Hyprland's portal, as wlr screencopy, and GNOME's send a
+/// picture only once part of the screen changes, so a still desktop would leave the phone's viewer
+/// empty. Meanwhile the screens are marked changed: an invisible overlay on wlr compositors
+/// ([crate::wlr::touch_screens]), a repaint by Vyoma's GNOME extension on GNOME.
 async fn wake(mut first: tokio::sync::oneshot::Receiver<()>) {
+    let wlr = crate::wlr::offered();
     for _ in 0..WAKE_TRIES {
         tokio::select! {
             _ = &mut first => return,
             _ = tokio::time::sleep(WAKE_EVERY) => {}
         }
-        match tokio::task::spawn_blocking(crate::wlr::touch_screens).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                warn!("couldn't wake the screen cast ({e:#})");
-                return;
-            }
-            Err(_) => return,
+        let woken = if wlr {
+            tokio::task::spawn_blocking(crate::wlr::touch_screens).await.unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
+        } else {
+            crate::shell::wake().await
+        };
+        if let Err(e) = woken {
+            warn!("couldn't wake the screen cast ({e:#}); it starts with the screen's next change");
+            return;
         }
     }
 }
@@ -235,6 +244,93 @@ fn fit((w, h): (i32, i32)) -> (i32, i32) {
     (w & !1, h & !1)
 }
 
+/// How this PC encodes H.264: the graphics card (VA-API) where it works, else x264 or OpenH264 on
+/// the CPU. VA-API's elements can be installed and still fail (a virtual machine, NVIDIA without
+/// its VA driver, a missing Mesa codec), and a cast whose encoder dies at once ended the same way
+/// on every Try again; so the card is tried once on a tiny test picture.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Encode {
+    Va,
+    X264,
+    OpenH264,
+}
+
+/// Chosen once per process (blocks up to a few seconds the first time: call it off the runtime).
+fn encode() -> Encode {
+    static CHOSEN: std::sync::OnceLock<Encode> = std::sync::OnceLock::new();
+    *CHOSEN.get_or_init(|| {
+        // VYOMA_SCREEN_ENCODER=va|x264|openh264: that one, untested (for tests, or a card that misbehaves).
+        match std::env::var("VYOMA_SCREEN_ENCODER").as_deref() {
+            Ok("va") => return Encode::Va,
+            Ok("x264") => return Encode::X264,
+            Ok("openh264") => return Encode::OpenH264,
+            _ => {}
+        }
+        let works = |pipeline: &str| {
+            let Ok(mut child) = std::process::Command::new("gst-launch-1.0")
+                .arg("-q")
+                .args(pipeline.split_whitespace())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            else {
+                return false;
+            };
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => return status.success(),
+                    Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(50)),
+                    _ => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return false;
+                    }
+                }
+            }
+        };
+        let test = "videotestsrc num-buffers=4 ! video/x-raw,width=320,height=240";
+        if works(&format!("{test} ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12 ! vah264enc ! fakesink")) {
+            return Encode::Va;
+        }
+        let cpu = if works(&format!("{test} ! x264enc tune=zerolatency speed-preset=ultrafast ! fakesink")) {
+            Some(Encode::X264)
+        } else if works(&format!("{test} ! videoconvert ! video/x-raw,format=I420 ! openh264enc ! fakesink")) {
+            Some(Encode::OpenH264)
+        } else {
+            None
+        };
+        match cpu {
+            Some(c) => {
+                warn!("the graphics card can't encode H.264 here (VA-API); the screen cast uses the CPU ({c:?})");
+                c
+            }
+            None => {
+                // Tried anyway, so the phone hears GStreamer's own reason.
+                tracing::error!("no H.264 encoder works here: the graphics card's (VA-API) fails, and neither x264 (gst-plugins-ugly) nor OpenH264 is installed");
+                Encode::Va
+            }
+        }
+    })
+}
+
+/// The most frames a second the CPU's encoders are asked for: more costs a core for little.
+const CPU_FPS: u32 = 60;
+
+/// What the capture may send, in order of preference: the phone's rate as the compositor's cap, then
+/// lower caps, then none. KWin takes any cap; Mutter offers at most the monitor's refresh rate
+/// (60 Hz mostly), and a fixed 120 there failed every cast ("no more input formats"), each Try
+/// again the same.
+fn capture_caps(any_memory: bool, fps: u32) -> String {
+    let raw = if any_memory { "video/x-raw(ANY)" } else { "video/x-raw" };
+    let mut rates = vec![fps];
+    rates.extend([60, 30].into_iter().filter(|&r| r < fps));
+    let mut out: Vec<String> = rates.iter().map(|r| format!("{raw},max-framerate={r}/1")).collect();
+    out.push(raw.to_string());
+    format!("capsfilter caps=\"{}\"", out.join(";"))
+}
+
 fn encoder(source: &str, fd: Option<OwnedFd>, w: i32, h: i32, fps: u32) -> Result<tokio::process::Child> {
     // Latency first. The capture has a variable frame rate (KWin sends one per change, up to the
     // monitor's 200 Hz); `max-framerate` asks KWin itself to send no more than `fps` (videorate
@@ -243,13 +339,32 @@ fn encoder(source: &str, fd: Option<OwnedFd>, w: i32, h: i32, fps: u32) -> Resul
     // no frame is a burst, and length-prefixed output ("avc"), one picture per write, so
     // the phone can show each frame the moment it lands.
     // VYOMA_SCREEN_CAPS: other caps after the capture, for latency experiments.
-    let caps = std::env::var("VYOMA_SCREEN_CAPS").unwrap_or_else(|_| format!("video/x-raw(ANY),max-framerate={fps}/1"));
+    let kind = encode();
+    let fps = if kind == Encode::Va { fps } else { fps.min(CPU_FPS) };
+    // The CPU's encoders take frames in memory: no (ANY), which would let PipeWire hand over DMA-BUFs.
+    let caps = std::env::var("VYOMA_SCREEN_CAPS").unwrap_or_else(|_| capture_caps(kind == Encode::Va, fps));
+    // x264's buffer is in milliseconds; OpenH264 takes bits a second.
+    let cpb_ms = CPB_KBITS * 1000 / BITRATE_KBPS;
+    let encode = match kind {
+        Encode::Va => format!(
+            "vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h} \
+             ! vah264enc rate-control=vbr bitrate={BITRATE_KBPS} cpb-size={CPB_KBITS} key-int-max={KEYFRAME_FRAMES} b-frames=0 num-slices=1 target-usage=7"
+        ),
+        Encode::X264 => format!(
+            "videoconvertscale ! video/x-raw,format=I420,width={w},height={h},pixel-aspect-ratio=1/1 \
+             ! x264enc tune=zerolatency speed-preset=ultrafast bitrate={BITRATE_KBPS} vbv-buf-capacity={cpb_ms} key-int-max={KEYFRAME_FRAMES} bframes=0 threads=0"
+        ),
+        Encode::OpenH264 => format!(
+            "videoconvertscale ! video/x-raw,format=I420,width={w},height={h},pixel-aspect-ratio=1/1 \
+             ! openh264enc usage-type=screen rate-control=bitrate bitrate={} gop-size={KEYFRAME_FRAMES} complexity=low",
+            BITRATE_KBPS * 1000
+        ),
+    };
     let pipeline = format!(
         "{source} \
          ! {caps} \
          ! queue max-size-buffers=1 leaky=downstream \
-         ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width={w},height={h} \
-         ! vah264enc rate-control=vbr bitrate={BITRATE_KBPS} cpb-size={CPB_KBITS} key-int-max={KEYFRAME_FRAMES} b-frames=0 num-slices=1 target-usage=7 \
+         ! {encode} \
          ! h264parse config-interval=-1 ! video/x-h264,stream-format=avc,alignment=au \
          ! fdsink fd=1 sync=false",
     );
@@ -931,7 +1046,7 @@ mod tests {
         // VYOMA_CAST_STILL=1: without waking it, to see what a still screen gives.
         let (pictured, waiting) = tokio::sync::oneshot::channel();
         let mut pictured = Some(pictured);
-        let waking = (std::env::var_os("VYOMA_CAST_STILL").is_none() && crate::wlr::offered()).then(|| tokio::spawn(wake(waiting)));
+        let waking = (std::env::var_os("VYOMA_CAST_STILL").is_none() && (crate::wlr::offered() || crate::desktop::is_gnome())).then(|| tokio::spawn(wake(waiting)));
         let _ = tokio::time::timeout(std::time::Duration::from_secs(secs as u64), async {
             loop {
                 let Ok(n) = out.read_u32().await else { return };

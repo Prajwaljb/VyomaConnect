@@ -298,7 +298,11 @@ fn notes() -> Vec<String> {
             if !quiet("gst-inspect-1.0", &["--exists", element]) {
                 // The part's name is for the log; the page says what to do in plain words.
                 tracing::debug!("no {element} (GStreamer VA-API) for {what}");
-                out.push(format!("{what} needs your graphics card's video driver for hardware {work}. Your system's driver settings can add it."));
+                out.push(if element == "vah264enc" {
+                    format!("{what} works on the processor without your graphics card's video driver, using more power. Your system's driver settings can add it for hardware {work}.")
+                } else {
+                    format!("{what} needs your graphics card's video driver for hardware {work}. Your system's driver settings can add it.")
+                });
             }
         }
     }
@@ -457,7 +461,7 @@ async fn install_missing(missing: &Missing) -> bool {
     status.is_ok_and(|s| s.success())
 }
 
-fn on_path(tool: &str) -> bool {
+pub fn on_path(tool: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(tool).is_file()))
 }
 

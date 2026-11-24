@@ -15,6 +15,7 @@
 //! - `Screens() → a(ii)`: each screen's logical size.
 //! - `AskReply(s heading, s message, s placeholder) → s`: GNOME's own dialog with a text field, for
 //!   replying to a phone's notification (GNOME's notifications have no reply field); "" if cancelled.
+//! - `Wake()`: a full repaint, so a screen cast on a still desktop gets its first picture.
 //! - property `Version` (u).
 //!
 //! It answers only `vyoma-desktop` (it checks the caller's program), so other apps can't read the
@@ -32,11 +33,18 @@ const IFACE: &str = "dev.vyoma.Shell1";
 /// Calls into the shell are quick; a frozen shell mustn't hold anything up.
 const LIMIT: Duration = Duration::from_secs(2);
 /// The extension's `Version` this build expects; an older one runs until the next login.
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
+
+/// One session-bus connection for every call: the presenter's dot calls at the pointer's rate, and a
+/// new connection each time cost a handshake (and a socket) per move.
+async fn bus() -> Result<Connection> {
+    static CONN: tokio::sync::OnceCell<Connection> = tokio::sync::OnceCell::const_new();
+    Ok(CONN.get_or_try_init(|| async { Connection::session().await.context("no session bus") }).await?.clone())
+}
 
 /// The extension is running in this session.
 pub async fn available() -> bool {
-    let Ok(conn) = Connection::session().await else { return false };
+    let Ok(conn) = bus().await else { return false };
     match conn.call_method(Some("org.freedesktop.DBus"), "/org/freedesktop/DBus", Some("org.freedesktop.DBus"), "NameHasOwner", &(BUS,)).await {
         Ok(reply) => reply.body().deserialize::<bool>().unwrap_or(false),
         Err(_) => false,
@@ -45,7 +53,7 @@ pub async fn available() -> bool {
 
 /// The running extension's version, if it runs.
 pub async fn version() -> Option<u32> {
-    let conn = Connection::session().await.ok()?;
+    let conn = bus().await.ok()?;
     let reply = conn.call_method(Some(BUS), PATH, Some("org.freedesktop.DBus.Properties"), "Get", &(IFACE, "Version")).await.ok()?;
     u32::try_from(reply.body().deserialize::<zbus::OwnedVariant>().ok()?).ok()
 }
@@ -54,7 +62,7 @@ async fn call<B>(method: &str, body: &B) -> Result<zbus::Message>
 where
     B: serde::Serialize + zbus::zvariant::DynamicType,
 {
-    let conn = Connection::session().await.context("no session bus")?;
+    let conn = bus().await?;
     let reply = tokio::time::timeout(LIMIT, conn.call_method(Some(BUS), PATH, Some(IFACE), method, body)).await.context("GNOME Shell didn't answer")?;
     explain(reply, method).await
 }
@@ -122,12 +130,18 @@ pub async fn switch_workspace(right: bool) -> Result<()> {
 }
 
 pub async fn screenshot() -> Result<Vec<u8>> {
-    let conn = Connection::session().await.context("no session bus")?;
+    let conn = bus().await?;
     // A big desktop takes a moment to encode.
     let reply = tokio::time::timeout(Duration::from_secs(15), conn.call_method(Some(BUS), PATH, Some(IFACE), "Screenshot", &()))
         .await
         .context("GNOME Shell didn't answer")?;
     Ok(explain(reply, "Screenshot").await?.body().deserialize::<Vec<u8>>()?)
+}
+
+/// A repaint of the whole desktop, for a screen cast waiting on its first picture.
+pub async fn wake() -> Result<()> {
+    call("Wake", &()).await?;
+    Ok(())
 }
 
 pub async fn screens() -> Result<Vec<(i32, i32)>> {
