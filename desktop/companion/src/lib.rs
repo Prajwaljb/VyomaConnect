@@ -32,6 +32,7 @@ pub mod scroll;
 pub mod setup;
 pub mod specs;
 pub mod stats;
+pub mod sway;
 pub mod tether;
 pub mod usb;
 pub mod wallpaper;

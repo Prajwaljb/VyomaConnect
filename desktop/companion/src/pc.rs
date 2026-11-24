@@ -148,6 +148,10 @@ pub async fn power(action: &str) -> Result<()> {
             crate::hypr::exit().await?;
             return Ok(());
         }
+        "logout" if crate::sway::active() => {
+            crate::sway::exit().await?;
+            return Ok(());
+        }
         "restart" | "shutdown" | "logout" => {
             let system = Connection::system().await.context("no system bus")?;
             let (path, iface, method) = match action {
@@ -232,6 +236,10 @@ pub async fn wake() -> Result<()> {
     } else if crate::hypr::active() {
         if let Err(e) = crate::hypr::displays_on().await {
             warn!("couldn't turn the displays on (Hyprland): {e:#}");
+        }
+    } else if crate::sway::active() {
+        if let Err(e) = crate::sway::displays_on().await {
+            warn!("couldn't turn the displays on (Sway): {e:#}");
         }
     } else if has_owner(&session, MUTTER).await {
         // GNOME: power-save mode 0 is "on".

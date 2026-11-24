@@ -46,6 +46,8 @@ pub fn keyboard_layout() -> (String, String) {
     };
     let found = if crate::hypr::active() {
         crate::hypr::keyboard_layout()
+    } else if crate::sway::active() {
+        crate::sway::keyboard_layout()
     } else if is_gnome() {
         from_gnome()
     } else {
@@ -81,6 +83,9 @@ pub async fn switch(right: bool) -> Result<()> {
     }
     if crate::hypr::active() {
         return crate::hypr::switch_workspace(right).await;
+    }
+    if crate::sway::active() {
+        return crate::sway::switch_workspace(right).await;
     }
     if is_gnome() {
         crate::shell::switch_workspace(right).await?;

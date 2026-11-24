@@ -86,7 +86,7 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   session's DISPLAY and starts the unit where graphical-session.target is never reached. Tests against Xvfb
   (`Xvfb :97 -screen 0 1280x720x24 -nolisten tcp`): `DISPLAY=:97 XDG_SESSION_TYPE=x11 VYOMA_X11_TEST=1 cargo test
   --release --lib x11::` in companion, `... cargo test --release presenter_x11` in daemon. Not yet run on a real
-  Cinnamon/MATE/Xfce session; wlroots (Sway, Hyprland) input still has no path.
+  Cinnamon/MATE/Xfce session (wlroots compositors: the Hyprland bullet below).
 - Hyprland (and other compositors with wlr's virtual pointer + virtual keyboard: Sway, river, labwc...), by probing, not
   names: `companion/src/wlr.rs` is input there (before the portal; daemon `input.rs` `Sink::Wlr`, `screen.rs` `Via::Wlr`);
   `companion/src/hypr.rs` talks to Hyprland's IPC socket (a listening `$XDG_RUNTIME_DIR/hypr/*/.socket.sock`; 0.57 takes
@@ -103,7 +103,11 @@ install -Dm755 desktop/companion/target/release/vyoma-companion ~/.local/bin/ &&
   `pipewire`, `wireplumber` (a conf.d file with every `monitor.*` disabled, so no sound card is touched), then
   `/usr/lib/xdg-desktop-portal-hyprland` and `/usr/lib/xdg-desktop-portal` with XDG_CURRENT_DESKTOP=Hyprland; the picker is
   `screencopy { custom_picker_binary = <script> }` in $XDG_CONFIG_HOME/hypr/xdph.conf printing `[SELECTION]/screen:<monitor>`;
-  Hyprland's portal sends a picture only once the screen changes, so the stream wakes it with an invisible layer-shell overlay until the first (`wlr::touch_screens`); `VYOMA_CAST_STILL=1` skips that, `VYOMA_CAST_SECS=<n>` counts longer, per second. Never
+  Hyprland's portal sends a picture only once the screen changes, so the stream wakes it with an invisible layer-shell overlay until the first (`wlr::touch_screens`); `VYOMA_CAST_STILL=1` skips that, `VYOMA_CAST_SECS=<n>` counts longer, per second. Sway: `companion/src/sway.rs`
+  (its IPC socket, i3's protocol: workspaces, displays on, log out, the config's xkb_layout and swaybg file);
+  test in the same nested KWin with Sway unpacked from the distro's packages into a scratch dir (`WLR_BACKENDS=wayland`,
+  LD_LIBRARY_PATH for its wlroots): `VYOMA_SWAY_TEST=1 [VYOMA_SWAY_WALLPAPER=<path>] cargo test --release --lib sway::`,
+  its config with `xkb_layout de`. Never
   `pgrep -x kwin_wayland` to stop it (the real KWin matches): kill by pid.
 - `desktop/windows` (`vyoma-windows`, `docs/PLAN.md` section 11, Windows): the PC side on Windows on core and the engine
   (`platform.rs` `Windows::offers`): a notification-area agent (`tray.rs`: icon, Open/Quit, balloons where there are no toasts, the session

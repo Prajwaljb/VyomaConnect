@@ -25,6 +25,7 @@ pub struct Session {
     /// Vyoma's GNOME extension is running.
     pub extension: bool,
     pub hyprland: bool,
+    pub sway: bool,
     pub kwin: bool,
     /// The compositor's Wayland protocols.
     pub globals: Vec<String>,
@@ -50,6 +51,7 @@ impl Session {
             gnome,
             extension: gnome && crate::shell::available().await,
             hyprland: crate::hypr::active(),
+            sway: crate::sway::active(),
             kwin,
             virtual_input: !x11 && crate::wlr::offered(),
             globals,
@@ -65,10 +67,11 @@ impl Session {
 
     /// Whose virtual pointer it is, for the words ([start]: at the start of a sentence).
     fn compositor(&self, start: bool) -> &'static str {
-        match (self.hyprland, start) {
-            (true, _) => "Hyprland's",
-            (false, true) => "The compositor's",
-            (false, false) => "the compositor's",
+        match (self.hyprland, self.sway, start) {
+            (true, _, _) => "Hyprland's",
+            (_, true, _) => "Sway's",
+            (_, _, true) => "The compositor's",
+            _ => "the compositor's",
         }
     }
 
@@ -152,6 +155,8 @@ impl Session {
             Way::found(NAME, "The window manager's desktops (EWMH)")
         } else if self.hyprland {
             Way::found(NAME, "Hyprland's workspaces, over its socket")
+        } else if self.sway {
+            Way::found(NAME, "Sway's workspaces, over its IPC socket")
         } else if self.gnome {
             if self.extension { Way::found(NAME, "Vyoma's GNOME extension") } else { Way::missing(NAME, NEEDS_EXTENSION) }
         } else if self.kwin {
@@ -199,6 +204,14 @@ mod tests {
         assert_eq!(w[1].2, "Wayland's data-control, through wl-clipboard");
         assert_eq!(w[2].2, "The ScreenCast portal, touches through Hyprland's virtual pointer");
         assert!(w.iter().all(|w| w.1), "everything has a way: {w:?}");
+    }
+
+    #[test]
+    fn sway_has_its_workspaces() {
+        let s = Session { sway: true, virtual_input: true, screencast_portal: true, globals: vec![LAYER_SHELL.into()], shooter: Some(Shooter::Grim), ..Default::default() };
+        let w = names(&s);
+        assert_eq!(w[0].2, "Sway's virtual pointer and keyboard");
+        assert_eq!((w[5].1, w[5].2.as_str()), (true, "Sway's workspaces, over its IPC socket"));
     }
 
     #[test]

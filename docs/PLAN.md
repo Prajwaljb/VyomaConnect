@@ -137,7 +137,8 @@ desktop/companion/     Rust daemon (Phase 2)
   Transport: UDP state snapshots with AEAD (ChaCha20-Poly1305, session key from TLS), <10 ms on LAN/USB.
 - **Phone mirroring + control from PC (done 2026-11-04):** MediaProjection → H.264 → a companion window
   (GStreamer via XWayland); mouse, wheel and keyboard come back through a user-enabled accessibility service.
-  Not yet: phone audio to the PC, clipboard paste into the phone from the window.
+  Since then: the phone's sound plays on the PC (`vyoma.mirror.audio`), and Ctrl+V / Shift+Insert in the window
+  types the PC's clipboard into the phone.
 - **Phone as PC webcam/mic (done 2026-11-04):** Camera2 → H.264 → companion → v4l2loopback "Vyoma Phone
   Camera"; mic → PipeWire source "Vyoma Phone Mic". Preview, zoom (incl. ultra-wide), torch and a notification
   Stop are in. Not yet: tried in real call apps.
@@ -476,7 +477,7 @@ Linux, the order each capability tries (as the code does it, and This PC's repor
 | Input | X11 XTEST (an X11 session) → wlr virtual pointer + virtual keyboard (Hyprland, Sway, river) → RemoteDesktop portal (KDE, GNOME) |
 | Clipboard | X11 selections → GNOME extension → ext/wlr data-control (KWin, Hyprland, Sway, COSMIC) |
 | Overlay | X11 override-redirect → GNOME extension → layer-shell |
-| Workspaces | EWMH → Hyprland IPC → GNOME extension → KWin (no Sway yet) |
+| Workspaces | EWMH → Hyprland IPC → Sway IPC → GNOME extension → KWin |
 | Screen | ScreenCast portal (xdg-desktop-portal-hyprland too) → X11 ximagesrc |
 | Screenshot | X11 (ximagesrc) → GNOME extension → Spectacle → grim (wlr screencopy) |
 | Lock | logind lock-session (the session's locker: KDE, GNOME, hyprlock/swaylock through their idle daemon) |
@@ -520,6 +521,17 @@ layer-shell overlay that takes no clicks (`wlr::touch_screens`, every 300 ms, at
 the first picture then came after 0.8 s. Still so: the pointer moving alone sends no new picture
 (a touch from the phone changes what's under it, which does). Not yet tried: hyprexpo's overview
 (plugin not installed; its Lua dispatcher name is a guess).
+
+### Sway
+Done (2026-11-24), checked against Sway 1.12 (wlroots 0.20, unpacked from the distro's signed
+packages into a scratch folder) nested in a headless KWin: `companion/src/sway.rs` speaks Sway's
+IPC socket (i3's protocol; `$SWAYSOCK`, else the only listening `sway-ipc.<uid>.*.sock`) for the
+workspaces (Hyprland's swipe rules: past the last to a new number, nothing past the first), the
+displays' power (`output * power on`, `dpms` before 1.8), log out, the keyboard layout (the
+config's `xkb_layout`, else XKB_DEFAULT_*) and swaybg's wallpaper (the config's last `output ... bg`,
+else swww). Input, data-control, the layer-shell dot, grim and the cast's wake were already the
+wlroots ways. This PC reads "Sway's virtual pointer and keyboard" and "Sway's workspaces". Not
+done: the swipe up (Sway has no overview), Sway's lock state (logind's LockedHint only).
 
 ### Windows
 - `vyoma-windows` on the engine; the window reaches it over a named pipe. Backends: Win32 clipboard,

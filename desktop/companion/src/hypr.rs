@@ -96,7 +96,7 @@ pub async fn switch_workspace(right: bool) -> Result<()> {
 }
 
 #[derive(Debug, PartialEq)]
-enum Beside {
+pub(crate) enum Beside {
     /// One in use that way (Hyprland's `e±1`, which only wraps round when there's none).
     InUse,
     /// A new one after the last (`r+1`).
@@ -104,7 +104,7 @@ enum Beside {
 }
 
 /// Where a swipe from workspace [here] goes, among the (normal) workspaces [ids] in use.
-fn workspace_beside(here: i64, ids: &[i64], right: bool) -> Option<Beside> {
+pub(crate) fn workspace_beside(here: i64, ids: &[i64], right: bool) -> Option<Beside> {
     if right {
         Some(if ids.iter().any(|&id| id > here) { Beside::InUse } else { Beside::New })
     } else {
@@ -256,7 +256,7 @@ fn parse_hyprpaper(text: &str) -> Option<PathBuf> {
 }
 
 /// swww's `query`: ": DP-1: 2560x1440, scale: 1, currently displaying: image: /path/a.jpg".
-fn parse_swww(text: &str) -> Option<PathBuf> {
+pub(crate) fn parse_swww(text: &str) -> Option<PathBuf> {
     text.lines().find_map(|l| l.split_once("image: ")).map(|(_, p)| PathBuf::from(p.trim())).filter(|p| p.is_absolute())
 }
 
