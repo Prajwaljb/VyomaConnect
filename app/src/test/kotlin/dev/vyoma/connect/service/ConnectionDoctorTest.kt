@@ -68,4 +68,14 @@ class ConnectionDoctorTest {
         assertTrue(ConnectionDoctor.samePrefix(b("10.0.3.1"), b("10.0.200.9"), 16))
         assertFalse(ConnectionDoctor.samePrefix(b("10.0.0.1"), b("fd00::1"), 8))
     }
+
+    @Test
+    fun aHotspotIsntOffWifi() {
+        val hotspot = fine.copy(onLan = false, hosting = true, sameNetwork = null, probe = Probe.NOT_TRIED)
+        val said = ConnectionDoctor.findings(hotspot).map { it.title }
+        assertTrue(said.none { "isn't on Wi-Fi" in it })
+        assertTrue(said.first().contains("hotspot"))
+        // On it and answering: no hotspot advice.
+        assertTrue(ConnectionDoctor.findings(hotspot.copy(sameNetwork = true, probe = Probe.ANSWERS)).none { "hotspot" in it.title })
+    }
 }

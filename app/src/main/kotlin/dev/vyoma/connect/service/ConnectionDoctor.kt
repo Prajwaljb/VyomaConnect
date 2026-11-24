@@ -51,6 +51,8 @@ object ConnectionDoctor {
         /** Whether the PC's last address is on the phone's network now; null when there's nothing to compare. */
         val sameNetwork: Boolean?,
         val probe: Probe,
+        /** This phone is a hotspot (or tethering): PCs reach it there with no Wi-Fi network. */
+        val hosting: Boolean = false,
     )
 
     /** The causes, likeliest first: the first is what a card leads with. */
@@ -58,15 +60,18 @@ object ConnectionDoctor {
         if (!f.localNetworkAllowed) add(
             Finding("Vyoma can't look on this network", "Android asks first. Allow it, and Vyoma finds ${f.pcName} by itself.", Fix.ALLOW_LOCAL_NETWORK),
         )
-        if (!f.onLan) add(
+        if (!f.onLan && !f.hosting) add(
             Finding("This phone isn't on Wi-Fi", "Join the same Wi-Fi as ${f.pcName}, or plug the phone into it with a USB cable.", Fix.WIFI_SETTINGS),
+        )
+        if (f.hosting && !f.onLan && f.sameNetwork != true && f.probe != Probe.ANSWERS && f.probe != Probe.REFUSED) add(
+            Finding("${f.pcName} isn't on this phone's hotspot", "Connect ${f.pcName} to this phone's hotspot, or plug the phone in with a USB cable. Vyoma finds it there by itself."),
         )
         when (f.probe) {
             Probe.ANSWERS -> add(Finding("${f.pcName} answers: connecting", "Not connected in a few seconds? Open Vyoma on the PC."))
             Probe.REFUSED -> add(Finding("Vyoma isn't running on ${f.pcName}", "${f.pcName} is on and on this Wi-Fi. Open Vyoma on it to start it again."))
             else -> Unit
         }
-        if (f.sameNetwork == false && f.probe != Probe.ANSWERS && f.probe != Probe.REFUSED) add(
+        if (f.sameNetwork == false && f.onLan && f.probe != Probe.ANSWERS && f.probe != Probe.REFUSED) add(
             Finding("Your phone and ${f.pcName} are on different networks", "Put both on the same Wi-Fi. A PC plugged into the router counts as the same network.", Fix.WIFI_SETTINGS),
         )
         if (f.probe == Probe.BLOCKED) add(
@@ -109,12 +114,23 @@ object ConnectionDoctor {
         val last = trusted?.lastAddress?.let { a -> runCatching { InetAddress.getByName(a) }.getOrNull() }
             ?.takeUnless { it.isLoopbackAddress || it.isAnyLocalAddress || it.isMulticastAddress }
         val port = trusted?.lastPort ?: 1716
-        val sameNetwork = last?.let { address -> lan.takeIf { it.isNotEmpty() }?.any { onSubnet(connectivity, it, address) } }
+        // This phone's hotspot or tethering: not a network Android lists, but PCs on it are local.
+        val net = AndroidNetwork(app)
+        val tether = net.tetherSubnets()
+        val onTether = last != null && tether.any { (mine, prefix) -> net.sameSubnet(mine, last, prefix) }
+        val sameNetwork = last?.let { address ->
+            if (onTether) true else lan.takeIf { it.isNotEmpty() || tether.isNotEmpty() }?.any { onSubnet(connectivity, it, address) }
+        }
         val network = lan.firstOrNull { last != null && onSubnet(connectivity, it, last) } ?: lan.firstOrNull()
-        val probe = if (last == null || network == null) Probe.NOT_TRIED else knock(network, last, port)
+        val probe = when {
+            last == null -> Probe.NOT_TRIED
+            onTether -> knock(null, last, port)
+            network == null -> Probe.NOT_TRIED
+            else -> knock(network, last, port)
+        }
         if (probe == Probe.ANSWERS) runCatching { hub.dial(last!!, port) }
-        VLog.i(TAG, "away: lan=${lan.isNotEmpty()} vpn=$vpn allowed=$allowed same=$sameNetwork probe=$probe")
-        Facts(pcName, lan.isNotEmpty(), vpn, allowed, sameNetwork, probe)
+        VLog.i(TAG, "away: lan=${lan.isNotEmpty()} hosting=${tether.isNotEmpty()} vpn=$vpn allowed=$allowed same=$sameNetwork probe=$probe")
+        Facts(pcName, lan.isNotEmpty(), vpn, allowed, sameNetwork, probe, hosting = tether.isNotEmpty())
     }
 
     private fun onSubnet(connectivity: ConnectivityManager, network: Network, address: InetAddress): Boolean =
@@ -143,11 +159,12 @@ object ConnectionDoctor {
      * refuses sends "not allowed" back at once; a PC that isn't there leaves the phone asking for
      * it for a few seconds first, so a quick "no route" is the firewall.
      */
-    private fun knock(network: Network, address: InetAddress, port: Int): Probe {
+    /** [network] null: the phone's own hotspot or tethering, which no network object stands for. */
+    private fun knock(network: Network?, address: InetAddress, port: Int): Probe {
         val started = SystemClock.elapsedRealtime()
         return try {
             Socket().use { s ->
-                network.bindSocket(s)
+                network?.bindSocket(s)
                 s.connect(InetSocketAddress(address, port), KNOCK_MS)
             }
             Probe.ANSWERS

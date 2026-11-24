@@ -42,6 +42,10 @@ class AndroidNetwork(private val context: Context) {
      * VPN. Tailscale and other VPN addresses fall through to the default (VPN) route.
      */
     private fun route(socket: Any, target: InetAddress) {
+        // Nowhere local to send it (off Wi-Fi: mobile data only, or this phone's hotspot on another
+        // subnet): refused here, as otherwise it left over mobile data, waking the modem for a
+        // home-network address the carrier drops, on every retry.
+        if (!isLocal(target)) throw java.io.IOException("no local network for ${target.hostAddress}")
         val network = lanNetworkFor(target) ?: return
         runCatching {
             when (socket) {
@@ -68,7 +72,51 @@ class AndroidNetwork(private val context: Context) {
         }
     }
 
-    private fun sameSubnet(a: InetAddress, b: InetAddress, prefix: Int): Boolean {
+    /**
+     * Whether [target] can be reached without mobile data: loopback (the cable's tunnel), an
+     * address on Wi-Fi, Ethernet, USB or a VPN's routes, an address on this phone's own hotspot or
+     * tethering, or a public one (a VPN or the internet takes it, as before). A private address on
+     * none of those is a network the phone isn't on now.
+     */
+    private fun isLocal(target: InetAddress): Boolean {
+        if (target.isLoopbackAddress) return true
+        @Suppress("DEPRECATION")
+        val networks = connectivity.allNetworks.mapNotNull { n -> connectivity.getNetworkCapabilities(n)?.let { n to it } }
+            .filter { (_, caps) -> !caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) || caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
+        if (target.hostAddress == "255.255.255.255") {
+            // The limited broadcast follows the default network: only with Wi-Fi, Ethernet or USB up.
+            return networks.any { (_, caps) -> !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
+        }
+        val isPrivate = target.isSiteLocalAddress || target.isLinkLocalAddress
+        if (!isPrivate) return true
+        // A VPN may carry it (a home WireGuard tunnel routes everything, the home network too).
+        if (networks.any { (_, caps) -> caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }) return true
+        val onNetwork = networks.any { (n, _) ->
+            val props = connectivity.getLinkProperties(n) ?: return@any false
+            props.routes.any { r -> r.destination.prefixLength > 0 && r.matches(target) } ||
+                props.linkAddresses.any { la -> sameSubnet(la.address, target, la.prefixLength) }
+        }
+        return onNetwork || tetherSubnets().any { (address, prefix) -> sameSubnet(address, target, prefix) }
+    }
+
+    /**
+     * This phone's own local networks Android doesn't list as networks: its hotspot, USB or Bluetooth
+     * tethering (an up interface with an IPv4 broadcast address that no network owns), as address
+     * and prefix length.
+     */
+    fun tetherSubnets(): List<Pair<InetAddress, Int>> = runCatching {
+        @Suppress("DEPRECATION")
+        val owned = connectivity.allNetworks.mapNotNull { connectivity.getLinkProperties(it)?.interfaceName }.toSet()
+        NetworkInterface.getNetworkInterfaces().toList()
+            .filter { it.isUp && !it.isLoopback && it.name !in owned }
+            .flatMap { iface -> iface.interfaceAddresses.filter { it.address is Inet4Address && it.broadcast != null && it.address.isSiteLocalAddress } }
+            .map { it.address to it.networkPrefixLength.toInt() }
+    }.getOrDefault(emptyList())
+
+    /** The phone is a hotspot, or tethering by USB or Bluetooth: PCs can reach it with no Wi-Fi network. */
+    fun hosting(): Boolean = tetherSubnets().isNotEmpty()
+
+    fun sameSubnet(a: InetAddress, b: InetAddress, prefix: Int): Boolean {
         val x = a.address
         val y = b.address
         if (x.size != y.size) return false
@@ -159,6 +207,34 @@ class AndroidNetwork(private val context: Context) {
     }
 
     private var lanCallback: ConnectivityManager.NetworkCallback? = null
+    private var tetherReceiver: android.content.BroadcastReceiver? = null
+
+    /**
+     * Calls [onChange] when the hotspot or tethering starts or stops. Android has no public callback
+     * for it; these system broadcasts reach receivers registered while the app runs.
+     */
+    fun watchHosting(onChange: (Boolean) -> Unit) {
+        unwatchHosting()
+        val receiver = object : android.content.BroadcastReceiver() {
+            // The interface comes up a moment after the broadcast: looked at again shortly after.
+            override fun onReceive(c: Context, i: android.content.Intent) {
+                val main = android.os.Handler(android.os.Looper.getMainLooper())
+                for (wait in longArrayOf(0, 1_500, 4_000)) main.postDelayed({ onChange(hosting()) }, wait)
+            }
+        }
+        val filter = android.content.IntentFilter().apply {
+            addAction("android.net.wifi.WIFI_AP_STATE_CHANGED")
+            addAction("android.net.conn.TETHER_STATE_CHANGED")
+        }
+        runCatching { androidx.core.content.ContextCompat.registerReceiver(context, receiver, filter, androidx.core.content.ContextCompat.RECEIVER_EXPORTED) }
+            .onSuccess { tetherReceiver = receiver }
+            .onFailure { VLog.w(TAG, "can't follow the hotspot: ${it.message}") }
+    }
+
+    fun unwatchHosting() {
+        tetherReceiver?.let { runCatching { context.unregisterReceiver(it) } }
+        tetherReceiver = null
+    }
 
     /** True while the phone is on Wi-Fi or Ethernet (VPNs and mobile data don't count). */
     fun onLan(): Boolean {

@@ -17,7 +17,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -194,6 +199,12 @@ class BluetoothTunnel(private val context: Context, private val hub: DeviceHub, 
     private val nextTry = HashMap<String, Long>()
     private val wait = HashMap<String, Long>()
 
+    /** Every device's state, emitting whenever any link comes or goes. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val linkChanges = hub.devices.flatMapLatest { devices ->
+        if (devices.isEmpty()) flowOf(emptyList()) else combine(devices.values.map { it.state }) { states -> states.map { it.isReachable to it.transports } }
+    }.distinctUntilChanged()
+
     fun start() {
         if (job != null) return
         BluetoothFallback.init(context)
@@ -201,8 +212,11 @@ class BluetoothTunnel(private val context: Context, private val hub: DeviceHub, 
             while (isActive) {
                 runCatching { tick() }.onFailure { VLog.w(TAG, "tick failed", it) }
                 // Switched off it only learns the PCs' addresses, which change rarely; switched on, at once.
-                if (BluetoothFallback.enabled.value) delay(TICK_MS)
-                else withTimeoutOrNull(IDLE_TICK_MS) { BluetoothFallback.enabled.first { it } }
+                // On with every PC linked over Wi-Fi or the cable there's nothing to do until a link
+                // changes: no 5 s tick all day (and night) for a radio that isn't needed.
+                if (!BluetoothFallback.enabled.value) withTimeoutOrNull(IDLE_TICK_MS) { BluetoothFallback.enabled.first { it } }
+                else if (hub.anyPairedOffline()) delay(TICK_MS)
+                else withTimeoutOrNull(IDLE_TICK_MS) { linkChanges.drop(1).first() }
             }
         }
     }
@@ -320,7 +334,8 @@ class BluetoothTunnel(private val context: Context, private val hub: DeviceHub, 
         val down = scope.launch(Dispatchers.IO) { pipe(radio.inputStream, socket.getOutputStream()) }
         val both = listOf(up, down)
         try {
-            while (both.all { it.isActive }) delay(PIPE_CHECK_MS)
+            // Woken when one ends, not polled twice a second for as long as the link lasts.
+            kotlinx.coroutines.selects.select<Unit> { both.forEach { job -> job.onJoin {} } }
         } finally {
             both.forEach { it.cancel() }
         }
@@ -360,6 +375,5 @@ class BluetoothTunnel(private val context: Context, private val hub: DeviceHub, 
         const val FIRST_RETRY_MS = 20_000L
         const val MAX_RETRY_MS = 300_000L
         const val ACCEPT_TIMEOUT_MS = 10_000
-        const val PIPE_CHECK_MS = 500L
     }
 }

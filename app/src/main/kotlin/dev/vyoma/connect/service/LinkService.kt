@@ -50,6 +50,7 @@ import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.stateIn
 
 /**
  * The one long-lived component. Runs the hub while the app is in use or devices are
@@ -311,8 +312,21 @@ class LinkService : LifecycleService() {
      * ([OutdoorReceiver]) when Wi-Fi or Ethernet comes up; opening the app starts it too.
      */
     private fun watchOutdoors(anyConnected: Flow<Boolean>) {
-        val onLan = MutableStateFlow(network.onLan())
-        network.watchLan { onLan.value = it }
+        // This phone's own hotspot (or USB/Bluetooth tethering) is a local network too: a PC on it
+        // reaches Vyoma with no Wi-Fi around, so outdoor mode mustn't stop it.
+        val wifi = MutableStateFlow(network.onLan())
+        val hosting = MutableStateFlow(network.hosting())
+        network.watchLan { wifi.value = it }
+        network.watchHosting { on ->
+            if (on && !hosting.value) {
+                // Just started: tell the PCs on it at once, and keep telling them as they join.
+                hub?.stopResting()
+                hub?.refresh()
+            }
+            hosting.value = on
+        }
+        val onLan = combine(wifi, hosting) { w, h -> w || h }.distinctUntilChanged()
+            .stateIn(lifecycleScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, wifi.value || hosting.value)
         // Back on Wi-Fi (maybe another one, where the PC still is): look for them all again.
         lifecycleScope.launch { onLan.drop(1).collect { if (it) hub?.stopResting() } }
         lifecycleScope.launch {
@@ -395,6 +409,7 @@ class LinkService : LifecycleService() {
     override fun onDestroy() {
         screen.stop()
         network.unwatchLan()
+        network.unwatchHosting()
         mediaSession?.stop()
         mdns?.stop()
         usb?.stop()
