@@ -68,6 +68,8 @@ pub async fn cannot_lock() -> Option<&'static str> {
     (!reply.body().deserialize::<bool>().ok()?).then_some("GNOME locks the screen only when you sign in through its login screen (GDM), so locking from your phone waits for that.")
 }
 const SCREENSAVER_PATH: &str = "/org/gnome/ScreenSaver";
+/// How often Hyprland's lock is asked about.
+const HYPR_LOCK_EVERY: Duration = Duration::from_secs(1);
 
 impl Session {
     pub async fn find(system: Connection) -> Result<Self> {
@@ -89,6 +91,13 @@ impl Session {
     }
 
     pub async fn locked(&self) -> Result<bool> {
+        // Hyprland knows whichever program locked it; logind only hears from lockers that tell it.
+        // An older Hyprland can't say (no `locked` request): logind's word then.
+        if vyoma_companion::hypr::active()
+            && let Ok(locked) = vyoma_companion::hypr::locked().await
+        {
+            return Ok(locked);
+        }
         if let Some(conn) = &self.gnome {
             if cannot_lock().await.is_some() {
                 return Ok(false);
@@ -117,11 +126,31 @@ impl Session {
         let method = if lock { "Lock" } else { "Unlock" };
         let path = self.path().await?;
         self.conn.call_method(Some(LOGIN), path.as_str(), Some(SESSION), method, &()).await.with_context(|| format!("logind {method}"))?;
+        if vyoma_companion::hypr::active() {
+            vyoma_companion::hypr::follow_logind(lock).await?;
+        }
         Ok(())
     }
 
     /// Each change of the lock, as it happens: any session's, kept if it's the display session now.
     pub async fn watch(&self, out: tokio::sync::mpsc::UnboundedSender<bool>) -> Result<()> {
+        // Hyprland says no lock change on its event socket: asked each second, changes sent. One that
+        // can't say (older than its `locked` request) is followed through logind below instead.
+        if vyoma_companion::hypr::active()
+            && let Ok(first) = vyoma_companion::hypr::locked().await
+        {
+            let mut last = Some(first);
+            loop {
+                tokio::time::sleep(HYPR_LOCK_EVERY).await;
+                let Ok(now) = vyoma_companion::hypr::locked().await else { continue };
+                if last != Some(now) {
+                    last = Some(now);
+                    if out.send(now).is_err() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
         if let Some(conn) = &self.gnome {
             let rule = MatchRule::builder().msg_type(zbus::message::Type::Signal).interface(SCREENSAVER).member("ActiveChanged").path(SCREENSAVER_PATH).build()?;
             let mut stream = MessageStream::for_match_rule(rule, conn, None).await?;

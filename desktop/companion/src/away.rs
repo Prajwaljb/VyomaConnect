@@ -88,6 +88,10 @@ async fn lock() -> anyhow::Result<()> {
     system
         .call_method(Some("org.freedesktop.login1"), "/org/freedesktop/login1/session/auto", Some("org.freedesktop.login1.Session"), "Lock", &())
         .await?;
+    // On Hyprland the lock screen may not follow logind: then hyprlock, if it's there.
+    if crate::hypr::active() {
+        crate::hypr::follow_logind(true).await?;
+    }
     Ok(())
 }
 

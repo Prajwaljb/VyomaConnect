@@ -114,20 +114,20 @@ mod agent {
     use crate::{away, calls, control, firewall, input, media, platform, presenter, system, tray, update, usb, win};
     use vyoma_core::adb::ClipboardSeen;
 
-    use vyoma_engine::stock::{self, BATTERY, Desk, FIND, LOCK_REQUEST, PING, battery_packet};
+    use vyoma_engine::stock::{self, BATTERY, Desk, FIND, LOCK, LOCK_REQUEST, PING, battery_packet, lock_packet};
     use vyoma_engine::notifications::{self, Incoming, NOTIFICATION, NOTIFICATION_ACTION, NOTIFICATION_REPLY, NOTIFICATION_REQUEST};
     pub const KEYBOARDSTATE: &str = "kdeconnect.mousepad.keyboardstate";
     /// PC → phone just before the agent stops (`why`: stop): the phone stops looking for it.
     pub const LEAVING: &str = "vyoma.pc.leaving";
 
-    /// What we take and send. No lock state outward yet (WTS session notifications, later).
+    /// What we take and send.
     const INCOMING: &[&str] = &[
         PING, BATTERY, FIND, LOCK_REQUEST, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, RUNCOMMAND_REQUEST, NOTIFICATION, input::MOUSEPAD_REQUEST,
         media::MPRIS_REQUEST, media::VOLUME_REQUEST, telephony::TELEPHONY, telephony::DONE, presenter::PRESENTER,
         messages::MESSAGES, messages::CONTACTS_UIDS_REPLY, messages::CONTACTS_VCARDS_REPLY, messages::UNLOCKED, messages::LOCKED,
     ];
     const OUTGOING: &[&str] = &[
-        PING, BATTERY, FIND, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, RUNCOMMAND, input::MOUSEPAD_ECHO, KEYBOARDSTATE, media::MPRIS, media::VOLUME,
+        PING, BATTERY, FIND, LOCK, CLIPBOARD, CLIPBOARD_CONNECT, SHARE, SHARE_UPDATE, RUNCOMMAND, input::MOUSEPAD_ECHO, KEYBOARDSTATE, media::MPRIS, media::VOLUME,
         messages::REQUEST, messages::REQUEST_CONVERSATIONS, messages::REQUEST_CONVERSATION, messages::CONTACTS_UIDS, messages::CONTACTS_VCARDS,
         messages::UNLOCK, messages::LOCK, vyoma_engine::calls::DIAL, LEAVING, NOTIFICATION_REQUEST, NOTIFICATION_REPLY, NOTIFICATION_ACTION, telephony::MUTE,
         telephony::REQUEST,
@@ -196,11 +196,13 @@ mod agent {
         if std::fs::metadata(&path).is_ok_and(|m| m.len() > LOG_MAX) {
             let _ = std::fs::remove_file(&path);
         }
-        let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "vyoma_windows=info,vyoma_core=info,vyoma_engine=info".into());
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "error,vyoma_windows=info,vyoma_core=info,vyoma_engine=info".into());
         match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
             Ok(file) => tracing_subscriber::fmt().with_env_filter(filter).with_ansi(false).with_writer(Mutex::new(file)).init(),
             Err(_) => tracing_subscriber::fmt().with_env_filter(filter).init(),
         }
+        // No console: a panicking thread would otherwise stop without a word.
+        vyoma_core::panics::log();
     }
 
     /// Screenshots and touches in real pixels on every display, not Windows' scaled guess.
@@ -248,6 +250,7 @@ mod agent {
             linked: Box::new(move |id| linked.lock().unwrap().contains(id)),
         };
         let ports = ports()?;
+        let udp_port = ports.udp;
         let everyone = announce_to(ports.udp)?;
         let lan = Lan::bind(me.clone(), identity(&me, win::name(), battery.is_some()), rules, ports).await?;
         let (links_tx, links) = mpsc::channel(16);
@@ -292,7 +295,7 @@ mod agent {
             lan: lan.clone(),
             commands: commands.clone(),
             changes: changes.clone(),
-            everyone,
+            everyone: everyone.clone(),
             run: run_commands.clone(),
             texts: texts.clone(),
             permits: permits.clone(),
@@ -359,9 +362,25 @@ mod agent {
         let (answers_tx, mut answers) = mpsc::unbounded_channel::<(String, String, bool)>();
         let mut ringer = win::Ringer::default();
         let arrivals = Arc::new(stock::Arrivals::default());
+        // Told again on a new network (the phone's hotspot, another Wi-Fi) and after sleep: before,
+        // only at start, so phones found this PC only when they next looked (15 min, screen off).
+        let (moved_tx, mut moved) = mpsc::unbounded_channel();
+        tokio::spawn(vyoma_core::networks::follow(moved_tx));
+        let named_only = list_env("VYOMA_ANNOUNCE").is_some();
 
         loop {
             tokio::select! {
+                Some(why) = moved.recv() => {
+                    let mut to = everyone.clone();
+                    if !named_only {
+                        to.extend(vyoma_core::networks::broadcasts().into_iter().map(|b| SocketAddr::from((b, udp_port))));
+                        to.extend(devices.values().filter(|d| d.paired).filter_map(|d| d.remote).map(|ip| SocketAddr::new(ip, udp_port)));
+                    }
+                    tracing::info!("{why}: telling the phones");
+                    if let Err(e) = lan.announce(&to).await {
+                        tracing::warn!("couldn't announce: {e:#}");
+                    }
+                }
                 Some(event) = events.recv() => {
                     if changes_details(&event) {
                         let _ = changes.send(json!({ "event": "Changed" }));
@@ -627,6 +646,13 @@ mod agent {
                 Some(s) = said.recv() => match s {
                     tray::Said::Open => open_window(&[]),
                     tray::Said::Quit | tray::Said::Ending => break,
+                    tray::Said::Locked(locked) => {
+                        for (id, d) in &devices {
+                            if d.takes(LOCK) {
+                                send(id, lock_packet(locked));
+                            }
+                        }
+                    }
                 },
                 _ = battery_tick.tick() => {
                     let now = win::battery();
@@ -936,12 +962,15 @@ mod agent {
         )
     }
 
-    /// What a paired device that just linked is sent: this PC's battery, its clipboard, and that
-    /// it takes typing (the phone's keyboard button).
+    /// What a paired device that just linked is sent: this PC's battery, whether it's locked, its
+    /// clipboard, and that it takes typing (the phone's keyboard button).
     fn started(d: &Device, battery: Option<win::Battery>, clip: &Clipboard) -> Vec<Value> {
         let mut out = Vec::new();
         if let Some(b) = battery.filter(|_| d.takes(BATTERY)) {
             out.push(battery_packet(b));
+        }
+        if let Some(locked) = tray::locked().filter(|_| d.takes(LOCK)) {
+            out.push(lock_packet(locked));
         }
         if let Some(p) = clip.connect_packet().filter(|_| d.takes(CLIPBOARD_CONNECT)) {
             out.push(p);
@@ -1025,8 +1054,12 @@ mod agent {
         }
 
         async fn set_locked(&mut self, lock: bool) -> Option<Result<()>> {
-            // Windows can be locked from outside, never unlocked.
-            lock.then(win::lock)
+            // Windows can be locked from outside, never unlocked: the phone says so where Unlock was pressed.
+            Some(if lock { win::lock() } else { Err(anyhow::anyhow!("{}", win::CANT_UNLOCK)) })
+        }
+
+        async fn locked(&mut self) -> Option<bool> {
+            tray::locked()
         }
 
         async fn copy(&mut self, text: &str) -> Result<()> {

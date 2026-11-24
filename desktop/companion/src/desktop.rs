@@ -35,7 +35,7 @@ pub fn keyboard_layout() -> (String, String) {
         return found;
     }
     let from_gnome = || {
-        let out = std::process::Command::new("gsettings").args(["get", "org.gnome.desktop.input-sources", "sources"]).output().ok()?;
+        let out = crate::run::output(std::process::Command::new("gsettings").args(["get", "org.gnome.desktop.input-sources", "sources"]), crate::run::QUICK)?;
         parse_gnome_sources(&String::from_utf8_lossy(&out.stdout))
     };
     let from_plasma = || {
@@ -171,19 +171,46 @@ pub async fn step(up: bool) -> Result<&'static str> {
 /// When the overview was opened from here: Hyprland doesn't say whether hyprexpo is showing.
 static EXPO: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
-/// Hyprland has no overview of its own; the hyprexpo plugin gives it one (up opens, down closes).
+/// Hyprland has no overview of its own: the hyprexpo plugin's (up opens, down closes), else Caelestia's launcher.
 async fn hypr_step(up: bool) -> Result<&'static str> {
-    if !crate::hypr::has_plugin("hyprexpo").await {
-        anyhow::bail!("Hyprland has no overview without its hyprexpo plugin");
+    if crate::hypr::has_plugin("hyprexpo").await {
+        let open = EXPO.lock().unwrap().is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(60));
+        if up == open {
+            return Ok(if open { "overview" } else { "windows" });
+        }
+        // hyprexpo's own dispatcher; not yet tried with the plugin loaded (Lua name as its docs give it).
+        crate::hypr::dispatch("hl.plugin.hyprexpo.expo(\"toggle\")", "hyprexpo:expo toggle").await?;
+        *EXPO.lock().unwrap() = up.then(std::time::Instant::now);
+        return Ok(if up { "overview" } else { "windows" });
     }
-    let open = EXPO.lock().unwrap().is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(60));
-    if up == open {
-        return Ok(if open { "overview" } else { "windows" });
+    // No overview in Hyprland itself: Caelestia's shell has an app launcher, which up opens as
+    // GNOME's swipe opens its apps grid, and down closes.
+    if let Some(open) = caelestia_launcher().await {
+        if up != open {
+            caelestia(&["drawers", "toggle", "launcher"]).await.context("Caelestia's launcher")?;
+        }
+        return Ok(if up { "grid" } else { "windows" });
     }
-    // hyprexpo's own dispatcher; not yet tried with the plugin loaded (Lua name as its docs give it).
-    crate::hypr::dispatch("hl.plugin.hyprexpo.expo(\"toggle\")", "hyprexpo:expo toggle").await?;
-    *EXPO.lock().unwrap() = up.then(std::time::Instant::now);
-    Ok(if up { "overview" } else { "windows" })
+    anyhow::bail!("Hyprland has no overview: its hyprexpo plugin gives it one")
+}
+
+/// Whether Caelestia's launcher is open; None where Caelestia's shell isn't running.
+async fn caelestia_launcher() -> Option<bool> {
+    let out = caelestia(&["drawers", "isOpen", "launcher"]).await.ok()?;
+    // It answers 1 or 0 (a string from QML; true/false taken too).
+    match out.trim() {
+        "1" | "true" => Some(true),
+        "0" | "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// A call to Caelestia's shell over Quickshell's IPC (`qs -c caelestia ipc call ...`); what it said.
+async fn caelestia(args: &[&str]) -> Result<String> {
+    let run = tokio::process::Command::new("qs").args(["-c", "caelestia", "ipc", "call"]).args(args).kill_on_drop(true).output();
+    let out = tokio::time::timeout(std::time::Duration::from_secs(3), run).await.context("Caelestia didn't answer")?.context("no qs (Quickshell)")?;
+    anyhow::ensure!(out.status.success(), "Caelestia: {}", String::from_utf8_lossy(&out.stderr).trim());
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 #[cfg(test)]

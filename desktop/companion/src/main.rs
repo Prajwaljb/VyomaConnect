@@ -89,8 +89,9 @@ fn main() -> Result<()> {
 #[tokio::main]
 async fn daemon() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "vyoma_companion=info".into()))
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "error,vyoma_companion=info,vyoma_core=info,vyoma_engine=info".into()))
         .init();
+    vyoma_core::panics::log();
 
     let host = KdeHost::load()?;
     let me = Identity::load_or_create()?;

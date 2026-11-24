@@ -139,8 +139,9 @@ async fn only_agent(dir: &std::path::Path) -> Result<std::fs::File> {
 #[tokio::main]
 async fn run(dir: PathBuf) -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "vyoma_mac=info,vyoma_core=info".into()))
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "error,vyoma_mac=info,vyoma_core=info,vyoma_engine=info".into()))
         .init();
+    vyoma_core::panics::log();
     vyoma_core::identity::use_dir(dir.clone());
     let _only_agent = only_agent(&dir).await?;
     #[cfg(target_os = "macos")]
@@ -292,9 +293,22 @@ async fn run(dir: PathBuf) -> Result<()> {
     let (found_tx, mut found) = mpsc::unbounded_channel::<()>();
     let mut ringer = mac::Ringer::default();
     let arrivals = Arc::new(stock::Arrivals::default());
+    // Told again on a new network (the phone's hotspot, another Wi-Fi) and after sleep: before,
+    // only at start, so phones found this Mac only when they next looked (15 min, screen off).
+    let (moved_tx, mut moved) = mpsc::unbounded_channel();
+    tokio::spawn(vyoma_core::networks::follow(moved_tx));
 
     loop {
         tokio::select! {
+            Some(why) = moved.recv() => {
+                let mut to = everyone.to_vec();
+                to.extend(vyoma_core::networks::broadcasts().into_iter().map(|b| SocketAddr::from((b, UDP_PORT))));
+                to.extend(devices.values().filter(|d| d.paired).filter_map(|d| d.remote).map(|ip| SocketAddr::new(ip, UDP_PORT)));
+                tracing::info!("{why}: telling the phones");
+                if let Err(e) = lan.announce(&to).await {
+                    tracing::warn!("couldn't announce: {e:#}");
+                }
+            }
             Some(event) = events.recv() => { if changes_details(&event) { let _ = changes.send(json!({ "event": "Changed" })); } let event_was_link = matches!(event, Event::Linked { .. } | Event::Gone { .. } | Event::Paired { .. } | Event::Unpaired { .. }); match event {
                 Event::Linked { id, name, paired, incoming, cert, remote, .. } => {
                     let d = devices.entry(id.clone()).or_default();

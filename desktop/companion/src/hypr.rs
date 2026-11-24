@@ -17,7 +17,7 @@ const TIMEOUT: Duration = Duration::from_secs(3);
 /// most (the wallpaper watch asks often, and each look knocks on Hyprland's socket).
 fn instance() -> Option<PathBuf> {
     static SEEN: std::sync::Mutex<Option<(std::time::Instant, Option<PathBuf>)>> = std::sync::Mutex::new(None);
-    let mut seen = SEEN.lock().unwrap();
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((at, found)) = seen.as_ref()
         && at.elapsed() < Duration::from_secs(5)
     {
@@ -82,10 +82,34 @@ pub async fn json(what: &str) -> Result<Value> {
     serde_json::from_str(&out).with_context(|| format!("Hyprland's {what} isn't JSON"))
 }
 
-/// The next workspace with something on it, or the one before (round the end, as Hyprland's own `e+1`).
+/// The workspace beside this one, as Hyprland's own touchpad swipe goes: right to the next one in
+/// use, or past the last to a new empty one; left to the one before, and nowhere past the first.
 pub async fn switch_workspace(right: bool) -> Result<()> {
-    let to = if right { "e+1" } else { "e-1" };
+    let here = json("activeworkspace").await?["id"].as_i64().context("no active workspace")?;
+    let ids: Vec<i64> = json("workspaces").await?.as_array().into_iter().flatten().filter_map(|w| w["id"].as_i64()).filter(|&id| id > 0).collect();
+    let to = match workspace_beside(here, &ids, right) {
+        Some(Beside::InUse) => if right { "e+1" } else { "e-1" },
+        Some(Beside::New) => "r+1",
+        None => return Ok(()),
+    };
     dispatch(&format!("hl.dsp.focus({{ workspace = \"{to}\" }})"), &format!("workspace {to}")).await
+}
+
+#[derive(Debug, PartialEq)]
+enum Beside {
+    /// One in use that way (Hyprland's `e±1`, which only wraps round when there's none).
+    InUse,
+    /// A new one after the last (`r+1`).
+    New,
+}
+
+/// Where a swipe from workspace [here] goes, among the (normal) workspaces [ids] in use.
+fn workspace_beside(here: i64, ids: &[i64], right: bool) -> Option<Beside> {
+    if right {
+        Some(if ids.iter().any(|&id| id > here) { Beside::InUse } else { Beside::New })
+    } else {
+        ids.iter().any(|&id| id < here).then_some(Beside::InUse)
+    }
 }
 
 /// Lights every display again (the screen went dark idle).
@@ -97,6 +121,74 @@ pub async fn displays_on() -> Result<()> {
 /// Ends the Hyprland session (the phone's Log out).
 pub async fn exit() -> Result<()> {
     dispatch("hl.dsp.exit()", "exit").await
+}
+
+/// Whether a lock screen holds the session: Hyprland's own answer, whichever program draws it
+/// (a shell's, hyprlock...). logind's LockedHint is only set by lockers that bother (Caelestia's doesn't).
+pub async fn locked() -> Result<bool> {
+    json("locked").await?["locked"].as_bool().context("Hyprland didn't say whether it's locked")
+}
+
+/// How long a lock screen has to follow logind's Lock or Unlock before Vyoma does it itself.
+const FOLLOW: Duration = Duration::from_secs(2);
+/// How long hyprlock has to come up, or go, once asked here.
+const SETTLE: Duration = Duration::from_secs(3);
+
+/// After logind was asked to lock ([lock]) or unlock this session. What listens to logind does it
+/// (a shell such as Caelestia's, hypridle's lock_cmd and unlock_cmd); where nothing does, hyprlock
+/// is started (by Hyprland, so it outlives Vyoma) or told to unlock (its SIGUSR1). Err with what
+/// to do when the session still isn't as asked.
+pub async fn follow_logind(lock: bool) -> Result<()> {
+    if reaches(lock, FOLLOW).await {
+        return Ok(());
+    }
+    if lock {
+        anyhow::ensure!(
+            crate::setup::on_path("hyprlock"),
+            "Nothing locked the screen: no lock screen here follows logind (hypridle's lock_cmd or your shell's), and hyprlock isn't installed"
+        );
+        tracing::info!("no lock screen followed logind: starting hyprlock");
+        dispatch("hl.dsp.exec_cmd(\"hyprlock\")", "exec hyprlock").await?;
+    } else {
+        anyhow::ensure!(signal_mine("hyprlock", libc::SIGUSR1) > 0, "The lock screen didn't unlock: it doesn't follow logind's unlock (hypridle's unlock_cmd can make it)");
+        tracing::info!("the lock screen didn't follow logind: told hyprlock to unlock");
+    }
+    anyhow::ensure!(reaches(lock, SETTLE).await, "The screen didn't {}", if lock { "lock" } else { "unlock" });
+    Ok(())
+}
+
+/// Whether the session is (or within [within] gets) locked as [lock] says.
+async fn reaches(lock: bool, within: Duration) -> bool {
+    let until = std::time::Instant::now() + within;
+    loop {
+        match locked().await {
+            Ok(now) if now == lock => return true,
+            Err(_) => return true, // Hyprland can't say: nothing more to check against.
+            _ => {}
+        }
+        if std::time::Instant::now() >= until {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Sends [signal] to this user's processes named [name]; how many there were.
+fn signal_mine(name: &str, signal: libc::c_int) -> usize {
+    // SAFETY: getuid has no failure mode.
+    let me = unsafe { libc::getuid() };
+    let mut sent = 0;
+    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<libc::pid_t>().ok()) else { continue };
+        let ours = std::fs::metadata(entry.path()).is_ok_and(|m| std::os::unix::fs::MetadataExt::uid(&m) == me);
+        if ours && std::fs::read_to_string(entry.path().join("comm")).is_ok_and(|c| c.trim() == name) {
+            // SAFETY: a signal to a process of our own user, found just now.
+            if unsafe { libc::kill(pid, signal) } == 0 {
+                sent += 1;
+            }
+        }
+    }
+    sent
 }
 
 /// Whether a plugin of this name is loaded (hyprexpo gives Hyprland an overview).
@@ -138,18 +230,20 @@ fn ask_blocking(path: &std::path::Path, what: &str) -> Result<String> {
 /// The wallpaper's file: hyprpaper's (asked through hyprctl, which speaks its protocol: 0.8's is
 /// binary), else swww's. Blocking and quick (the wallpaper watch asks every few seconds).
 pub fn wallpaper() -> Option<PathBuf> {
-    let quiet = |program: &str| {
-        let mut c = std::process::Command::new(program);
-        c.stderr(std::process::Stdio::null()).stdin(std::process::Stdio::null());
-        c
-    };
+    use std::process::Command;
+    // Each with a deadline: hyprctl waits on hyprpaper's socket and swww on its daemon, and either
+    // hung would hold the watch (and whoever waits on it) for good.
     if let Some(sig) = instance().and_then(|d| d.file_name().map(|n| n.to_owned()))
-        && let Ok(out) = quiet("hyprctl").env("HYPRLAND_INSTANCE_SIGNATURE", sig).args(["hyprpaper", "listactive"]).output()
+        && crate::setup::on_path("hyprctl")
+        && let Some(out) = crate::run::output(Command::new("hyprctl").env("HYPRLAND_INSTANCE_SIGNATURE", sig).args(["hyprpaper", "listactive"]), crate::run::QUICK)
         && let Some(p) = parse_hyprpaper(&String::from_utf8_lossy(&out.stdout))
     {
         return Some(p);
     }
-    let out = quiet("swww").arg("query").output().ok()?;
+    if !crate::setup::on_path("swww") {
+        return None;
+    }
+    let out = crate::run::output(Command::new("swww").arg("query"), crate::run::QUICK)?;
     parse_swww(&String::from_utf8_lossy(&out.stdout))
 }
 
@@ -194,6 +288,15 @@ mod tests {
         if let Ok(path) = std::env::var("VYOMA_HYPR_WALLPAPER") {
             assert_eq!(tokio::task::spawn_blocking(wallpaper).await.unwrap(), Some(PathBuf::from(path)));
         }
+    }
+
+    #[test]
+    fn swipes_go_as_hyprlands_own() {
+        assert_eq!(workspace_beside(1, &[1], true), Some(Beside::New), "past the last: a new one");
+        assert_eq!(workspace_beside(1, &[1, 3], true), Some(Beside::InUse));
+        assert_eq!(workspace_beside(3, &[1, 3], true), Some(Beside::New), "no wrapping round to 1");
+        assert_eq!(workspace_beside(1, &[1, 3], false), None, "nothing before the first");
+        assert_eq!(workspace_beside(3, &[1, 3], false), Some(Beside::InUse));
     }
 
     #[test]

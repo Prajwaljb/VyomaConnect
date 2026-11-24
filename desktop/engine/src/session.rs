@@ -537,14 +537,24 @@ fn stop(task: Option<tokio::task::JoinHandle<()>>) -> bool {
 /// Sends the wallpaper's colours whenever it changes (checked every few seconds; the phone asks for
 /// the current one itself when it connects).
 async fn watch_wallpaper<P: Platform>(platform: Arc<P>, sender: Sender) {
-    let mut last = platform.wallpaper_signature();
-    if last.is_none() {
+    // Off the runtime, and given up on after a while: on some desktops it asks another program
+    // (gsettings, hyprctl, swww), which can hang with its daemon.
+    let signature = || {
+        let platform = platform.clone();
+        // None: it couldn't tell this time; Some(None): this computer has no wallpaper to follow.
+        async move { tokio::time::timeout(Duration::from_secs(10), tokio::task::spawn_blocking(move || platform.wallpaper_signature())).await.ok().and_then(Result::ok) }
+    };
+    let first = signature().await;
+    if first == Some(None) {
         return;
     }
+    let mut last = first.flatten();
     let mut tick = tokio::time::interval(Duration::from_secs(3));
+    // A slow look (a stuck helper) doesn't make the next ones pile up behind it.
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tick.tick().await;
-        let now = platform.wallpaper_signature();
+        let Some(now) = signature().await else { continue };
         if now == last {
             continue;
         }
