@@ -419,6 +419,13 @@ pub struct Folder {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
+pub struct Progress {
+    pub name: String,
+    pub done: u64,
+    pub total: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FileEntry {
     pub name: String,
     pub folder: bool,
@@ -499,7 +506,7 @@ pub trait Daemon: Send + Sync {
     fn phone_files(&self, _id: &str, _path: Option<&str>) -> Result<Folder> {
         bail!("Browse opens the phone's files in your file manager here")
     }
-    /// Copies the phone's file into Downloads; where it landed.
+    /// Copies the phone's file, or folder with what's in it, into Downloads; where it landed.
     fn fetch_phone_file(&self, _id: &str, _path: &str) -> Result<String> {
         bail!("Not here")
     }
@@ -512,6 +519,14 @@ pub trait Daemon: Send + Sync {
     }
     /// Deletes a file, or a folder with everything in it, on the phone.
     fn delete_phone_file(&self, _id: &str, _path: &str) -> Result<()> {
+        bail!("Not here")
+    }
+    /// The copy under way to or from phone [id]: its file, bytes done and total; None if none is.
+    fn phone_files_progress(&self, _id: &str) -> Result<Option<Progress>> {
+        Ok(None)
+    }
+    /// Stops the copy under way (it then answers "Stopped").
+    fn stop_phone_files(&self, _id: &str) -> Result<()> {
         bail!("Not here")
     }
     /// Blocks until the daemon says something (an error once it's gone away).

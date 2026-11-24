@@ -3249,14 +3249,20 @@ component FilesPage inherits Page {
     in property <[PhoneFile]> files;
     // A copy or delete running: what it is ("Copying photo.jpg…"); the list waits meanwhile.
     in property <string> busy;
+    // A copy's share done (0 to 1; below 0 until its size is known), "12 MB of 148 MB", and whether
+    // it can be stopped (copies can, deleting can't).
+    in property <float> progress: -1;
+    in property <string> progress-text;
+    in property <bool> can-stop;
+    callback stop();
     callback open(PhoneFile);
     callback delete(PhoneFile);
     callback add-files();
     callback new-folder();
+    callback copy-folder();
     callback retry();
     glyph: @image-url("icons/folder.svg");
-    subtitle: root.busy != "" ? root.busy : root.phone-name;
-    subtitle-color: root.busy != "" ? Theme.accent : Theme.muted;
+    subtitle: root.phone-name;
 
     if root.state == "loading": Text {
         text: "Opening " + root.phone-name + "'s files\u{2026}";
@@ -3283,6 +3289,47 @@ component FilesPage inherits Page {
             }
         }
     }
+    if root.busy != "": Section {
+        label: "Now";
+        VerticalLayout {
+            padding: 18px;
+            spacing: 10px;
+            HorizontalLayout {
+                spacing: 14px;
+                Text {
+                    text: root.busy;
+                    color: Theme.text;
+                    font-size: 15px;
+                    font-weight: 500;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if root.can-stop: PillButton {
+                    text: "Stop";
+                    destructive: true;
+                    clicked => { root.stop(); }
+                }
+            }
+            if root.progress >= 0: Rectangle {
+                height: 6px;
+                border-radius: 3px;
+                background: Theme.divider;
+                Rectangle {
+                    x: 0;
+                    width: max(6px, parent.width * min(1, root.progress));
+                    animate width { duration: 400ms; easing: ease-out; }
+                    border-radius: 3px;
+                    background: Theme.accent-fill;
+                }
+            }
+            if root.progress-text != "": Text {
+                text: root.progress-text;
+                color: Theme.muted;
+                font-size: 13px;
+            }
+        }
+    }
     if root.state == "ready": Section {
         label: "This folder";
         Row {
@@ -3298,8 +3345,18 @@ component FilesPage inherits Page {
             icon-color: Theme.tile-teal;
             title: "New folder";
             tappable: root.busy == "";
-            last: true;
+            last: root.files.length == 0;
             clicked => { root.new-folder(); }
+        }
+        // An empty folder has nothing to copy.
+        if root.files.length > 0: Row {
+            icon: @image-url("icons/download.svg");
+            icon-color: Theme.tile-orange;
+            title: "Copy this folder to this PC";
+            subtitle: "Into Downloads";
+            tappable: root.busy == "";
+            last: true;
+            clicked => { root.copy-folder(); }
         }
     }
     if root.state == "ready" && root.files.length == 0: Text {
@@ -3486,6 +3543,10 @@ export component MainWindow inherits Window {
     in property <string> files-error;
     in property <[PhoneFile]> files-list;
     in property <string> files-busy;
+    in property <float> files-progress: -1;
+    in property <string> files-progress-text;
+    in property <bool> files-can-stop;
+    callback stop-phone-files();
     in-out property <PhoneFile> files-target;
     in-out property <bool> confirm-delete-file;
     in-out property <bool> naming-folder;
@@ -3493,6 +3554,7 @@ export component MainWindow inherits Window {
     callback open-phone-file(PhoneFile);
     callback phone-files-up();
     callback add-phone-files();
+    callback copy-phone-folder();
     callback make-phone-folder(string);
     callback delete-phone-file(PhoneFile);
     callback reload-phone-files();
@@ -3860,6 +3922,10 @@ export component MainWindow inherits Window {
             error: root.files-error;
             files: root.files-list;
             busy: root.files-busy;
+            progress: root.files-progress;
+            progress-text: root.files-progress-text;
+            can-stop: root.files-can-stop;
+            stop => { root.stop-phone-files(); }
             go-back => { root.phone-files-up(); }
             open(f) => { root.open-phone-file(f); }
             delete(f) => {
@@ -3867,6 +3933,7 @@ export component MainWindow inherits Window {
                 root.confirm-delete-file = true;
             }
             add-files => { root.add-phone-files(); }
+            copy-folder => { root.copy-phone-folder(); }
             new-folder => {
                 root.new-folder-name = "";
                 root.naming-folder = true;

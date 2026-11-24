@@ -19,7 +19,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use crate::daemon::{ActivityEntry, CommandData, Daemon, Event, Folder, Found, Health, Inbox, People, Permission, PhoneData, ThreadData};
+use crate::daemon::{ActivityEntry, CommandData, Daemon, Event, Folder, Found, Progress, Health, Inbox, People, Permission, PhoneData, ThreadData};
 
 const NOT_RUNNING: &str = "Vyoma isn't running here right now. It restarts by itself; if it doesn't, use Start Vyoma";
 /// A call the daemon takes longer than this over has hung.
@@ -296,6 +296,19 @@ impl Daemon for SocketDaemon {
 
     fn delete_phone_file(&self, id: &str, path: &str) -> Result<()> {
         self.call_within("DeletePhoneFile", json!([id, path]), COPY_TIMEOUT).map(drop)
+    }
+
+    fn phone_files_progress(&self, id: &str) -> Result<Option<Progress>> {
+        let p = self.call("PhoneFilesProgress", json!([id]))?;
+        Ok(p.is_object().then(|| Progress {
+            name: p["name"].as_str().unwrap_or_default().to_owned(),
+            done: p["done"].as_u64().unwrap_or(0),
+            total: p["total"].as_u64().unwrap_or(0),
+        }))
+    }
+
+    fn stop_phone_files(&self, id: &str) -> Result<()> {
+        self.call("StopPhoneFiles", json!([id])).map(drop)
     }
 
     fn next_event(&self) -> Result<Event> {

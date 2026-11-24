@@ -2,7 +2,9 @@
 //! folder of the phone at a time, read from the agent (which talks to the phone's file server) off
 //! the UI thread. A file opened is copied into Downloads first, then opened with its app.
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use chrono::{Datelike, Local, TimeZone};
 use slint::{ComponentHandle, ModelRc, VecModel};
@@ -20,6 +22,8 @@ struct Here {
     phone: String,
     /// None: the phone's first top folder (as it's first opened).
     path: Option<String>,
+    /// The folder's name, as the page shows it.
+    name: String,
     parent: Option<String>,
     /// The phone's top folders, for the way back's name.
     roots: Vec<(String, String)>,
@@ -59,6 +63,19 @@ pub fn wire(ui: &MainWindow) {
             read(&ui);
         }
     });
+    ui.on_stop_phone_files({
+        let ui = ui.as_weak();
+        move || {
+            let Some(id) = here(|h| h.id.clone()) else { return };
+            if let Some(win) = ui.upgrade() {
+                win.set_files_can_stop(false);
+                win.set_files_busy("Stopping\u{2026}".into());
+            }
+            std::thread::spawn(move || {
+                let _ = daemon::connect().and_then(|d| d.stop_phone_files(&id));
+            });
+        }
+    });
     ui.on_open_phone_file({
         let ui = ui.as_weak();
         move |f| {
@@ -71,11 +88,11 @@ pub fn wire(ui: &MainWindow) {
             }
             let Some(id) = here(|h| h.id.clone()) else { return };
             let (name, path) = (f.name.to_string(), f.path.to_string());
-            win.set_files_busy(format!("Copying {name}\u{2026}").into());
             let ui = ui.clone();
             std::thread::spawn(move || {
+                let watch = Copying::start(&ui, &id, &format!("Copying {name}\u{2026}"));
                 let done = daemon::connect().and_then(|d| d.fetch_phone_file(&id, &path));
-                busy(&ui, "");
+                drop(watch);
                 match done {
                     Ok(local) => {
                         if let Err(e) = open_here(&local) {
@@ -84,6 +101,7 @@ pub fn wire(ui: &MainWindow) {
                             notify(&ui, format!("{name} is in Downloads"));
                         }
                     }
+                    Err(e) if stopped(&e) => notify(&ui, format!("Stopped copying {name}")),
                     Err(e) => notify(&ui, format!("Couldn't copy {name}: {e:#}")),
                 }
             });
@@ -99,14 +117,36 @@ pub fn wire(ui: &MainWindow) {
                 let Some(files) = rfd::FileDialog::new().set_title(format!("Add to {phone}")).pick_files() else { return };
                 let paths: Vec<String> = files.iter().map(|p| p.to_string_lossy().into_owned()).collect();
                 let n = paths.len();
-                busy(&ui, &if n == 1 { "Copying 1 file\u{2026}".to_owned() } else { format!("Copying {n} files\u{2026}") });
+                let watch = Copying::start(&ui, &id, &if n == 1 { "Copying 1 file\u{2026}".to_owned() } else { format!("Copying {n} files\u{2026}") });
                 let done = daemon::connect().and_then(|d| d.put_phone_files(&id, &dir, paths));
-                busy(&ui, "");
+                drop(watch);
                 match done {
                     Ok(sent) => notify(&ui, if sent == 1 { format!("Copied 1 file to {phone}") } else { format!("Copied {sent} files to {phone}") }),
+                    Err(e) if stopped(&e) => notify(&ui, format!("Stopped copying to {phone}")),
                     Err(e) => notify(&ui, format!("Couldn't copy to {phone}: {e:#}")),
                 }
                 read(&ui);
+            });
+        }
+    });
+    ui.on_copy_phone_folder({
+        let ui = ui.as_weak();
+        move || {
+            let Some((id, path, name)) = here(|h| (h.id.clone(), h.path.clone(), h.name.clone())) else { return };
+            let Some(path) = path else { return };
+            let ui = ui.clone();
+            std::thread::spawn(move || {
+                let watch = Copying::start(&ui, &id, &format!("Copying {name}\u{2026}"));
+                let done = daemon::connect().and_then(|d| d.fetch_phone_file(&id, &path));
+                drop(watch);
+                match done {
+                    Ok(local) => {
+                        let _ = open_here(&local);
+                        notify(&ui, format!("{name} is in Downloads"));
+                    }
+                    Err(e) if stopped(&e) => notify(&ui, format!("Stopped copying {name}")),
+                    Err(e) => notify(&ui, format!("Couldn't copy {name}: {e:#}")),
+                }
             });
         }
     });
@@ -169,6 +209,69 @@ pub fn start(win: &MainWindow, id: &str) {
     win.set_selected(FILES.into());
 }
 
+/// A copy under way: the page's card shows [what], then the phone's progress, asked for every
+/// 400 ms, until this is dropped (the copy's answer came).
+struct Copying {
+    running: Arc<AtomicBool>,
+    ui: slint::Weak<MainWindow>,
+}
+
+impl Copying {
+    fn start(ui: &slint::Weak<MainWindow>, id: &str, what: &str) -> Copying {
+        let running = Arc::new(AtomicBool::new(true));
+        let (ui2, what) = (ui.clone(), what.to_owned());
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(win) = ui2.upgrade() {
+                win.set_files_busy(what.into());
+                win.set_files_progress(-1.0);
+                win.set_files_progress_text("".into());
+                win.set_files_can_stop(true);
+            }
+        });
+        let (ui2, id, on) = (ui.clone(), id.to_owned(), running.clone());
+        std::thread::spawn(move || {
+            while on.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(400));
+                let Ok(Some(p)) = daemon::connect().and_then(|d| d.phone_files_progress(&id)) else { continue };
+                let (ui, on) = (ui2.clone(), on.clone());
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(win) = ui.upgrade() else { return };
+                    if !on.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    // Once Stop is pressed, "Stopping…" stays.
+                    if win.get_files_can_stop() {
+                        win.set_files_busy(format!("Copying {}\u{2026}", breakable(&p.name)).into());
+                    }
+                    win.set_files_progress(if p.total > 0 { p.done as f32 / p.total as f32 } else { -1.0 });
+                    win.set_files_progress_text(if p.total > 0 { format!("{} of {}", size(p.done), size(p.total)) } else { size(p.done) }.into());
+                });
+            }
+        });
+        Copying { running, ui: ui.clone() }
+    }
+}
+
+impl Drop for Copying {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Relaxed);
+        let ui = self.ui.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(win) = ui.upgrade() {
+                win.set_files_busy("".into());
+                win.set_files_progress(-1.0);
+                win.set_files_progress_text("".into());
+                win.set_files_can_stop(false);
+            }
+        });
+    }
+}
+
+/// The person stopped it (the engine's `phonefiles::STOPPED`).
+fn stopped(e: &anyhow::Error) -> bool {
+    e.to_string() == "Stopped"
+}
+
 fn busy(ui: &slint::Weak<MainWindow>, what: &str) {
     let (ui, what) = (ui.clone(), what.to_owned());
     let _ = slint::invoke_from_event_loop(move || {
@@ -210,6 +313,7 @@ pub fn read(ui: &slint::Weak<MainWindow>) {
 pub fn show_folder(win: &MainWindow, folder: &Folder) {
     let phone = here(|h| {
         h.path = Some(folder.path.clone());
+        h.name = folder.name.clone();
         h.parent = folder.parent.clone();
         h.roots = folder.roots.clone();
         h.phone.clone()

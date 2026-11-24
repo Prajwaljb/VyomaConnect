@@ -288,7 +288,12 @@ fn files(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>) {
     };
     crate::files::show_folder(ui, &folder);
     match scene {
-        "files-busy" => ui.set_files_busy("Copying PXL_20261120_183005123.mp4\u{2026}".into()),
+        "files-busy" => {
+            ui.set_files_busy("Copying PXL_20261120_183005123.mp4\u{2026}".into());
+            ui.set_files_progress(0.42);
+            ui.set_files_progress_text("62 MB of 148 MB".into());
+            ui.set_files_can_stop(true);
+        }
         "files-delete" => {
             let list = ui.get_files_list();
             if let Some(f) = slint::Model::row_data(&list, 0) {

@@ -339,7 +339,12 @@ signs in with the PC certificate's key (else the one-time password) and keeps on
 after 3 idle minutes. The agents answer the window's `PhoneFiles`, `FetchPhoneFile` (into Downloads, then opened),
 `PutPhoneFiles`, `NewPhoneFolder` and `DeletePhoneFile` as spawned tasks; the window's Files page (`gui/src/files.rs`)
 shows one folder at a time, folders first, with Add files, New folder and a bin that asks first; the phone's top
-folders can't be deleted. Tested against OpenSSH's sftp server (`VYOMA_SSHD_TEST=1`), not yet the phone.
+folders can't be deleted. A copy shows its progress (the window asks `PhoneFilesProgress` every 400 ms) and
+Stop ends it (`StopPhoneFiles`; the part file or half-copied file is removed). "Copy this folder to this PC"
+copies the open folder with everything in it into a new folder in Downloads (`album (2)` beside an older copy;
+removed again if it fails or is stopped), then opens it. Files dragged onto the window
+wait for Slint, which takes no drops from outside the app (1.19). Tested against OpenSSH's sftp server
+(`VYOMA_SSHD_TEST=1`, a stopped 64 MB copy included), not yet the phone.
 Loose ends, 2026-11-08: a mount survives the link moving between the cable and Wi-Fi (remounted quietly at the
 same folder), and the mirror's sound goes as Opus (128 kbit/s instead of 1.5 Mbit/s PCM) to a PC that can play it.
 

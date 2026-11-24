@@ -12,7 +12,9 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::task::{Context as TaskContext, Poll};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -31,7 +33,10 @@ pub const SFTP: &str = "kdeconnect.sftp";
 pub const SFTP_REQUEST: &str = "kdeconnect.sftp.request";
 
 /// The window's requests this module answers.
-pub const METHODS: &[&str] = &["PhoneFiles", "FetchPhoneFile", "PutPhoneFiles", "NewPhoneFolder", "DeletePhoneFile"];
+pub const METHODS: &[&str] = &["PhoneFiles", "FetchPhoneFile", "PutPhoneFiles", "NewPhoneFolder", "DeletePhoneFile", "PhoneFilesProgress", "StopPhoneFiles"];
+
+/// What a copy stopped by the person answers (the window says so quietly, not as a failure).
+pub const STOPPED: &str = "Stopped";
 
 /// A session unused this long is closed.
 const IDLE: Duration = Duration::from_secs(180);
@@ -148,6 +153,51 @@ impl Open {
     }
 }
 
+/// A copy under way, for the window's progress bar and its Stop.
+#[derive(Default)]
+pub struct Transfer {
+    /// The file being copied now.
+    name: Mutex<String>,
+    done: AtomicU64,
+    total: AtomicU64,
+    stop: AtomicBool,
+}
+
+impl Transfer {
+    fn now(&self, name: &str) {
+        *self.name.lock().unwrap_or_else(|e| e.into_inner()) = name.to_owned();
+    }
+
+    fn json(&self) -> Value {
+        json!({
+            "name": *self.name.lock().unwrap_or_else(|e| e.into_inner()),
+            "done": self.done.load(Ordering::Relaxed),
+            "total": self.total.load(Ordering::Relaxed),
+        })
+    }
+}
+
+/// Reads through [inner], counting into [transfer] and failing once it's asked to stop (what
+/// it's copied into then cleans up: a fetch's part file, a put's half file).
+struct Counted<'a, R> {
+    inner: R,
+    transfer: &'a Transfer,
+}
+
+impl<R: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for Counted<'_, R> {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>, buf: &mut tokio::io::ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+        if self.transfer.stop.load(Ordering::Relaxed) {
+            return Poll::Ready(Err(std::io::Error::other(STOPPED)));
+        }
+        let before = buf.filled().len();
+        let read = Pin::new(&mut self.inner).poll_read(cx, buf);
+        if let Poll::Ready(Ok(())) = read {
+            self.transfer.done.fetch_add((buf.filled().len() - before) as u64, Ordering::Relaxed);
+        }
+        read
+    }
+}
+
 /// Every phone's session, and the server details being waited for.
 pub struct PhoneFiles {
     commands: mpsc::UnboundedSender<Command>,
@@ -156,6 +206,8 @@ pub struct PhoneFiles {
     waiting: Mutex<HashMap<String, oneshot::Sender<Result<Server, String>>>>,
     /// Per phone: its session (one connects at a time; others wait and share it).
     sessions: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<Arc<Open>>>>>>,
+    /// Per phone: the copy under way, if one is.
+    transfers: Mutex<HashMap<String, Arc<Transfer>>>,
 }
 
 impl PhoneFiles {
@@ -167,7 +219,7 @@ impl PhoneFiles {
                 None
             }
         };
-        Arc::new(PhoneFiles { commands, key, waiting: Mutex::default(), sessions: Mutex::default() })
+        Arc::new(PhoneFiles { commands, key, waiting: Mutex::default(), sessions: Mutex::default(), transfers: Mutex::default() })
     }
 
     /// The phone [id] sent `kdeconnect.sftp`.
@@ -188,6 +240,25 @@ impl PhoneFiles {
                     close(&open).await;
                 }
             });
+        }
+    }
+
+    /// A new copy for phone [id], [total] bytes; the record goes once [Begun] is dropped.
+    fn begin(self: &Arc<Self>, id: &str, total: u64) -> Begun {
+        let transfer = Arc::new(Transfer { total: AtomicU64::new(total), ..Default::default() });
+        self.transfers.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_owned(), transfer.clone());
+        Begun { files: self.clone(), id: id.to_owned(), transfer }
+    }
+
+    /// Phone [id]'s copy under way: its file, bytes done and total; null if none is.
+    pub fn progress(&self, id: &str) -> Value {
+        self.transfers.lock().unwrap_or_else(|e| e.into_inner()).get(id).map_or(Value::Null, |t| t.json())
+    }
+
+    /// Stops phone [id]'s copy under way, if one is.
+    pub fn stop(&self, id: &str) {
+        if let Some(t) = self.transfers.lock().unwrap_or_else(|e| e.into_inner()).get(id) {
+            t.stop.store(true, Ordering::Relaxed);
         }
     }
 
@@ -297,17 +368,41 @@ impl PhoneFiles {
         }))
     }
 
-    /// Copies the phone's file [path] into [dir] (a free name, never over a file); where it landed.
+    /// Copies the phone's file [path], or folder with everything in it, into [dir] (a free name,
+    /// never over what's there); where it landed.
     pub async fn fetch(self: &Arc<Self>, phone: &Phone, path: &str, dir: &Path) -> Result<PathBuf> {
         let path = clean(path).context("That file's name can't be used")?;
         let open = self.session(phone).await?;
         let meta = open.sftp.metadata(path.clone()).await.with_context(|| format!("{} isn't there any more", leaf(&path)))?;
-        anyhow::ensure!(!meta.is_dir(), "Folders can't be copied yet; open it and copy its files");
-        let mut file = open.sftp.open(path.clone()).await.with_context(|| format!("Couldn't open {}", leaf(&path)))?;
-        let landed = vyoma_core::share::land(&mut file, dir, leaf(&path), meta.modified().ok()).await.with_context(|| format!("Couldn't copy {}", leaf(&path)))?;
+        if meta.is_dir() {
+            return self.fetch_folder(phone, &open, &path, dir).await;
+        }
+        let file = open.sftp.open(path.clone()).await.with_context(|| format!("Couldn't open {}", leaf(&path)))?;
+        let begun = self.begin(&phone.id, meta.len());
+        begun.transfer.now(leaf(&path));
+        let mut counted = Counted { inner: file, transfer: &begun.transfer };
+        let landed = vyoma_core::share::land(&mut counted, dir, leaf(&path), meta.modified().ok()).await;
+        let landed = stopped(&begun.transfer, landed.with_context(|| format!("Couldn't copy {}", leaf(&path))))?;
         open.touch();
         tracing::info!("{}: copied a file from the phone", phone.id);
         Ok(landed)
+    }
+
+    /// Copies the phone's folder [path] into a new folder in [dir]. Half a folder isn't left
+    /// behind: if it fails or is stopped, what came so far is removed.
+    async fn fetch_folder(self: &Arc<Self>, phone: &Phone, open: &Open, path: &str, dir: &Path) -> Result<PathBuf> {
+        let total = Box::pin(phone_size(open, path)).await?;
+        let begun = self.begin(&phone.id, total);
+        tokio::fs::create_dir_all(dir).await.with_context(|| format!("Couldn't make {}", dir.display()))?;
+        let target = new_folder_in(dir, &vyoma_core::share::safe_name(leaf(path))).await?;
+        let copied = Box::pin(fetch_tree(open, path, &target, &begun.transfer)).await;
+        if copied.is_err() {
+            let _ = tokio::fs::remove_dir_all(&target).await;
+        }
+        stopped(&begun.transfer, copied.with_context(|| format!("Couldn't copy {}", leaf(path))))?;
+        open.touch();
+        tracing::info!("{}: copied a folder from the phone", phone.id);
+        Ok(target)
     }
 
     /// Copies files from this computer into the phone's folder [dir] (folders with what's in them);
@@ -315,9 +410,14 @@ impl PhoneFiles {
     pub async fn put(self: &Arc<Self>, phone: &Phone, dir: &str, locals: &[PathBuf]) -> Result<usize> {
         let dir = clean(dir).context("That folder's name can't be used")?;
         let open = self.session(phone).await?;
+        let mut total = 0;
+        for local in locals {
+            total += size_of(local).await;
+        }
+        let begun = self.begin(&phone.id, total);
         let mut sent = 0;
         for local in locals {
-            sent += Box::pin(put_one(&open, local, &dir)).await?;
+            sent += stopped(&begun.transfer, Box::pin(put_one(&open, local, &dir, &begun.transfer)).await)?;
             open.touch();
         }
         tracing::info!("{}: copied {sent} file(s) to the phone", phone.id);
@@ -365,7 +465,103 @@ async fn close(open: &Open) {
     let _ = open.ssh.disconnect(russh::Disconnect::ByApplication, "", "en").await;
 }
 
-async fn put_one(open: &Open, local: &Path, dir: &str) -> Result<usize> {
+/// Phone [id]'s copy record, gone when the copy ends.
+struct Begun {
+    files: Arc<PhoneFiles>,
+    id: String,
+    transfer: Arc<Transfer>,
+}
+
+impl Drop for Begun {
+    fn drop(&mut self) {
+        let mut all = self.files.transfers.lock().unwrap_or_else(|e| e.into_inner());
+        if all.get(&self.id).is_some_and(|t| Arc::ptr_eq(t, &self.transfer)) {
+            all.remove(&self.id);
+        }
+    }
+}
+
+/// [done], or [STOPPED] as its whole error if the person stopped it.
+fn stopped<T>(transfer: &Transfer, done: Result<T>) -> Result<T> {
+    match done {
+        Err(_) if transfer.stop.load(Ordering::Relaxed) => Err(anyhow!(STOPPED)),
+        other => other,
+    }
+}
+
+/// The bytes in the phone's folder [path] (links not followed).
+async fn phone_size(open: &Open, path: &str) -> Result<u64> {
+    let mut total = 0;
+    for e in open.sftp.read_dir(path.to_owned()).await.with_context(|| format!("Couldn't open {}", leaf(path)))? {
+        let name = e.file_name();
+        if name == "." || name == ".." {
+            continue;
+        }
+        if e.file_type().is_dir() {
+            total += Box::pin(phone_size(open, &join(path, &name))).await?;
+        } else if e.file_type().is_file() {
+            total += e.metadata().len();
+        }
+    }
+    Ok(total)
+}
+
+/// What's in the phone's folder [path], copied into [into] (made already).
+async fn fetch_tree(open: &Open, path: &str, into: &Path, transfer: &Transfer) -> Result<()> {
+    let entries: Vec<_> = open.sftp.read_dir(path.to_owned()).await.with_context(|| format!("Couldn't open {}", leaf(path)))?.collect();
+    for e in entries {
+        let name = e.file_name();
+        if name == "." || name == ".." {
+            continue;
+        }
+        let local = vyoma_core::share::safe_name(&name);
+        let from = join(path, &name);
+        if e.file_type().is_dir() {
+            let sub = into.join(&local);
+            tokio::fs::create_dir(&sub).await.with_context(|| format!("Couldn't make {local}"))?;
+            Box::pin(fetch_tree(open, &from, &sub, transfer)).await?;
+        } else if e.file_type().is_file() {
+            let file = open.sftp.open(from.clone()).await.with_context(|| format!("Couldn't open {name}"))?;
+            transfer.now(&name);
+            let mut counted = Counted { inner: file, transfer };
+            vyoma_core::share::land(&mut counted, into, &local, e.metadata().modified().ok()).await.with_context(|| format!("Couldn't copy {name}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// A new folder [name] in [dir], or `name (2)` and so on: made at once, so nothing else takes it.
+async fn new_folder_in(dir: &Path, name: &str) -> Result<PathBuf> {
+    for n in 1..1000 {
+        let candidate = if n == 1 { dir.join(name) } else { dir.join(format!("{name} ({n})")) };
+        match tokio::fs::create_dir(&candidate).await {
+            Ok(()) => return Ok(candidate),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e).with_context(|| format!("Couldn't make {name}")),
+        }
+    }
+    bail!("Couldn't find a free name for {name}")
+}
+
+/// The bytes in [local]: a file's size, a folder's files' sizes (links not followed).
+async fn size_of(local: &Path) -> u64 {
+    let Ok(meta) = tokio::fs::symlink_metadata(local).await else { return 0 };
+    if meta.is_file() {
+        return meta.len();
+    }
+    if !meta.is_dir() {
+        return 0;
+    }
+    let mut total = 0;
+    if let Ok(mut read) = tokio::fs::read_dir(local).await {
+        while let Ok(Some(e)) = read.next_entry().await {
+            total += Box::pin(size_of(&e.path())).await;
+        }
+    }
+    total
+}
+
+async fn put_one(open: &Open, local: &Path, dir: &str, transfer: &Transfer) -> Result<usize> {
     let name = local.file_name().map(|n| n.to_string_lossy().into_owned()).context("That file has no name")?;
     let name = vyoma_core::share::safe_name(&name);
     let target = free_name(open, dir, &name).await;
@@ -375,15 +571,17 @@ async fn put_one(open: &Open, local: &Path, dir: &str) -> Result<usize> {
         let mut sent = 0;
         let mut read = tokio::fs::read_dir(local).await?;
         while let Some(e) = read.next_entry().await? {
-            sent += Box::pin(put_one(open, &e.path(), &target)).await?;
+            sent += Box::pin(put_one(open, &e.path(), &target, transfer)).await?;
         }
         return Ok(sent);
     }
     if !meta.is_file() {
         return Ok(0); // A link or a device: not copied.
     }
-    let mut from = tokio::fs::File::open(local).await.with_context(|| format!("Couldn't read {name}"))?;
+    let from = tokio::fs::File::open(local).await.with_context(|| format!("Couldn't read {name}"))?;
     let mut to = open.sftp.create(target.clone()).await.with_context(|| format!("Couldn't write {name} on the phone"))?;
+    transfer.now(&name);
+    let mut from = Counted { inner: from, transfer };
     let copied = async {
         tokio::io::copy(&mut from, &mut to).await?;
         tokio::io::AsyncWriteExt::shutdown(&mut to).await?;
@@ -472,8 +670,20 @@ pub fn request(files: &Arc<PhoneFiles>, method: &str, args: &Value, devices: &De
         return None;
     }
     let (files, method, args) = (files.clone(), method.to_owned(), args.clone());
+    // These two answer at once, connected or not.
+    let quick = match method.as_str() {
+        "PhoneFilesProgress" => Some(text(&args, 0).map(|id| files.progress(&id))),
+        "StopPhoneFiles" => Some(text(&args, 0).map(|id| {
+            files.stop(&id);
+            Value::Null
+        })),
+        _ => None,
+    };
     let phone = text(&args, 0).and_then(|id| Phone::of(devices, &id));
     Some(async move {
+        if let Some(answer) = quick {
+            return answer;
+        }
         let phone = phone?;
         let arg = |i: usize| text(&args, i);
         let done: Result<Value> = match method.as_str() {
@@ -498,6 +708,20 @@ pub fn request(files: &Arc<PhoneFiles>, method: &str, args: &Value, devices: &De
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn copies_count_and_stop() {
+        let transfer = Transfer { total: AtomicU64::new(10), ..Default::default() };
+        transfer.now("a.jpg");
+        let mut out = Vec::new();
+        tokio::io::copy(&mut Counted { inner: &b"0123456789"[..], transfer: &transfer }, &mut out).await.unwrap();
+        assert_eq!(transfer.json(), json!({ "name": "a.jpg", "done": 10, "total": 10 }));
+        transfer.stop.store(true, Ordering::Relaxed);
+        let failed = tokio::io::copy(&mut Counted { inner: &b"more"[..], transfer: &transfer }, &mut out).await;
+        assert!(failed.is_err());
+        let said = stopped(&transfer, Err::<(), _>(anyhow!(failed.unwrap_err())).context("Couldn't copy a.jpg"));
+        assert_eq!(format!("{}", said.unwrap_err()), STOPPED);
+    }
 
     #[test]
     fn reads_where_the_server_is() {
@@ -651,6 +875,38 @@ mod live {
         assert_eq!(std::fs::read(dir.join("share/DCIM/notes.txt")).unwrap(), b"hello phone");
         assert_eq!(std::fs::read(dir.join("share/DCIM/notes (2).txt")).unwrap(), b"hello phone", "a name already there gets a number");
         assert_eq!(std::fs::read(dir.join("share/DCIM/album/a.png")).unwrap(), b"png");
+        assert!(files.progress("p").is_null(), "no copy under way once it's done");
+
+        // A whole folder from the phone, into a new folder beside an older copy.
+        let album = files.fetch(&phone, &format!("{share}/DCIM/album"), &downloads).await.unwrap();
+        assert_eq!(album, downloads.join("album"));
+        assert_eq!(std::fs::read(album.join("a.png")).unwrap(), b"png");
+        let again = files.fetch(&phone, &format!("{share}/DCIM/album"), &downloads).await.unwrap();
+        assert_eq!(again, downloads.join("album (2)"));
+
+        // A big copy, stopped once it's started: Stopped, and no half file on the phone.
+        std::fs::write(local.join("big.bin"), vec![7u8; 64 << 20]).unwrap();
+        let big = local.join("big.bin");
+        let copying = tokio::spawn({
+            let (files, phone, to) = (files.clone(), phone.clone(), format!("{share}/DCIM"));
+            async move { files.put(&phone, &to, &[big]).await }
+        });
+        let started = async {
+            loop {
+                let p = files.progress("p");
+                if p["done"].as_u64().unwrap_or(0) > 0 {
+                    return p;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        };
+        let p = tokio::time::timeout(Duration::from_secs(10), started).await.expect("the copy shows its progress");
+        assert_eq!((p["name"].as_str(), p["total"].as_u64()), (Some("big.bin"), Some(64 << 20)));
+        files.stop("p");
+        let e = copying.await.unwrap().unwrap_err();
+        assert_eq!(format!("{e}"), STOPPED);
+        assert!(!dir.join("share/DCIM/big.bin").exists(), "the half file is removed");
+        assert!(files.progress("p").is_null());
 
         files.new_folder(&phone, &format!("{share}/Music")).await.unwrap();
         assert!(files.new_folder(&phone, &format!("{share}/Music")).await.is_err(), "already there");
