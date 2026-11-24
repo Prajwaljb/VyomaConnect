@@ -632,7 +632,10 @@ build, headless Xvfb display, private ports and pipe) and next on GitHub's runne
   encoder's Direct3D manager), the mirror drawn with Direct3D if GDI's scaling proves slow.
 
 ### Google Play
-- A `play` product flavor built as an AAB; the GitHub/F-Droid build stays as it is.
+- Started 2026-11-20: a `play` build type (not a flavor, so every existing task keeps its name)
+  built as an AAB (`bundlePlay`); the GitHub/F-Droid build stays as it is. The checklist, declaration
+  texts and Data safety notes are in `docs/PLAY.md`; the privacy policy is `site/privacy.html`; the
+  mirror screen asks before opening Accessibility settings (Play's prominent disclosure).
 - Signing: uploading the existing release key to Play App Signing keeps one signature everywhere
   (people switch channels without reinstalling; the PC's cable allow-list goes by signing key). It
   can't be undone: the owner's call.
