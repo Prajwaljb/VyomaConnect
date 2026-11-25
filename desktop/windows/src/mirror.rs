@@ -182,6 +182,8 @@ pub fn nv12_to_bgra(y_plane: &[u8], uv: &[u8], pitch: usize, (ox, oy): (usize, u
 
 // ---- Windows' H.264 decoder
 
+pub use vyoma_camera::frame::View;
+
 /// The decoder's pictures as they come out: their place in the buffer and their visible size.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Layout {
@@ -271,20 +273,30 @@ impl Decoder {
     /// One access unit (Annex-B, start codes included) in; each picture that came out, as BGRA,
     /// to [shown] with its size.
     pub fn decode(&mut self, unit: &[u8], mut shown: impl FnMut(usize, usize, &[u8])) -> Result<()> {
-        let sample = self.sample(unit)?;
         let mut bgra = Vec::new();
+        self.decode_nv12(unit, |v| {
+            nv12_to_bgra(v.y, v.uv, v.pitch, v.offset, v.w, v.h, &mut bgra);
+            if bgra.len() == v.w * v.h * 4 {
+                shown(v.w, v.h, &bgra);
+            }
+        })
+    }
+
+    /// One access unit in; each picture that came out as the decoder lays it out (NV12).
+    pub fn decode_nv12(&mut self, unit: &[u8], mut seen: impl FnMut(&View)) -> Result<()> {
+        let sample = self.sample(unit)?;
         // SAFETY: a complete sample for the stream the types were set on.
         match unsafe { self.mft.ProcessInput(0, &sample, 0) } {
             Ok(()) => {}
             // Full: what it has comes out first, then it takes this one.
             Err(e) if e.code() == MF_E_NOTACCEPTING => {
-                while self.pull(&mut bgra, &mut shown)? {}
+                while self.pull(&mut seen)? {}
                 // SAFETY: as above.
                 unsafe { self.mft.ProcessInput(0, &sample, 0)? };
             }
             Err(e) => return Err(e.into()),
         }
-        while self.pull(&mut bgra, &mut shown)? {}
+        while self.pull(&mut seen)? {}
         Ok(())
     }
 
@@ -306,7 +318,7 @@ impl Decoder {
     }
 
     /// One picture out, if there is one; false when the decoder wants more input.
-    fn pull(&mut self, bgra: &mut Vec<u8>, shown: &mut impl FnMut(usize, usize, &[u8])) -> Result<bool> {
+    fn pull(&mut self, seen: &mut impl FnMut(&View)) -> Result<bool> {
         // SAFETY: the output buffer's sample and events are taken out of their ManuallyDrop
         // exactly once; the picture's buffer is locked while it's converted.
         unsafe {
@@ -340,7 +352,7 @@ impl Decoder {
                 let pitch = pitch.unsigned_abs() as usize;
                 let y = std::slice::from_raw_parts(scan0, pitch * l.alloc_h);
                 let uv = std::slice::from_raw_parts(scan0.add(pitch * l.alloc_h), pitch * l.alloc_h.div_ceil(2));
-                nv12_to_bgra(y, uv, pitch, l.offset, l.w, l.h, bgra);
+                seen(&View { y, uv, pitch, offset: l.offset, w: l.w, h: l.h });
                 two_d.Unlock2D()?;
             } else {
                 let (mut data, mut len) = (std::ptr::null_mut(), 0u32);
@@ -348,12 +360,9 @@ impl Decoder {
                 let all = std::slice::from_raw_parts(data, len as usize);
                 let luma = l.stride * l.alloc_h;
                 if all.len() >= luma + l.stride * l.alloc_h.div_ceil(2) {
-                    nv12_to_bgra(&all[..luma], &all[luma..], l.stride, l.offset, l.w, l.h, bgra);
+                    seen(&View { y: &all[..luma], uv: &all[luma..], pitch: l.stride, offset: l.offset, w: l.w, h: l.h });
                 }
                 buffer.Unlock()?;
-            }
-            if bgra.len() == l.w * l.h * 4 {
-                shown(l.w, l.h, bgra);
             }
             Ok(true)
         }
@@ -875,7 +884,7 @@ pub mod sound {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -937,7 +946,7 @@ mod tests {
     }
 
     /// Pictures from this PC's own encoder (the live screen's), as the phone's would come.
-    fn some_video(frames: usize) -> Option<Vec<u8>> {
+    pub(crate) fn some_video(frames: usize) -> Option<Vec<u8>> {
         // SAFETY: COM and Media Foundation for this thread (both count their starts).
         unsafe {
             let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED);

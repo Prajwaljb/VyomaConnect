@@ -388,6 +388,46 @@ pub fn pause_playing() -> Vec<String> {
     paused
 }
 
+/// One app's media session for handoff: its id, title, whether it plays, where it is (estimated
+/// from the app's last report), and whether the app reports a position at all.
+pub struct MediaSession {
+    pub app: String,
+    pub title: String,
+    pub playing: bool,
+    pub pos_ms: i64,
+    pub reported: bool,
+}
+
+/// Every app's session, for handoff, on the calling thread (which has joined the MTA).
+pub fn sessions_now() -> Vec<MediaSession> {
+    let controls = Controls::new();
+    let now = now_ticks();
+    controls
+        .sessions()
+        .iter()
+        .filter_map(|s| {
+            let track = read(s, now)?;
+            let timeline = s.GetTimelineProperties().ok();
+            let updated = timeline.as_ref().and_then(|t| t.LastUpdatedTime().ok()).map_or(0, |d| d.UniversalTime);
+            Some(MediaSession {
+                app: s.SourceAppUserModelId().map(|a| a.to_string_lossy()).unwrap_or_default(),
+                title: track.title,
+                playing: track.playing,
+                pos_ms: track.pos_ms,
+                // Firefox leaves the timeline empty: no position to trust.
+                reported: updated > 0 && (track.pos_ms > 0 || track.length_ms > 0),
+            })
+        })
+        .collect()
+}
+
+/// Pauses app [app]'s player (handoff: the phone takes over).
+pub fn pause_app(app: &str) {
+    // SAFETY: as in [pause_playing].
+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    Controls::new().apply(app, &[Do::Pause]);
+}
+
 /// Plays again what [pause_playing] paused (apps by their id), if they're still there.
 pub fn resume(apps: &[String]) {
     // SAFETY: as in [pause_playing].

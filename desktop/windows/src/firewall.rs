@@ -6,8 +6,8 @@
 //! that let in only Vyoma, only on its ports.
 //! Built and tested on CI and under Wine only; not yet run on a real Windows PC.
 
-use anyhow::{Context, Result, bail};
-use windows::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, VARIANT_TRUE, WAIT_OBJECT_0};
+use anyhow::{Context, Result};
+use windows::Win32::Foundation::VARIANT_TRUE;
 use windows::Win32::NetworkManagement::WindowsFirewall::{
     INetFwPolicy2, INetFwRule, NET_FW_ACTION_ALLOW, NET_FW_ACTION_BLOCK, NET_FW_IP_PROTOCOL_ANY, NET_FW_IP_PROTOCOL_TCP, NET_FW_IP_PROTOCOL_UDP,
     NET_FW_PROFILE2_ALL, NET_FW_PROFILE2_DOMAIN, NET_FW_PROFILE2_PRIVATE, NET_FW_PROFILE2_PUBLIC, NET_FW_RULE_DIR_IN, NetFwPolicy2,
@@ -15,11 +15,8 @@ use windows::Win32::NetworkManagement::WindowsFirewall::{
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx};
 use windows::Win32::System::Ole::IEnumVARIANT;
-use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
 use windows::Win32::System::Variant::VARIANT;
-use windows::Win32::UI::Shell::{SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
-use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
-use windows::core::{BSTR, HSTRING, IUnknown, Interface, PCWSTR};
+use windows::core::{BSTR, IUnknown, Interface};
 
 pub const CHECK: &str = "Firewall";
 pub const OPEN_ARG: &str = "--open-firewall";
@@ -167,37 +164,7 @@ pub fn check() -> Option<serde_json::Value> {
 
 /// Let phones through: this program again as an administrator (Windows asks), waiting for it.
 pub fn open() -> Result<()> {
-    let exe = HSTRING::from(std::env::current_exe()?.as_os_str());
-    let (verb, args) = (HSTRING::from("runas"), HSTRING::from(OPEN_ARG));
-    let mut info = SHELLEXECUTEINFOW {
-        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
-        lpVerb: PCWSTR(verb.as_ptr()),
-        lpFile: PCWSTR(exe.as_ptr()),
-        lpParameters: PCWSTR(args.as_ptr()),
-        nShow: SW_HIDE.0,
-        ..Default::default()
-    };
-    // SAFETY: the strings outlive the call; the process handle is waited on and closed.
-    unsafe {
-        if let Err(e) = ShellExecuteExW(&mut info) {
-            if e.code() == ERROR_CANCELLED.to_hresult() {
-                bail!("Windows asked for an administrator and was told no");
-            }
-            return Err(e).context("couldn't ask Windows for an administrator");
-        }
-        if info.hProcess.is_invalid() {
-            bail!("the firewall change didn't start");
-        }
-        let waited = WaitForSingleObject(info.hProcess, 120_000);
-        let mut code = 1u32;
-        let _ = GetExitCodeProcess(info.hProcess, &mut code);
-        let _ = CloseHandle(info.hProcess);
-        if waited != WAIT_OBJECT_0 || code != 0 {
-            bail!("the firewall wasn't changed");
-        }
-    }
-    Ok(())
+    crate::win::as_admin(OPEN_ARG, "the firewall wasn't changed")
 }
 
 /// `--open-firewall` (as an administrator): Vyoma's rules afresh. Exit status 0 when done.

@@ -1082,7 +1082,8 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
     }
 
     /** What the PC says about the phone's camera and microphone (see [sendWebcam]). */
-    data class WebcamState(val camera: Boolean = false, val mic: Boolean = false, val error: String? = null)
+    /** [micError]: the PC can't take the phone's mic at all (Windows: no app may add one), in its words. */
+    data class WebcamState(val camera: Boolean = false, val mic: Boolean = false, val error: String? = null, val micError: String? = null)
     private val _webcam = MutableStateFlow(WebcamState())
     val webcam: StateFlow<WebcamState> = _webcam.asStateFlow()
 
@@ -1113,7 +1114,10 @@ class CompanionPlugin(private val ctx: PluginContext, private val sink: ShareSin
         val error = packet.string("error")
         _webcam.value = _webcam.value.let { s ->
             if (error != null) s.copy(error = error)
-            else s.copy(camera = packet.bool("camera") ?: s.camera, mic = packet.bool("mic") ?: s.mic, error = null)
+            else s.copy(
+                camera = packet.bool("camera") ?: s.camera, mic = packet.bool("mic") ?: s.mic, error = null,
+                micError = packet.string("micError") ?: s.micError,
+            )
         }
     }
 

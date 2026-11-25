@@ -90,12 +90,13 @@ jobs:
         run: |
           call "%VYOMA_SIGN%" windows\target\release\vyoma-windows.exe || exit /b 1
           call "%VYOMA_SIGN%" gui\target\release\vyoma.exe || exit /b 1
+          call "%VYOMA_SIGN%" windows\target\release\vyoma_camera.dll || exit /b 1
       - name: Package
         working-directory: desktop
         shell: bash
         run: |
           mkdir -p out/Vyoma
-          cp windows/target/release/vyoma-windows.exe gui/target/release/vyoma.exe ../LICENSE out/Vyoma/
+          cp windows/target/release/vyoma-windows.exe windows/target/release/vyoma_camera.dll gui/target/release/vyoma.exe ../LICENSE out/Vyoma/
           cp ../VERSION out/Vyoma/VERSION.txt
           (cd out && 7z a -tzip Vyoma-windows.zip Vyoma >/dev/null)
           ls -l out

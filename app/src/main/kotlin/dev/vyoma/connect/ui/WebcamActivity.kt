@@ -191,7 +191,7 @@ class WebcamActivity : ComponentActivity() {
                         SectionCard(Modifier.padding(top = 8.dp)) {
                             ListRow(
                                 title = "Send the microphone too",
-                                subtitle = "Appears on the PC as \"Vyoma Phone Mic\"",
+                                subtitle = status.micError ?: "Appears on the PC as \"Vyoma Phone Mic\"",
                                 icon = Icons.Rounded.Mic,
                                 trailing = {
                                     VyomaSwitch(status.options.mic, { on -> save(status.options.copy(mic = on)) }, contentDescription = "Microphone")
@@ -265,7 +265,8 @@ private fun Preview(size: android.util.Size) {
 private fun SetupSteps() {
     // Vyoma on the PC installs it: no terminal, no paths into the source.
     Text(
-        "On the PC, click Install on This PC in Vyoma's window (or in Vyoma's notification). It asks for the password once, then try again here.",
+        "On the PC, open This PC in Vyoma's window and click Install (on Linux, also in Vyoma's notification) or Set up (on Windows). " +
+            "It asks for the password or an administrator once, then try again here.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 14.dp),

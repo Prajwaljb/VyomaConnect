@@ -360,7 +360,18 @@ impl Pads for UsbIp {
 
 /// Runs the pad for one phone while it sends states.
 pub async fn run(input: mpsc::Receiver<GamepadInput>, sender: Sender, name: String) {
+    let _release = ReleaseAccessory;
     drive(UsbIp, input, sender, name).await
+}
+
+/// However the pad ends (aborted with the link too): a phone bridged over USB accessory mode for
+/// this stops being read.
+struct ReleaseAccessory;
+
+impl Drop for ReleaseAccessory {
+    fn drop(&mut self) {
+        crate::accessory::release();
+    }
 }
 
 /// The Game controller check for This PC.
@@ -429,7 +440,7 @@ pub async fn fetch_driver(on_installed: impl FnOnce() + Send + 'static) -> Resul
     Ok(())
 }
 
-fn sum_matches(bytes: &[u8], hex: &str) -> bool {
+pub(crate) fn sum_matches(bytes: &[u8], hex: &str) -> bool {
     let got: String = ring::digest::digest(&ring::digest::SHA256, bytes).as_ref().iter().map(|b| format!("{b:02x}")).collect();
     got == hex
 }

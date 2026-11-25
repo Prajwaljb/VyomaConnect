@@ -4,7 +4,8 @@
 //! (browse, open, send both ways), brightness and app volumes ([pc]), sleep / restart / shut down
 //! / sign out, waking the screen, Task View and the virtual desktops, paste, the wallpaper's
 //! colours, walk-away rules, the phone's screen in a window ([crate::mirror]), a photo with the
-//! camera ([crate::camera]) and the phone as a game controller ([crate::gamepad]).
+//! camera ([crate::camera]), the phone as a game controller ([crate::gamepad]), handoff of a web
+//! video ([crate::handoff]) and the touchpad over Bluetooth ([crate::bluetooth]).
 //! Built and tested on CI and under Wine only; not yet run on a real Windows PC.
 
 use std::net::IpAddr;
@@ -22,7 +23,7 @@ use vyoma_core::away::Rules;
 use vyoma_core::device::Command;
 use vyoma_core::files;
 use vyoma_core::link::{Sender, packet};
-use vyoma_engine::{Cx, Feature, Platform, Sampler};
+use vyoma_engine::{Cx, Feature, Handoff, Platform, Sampler, Started};
 
 use crate::{input, pc, screen, system, tray, wallpaper, win};
 
@@ -37,6 +38,8 @@ pub struct Windows {
     task_view: Mutex<Option<Instant>>,
     /// Each phone's walk-away rules (carried out by [crate::away::Hands]).
     pub away: Arc<Rules>,
+    /// The web video the phones are offered to continue.
+    handoff: Arc<crate::handoff::Offer>,
 }
 
 impl Windows {
@@ -47,9 +50,11 @@ impl Windows {
             Feature::Controls | Feature::Wallpaper | Feature::Away | Feature::Mirror | Feature::Camera => true,
             // Offered without the driver too: the phone then says how to get it.
             Feature::Gamepad => true,
-            // Not on Windows yet: the browser's media handoff, the USB accessory, the phone's camera
-            // as a webcam, the Bluetooth touchpad.
-            Feature::Handoff | Feature::Accessory | Feature::Webcam | Feature::Touchpad => false,
+            // Offered without a radio too: the phone then says Bluetooth is off or missing.
+            Feature::Handoff | Feature::Touchpad => true,
+            // Offered before their one-time setup too (UsbDk; the camera registered as an
+            // administrator): the phone then says what's needed.
+            Feature::Accessory | Feature::Webcam => true,
         }
     }
 }
@@ -91,12 +96,48 @@ impl Platform for Windows {
         crate::gamepad::run(input, cx.sender.clone(), cx.name.clone()).await
     }
 
+    fn handoff_offer(&self) -> Option<String> {
+        self.handoff.title()
+    }
+
+    async fn handoff(&self) -> Option<Handoff> {
+        tokio::task::spawn_blocking(crate::handoff::find).await.ok().flatten().map(Into::into)
+    }
+
+    async fn pause_handoff(&self, h: &Handoff) {
+        let app = h.player.clone();
+        let _ = tokio::task::spawn_blocking(move || crate::media::pause_app(&app)).await;
+    }
+
+    fn touchpad(&self, cx: &Cx) -> Option<Started> {
+        let (tx, rx) = mpsc::channel(256);
+        let task = tokio::spawn(crate::bluetooth::touchpad(cx.sender.clone(), cx.name.clone(), tx.clone(), rx));
+        Some(Started { task, close: Box::new(move || tx.try_send(vyoma_core::pointer::Frame::Close).is_ok()) })
+    }
+
+    async fn bluetooth_address(&self) -> Option<String> {
+        tokio::task::spawn_blocking(crate::bluetooth::address).await.ok().flatten()
+    }
+
     async fn camera_state(&self) -> (bool, bool) {
         crate::camera::state().await
     }
 
     async fn camera_photo(&self, cx: &Cx) -> Result<()> {
         crate::camera::take(&cx.sender, &cx.me, &cx.pinned, &cx.name).await
+    }
+
+    async fn webcam(&self, cx: &Cx, phone: IpAddr, packet: &Value, turn: tokio::sync::watch::Receiver<u32>) -> Result<()> {
+        crate::webcam::camera(&cx.sender, &cx.me, &cx.pinned, phone, packet, turn, &cx.name).await
+    }
+
+    async fn webcam_mic(&self, cx: &Cx, _phone: IpAddr, _packet: &Value) -> Result<()> {
+        crate::webcam::mic(&cx.sender).await;
+        Ok(())
+    }
+
+    fn usb_accessory(&self, reswitch: bool) -> Result<()> {
+        crate::accessory::start(reswitch)
     }
 
     async fn mirror(&self, cx: &Cx, phone: IpAddr, packet: &Value) -> Result<()> {
@@ -411,7 +452,9 @@ mod tests {
             assert!(incoming.contains(&kind), "{kind}");
         }
         assert!(incoming.contains(&"vyoma.gamepad.state"), "the controller");
-        assert!(!incoming.contains(&"vyoma.webcam"), "the webcam isn't on Windows yet");
+        for kind in ["vyoma.webcam", "vyoma.webcam.turn", "vyoma.usb.accessory"] {
+            assert!(incoming.contains(&kind), "{kind}");
+        }
     }
 
     #[test]

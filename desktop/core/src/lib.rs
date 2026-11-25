@@ -24,6 +24,7 @@ pub mod panics;
 pub mod payload;
 pub mod presenter;
 pub mod permits;
+pub mod pointer;
 pub mod release;
 pub mod updates;
 pub mod usbip;

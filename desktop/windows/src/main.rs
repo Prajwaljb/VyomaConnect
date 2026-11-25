@@ -25,7 +25,11 @@
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
 #[cfg(windows)]
+mod accessory;
+#[cfg(windows)]
 mod away;
+#[cfg(windows)]
+mod bluetooth;
 #[cfg(windows)]
 mod calls;
 #[cfg(windows)]
@@ -41,6 +45,8 @@ mod gamepad;
 #[cfg(windows)]
 mod gpu;
 #[cfg(windows)]
+mod handoff;
+#[cfg(windows)]
 mod input;
 #[cfg(windows)]
 mod media;
@@ -54,6 +60,8 @@ mod platform;
 mod presenter;
 #[cfg(windows)]
 mod screen;
+#[cfg(windows)]
+mod webcam;
 #[cfg(windows)]
 mod sendto;
 #[cfg(windows)]
@@ -111,7 +119,7 @@ mod agent {
     use vyoma_engine::window::{Answer, CHANGING, Device, Devices, Side};
 
     use crate::toast::{self, Button, Heard, Shown, Toast};
-    use crate::{away, calls, control, firewall, input, media, platform, presenter, system, tray, update, usb, win};
+    use crate::{away, bluetooth, calls, control, firewall, input, media, platform, presenter, system, tray, update, usb, win};
     use vyoma_core::adb::ClipboardSeen;
 
     use vyoma_engine::stock::{self, BATTERY, Desk, FIND, LOCK, LOCK_REQUEST, PING, battery_packet, lock_packet};
@@ -175,6 +183,11 @@ mod agent {
             }
             // Let phones through, as an administrator (Windows asked; see firewall::open).
             Some(firewall::OPEN_ARG) => firewall::allow(),
+            // The phone camera for apps, as an administrator (This PC's Set up or the installer).
+            Some(crate::webcam::INSTALL_ARG) => crate::webcam::install(),
+            Some(crate::webcam::REMOVE_ARG) => crate::webcam::remove(),
+            // The installer's "Controller over USB" option: UsbDk's installer, fetched and opened.
+            Some(crate::accessory::GET_ARG) => crate::accessory::get_from_installer(),
             // Windows starting the agent for a toast's button while it wasn't running.
             Some("-Embedding") => run(win::data_dir()),
             Some(SEND_ANY) => send_any(std::env::args().skip(2).collect()),
@@ -185,7 +198,7 @@ mod agent {
                 quit_running();
                 Ok(())
             }
-            Some(other) => bail!("unknown option {other}: try --install, --uninstall or --quit"),
+            Some(other) => bail!("unknown option {other}: try --install, --uninstall, --install-camera, --remove-camera or --quit"),
             None => run(win::data_dir()),
         }
     }
@@ -320,6 +333,10 @@ mod agent {
         let calls = calls::start();
         // The USB cable: phones plugged in with USB debugging link through adb's tunnel.
         usb::start(lan.tcp_port());
+        // Bluetooth: the link when there's no Wi-Fi to the PC, and the controller's and touchpad's frames.
+        bluetooth::start(lan.tcp_port(), tokio::runtime::Handle::current());
+        // The phone camera for apps, while the agent runs (once it's set up).
+        crate::webcam::add();
         // The controller's states down the cable (adb's reverse of the phone's 1866); pads a
         // previous run left behind aren't retried.
         tokio::spawn(vyoma_core::gamepad::serve_wired());
@@ -859,6 +876,34 @@ mod agent {
                     });
                     Ok(Value::Null)
                 }
+                crate::webcam::CHECK => {
+                    let changes = w.changes.clone();
+                    tokio::spawn(async move {
+                        if let Ok(Err(e)) = tokio::task::spawn_blocking(crate::webcam::set_up).await {
+                            tracing::warn!("phone camera: {e:#}");
+                            let text = format!("{e:#}");
+                            tokio::task::spawn_blocking(move || tray::notify("The phone camera wasn't set up", &text));
+                        }
+                        let _ = changes.send(json!({ "event": "Changed" }));
+                    });
+                    Ok(Value::Null)
+                }
+                crate::accessory::CHECK => {
+                    let changes = w.changes.clone();
+                    tokio::spawn(async move {
+                        let installed = changes.clone();
+                        let done = crate::accessory::fetch_driver(move || {
+                            let _ = installed.send(json!({ "event": "Changed" }));
+                        });
+                        if let Err(e) = done.await {
+                            tracing::warn!("no UsbDk: {e:#}");
+                            let text = format!("{e:#}");
+                            tokio::task::spawn_blocking(move || tray::notify("Couldn't get the USB driver", &text));
+                        }
+                        let _ = changes.send(json!({ "event": "Changed" }));
+                    });
+                    Ok(Value::Null)
+                }
                 crate::camera::CHECK => {
                     win::open(crate::camera::SETTINGS);
                     Ok(Value::Null)
@@ -913,6 +958,8 @@ mod agent {
         all.extend(firewall::check());
         all.push(usb::check());
         all.push(crate::gamepad::check());
+        all.push(crate::accessory::check());
+        all.push(crate::webcam::check());
         all.extend(crate::camera::check());
         Value::Array(all)
     }

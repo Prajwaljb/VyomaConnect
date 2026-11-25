@@ -265,7 +265,7 @@ impl PhoneFiles {
     }
 
     /// Phone [id]'s session's request time limit (tests: a frozen server fails sooner).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     async fn sftp_timeout(&self, id: &str, secs: u64) {
         if let Some(open) = self.slot(id).lock().await.as_ref() {
             open.sftp.set_timeout(secs);

@@ -249,6 +249,23 @@ pub fn sink_request(body: &Value) -> SinkRequest {
     }
 }
 
+/// A YouTube-style `t=` in a URL (`t=90`, `t=90s`, `t=1m30s`), in ms; 0 if there's none.
+pub fn url_time_ms(url: &str) -> i64 {
+    let Some(query) = url.split_once('?').map(|(_, q)| q) else { return 0 };
+    let Some(t) = query.split(['&', '#']).find_map(|kv| kv.strip_prefix("t=")) else { return 0 };
+    let (mut total, mut num) = (0i64, 0i64);
+    for c in t.chars() {
+        match c {
+            '0'..='9' => num = num * 10 + c.to_digit(10).unwrap() as i64,
+            'h' => (total, num) = (total + num * 3600, 0),
+            'm' => (total, num) = (total + num * 60, 0),
+            's' => (total, num) = (total + num, 0),
+            _ => break,
+        }
+    }
+    (total + num) * 1000
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

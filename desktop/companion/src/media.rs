@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use tracing::warn;
+use vyoma_engine::media::url_time_ms;
 use zbus::{Connection, MatchRule, MessageStream, OwnedVariant};
 
 const PREFIX: &str = "org.mpris.MediaPlayer2.";
@@ -234,31 +235,15 @@ fn int(v: &OwnedVariant) -> Option<i64> {
     i64::try_from(&**v).ok()
 }
 
-/// A YouTube-style `t=` in a URL (`t=90`, `t=90s`, `t=1m30s`), in ms; 0 if there's none.
-fn url_time_ms(url: &str) -> i64 {
-    let Some(query) = url.split_once('?').map(|(_, q)| q) else { return 0 };
-    let Some(t) = query.split(['&', '#']).find_map(|kv| kv.strip_prefix("t=")) else { return 0 };
-    let (mut total, mut num) = (0i64, 0i64);
-    for c in t.chars() {
-        match c {
-            '0'..='9' => num = num * 10 + c.to_digit(10).unwrap() as i64,
-            'h' => (total, num) = (total + num * 3600, 0),
-            'm' => (total, num) = (total + num * 60, 0),
-            's' => (total, num) = (total + num, 0),
-            _ => break,
-        }
-    }
-    (total + num) * 1000
-}
 
 #[cfg(test)]
 mod tests {
     #[test]
     fn url_times() {
-        assert_eq!(super::url_time_ms("https://www.youtube.com/watch?v=x&t=14s"), 14_000);
-        assert_eq!(super::url_time_ms("https://youtu.be/x?t=90"), 90_000);
-        assert_eq!(super::url_time_ms("https://www.youtube.com/watch?v=x&t=1h2m3s"), 3_723_000);
-        assert_eq!(super::url_time_ms("https://www.youtube.com/watch?v=x"), 0);
+        assert_eq!(vyoma_engine::media::url_time_ms("https://www.youtube.com/watch?v=x&t=14s"), 14_000);
+        assert_eq!(vyoma_engine::media::url_time_ms("https://youtu.be/x?t=90"), 90_000);
+        assert_eq!(vyoma_engine::media::url_time_ms("https://www.youtube.com/watch?v=x&t=1h2m3s"), 3_723_000);
+        assert_eq!(vyoma_engine::media::url_time_ms("https://www.youtube.com/watch?v=x"), 0);
     }
 }
 

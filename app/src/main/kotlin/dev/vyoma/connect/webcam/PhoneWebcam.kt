@@ -74,6 +74,8 @@ object PhoneWebcam {
         val mic: Boolean = false,
         val pc: String? = null,
         val error: String? = null,
+        /** Why the PC can't take the mic at all (Windows), shown on the Microphone row. */
+        val micError: String? = null,
         /** The camera in use: how far it zooms (below 1 is its ultra-wide) and whether it has a torch. */
         val zoomRange: ClosedFloatingPointRange<Float> = 1f..1f,
         val torchable: Boolean = false,
@@ -214,7 +216,7 @@ object PhoneWebcam {
         val turns = Turns(app)
         try {
             launch {
-                plugin.webcam.collect { s -> _status.value = _status.value.copy(camera = s.camera, mic = s.mic) }
+                plugin.webcam.collect { s -> _status.value = _status.value.copy(camera = s.camera, mic = s.mic, micError = s.micError) }
             }
             _status.value = _status.value.copy(size = size)
             // The camera in use: closed and the other opened on a switch, into the same encoder. The
@@ -299,18 +301,21 @@ object PhoneWebcam {
                     }
             }
             launch {
-                micOn.collectLatest { on ->
-                    if (!on) return@collectLatest
-                    val pcm = LiveStream(MIC_BACKLOG)
-                    val mic = Mic(app, pcm)
-                    try {
-                        mic.start()
-                        plugin.sendMic(RATE, 1, pcm)
-                    } finally {
-                        mic.close()
-                        pcm.close()
+                // A PC that can't take a mic says so once: the mic closes again (its dot goes too).
+                combine(micOn, plugin.webcam.map { it.micError != null }.distinctUntilChanged()) { on, refused -> on && !refused }
+                    .distinctUntilChanged()
+                    .collectLatest { on ->
+                        if (!on) return@collectLatest
+                        val pcm = LiveStream(MIC_BACKLOG)
+                        val mic = Mic(app, pcm)
+                        try {
+                            mic.start()
+                            plugin.sendMic(RATE, 1, pcm)
+                        } finally {
+                            mic.close()
+                            pcm.close()
+                        }
                     }
-                }
             }
             plugin.sendWebcam(encoder.width, encoder.height, upright(cameras, cameraFor(cameras, front.value), turns.held.value), video)
         } finally {

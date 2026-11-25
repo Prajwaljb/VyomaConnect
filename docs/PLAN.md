@@ -658,6 +658,31 @@ build, headless Xvfb display, private ports and pipe) and next on GitHub's runne
   processor (Wine), or one that fails mid-stream goes through the CPU as before. Untested: GitHub's
   runners have only Windows' software card, which has no video processor (the test checks nothing
   there), and Wine's claims one it can't make; it waits for a PC with a graphics card.
+- Handoff and Bluetooth (2026-11-25, "add the missing features on windows"):
+  - Handoff (`handoff.rs`): Windows' media controls give the title and the position (Chromium-based
+    browsers report it; else the address's `t=`), never the page, so the browser window whose title
+    holds the video's title is found and its address read from the address bar through UI
+    Automation (breadth first through the browser's own controls, pages skipped, the first edit box
+    holding a web address). Only the tab showing can be handed over; the phone is offered nothing
+    else. The offer is kept fresh on a thread while phones ask. Wine's UI Automation reads a window
+    but walks none of its controls, so the address bar test runs on CI's runners only.
+  - Bluetooth (`bluetooth.rs`): Winsock's own RFCOMM sockets with their SDP records published under
+    the phone's UUIDs: the link when there's no Wi-Fi (piped to the agent's TCP port; the phone keeps
+    the radio's address from `vyoma.bluetooth`), the controller's frames and the touchpad's. The
+    touchpad's signed frames moved into core (`vyoma_core::pointer`), Linux on it too. A Bluetooth
+    socket isn't one tokio waits on, so threads pipe each connection to a loopback pair; tested with
+    a TCP socket standing in for the radio. Wine has no Bluetooth sockets: no radio test here.
+- The phone as a webcam and the controller over USB on Windows (2026-11-25), each set up once as an
+  administrator from This PC or the installer's components page:
+  - Webcam: `vyoma_camera.dll` (desktop/windows/camera) is a Media Foundation source behind an
+    IMFActivate, as Windows' virtual camera sample builds one; `--install-camera` copies it under
+    Program Files (versioned name, as the camera service may hold the old one) and registers its class
+    in HKLM; the agent adds "Vyoma Phone Camera" for its session (MFCreateVirtualCamera, Windows 11)
+    and writes the phone's decoded, upright NV12 into a global shared section the source reads
+    (seqlock, 2 s staleness, the orb placeholder otherwise). No mic: the phone is told why (`micError`).
+  - USB: UsbDk takes a likely phone over only while it's switched to accessory mode and while the
+    accessory is read; frames go to the wired listener as adb's tunnel would carry them.
+  - Not yet run on Windows: Frame Server and UsbDk aren't in Wine. CI runs makensis.
 - Next: the NV12 picture handed to the hardware encoder as a texture (no read-back at all; needs the
   encoder's Direct3D manager), the mirror drawn with Direct3D if GDI's scaling proves slow.
 

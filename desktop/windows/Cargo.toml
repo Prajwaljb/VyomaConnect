@@ -5,6 +5,16 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 description = "Vyoma's PC side on Windows: pairs with and serves Vyoma on your phone, on vyoma-core and vyoma-engine"
 
+# The camera for apps (vyoma_camera.dll, camera/): Windows' camera service loads it; the agent shares its frame code.
+[lib]
+name = "vyoma_camera"
+path = "camera/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "vyoma-windows"
+path = "src/main.rs"
+
 # Everything is Windows-only: elsewhere the program just says where Vyoma's PC side is.
 # Windows' own APIs (MIT/Apache-2.0); the phone's Home stats and About this PC (MIT), screenshots as PNG (MIT/Apache-2.0).
 [target.'cfg(windows)'.dependencies]
@@ -19,7 +29,7 @@ sysinfo = "0.40.0"
 # The controller driver download's SHA-256 (Apache-2.0/ISC, as core's).
 ring = "0.17.14"
 # Windows' COM and WinRT APIs (MIT/Apache-2.0): media controls, Core Audio, toasts, screen capture,
-# Media Foundation's H.264 encoder, the firewall.
+# Media Foundation's H.264 encoder, the firewall, UI Automation (handoff's address bar).
 # windows-core: for #[implement] (COM objects Windows calls: the toasts' buttons).
 windows-core = "0.62"
 windows = { version = "0.62", features = [
@@ -41,6 +51,7 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Imaging",
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
+    "Win32_Media_KernelStreaming",
     "Win32_Media_MediaFoundation",
     "Win32_Storage_FileSystem",
     "Win32_NetworkManagement_WindowsFirewall",
@@ -52,15 +63,18 @@ windows = { version = "0.62", features = [
     "Win32_System_Variant",
     "Win32_System_Wmi",
     "Win32_UI_Notifications",
+    "Win32_UI_Accessibility",
     "Win32_UI_Shell",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ] }
 png = "0.17"
 windows-sys = { version = "0.61", features = [
+    "Win32_Devices_Bluetooth",
     "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
@@ -84,6 +98,10 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# Tests decode the touchpad's key as the phone does (MIT/Apache-2.0, already core's).
+[target.'cfg(windows)'.dev-dependencies]
+base64 = "0.23"
 
 # The icon inside the program (MIT).
 [build-dependencies]

@@ -273,14 +273,36 @@ impl Ringer {
     }
 }
 
+/// A registry hive: this user's, or the whole machine's (writing there needs an administrator).
+#[derive(Clone, Copy)]
+pub enum Hive {
+    User,
+    Machine,
+}
+
+impl Hive {
+    fn key(self) -> windows_sys::Win32::System::Registry::HKEY {
+        use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+        match self {
+            Hive::User => HKEY_CURRENT_USER,
+            Hive::Machine => HKEY_LOCAL_MACHINE,
+        }
+    }
+}
+
 /// Sets a text value under HKEY_CURRENT_USER, making the key if needed ([name] None: its default).
 pub fn set_user_value(key: &str, name: Option<&str>, value: &str) -> anyhow::Result<()> {
-    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RegSetKeyValueW};
+    set_value(Hive::User, key, name, value)
+}
+
+/// Sets a text value in [hive], making the key if needed ([name] None: its default).
+pub fn set_value(hive: Hive, key: &str, name: Option<&str>, value: &str) -> anyhow::Result<()> {
+    use windows_sys::Win32::System::Registry::{REG_SZ, RegSetKeyValueW};
     let value = wide(value);
     let name = name.map(wide);
     // SAFETY: NUL-terminated key, name and REG_SZ data of exactly value's bytes.
     let err = unsafe {
-        RegSetKeyValueW(HKEY_CURRENT_USER, wide(key).as_ptr(), name.as_ref().map_or(std::ptr::null(), |n| n.as_ptr()), REG_SZ, value.as_ptr().cast(), (value.len() * 2) as u32)
+        RegSetKeyValueW(hive.key(), wide(key).as_ptr(), name.as_ref().map_or(std::ptr::null(), |n| n.as_ptr()), REG_SZ, value.as_ptr().cast(), (value.len() * 2) as u32)
     };
     if err != 0 {
         anyhow::bail!("couldn't write {key} ({err})");
@@ -290,13 +312,18 @@ pub fn set_user_value(key: &str, name: Option<&str>, value: &str) -> anyhow::Res
 
 /// Reads a text value under HKEY_CURRENT_USER ([name] None: its default).
 pub fn user_value(key: &str, name: Option<&str>) -> Option<String> {
-    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegGetValueW};
+    value(Hive::User, key, name)
+}
+
+/// Reads a text value in [hive] ([name] None: its default).
+pub fn value(hive: Hive, key: &str, name: Option<&str>) -> Option<String> {
+    use windows_sys::Win32::System::Registry::{RRF_RT_REG_SZ, RegGetValueW};
     let name = name.map(wide);
     let mut buf = vec![0u16; 1024];
     let mut size = (buf.len() * 2) as u32;
     // SAFETY: a buffer of [size] bytes; Windows writes a NUL-terminated string into it.
     let err = unsafe {
-        RegGetValueW(HKEY_CURRENT_USER, wide(key).as_ptr(), name.as_ref().map_or(std::ptr::null(), |n| n.as_ptr()), RRF_RT_REG_SZ, std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut size)
+        RegGetValueW(hive.key(), wide(key).as_ptr(), name.as_ref().map_or(std::ptr::null(), |n| n.as_ptr()), RRF_RT_REG_SZ, std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut size)
     };
     // SAFETY: as above, NUL-terminated on success.
     (err == 0).then(|| unsafe { from_wide(buf.as_ptr()) })
@@ -304,9 +331,55 @@ pub fn user_value(key: &str, name: Option<&str>) -> Option<String> {
 
 /// Deletes a key under HKEY_CURRENT_USER with everything in it; fine if it isn't there.
 pub fn delete_user_key(key: &str) {
-    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RegDeleteTreeW};
-    // SAFETY: a NUL-terminated path under HKCU.
-    unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, wide(key).as_ptr()) };
+    delete_key(Hive::User, key);
+}
+
+/// Deletes a key in [hive] with everything in it; fine if it isn't there.
+pub fn delete_key(hive: Hive, key: &str) {
+    use windows_sys::Win32::System::Registry::RegDeleteTreeW;
+    // SAFETY: a NUL-terminated path under the hive.
+    unsafe { RegDeleteTreeW(hive.key(), wide(key).as_ptr()) };
+}
+
+/// Runs this program again with [arg] as an administrator (Windows asks), waiting up to two
+/// minutes; Err with [failed] when it was refused or didn't finish well.
+pub fn as_admin(arg: &str, failed: &str) -> anyhow::Result<()> {
+    use windows::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, WAIT_OBJECT_0};
+    use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+    use windows::Win32::UI::Shell::{SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+    use windows::core::{HSTRING, PCWSTR};
+    let exe = HSTRING::from(std::env::current_exe()?.as_os_str());
+    let (verb, args) = (HSTRING::from("runas"), HSTRING::from(arg));
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
+        lpVerb: PCWSTR(verb.as_ptr()),
+        lpFile: PCWSTR(exe.as_ptr()),
+        lpParameters: PCWSTR(args.as_ptr()),
+        nShow: SW_HIDE.0,
+        ..Default::default()
+    };
+    // SAFETY: the strings outlive the call; the process handle is waited on and closed.
+    unsafe {
+        if let Err(e) = ShellExecuteExW(&mut info) {
+            if e.code() == ERROR_CANCELLED.to_hresult() {
+                anyhow::bail!("Windows asked for an administrator and was told no");
+            }
+            return Err(anyhow::Error::from(e).context("couldn't ask Windows for an administrator"));
+        }
+        if info.hProcess.is_invalid() {
+            anyhow::bail!("{failed}");
+        }
+        let waited = WaitForSingleObject(info.hProcess, 120_000);
+        let mut code = 1u32;
+        let _ = GetExitCodeProcess(info.hProcess, &mut code);
+        let _ = CloseHandle(info.hProcess);
+        if waited != WAIT_OBJECT_0 || code != 0 {
+            anyhow::bail!("{failed}");
+        }
+    }
+    Ok(())
 }
 
 /// The device interfaces of [class] present now, by their paths (cfgmgr32).
