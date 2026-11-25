@@ -27,7 +27,18 @@ struct Here {
     parent: Option<String>,
     /// The phone's top folders, for the way back's name.
     roots: Vec<(String, String)>,
+    /// Everything in the folder; the page shows [shown] of them, sorted and filtered.
+    entries: Vec<FileEntry>,
+    newest: bool,
+    query: String,
+    shown: usize,
 }
+
+/// Rows made at a time: a camera folder can hold tens of thousands of photos, and every row is a
+/// component (5,000 cost 115 MB and most of a second).
+const PAGE: usize = 200;
+/// A folder with more than this many things gets a search field.
+const SEARCHABLE: usize = 20;
 
 static HERE: Mutex<Option<Here>> = Mutex::new(None);
 
@@ -61,6 +72,39 @@ pub fn wire(ui: &MainWindow) {
                 win.set_files_state("loading".into());
             }
             read(&ui);
+        }
+    });
+    ui.on_sort_phone_files({
+        let ui = ui.as_weak();
+        move |how| {
+            here(|h| {
+                h.newest = how == "newest";
+                h.shown = PAGE;
+            });
+            if let Some(win) = ui.upgrade() {
+                refresh(&win);
+            }
+        }
+    });
+    ui.on_search_phone_files({
+        let ui = ui.as_weak();
+        move |q| {
+            here(|h| {
+                h.query = q.to_string();
+                h.shown = PAGE;
+            });
+            if let Some(win) = ui.upgrade() {
+                refresh(&win);
+            }
+        }
+    });
+    ui.on_more_phone_files({
+        let ui = ui.as_weak();
+        move || {
+            here(|h| h.shown += PAGE);
+            if let Some(win) = ui.upgrade() {
+                refresh(&win);
+            }
         }
     });
     ui.on_stop_phone_files({
@@ -325,10 +369,74 @@ pub fn show_folder(win: &MainWindow, folder: &Folder) {
     };
     win.set_files_title(breakable(&folder.name).into());
     win.set_files_back(back.into());
-    let now = Local::now().timestamp();
-    let rows: Vec<PhoneFile> = folder.entries.iter().map(|e| row(&folder.path, e, now)).collect();
-    win.set_files_list(ModelRc::new(VecModel::from(rows)));
+    // A folder just opened (the page was loading) starts at its top with no search; the same one
+    // read again after a copy or delete keeps them.
+    let opened = win.get_files_state() != "ready";
+    let fresh = here(|h| {
+        if opened {
+            h.query.clear();
+            h.shown = PAGE;
+        }
+        h.entries = folder.entries.clone();
+    });
+    if fresh.is_none() {
+        return;
+    }
+    refresh(win);
     win.set_files_state("ready".into());
+}
+
+/// The rows the page shows: [entries] filtered by [query], folders first then by name or newest,
+/// the first [shown]; and how many more there are.
+fn visible<'a>(entries: &'a [FileEntry], newest: bool, query: &str, shown: usize) -> (Vec<&'a FileEntry>, usize, usize) {
+    let q = query.trim().to_lowercase();
+    let mut list: Vec<&FileEntry> = entries.iter().filter(|e| q.is_empty() || e.name.to_lowercase().contains(&q)).collect();
+    list.sort_by(|a, b| {
+        b.folder.cmp(&a.folder).then_with(|| if newest { b.modified.cmp(&a.modified) } else { std::cmp::Ordering::Equal }).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    let matched = list.len();
+    list.truncate(shown);
+    let more = matched - list.len();
+    (list, matched, more)
+}
+
+/// Shows the folder's rows as [Here] says (sort, search, how many).
+fn refresh(win: &MainWindow) {
+    let Some((rows, matched, more, total, newest, query)) = here(|h| {
+        let now = Local::now().timestamp();
+        let dir = h.path.clone().unwrap_or_default();
+        let (list, matched, more) = visible(&h.entries, h.newest, &h.query, h.shown);
+        let rows: Vec<PhoneFile> = list.into_iter().map(|e| row(&dir, e, now)).collect();
+        (rows, matched, more, h.entries.len(), h.newest, h.query.clone())
+    }) else {
+        return;
+    };
+    win.set_files_list(ModelRc::new(VecModel::from(rows)));
+    win.set_files_more(more.min(PAGE) as i32);
+    win.set_files_searchable(total > SEARCHABLE);
+    win.set_files_total(total as i32);
+    win.set_files_sort(if newest { "newest" } else { "name" }.into());
+    win.set_files_query(query.clone().into());
+    win.set_files_count(count_label(total, matched, &query).into());
+}
+
+/// "7 items", "1 item", "12 of 5,000 match".
+fn count_label(total: usize, matched: usize, query: &str) -> String {
+    let n = |x: usize| {
+        let s = x.to_string();
+        let mut out = String::new();
+        for (i, c) in s.chars().enumerate() {
+            if i > 0 && (s.len() - i) % 3 == 0 {
+                out.push(',');
+            }
+            out.push(c);
+        }
+        out
+    };
+    if !query.trim().is_empty() {
+        return format!("{} of {} match", n(matched), n(total));
+    }
+    if total == 1 { "1 item".into() } else { format!("{} items", n(total)) }
 }
 
 fn row(dir: &str, e: &FileEntry, now: i64) -> PhoneFile {
@@ -427,6 +535,21 @@ mod tests {
         assert!(folder_name("a/b").is_err() && folder_name("..").is_err() && folder_name("").is_err());
         assert_eq!(leaf("/DCIM/Camera"), "Camera");
         assert_eq!(when(0, 1_800_000_000), "");
+    }
+
+    #[test]
+    fn big_folders_show_a_page_sorted_and_filtered() {
+        let e = |name: &str, folder: bool, modified: i64| FileEntry { name: name.into(), folder, size: 1, modified };
+        let entries: Vec<FileEntry> = (0..450).map(|i| e(&format!("IMG_{i:04}.jpg"), false, i)).chain([e("Edited", true, 0)]).collect();
+        let (list, matched, more) = visible(&entries, false, "", PAGE);
+        assert_eq!((list.len(), matched, more), (PAGE, 451, 251));
+        assert_eq!((list[0].name.as_str(), list[1].name.as_str()), ("Edited", "IMG_0000.jpg"), "folders first, then by name");
+        let (list, ..) = visible(&entries, true, "", PAGE);
+        assert_eq!((list[0].name.as_str(), list[1].name.as_str()), ("Edited", "IMG_0449.jpg"), "newest first");
+        let (list, matched, more) = visible(&entries, false, "img_04", PAGE);
+        assert_eq!((list.len(), matched, more), (50, 50, 0));
+        assert_eq!(count_label(5000, 12, "x"), "12 of 5,000 match");
+        assert_eq!((count_label(1, 1, ""), count_label(1234567, 1234567, " ")), ("1 item".into(), "1,234,567 items".into()));
     }
 
     #[test]

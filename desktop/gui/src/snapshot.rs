@@ -251,7 +251,7 @@ fn health(missing: bool) -> Health {
 
 /// Made-up texts: messages (the list), messages-thread, messages-silent, messages-loading, and the phone's texts
 /// The phone's files (the Mac and Windows): files, files-loading, files-error, files-busy,
-/// files-delete, files-new, files-empty.
+/// files-delete, files-new, files-empty, files-many (5,000 photos), files-search, files-nothing.
 fn files(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>) {
     use crate::daemon::{FileEntry, Folder};
     crate::files::wire(ui);
@@ -268,6 +268,9 @@ fn files(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>) {
     let e = |name: &str, folder: bool, size: u64, mins: i64| FileEntry { name: name.into(), folder, size, modified: t(mins) };
     let entries = if scene == "files-empty" {
         vec![]
+    } else if scene == "files-many" || scene == "files-search" || scene == "files-nothing" {
+        // A camera folder: thousands of photos.
+        (0..5000).map(|i| e(&format!("IMG_2026{:04}_{:06}.jpg", 1000 + i / 40, i), false, 3_000_000 + i as u64 * 17, 60 * 24 * 365 - i as i64 * 100)).collect()
     } else {
         vec![
             e("Camera", true, 0, 30),
@@ -301,7 +304,10 @@ fn files(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>) {
             }
             ui.set_confirm_delete_file(true);
         }
+        "files-search" => ui.invoke_search_phone_files("_00012".into()),
+        "files-nothing" => ui.invoke_search_phone_files("holiday".into()),
         "files-new" => {
+
             ui.set_new_folder_name("Trips 2027".into());
             ui.set_naming_folder(true);
         }

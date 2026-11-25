@@ -42,6 +42,8 @@ pub const STOPPED: &str = "Stopped";
 const IDLE: Duration = Duration::from_secs(180);
 /// How long the phone has to start its server and say where.
 const ASK_WAIT: Duration = Duration::from_secs(20);
+/// How long a failed request's check of the session may take.
+const PROBE_WAIT: Duration = Duration::from_secs(5);
 /// How long the connection and sign-in may take.
 const CONNECT_WAIT: Duration = Duration::from_secs(15);
 /// Over the cable the phone's payload ports (its file server's among them) are reached here at port + this.
@@ -259,6 +261,31 @@ impl PhoneFiles {
     pub fn stop(&self, id: &str) {
         if let Some(t) = self.transfers.lock().unwrap_or_else(|e| e.into_inner()).get(id) {
             t.stop.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Phone [id]'s session's request time limit (tests: a frozen server fails sooner).
+    #[cfg(test)]
+    async fn sftp_timeout(&self, id: &str, secs: u64) {
+        if let Some(open) = self.slot(id).lock().await.as_ref() {
+            open.sftp.set_timeout(secs);
+        }
+    }
+
+    /// After a failed request: is phone [id]'s session still answering? A connection that died
+    /// without closing (the phone left the network, its screen-off cut) would otherwise fail every
+    /// request until the idle limit; dropped, the next request connects again.
+    pub async fn recover(&self, id: &str) {
+        let slot = self.slot(id);
+        let mut held = slot.lock().await;
+        let Some(open) = held.as_ref() else { return };
+        let root = open.roots.first().map_or_else(|| "/".to_owned(), |r| r.0.clone());
+        let answers = !open.ssh.is_closed() && matches!(tokio::time::timeout(PROBE_WAIT, open.sftp.metadata(root)).await, Ok(Ok(_)));
+        if !answers {
+            tracing::info!("{id}: its file server stopped answering; connecting again next time");
+            if let Some(open) = held.take() {
+                tokio::spawn(async move { close(&open).await });
+            }
         }
     }
 
@@ -697,6 +724,9 @@ pub fn request(files: &Arc<PhoneFiles>, method: &str, args: &Value, devices: &De
             "DeletePhoneFile" => files.delete(&phone, &arg(1)?).await.map(|_| Value::Null),
             _ => return Err("Not a files request".into()),
         };
+        if done.is_err() {
+            files.recover(&phone.id).await;
+        }
         done.map_err(|e| {
             tracing::info!("{}: {method}: {e:#}", phone.id);
             // The first line is for people; the causes underneath are for the log.
@@ -914,6 +944,32 @@ mod live {
         assert!(!dir.join("share/DCIM/album").exists(), "a folder with what's in it");
         assert!(files.delete(&phone, &share).await.is_err(), "not a top folder");
         assert!(files.list(&phone, Some(&format!("{share}/../.."))).await.is_err(), "no way above");
+
+        // The connection dies without closing (the session's sshd frozen: the socket stays open,
+        // nothing answers): the request fails, the check drops the session, and the next request
+        // connects again.
+        // sshd-session and its privilege-separated child: every process under the listener.
+        let mut session: Vec<String> = Vec::new();
+        let mut parents = vec![_sshd.child.id().to_string()];
+        while let Some(pid) = parents.pop() {
+            let children = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).unwrap_or_default();
+            for child in children.split_whitespace() {
+                session.push(child.to_owned());
+                parents.push(child.to_owned());
+            }
+        }
+        assert!(!session.is_empty(), "sshd serves the session in a child");
+        files.sftp_timeout("p", 2).await;
+        for pid in &session {
+            run(Run::new("kill").args(["-STOP", pid]));
+        }
+        assert!(files.list(&phone, None).await.is_err(), "a frozen server fails the request");
+        files.recover("p").await;
+        for pid in &session {
+            run(Run::new("kill").args(["-KILL", pid]));
+        }
+        let back = tokio::time::timeout(Duration::from_secs(20), files.list(&phone, None)).await.expect("connects again").unwrap();
+        assert_eq!(back["path"], share.as_str());
 
         // Someone else's server on the phone's port: a host key that isn't the phone's.
         files.forget("p");

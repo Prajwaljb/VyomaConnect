@@ -3254,6 +3254,18 @@ component FilesPage inherits Page {
     in property <float> progress: -1;
     in property <string> progress-text;
     in property <bool> can-stop;
+    // Big folders: "name" or "newest", the search (with more than a few things), "7 items" or
+    // "12 of 5,000 match", and how many more rows the next page adds.
+    in property <string> sort: "name";
+    in-out property <string> query;
+    in property <bool> searchable;
+    in property <string> count;
+    // Everything in the folder, whatever the search shows.
+    in property <int> total;
+    in property <int> more;
+    callback set-sort(string);
+    callback search(string);
+    callback show-more();
     callback stop();
     callback open(PhoneFile);
     callback delete(PhoneFile);
@@ -3345,11 +3357,11 @@ component FilesPage inherits Page {
             icon-color: Theme.tile-teal;
             title: "New folder";
             tappable: root.busy == "";
-            last: root.files.length == 0;
+            last: root.total == 0;
             clicked => { root.new-folder(); }
         }
         // An empty folder has nothing to copy.
-        if root.files.length > 0: Row {
+        if root.total > 0: Row {
             icon: @image-url("icons/download.svg");
             icon-color: Theme.tile-orange;
             title: "Copy this folder to this PC";
@@ -3359,21 +3371,50 @@ component FilesPage inherits Page {
             clicked => { root.copy-folder(); }
         }
     }
+    if root.state == "ready" && root.searchable: SearchField {
+        text <=> root.query;
+        placeholder: "Search this folder";
+        edited(q) => { root.search(q); }
+    }
+    if root.state == "ready" && root.total > 1: HorizontalLayout {
+        alignment: center;
+        spacing: 8px;
+        PillButton {
+            text: "Name";
+            prominent: root.sort == "name";
+            clicked => { root.set-sort("name"); }
+        }
+        PillButton {
+            text: "Newest first";
+            prominent: root.sort == "newest";
+            clicked => { root.set-sort("newest"); }
+        }
+    }
     if root.state == "ready" && root.files.length == 0: Text {
-        text: "Nothing in this folder yet.";
+        text: root.query == "" ? "Nothing in this folder yet." : "Nothing here is called \u{201c}" + root.query + "\u{201d}.";
         color: Theme.muted;
         font-size: 15px;
+        wrap: word-wrap;
+        min-height: self.preferred-height;
         horizontal-alignment: center;
     }
     if root.state == "ready" && root.files.length > 0: Section {
-        label: root.files.length == 1 ? "1 item" : root.files.length + " items";
+        label: root.count;
         for f[i] in root.files: FileRow {
             file: f;
             first: i == 0;
-            last: i == root.files.length - 1;
+            last: i == root.files.length - 1 && root.more == 0;
             enabled: root.busy == "";
             open => { root.open(f); }
             delete => { root.delete(f); }
+        }
+        if root.more > 0: Row {
+            icon: @image-url("icons/chevron.svg");
+            icon-color: Theme.tile-blue;
+            title: "Show " + root.more + " more";
+            tappable: true;
+            last: true;
+            clicked => { root.show-more(); }
         }
     }
 }
@@ -3546,6 +3587,15 @@ export component MainWindow inherits Window {
     in property <float> files-progress: -1;
     in property <string> files-progress-text;
     in property <bool> files-can-stop;
+    in property <string> files-sort: "name";
+    in-out property <string> files-query;
+    in property <bool> files-searchable;
+    in property <string> files-count;
+    in property <int> files-more;
+    in property <int> files-total;
+    callback sort-phone-files(string);
+    callback search-phone-files(string);
+    callback more-phone-files();
     callback stop-phone-files();
     in-out property <PhoneFile> files-target;
     in-out property <bool> confirm-delete-file;
@@ -3925,6 +3975,15 @@ export component MainWindow inherits Window {
             progress: root.files-progress;
             progress-text: root.files-progress-text;
             can-stop: root.files-can-stop;
+            sort: root.files-sort;
+            query <=> root.files-query;
+            searchable: root.files-searchable;
+            count: root.files-count;
+            more: root.files-more;
+            total: root.files-total;
+            set-sort(how) => { root.sort-phone-files(how); }
+            search(q) => { root.search-phone-files(q); }
+            show-more => { root.more-phone-files(); }
             stop => { root.stop-phone-files(); }
             go-back => { root.phone-files-up(); }
             open(f) => { root.open-phone-file(f); }
