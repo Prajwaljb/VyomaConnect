@@ -345,7 +345,9 @@ copies the open folder with everything in it into a new folder in Downloads (`al
 removed again if it fails or is stopped), then opens it. A camera folder of thousands: 200 rows at a time (5,000 rows
 cost 115 MB and most of a second each time the folder opened), Name or Newest first, a search over the folder's names.
 A connection that dies without closing (the phone off the network) is checked after a failed request and dropped,
-so the next request connects again instead of failing until the idle limit (tested by freezing sshd's session). Files dragged onto the window
+so the next request connects again instead of failing until the idle limit (tested by freezing sshd's session).
+Each row's "…" opens a sheet: Copy to this PC (a folder without opening it), Rename (never over a name
+already there; the phone's top folders can't be), Delete. Files dragged onto the window
 wait for Slint, which takes no drops from outside the app (1.19). Tested against OpenSSH's sftp server
 (`VYOMA_SSHD_TEST=1`, a stopped 64 MB copy included), not yet the phone.
 Loose ends, 2026-11-08: a mount survives the link moving between the cable and Wi-Fi (remounted quietly at the

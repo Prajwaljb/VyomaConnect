@@ -251,7 +251,7 @@ fn health(missing: bool) -> Health {
 
 /// Made-up texts: messages (the list), messages-thread, messages-silent, messages-loading, and the phone's texts
 /// The phone's files (the Mac and Windows): files, files-loading, files-error, files-busy,
-/// files-delete, files-new, files-empty, files-many (5,000 photos), files-search, files-nothing.
+/// files-delete, files-new, files-empty, files-many (5,000 photos), files-search, files-nothing, files-actions, files-rename.
 fn files(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>) {
     use crate::daemon::{FileEntry, Folder};
     crate::files::wire(ui);
@@ -303,6 +303,18 @@ fn files(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>) {
                 ui.set_files_target(f);
             }
             ui.set_confirm_delete_file(true);
+        }
+        "files-actions" | "files-rename" => {
+            let list = ui.get_files_list();
+            if let Some(f) = slint::Model::row_data(&list, 3) {
+                ui.set_rename_name(f.name.clone());
+                ui.set_files_target(f);
+            }
+            if scene == "files-actions" {
+                ui.set_files_acting(true);
+            } else {
+                ui.set_renaming_file(true);
+            }
         }
         "files-search" => ui.invoke_search_phone_files("_00012".into()),
         "files-nothing" => ui.invoke_search_phone_files("holiday".into()),

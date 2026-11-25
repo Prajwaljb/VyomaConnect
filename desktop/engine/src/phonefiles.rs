@@ -33,7 +33,7 @@ pub const SFTP: &str = "kdeconnect.sftp";
 pub const SFTP_REQUEST: &str = "kdeconnect.sftp.request";
 
 /// The window's requests this module answers.
-pub const METHODS: &[&str] = &["PhoneFiles", "FetchPhoneFile", "PutPhoneFiles", "NewPhoneFolder", "DeletePhoneFile", "PhoneFilesProgress", "StopPhoneFiles"];
+pub const METHODS: &[&str] = &["PhoneFiles", "FetchPhoneFile", "PutPhoneFiles", "NewPhoneFolder", "DeletePhoneFile", "RenamePhoneFile", "PhoneFilesProgress", "StopPhoneFiles"];
 
 /// What a copy stopped by the person answers (the window says so quietly, not as a failure).
 pub const STOPPED: &str = "Stopped";
@@ -460,6 +460,26 @@ impl PhoneFiles {
         Ok(())
     }
 
+    /// Renames the phone's file or folder [path] to [name] in the same folder; never over
+    /// something already called that. The new path.
+    pub async fn rename(self: &Arc<Self>, phone: &Phone, path: &str, name: &str) -> Result<String> {
+        let path = clean(path).context("That name can't be used")?;
+        let name = name.trim();
+        anyhow::ensure!(!name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.chars().any(char::is_control), "A name can't have / in it");
+        let open = self.session(phone).await?;
+        anyhow::ensure!(path != "/" && !open.roots.iter().any(|r| r.0 == path), "The phone's top folders can't be renamed");
+        let to = join(path.rsplit_once('/').map_or("/", |(up, _)| if up.is_empty() { "/" } else { up }), name);
+        if to == path {
+            return Ok(to);
+        }
+        // Only a change of case may land on "itself" (a phone's storage ignores case).
+        let same_but_case = to.to_lowercase() == path.to_lowercase();
+        anyhow::ensure!(same_but_case || !open.sftp.try_exists(to.clone()).await.unwrap_or(false), "There's already something called {name} there");
+        open.sftp.rename(path.clone(), to.clone()).await.with_context(|| format!("Couldn't rename {}", leaf(&path)))?;
+        open.touch();
+        Ok(to)
+    }
+
     /// Deletes the phone's file [path], or folder with everything in it (links themselves, never
     /// what they point to). A top folder can't be.
     pub async fn delete(self: &Arc<Self>, phone: &Phone, path: &str) -> Result<()> {
@@ -722,6 +742,7 @@ pub fn request(files: &Arc<PhoneFiles>, method: &str, args: &Value, devices: &De
             }
             "NewPhoneFolder" => files.new_folder(&phone, &arg(1)?).await.map(|_| Value::Null),
             "DeletePhoneFile" => files.delete(&phone, &arg(1)?).await.map(|_| Value::Null),
+            "RenamePhoneFile" => files.rename(&phone, &arg(1)?, &arg(2)?).await.map(|to| json!(to)),
             _ => return Err("Not a files request".into()),
         };
         if done.is_err() {
@@ -940,6 +961,14 @@ mod live {
 
         files.new_folder(&phone, &format!("{share}/Music")).await.unwrap();
         assert!(files.new_folder(&phone, &format!("{share}/Music")).await.is_err(), "already there");
+        let renamed = files.rename(&phone, &format!("{share}/DCIM/notes (2).txt"), "plans.txt").await.unwrap();
+        assert_eq!(renamed, format!("{share}/DCIM/plans.txt"));
+        assert_eq!(std::fs::read(dir.join("share/DCIM/plans.txt")).unwrap(), b"hello phone");
+        assert!(files.rename(&phone, &format!("{share}/DCIM/plans.txt"), "notes.txt").await.is_err(), "never over a file");
+        assert!(files.rename(&phone, &format!("{share}/DCIM/plans.txt"), "a/b").await.is_err(), "no slashes");
+        assert!(files.rename(&phone, &share, "Elsewhere").await.is_err(), "not a top folder");
+        files.rename(&phone, &format!("{share}/Music"), "Songs").await.unwrap();
+        assert!(dir.join("share/Songs").is_dir(), "folders too");
         files.delete(&phone, &format!("{share}/DCIM/album")).await.unwrap();
         assert!(!dir.join("share/DCIM/album").exists(), "a folder with what's in it");
         assert!(files.delete(&phone, &share).await.is_err(), "not a top folder");

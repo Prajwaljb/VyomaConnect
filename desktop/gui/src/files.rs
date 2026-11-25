@@ -194,6 +194,53 @@ pub fn wire(ui: &MainWindow) {
             });
         }
     });
+    ui.on_copy_phone_item({
+        let ui = ui.as_weak();
+        move |f| {
+            let Some(id) = here(|h| h.id.clone()) else { return };
+            let (name, path, folder) = (f.name.to_string(), f.path.to_string(), f.folder);
+            let ui = ui.clone();
+            std::thread::spawn(move || {
+                let watch = Copying::start(&ui, &id, &format!("Copying {name}\u{2026}"));
+                let done = daemon::connect().and_then(|d| d.fetch_phone_file(&id, &path));
+                drop(watch);
+                match done {
+                    Ok(local) => {
+                        // A folder opens in the file manager; a file just lands.
+                        if folder {
+                            let _ = open_here(&local);
+                        }
+                        let landed = std::path::Path::new(&local).file_name().map_or(name.clone(), |n| n.to_string_lossy().into_owned());
+                        notify(&ui, format!("{landed} is in Downloads"));
+                    }
+                    Err(e) if stopped(&e) => notify(&ui, format!("Stopped copying {name}")),
+                    Err(e) => notify(&ui, format!("Couldn't copy {name}: {e:#}")),
+                }
+            });
+        }
+    });
+    ui.on_rename_phone_file({
+        let ui = ui.as_weak();
+        move |f, to| {
+            let to = to.trim().to_owned();
+            let Some(id) = here(|h| h.id.clone()) else { return };
+            if to == f.name.as_str() {
+                return;
+            }
+            if let Err(why) = folder_name(&to) {
+                notify(&ui, why.replace("A folder's name", "A name").replace("Give the folder a name", "Give it a name"));
+                return;
+            }
+            let (name, path) = (f.name.to_string(), f.path.to_string());
+            let ui = ui.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = daemon::connect().and_then(|d| d.rename_phone_file(&id, &path, &to)) {
+                    notify(&ui, format!("Couldn't rename {name}: {e:#}"));
+                }
+                read(&ui);
+            });
+        }
+    });
     ui.on_make_phone_folder({
         let ui = ui.as_weak();
         move |name| {
@@ -441,7 +488,8 @@ fn count_label(total: usize, matched: usize, query: &str) -> String {
 
 fn row(dir: &str, e: &FileEntry, now: i64) -> PhoneFile {
     PhoneFile {
-        name: breakable(&e.name).into(),
+        name: e.name.clone().into(),
+        label: breakable(&e.name).into(),
         path: format!("{}/{}", dir.trim_end_matches('/'), e.name).into(),
         folder: e.folder,
         detail: if e.folder { when(e.modified, now) } else { [size(e.size), when(e.modified, now)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" \u{b7} ") }.into(),

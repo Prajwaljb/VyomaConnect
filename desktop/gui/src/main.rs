@@ -1,6 +1,6 @@
 //! Vyoma's desktop window. It only shows and asks: the daemon (`vyoma-desktop`) owns the links,
 //! so closing or crashing this never drops a phone. `--snapshot <png>` renders it offscreen with
-//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|away|unpair|add-done|notice|cable|pc|pc-setup|activity|commands|commands-empty|commands-edit|messages|messages-thread|messages-search|messages-contacts|messages-call|messages-silent|messages-loading|messages-asking|messages-declined|messages-locked|files|files-loading|files-error|files-busy|files-delete|files-new|files-empty|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|add|down`, `--setup` to open on setup). `--page commands|this-pc|activity|<phone id>` opens on that page;
+//! made-up phones instead (`--dark`, `--plain` for no wallpaper, `--scene phones|pairing|nearby|away|unpair|add-done|notice|cable|pc|pc-setup|activity|commands|commands-empty|commands-edit|messages|messages-thread|messages-search|messages-contacts|messages-call|messages-silent|messages-loading|messages-asking|messages-declined|messages-locked|files|files-loading|files-error|files-busy|files-delete|files-new|files-empty|files-many|files-search|files-nothing|files-actions|files-rename|setup|setup-pairing|setup-search|setup-ready|setup-moment|empty|add|down`, `--setup` to open on setup). `--page commands|this-pc|activity|<phone id>` opens on that page;
 //! a window already open shows it instead (`instance.rs`).
 
 // No console window behind Vyoma's on Windows.

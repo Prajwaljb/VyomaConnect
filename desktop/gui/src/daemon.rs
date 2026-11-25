@@ -517,6 +517,10 @@ pub trait Daemon: Send + Sync {
     fn new_phone_folder(&self, _id: &str, _path: &str) -> Result<()> {
         bail!("Not here")
     }
+    /// Renames a file or folder on the phone (same folder); its new path.
+    fn rename_phone_file(&self, _id: &str, _path: &str, _name: &str) -> Result<String> {
+        bail!("Not here")
+    }
     /// Deletes a file, or a folder with everything in it, on the phone.
     fn delete_phone_file(&self, _id: &str, _path: &str) -> Result<()> {
         bail!("Not here")

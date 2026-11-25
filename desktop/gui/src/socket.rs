@@ -298,6 +298,10 @@ impl Daemon for SocketDaemon {
         self.call_within("DeletePhoneFile", json!([id, path]), COPY_TIMEOUT).map(drop)
     }
 
+    fn rename_phone_file(&self, id: &str, path: &str, name: &str) -> Result<String> {
+        Ok(self.call_within("RenamePhoneFile", json!([id, path, name]), Duration::from_secs(60))?.as_str().unwrap_or_default().to_owned())
+    }
+
     fn phone_files_progress(&self, id: &str) -> Result<Option<Progress>> {
         let p = self.call("PhoneFilesProgress", json!([id]))?;
         Ok(p.is_object().then(|| Progress {
