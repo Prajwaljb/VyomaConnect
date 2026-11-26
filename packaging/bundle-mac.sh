@@ -47,6 +47,8 @@ cat > "$app/Contents/Info.plist" <<EOF
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Vyoma plays, pauses and skips in Music and Spotify, and restarts, shuts down or logs out this Mac, when you ask from your phone.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Vyoma lets your phone be this Mac's touchpad over Bluetooth, and stays connected to it without Wi-Fi.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Vyoma takes a photo with this Mac's camera when you ask from your phone, and tells you here each time.</string>
 	<key>NSLocalNetworkUsageDescription</key>

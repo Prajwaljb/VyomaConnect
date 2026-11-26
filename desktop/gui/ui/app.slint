@@ -131,6 +131,9 @@ export struct PhoneFile {
     folder: bool,
     detail: string,
     kind: string,
+    // A photo's or video's own small picture, once the phone sent it.
+    thumb: image,
+    has-thumb: bool,
 }
 
 // Snapshots only: how far each page starts scrolled (past the end means to the end).
@@ -3187,7 +3190,43 @@ component FileRow inherits Rectangle {
         padding-top: 10px;
         padding-bottom: 10px;
         spacing: 14px;
-        VerticalLayout {
+        if root.file.has-thumb: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: 32px * 0.28;
+                clip: true;
+                background: Theme.tile-blue;
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.file.thumb;
+                    image-fit: cover;
+                }
+                // A video says so in the corner.
+                if root.file.kind == "video": Rectangle {
+                    x: parent.width - self.width - 2px;
+                    y: parent.height - self.height - 2px;
+                    width: 14px;
+                    height: 14px;
+                    border-radius: 7px;
+                    background: #00000099;
+                    Glyph {
+                        source: @image-url("icons/video.svg");
+                        tint: white;
+                        width: 9px;
+                        height: 9px;
+                    }
+                }
+                Rectangle {
+                    border-radius: parent.border-radius;
+                    border-width: 1px;
+                    border-color: #FFFFFF40;
+                }
+            }
+        }
+        if !root.file.has-thumb: VerticalLayout {
             alignment: center;
             Badge {
                 icon: root.file.folder ? @image-url("icons/folder.svg")

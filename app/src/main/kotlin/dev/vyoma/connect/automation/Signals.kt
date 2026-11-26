@@ -70,6 +70,8 @@ data class Snapshot(
     val pcVia: TransportKind? = null,
     /** Addresses of the Bluetooth devices connected now. */
     val bluetooth: Set<String> = emptySet(),
+    /** The app on screen, only while a rule names an app (usage access); null with the screen off. */
+    val foreground: String? = null,
     /** False until every input has reported once. */
     val ready: Boolean = false,
 )
@@ -89,6 +91,10 @@ class Signals(private val context: Context, private val c: AppContainer, private
     private val wifiPrint = MutableStateFlow<String?>(null)
     private val homes = MutableStateFlow(prefs.getStringSet(HOMES, emptySet()).orEmpty())
 
+    /** The packages enabled rules name (the rule engine keeps it): nothing is looked at while it's empty. */
+    val watchedApps = MutableStateFlow<Set<String>>(emptySet())
+    private val screenOn = MutableStateFlow(true)
+
     /** The PC rules act on: the first paired one that's connected (as the widgets pick it). */
     private val pc: Flow<Device?> = c.hub.flatMapLatest { hub ->
         hub?.devices?.flatMapLatest { devices ->
@@ -106,6 +112,7 @@ class Signals(private val context: Context, private val c: AppContainer, private
         watchHeadphones()
         watchBluetooth()
         watchWifi()
+        watchScreen()
         learnHome()
 
         // A Wi-Fi/USB swap drops the link for a moment: "away" only after it's stayed gone 20 s.
@@ -137,19 +144,79 @@ class Signals(private val context: Context, private val c: AppContainer, private
             .transformLatest { delay(VIA_SETTLE_MS); emit(it) }.onStart { emit(null) }
         val connections = combine(wifiPrint, via, bluetooth) { print, route, nearby -> Connections(print, route, nearby) }
         val phone = c.battery.state
-        val local = combine(call, headphones, wifi, phone) { call, phones, wifi, battery -> Local(call, phones, wifi, battery?.charge, battery?.charging == true) }
+        val local = combine(call, headphones, wifi, phone, foreground()) { call, phones, wifi, battery, app ->
+            Local(call, phones, wifi, battery?.charge, battery?.charging == true, app)
+        }
         return combine(link, pcState, playing, local, connections) { (up, since), (charge, charging, locked), play, l, conn ->
             Snapshot(
                 pcConnected = up, pcAwaySince = since, call = l.call,
                 phoneBattery = l.battery, phoneCharging = l.charging,
                 pcBattery = charge, pcCharging = charging, pcLocked = locked, pcPlaying = play && up,
-                headphones = l.headphones, wifi = l.wifi,
+                headphones = l.headphones, wifi = l.wifi, foreground = l.foreground,
                 wifiPrint = conn.wifiPrint, pcVia = conn.pcVia, bluetooth = conn.bluetooth, ready = true,
             )
         }.distinctUntilChanged().stateIn(scope, SharingStarted.Eagerly, Snapshot())
     }
 
-    private data class Local(val call: CallState, val headphones: Boolean, val wifi: WifiState, val battery: Int?, val charging: Boolean)
+    private data class Local(val call: CallState, val headphones: Boolean, val wifi: WifiState, val battery: Int?, val charging: Boolean, val foreground: String?)
+
+    /** Whether Android lets Vyoma read which app is on screen (Usage access, in Special app access). */
+    fun usageAllowed(): Boolean {
+        val ops = context.getSystemService(android.app.AppOpsManager::class.java)
+        return ops.unsafeCheckOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), context.packageName) ==
+            android.app.AppOpsManager.MODE_ALLOWED
+    }
+
+    /**
+     * The app on screen, from Android's usage events: the only polling here, so only while a rule
+     * names an app, the screen is on and usage access is allowed; each look reads just the events
+     * since the one before.
+     */
+    private fun foreground(): Flow<String?> = combine(watchedApps.map { it.isNotEmpty() }.distinctUntilChanged(), screenOn) { wanted, on -> wanted && on }
+        .distinctUntilChanged()
+        .transformLatest { look ->
+            if (!look) {
+                emit(null)
+                return@transformLatest
+            }
+            val usage = context.getSystemService(android.app.usage.UsageStatsManager::class.java)
+            var since = System.currentTimeMillis() - FOREGROUND_BACK_MS
+            var current: String? = null
+            val event = android.app.usage.UsageEvents.Event()
+            while (true) {
+                if (usageAllowed()) {
+                    val now = System.currentTimeMillis()
+                    runCatching {
+                        val events = usage.queryEvents(since, now)
+                        while (events.hasNextEvent()) {
+                            events.getNextEvent(event)
+                            when (event.eventType) {
+                                android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED -> current = event.packageName
+                                android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED -> if (event.packageName == current) current = null
+                            }
+                        }
+                    }
+                    since = now
+                    emit(current)
+                } else emit(null)
+                delay(FOREGROUND_EVERY_MS)
+            }
+        }
+        .distinctUntilChanged()
+
+    /** Screen on and off: what's on screen is only looked at while it's on. */
+    private fun watchScreen() {
+        screenOn.value = context.getSystemService(android.os.PowerManager::class.java).isInteractive
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        }
+        context.registerReceiver(object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                screenOn.value = intent.action == Intent.ACTION_SCREEN_ON
+            }
+        }, filter, Context.RECEIVER_NOT_EXPORTED)
+    }
 
     private data class Connections(val wifiPrint: String?, val pcVia: TransportKind?, val bluetooth: Set<String>)
 
@@ -287,6 +354,9 @@ class Signals(private val context: Context, private val c: AppContainer, private
         const val MAX_HOMES = 3
         const val AWAY_GRACE_MS = 20_000L
         const val VIA_SETTLE_MS = 3_000L
+        /** How often the app on screen is looked at, and how far back the first look reads. */
+        const val FOREGROUND_EVERY_MS = 1_500L
+        const val FOREGROUND_BACK_MS = 10 * 60_000L
         val HEADPHONES = setOf(
             AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
             AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_BLE_HEADSET,

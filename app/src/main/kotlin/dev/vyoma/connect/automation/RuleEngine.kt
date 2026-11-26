@@ -81,6 +81,12 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
                 schedule(rules, s, now)
             }
         }
+        // The apps enabled rules name: only those make the phone look at what's on screen.
+        c.appScope.launch {
+            store.rules.collect { rules ->
+                signals.watchedApps.value = rules.filter { it.enabled }.flatMap { r -> (listOf(r.trigger) + r.conditions).filterIsInstance<Trigger.AppOpen>() }.map { it.pkg }.toSet()
+            }
+        }
         // Inputs settle in the first seconds (the PC's link, Wi-Fi): look again once they have.
         c.appScope.launch {
             delay(SETTLE_MS)
@@ -90,6 +96,9 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
 
     /** Paired Bluetooth devices, (address, name), to pick from. */
     fun pairedBluetooth(): List<Pair<String, String>> = signals.pairedBluetooth()
+
+    /** Whether Android lets rules see which app is on screen. */
+    fun usageAllowed(): Boolean = signals.usageAllowed()
 
     /** The fingerprint of the Wi-Fi this phone is on, if any. */
     fun currentWifi(): String? = signals.snapshot.value.wifiPrint
@@ -175,6 +184,7 @@ class RuleEngine(private val app: Application, private val c: AppContainer) {
         is Trigger.BluetoothDevice -> (address in s.bluetooth) == connected
         is Trigger.PcVia -> s.pcVia == via
         is Trigger.WifiNetwork -> (s.wifiPrint == print) == on
+        is Trigger.AppOpen -> (s.foreground == pkg) == open
         is Trigger.Time -> TimeRules.holds(this, now)
     }
 

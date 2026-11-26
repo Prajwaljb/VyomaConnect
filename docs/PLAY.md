@@ -68,7 +68,10 @@ connection to the user's computer, so calls, texts and notifications reach it wh
 
 **Not restricted but worth knowing:** READ_LOGS and SYSTEM_ALERT_WINDOW (background clipboard, granted
 by the user's PC over adb, never at runtime); SCHEDULE_EXACT_ALARM (time-based automation rules; the
-user grants it, no declaration).
+user grants it, no declaration); PACKAGE_USAGE_STATS ("An app is open" automation rules: which app is
+on screen, read only while such a rule exists and the screen is on; the user allows it in Usage access,
+no declaration form, but the Data safety answers say app interactions are read on the device and never
+sent).
 
 ## Data safety
 

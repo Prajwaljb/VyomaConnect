@@ -129,6 +129,28 @@ class AndroidPhoneFileServer(private val app: Context, private val hostKey: () -
         if (peers.isEmpty()) close()
     }
 
+    override fun thumbnail(peerKey: PublicKey?, path: String, size: Int): ByteArray? {
+        synchronized(lock) {
+            if (!PhoneFileSharing.on.value || !PhoneFileSharing.allowed() || peerKey == null || peerKey.id() !in peers) return null
+        }
+        val root = Environment.getExternalStorageDirectory().canonicalFile
+        val file = java.io.File(root, path.trimStart('/')).canonicalFile
+        // Only inside what the server shares (no "..", no link out of it).
+        if (!file.path.startsWith(root.path + "/") || !file.isFile) return null
+        val box = android.util.Size(size, size)
+        val ext = file.extension.lowercase()
+        val bitmap = when (ext) {
+            in THUMB_IMAGES -> android.media.ThumbnailUtils.createImageThumbnail(file, box, null)
+            in THUMB_VIDEOS -> android.media.ThumbnailUtils.createVideoThumbnail(file, box, null)
+            else -> return null
+        }
+        return java.io.ByteArrayOutputStream().use { out ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, out)
+            bitmap.recycle()
+            out.toByteArray()
+        }
+    }
+
     /** Turned off in Settings: whoever's in is cut off now. */
     fun stopAll() = synchronized(lock) {
         peers.clear()
@@ -245,6 +267,8 @@ class AndroidPhoneFileServer(private val app: Context, private val hostKey: () -
     private fun sha256(s: String) = MessageDigest.getInstance("SHA-256").digest(s.toByteArray())
 
     companion object {
+        private val THUMB_IMAGES = setOf("jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "bmp", "avif", "dng")
+        private val THUMB_VIDEOS = setOf("mp4", "mkv", "webm", "mov", "3gp", "avi", "m4v")
         private const val TAG = "PhoneFiles"
         private val PORTS = 1739..1764
         private const val STATVFS = "statvfs@openssh.com"

@@ -529,6 +529,11 @@ pub trait Daemon: Send + Sync {
     fn phone_files_progress(&self, _id: &str) -> Result<Option<Progress>> {
         Ok(None)
     }
+    /// Small JPEGs of the photos and videos at [paths] on phone [id], as (path, bytes); what the
+    /// phone can't show is left out.
+    fn phone_thumbs(&self, _id: &str, _paths: &[String]) -> Result<Vec<(String, Vec<u8>)>> {
+        Ok(Vec::new())
+    }
     /// Stops the copy under way (it then answers "Stopped").
     fn stop_phone_files(&self, _id: &str) -> Result<()> {
         bail!("Not here")

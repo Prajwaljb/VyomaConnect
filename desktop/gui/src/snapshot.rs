@@ -249,9 +249,33 @@ fn health(missing: bool) -> Health {
     Health { features, installable: missing, installing: false, checks, ways, notes, update, version: String::new() }
 }
 
+/// A sky-and-dunes picture standing in for a phone's thumbnail of a photo or video, tinted by its name.
+fn made_up_photo(name: &str) -> Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>> {
+    let lower = name.to_lowercase();
+    if ![".jpg", ".mp4"].iter().any(|x| lower.ends_with(x)) {
+        return None;
+    }
+    let warm = lower.ends_with(".mp4");
+    let (w, h) = (128u32, 96u32);
+    let mut px = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(w, h);
+    for (i, p) in px.make_mut_slice().iter_mut().enumerate() {
+        let (x, y) = ((i as u32 % w) as f32 / w as f32, (i as u32 / w) as f32 / h as f32);
+        let dune = 0.62 + 0.08 * (x * 6.0).sin();
+        let (r, g, b) = if y > dune {
+            if warm { (214.0 - 40.0 * y, 140.0 - 30.0 * y, 90.0) } else { (226.0 - 50.0 * y, 186.0 - 40.0 * y, 140.0 - 30.0 * y) }
+        } else if warm {
+            (250.0 - 30.0 * y, 170.0 + 40.0 * y, 120.0 + 60.0 * y)
+        } else {
+            (90.0 + 80.0 * y, 150.0 + 70.0 * y, 230.0 - 10.0 * y)
+        };
+        *p = slint::Rgba8Pixel { r: r as u8, g: g as u8, b: b as u8, a: 255 };
+    }
+    Some(px)
+}
+
 /// Made-up texts: messages (the list), messages-thread, messages-silent, messages-loading, and the phone's texts
 /// The phone's files (the Mac and Windows): files, files-loading, files-error, files-busy,
-/// files-delete, files-new, files-empty, files-many (5,000 photos), files-search, files-nothing, files-actions, files-rename.
+/// files-delete, files-new, files-empty, files-many (5,000 photos), files-search, files-nothing, files-actions, files-rename, files-thumbs.
 fn files(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>) {
     use crate::daemon::{FileEntry, Folder};
     crate::files::wire(ui);
@@ -289,6 +313,12 @@ fn files(ui: &MainWindow, scene: &str, noon: chrono::DateTime<chrono::Local>) {
         roots: vec![("/".into(), "Internal storage".into())],
         entries,
     };
+    // Made-up pictures for the photos and videos (files-thumbs), else none: never the agent's.
+    for e in &folder.entries {
+        let path = format!("/DCIM/{}", e.name);
+        let picture = (scene == "files-thumbs" && !e.folder).then(|| made_up_photo(&e.name)).flatten();
+        crate::files::seed_thumb("a", &path, e.modified, picture);
+    }
     crate::files::show_folder(ui, &folder);
     match scene {
         "files-busy" => {

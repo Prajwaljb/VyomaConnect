@@ -24,7 +24,7 @@ vyoma-engine = { path = "../engine", features = ["phone-files"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSError", "NSGeometry", "NSObject", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSObject", "NSString", "NSURL", "NSValue"] }
 # Where the desktop picture is (NSWorkspace), and the phone's screen in a window (NSWindow, NSView).
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSApplication", "NSEvent", "NSGraphics", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow", "NSWorkspace"] }
 objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger", "UNUserNotificationCenter"] }
@@ -32,6 +32,8 @@ objc2-user-notifications = { version = "0.3", default-features = false, features
 # screen in a window here (AVSampleBufferDisplayLayer decodes it) with its sound (AudioQueue): those C APIs are
 # declared where they're used; these give CoreMedia's CMTime and the dispatch queues.
 objc2-core-media = { version = "0.3", default-features = false, features = ["std", "objc2", "CMTime"] }
+# The touchpad and the link over Bluetooth (RFCOMM services with SDP records).
+objc2-io-bluetooth = { version = "0.3", default-features = false, features = ["std", "objc2", "objc2-foundation", "Bluetooth", "IOBluetoothHostController", "IOBluetoothObject", "IOBluetoothRFCOMMChannel", "IOBluetoothSDPServiceRecord", "IOBluetoothUserLib", "IOBluetoothUserNotification", "IOBluetoothDevice"] }
 dispatch2 = { version = "0.3", default-features = false, features = ["std", "alloc", "block2", "objc2"] }
 
 [profile.release]

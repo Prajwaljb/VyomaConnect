@@ -4852,9 +4852,11 @@ name = "vyoma-gui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "embed-resource",
  "futures-util",
+ "image",
  "png",
  "qrcode",
  "rfd",

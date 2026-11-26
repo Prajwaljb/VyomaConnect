@@ -1,6 +1,7 @@
 package dev.vyoma.connect.automation
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.BatteryAlert
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.Bluetooth
@@ -68,6 +69,9 @@ fun Trigger.look(): Look = when (this) {
         TransportKind.LAN -> Look("PC on Wi-Fi", Icons.Rounded.Wifi, SystemColor.TEAL)
     }
     is Trigger.WifiNetwork -> if (on) Look("On $name Wi-Fi", Icons.Rounded.Wifi, SystemColor.TEAL) else Look("Off $name Wi-Fi", Icons.Rounded.WifiOff, SystemColor.GRAY)
+    is Trigger.AppOpen ->
+        if (open) Look("$name is open", Icons.Rounded.Apps, SystemColor.MINT, "On this phone's screen", named = true)
+        else Look("$name is closed", Icons.Rounded.Apps, SystemColor.GRAY, "Not on this phone's screen", named = true)
     is Trigger.Time -> Look(
         if (end == null) "At ${clock(start)}" else "${clock(start)} – ${clock(end)}",
         Icons.Rounded.Schedule, SystemColor.YELLOW, days(days),

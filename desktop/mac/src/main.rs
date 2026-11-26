@@ -11,10 +11,12 @@
 //! Built and tested on GitHub's macOS runners only; not yet tried on a real Mac.
 
 mod away;
+mod bluetooth;
 mod brightness;
 mod calls;
 mod control;
 mod finder;
+mod handoff;
 mod input;
 mod launchd;
 mod mac;
@@ -253,6 +255,7 @@ async fn run(dir: PathBuf) -> Result<()> {
     let mut pointer = input::Pointer::default();
     // The USB cable: phones plugged in with USB debugging get the adb tunnel and grants.
     usb::start(lan.tcp_port());
+    bluetooth::start(lan.tcp_port(), tokio::runtime::Handle::current());
     {
         let changes = changes.clone();
         vyoma_core::adb::on_clipboard_change(Box::new(move || {
@@ -493,7 +496,7 @@ async fn run(dir: PathBuf) -> Result<()> {
                                 send(&id, reply);
                             }
                         }
-                        Route::Other if kind == vyoma_engine::phonefiles::SFTP => files.reply(&id, &packet),
+                        Route::Other if vyoma_engine::phonefiles::PhoneFiles::answers(&kind) => files.reply(&id, &packet),
                         Route::Other => tracing::debug!("{}: nothing here for {kind}", d.name),
                     }
                 }
@@ -851,8 +854,8 @@ fn identity(me: &Identity, name: String, laptop: bool) -> Value {
             "deviceName": name,
             "deviceType": if laptop { "laptop" } else { "desktop" },
             "protocolVersion": 8,
-            "incomingCapabilities": ([INCOMING, &engine_in].concat()),
-            "outgoingCapabilities": ([OUTGOING, &engine_out].concat()),
+            "incomingCapabilities": ([INCOMING, vyoma_engine::phonefiles::INCOMING, &engine_in].concat()),
+            "outgoingCapabilities": ([OUTGOING, vyoma_engine::phonefiles::OUTGOING, &engine_out].concat()),
         }),
     )
 }
@@ -1010,7 +1013,11 @@ mod tests {
         let p = identity(&me, "Sam's MacBook".into(), true);
         assert_eq!(p["body"]["deviceType"], "laptop");
         let incoming = p["body"]["incomingCapabilities"].as_array().unwrap();
-        assert_eq!(incoming.len(), INCOMING.len() + vyoma_engine::platform::capabilities_for(platform::Mac::offers).0.len());
+        assert_eq!(incoming.len(), INCOMING.len() + vyoma_engine::phonefiles::INCOMING.len() + vyoma_engine::platform::capabilities_for(platform::Mac::offers).0.len());
+        // The phone loads its file server's plugin only for a PC that lists its packets.
+        let outgoing = p["body"]["outgoingCapabilities"].as_array().unwrap();
+        assert!(incoming.iter().any(|t| t == "kdeconnect.sftp") && outgoing.iter().any(|t| t == "kdeconnect.sftp.request"));
+        assert!(outgoing.iter().any(|t| t == "vyoma.files.thumbs.request"));
         // What the phone looks for before it shows a tile (its PcFeatures).
         for offered in ["vyoma.away", "kdeconnect.telephony", "kdeconnect.presenter", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.screen.request", "vyoma.mirror", "vyoma.paste", "vyoma.desktop.step"] {
             assert!(incoming.iter().any(|t| t == offered), "{offered}");

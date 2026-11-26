@@ -53,6 +53,8 @@ class RulesTest {
             Trigger.BluetoothDevice("AA:BB", "Car audio", connected = false),
             Trigger.PcVia(dev.vyoma.connect.protocol.link.TransportKind.BLUETOOTH),
             Trigger.WifiNetwork("10.0.0.0/24|10.0.0.1", "Office", on = false),
+            Trigger.AppOpen("com.example.maps", "Maps", open = true),
+            Trigger.AppOpen("com.example.game", "Game", open = false),
         )
         val rules = triggers.map { Rule(id = "r", name = "n", trigger = it, conditions = listOf(it), actions = listOf(Action.LockPc)) }
         assertEquals(rules, RuleJson.decode(RuleJson.encode(rules)))

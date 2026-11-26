@@ -2,12 +2,13 @@
 //! folder of the phone at a time, read from the agent (which talks to the phone's file server) off
 //! the UI thread. A file opened is copied into Downloads first, then opened with its app.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use chrono::{Datelike, Local, TimeZone};
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::daemon::{self, FileEntry, Folder};
 use crate::{MainWindow, PhoneFile, breakable, notify};
@@ -41,6 +42,28 @@ const PAGE: usize = 200;
 const SEARCHABLE: usize = 20;
 
 static HERE: Mutex<Option<Here>> = Mutex::new(None);
+
+pub type Pixels = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
+/// A thumbnail's key: the phone, the file's path and its time (a changed file is asked again).
+type ThumbKey = (String, String, i64);
+/// Photos' and videos' thumbnails from the phone; None: it had none to give.
+static THUMBS: LazyLock<Mutex<HashMap<ThumbKey, Option<Pixels>>>> = LazyLock::new(Mutex::default);
+/// Thumbnails being asked for now.
+static ASKED: LazyLock<Mutex<HashSet<ThumbKey>>> = LazyLock::new(Mutex::default);
+/// Thumbnails asked for at a time, so the first ones show while the rest come.
+const THUMBS_AT_ONCE: usize = 24;
+/// Kept at most (a few folders' worth); past it they're all asked again.
+const THUMBS_KEPT: usize = 3000;
+/// Off in snapshots: the made-up phones' pictures are put in by hand ([seed_thumb]).
+static FETCH_THUMBS: AtomicBool = AtomicBool::new(true);
+
+/// Snapshots: no asking the agent; [pixels] as the thumbnail of phone [id]'s file at [path].
+pub fn seed_thumb(id: &str, path: &str, modified: i64, pixels: Option<Pixels>) {
+    FETCH_THUMBS.store(false, Ordering::Relaxed);
+    if let Some(px) = pixels {
+        THUMBS.lock().unwrap_or_else(|e| e.into_inner()).insert(thumb_key(id, path, modified), Some(px));
+    }
+}
 
 fn here<T>(f: impl FnOnce(&mut Here) -> T) -> Option<T> {
     HERE.lock().unwrap_or_else(|e| e.into_inner()).as_mut().map(f)
@@ -453,7 +476,9 @@ fn refresh(win: &MainWindow) {
         let now = Local::now().timestamp();
         let dir = h.path.clone().unwrap_or_default();
         let (list, matched, more) = visible(&h.entries, h.newest, &h.query, h.shown);
-        let rows: Vec<PhoneFile> = list.into_iter().map(|e| row(&dir, e, now)).collect();
+        let thumbs = THUMBS.lock().unwrap_or_else(|e| e.into_inner());
+        let rows: Vec<PhoneFile> = list.into_iter().map(|e| with_thumb(row(&dir, e, now), &h.id, e.modified, &thumbs)).collect();
+        drop(thumbs);
         (rows, matched, more, h.entries.len(), h.newest, h.query.clone())
     }) else {
         return;
@@ -465,6 +490,112 @@ fn refresh(win: &MainWindow) {
     win.set_files_sort(if newest { "newest" } else { "name" }.into());
     win.set_files_query(query.clone().into());
     win.set_files_count(count_label(total, matched, &query).into());
+    fetch_thumbs(win);
+}
+
+fn thumb_key(id: &str, path: &str, modified: i64) -> ThumbKey {
+    (id.to_owned(), path.to_owned(), modified)
+}
+
+/// [r] with its thumbnail, if the phone sent one.
+fn with_thumb(mut r: PhoneFile, id: &str, modified: i64, thumbs: &HashMap<ThumbKey, Option<Pixels>>) -> PhoneFile {
+    if let Some(Some(px)) = thumbs.get(&thumb_key(id, &r.path, modified)) {
+        r.thumb = slint::Image::from_rgba8(px.clone());
+        r.has_thumb = true;
+    }
+    r
+}
+
+/// Asks the phone for the thumbnails of the photos and videos shown that it hasn't sent yet, a few
+/// at a time; each lands in its row as it comes.
+fn fetch_thumbs(win: &MainWindow) {
+    if !FETCH_THUMBS.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some((id, wanted)) = here(|h| {
+        let dir = h.path.clone().unwrap_or_default();
+        let (list, ..) = visible(&h.entries, h.newest, &h.query, h.shown);
+        let known = THUMBS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut asked = ASKED.lock().unwrap_or_else(|e| e.into_inner());
+        let wanted: Vec<(String, i64)> = list
+            .into_iter()
+            .filter(|e| !e.folder && matches!(kind(&e.name), "image" | "video"))
+            .map(|e| (format!("{}/{}", dir.trim_end_matches('/'), e.name), e.modified))
+            .filter(|(path, m)| {
+                let key = thumb_key(&h.id, path, *m);
+                !known.contains_key(&key) && asked.insert(key)
+            })
+            .collect();
+        (h.id.clone(), wanted)
+    }) else {
+        return;
+    };
+    if wanted.is_empty() {
+        return;
+    }
+    let ui = win.as_weak();
+    std::thread::spawn(move || {
+        let Ok(d) = daemon::connect() else { return forget_asked(&id, &wanted) };
+        for batch in wanted.chunks(THUMBS_AT_ONCE) {
+            let paths: Vec<String> = batch.iter().map(|(p, _)| p.clone()).collect();
+            let Ok(got) = d.phone_thumbs(&id, &paths) else { return forget_asked(&id, &wanted) };
+            let got: HashMap<String, Vec<u8>> = got.into_iter().collect();
+            {
+                let mut thumbs = THUMBS.lock().unwrap_or_else(|e| e.into_inner());
+                if thumbs.len() > THUMBS_KEPT {
+                    thumbs.clear();
+                }
+                for (path, modified) in batch {
+                    thumbs.insert(thumb_key(&id, path, *modified), got.get(path).and_then(|jpg| decode(jpg)));
+                }
+            }
+            let mut asked = ASKED.lock().unwrap_or_else(|e| e.into_inner());
+            for (path, modified) in batch {
+                asked.remove(&thumb_key(&id, path, *modified));
+            }
+            drop(asked);
+            let (ui, id, batch) = (ui.clone(), id.clone(), batch.to_vec());
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(win) = ui.upgrade() else { return };
+                if win.get_selected() != FILES || here(|h| h.id.clone()).as_deref() != Some(id.as_str()) {
+                    return;
+                }
+                let list = win.get_files_list();
+                let Some(rows) = list.as_any().downcast_ref::<VecModel<PhoneFile>>() else { return };
+                let thumbs = THUMBS.lock().unwrap_or_else(|e| e.into_inner());
+                for i in 0..rows.row_count() {
+                    let Some(r) = rows.row_data(i) else { continue };
+                    if r.has_thumb {
+                        continue;
+                    }
+                    if let Some((_, modified)) = batch.iter().find(|(p, _)| r.path.as_str() == p) {
+                        let r = with_thumb(r, &id, *modified, &thumbs);
+                        if r.has_thumb {
+                            rows.set_row_data(i, r);
+                        }
+                    }
+                }
+            });
+        }
+    });
+}
+
+/// A request that failed: those may be asked again next time.
+fn forget_asked(id: &str, wanted: &[(String, i64)]) {
+    let mut asked = ASKED.lock().unwrap_or_else(|e| e.into_inner());
+    for (path, modified) in wanted {
+        asked.remove(&thumb_key(id, path, *modified));
+    }
+}
+
+/// The phone's JPEG as pixels; None if it isn't one (or is too big to be a thumbnail).
+fn decode(jpg: &[u8]) -> Option<Pixels> {
+    let img = image::load_from_memory_with_format(jpg, image::ImageFormat::Jpeg).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 || w > 512 || h > 512 {
+        return None;
+    }
+    Some(Pixels::clone_from_slice(img.as_raw(), w, h))
 }
 
 /// "7 items", "1 item", "12 of 5,000 match".
@@ -494,6 +625,8 @@ fn row(dir: &str, e: &FileEntry, now: i64) -> PhoneFile {
         folder: e.folder,
         detail: if e.folder { when(e.modified, now) } else { [size(e.size), when(e.modified, now)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" \u{b7} ") }.into(),
         kind: kind(&e.name).into(),
+        thumb: Default::default(),
+        has_thumb: false,
     }
 }
 

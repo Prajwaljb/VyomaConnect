@@ -40,13 +40,70 @@ fn open(path: &std::path::Path) -> std::io::Result<Stream> {
     {
         // Every instance of the pipe taken (231, ERROR_PIPE_BUSY): the agent makes the next at
         // once, so a moment's wait finds it.
+        let mut opened = std::fs::OpenOptions::new().read(true).write(true).open(path);
         for _ in 0..50 {
-            match std::fs::OpenOptions::new().read(true).write(true).open(path) {
-                Err(e) if e.raw_os_error() == Some(231) => std::thread::sleep(Duration::from_millis(20)),
-                other => return other,
+            if !matches!(&opened, Err(e) if e.raw_os_error() == Some(231)) {
+                break;
             }
+            std::thread::sleep(Duration::from_millis(20));
+            opened = std::fs::OpenOptions::new().read(true).write(true).open(path);
         }
-        std::fs::OpenOptions::new().read(true).write(true).open(path)
+        let pipe = opened?;
+        // Pipe names are one namespace for the whole PC: on a PC several people use, another
+        // account could make this one first. Only this user's agent is talked to.
+        if !pipe_owner::same_user(&pipe) {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Another account on this PC holds Vyoma's connection. Restart the PC, then open Vyoma"));
+        }
+        Ok(pipe)
+    }
+}
+
+/// Who serves a pipe the window opened.
+#[cfg(windows)]
+mod pipe_owner {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{GetLengthSid, GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
+    use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    /// Whether the process serving [pipe] runs as this user.
+    pub fn same_user(pipe: &std::fs::File) -> bool {
+        let mut pid = 0u32;
+        // SAFETY: a pipe handle we own; the process handle is closed after its user is read.
+        unsafe {
+            if GetNamedPipeServerProcessId(pipe.as_raw_handle() as HANDLE, &mut pid) == 0 {
+                return false;
+            }
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if process.is_null() {
+                return false;
+            }
+            let theirs = user(process);
+            CloseHandle(process);
+            theirs.is_some() && theirs == user(GetCurrentProcess())
+        }
+    }
+
+    /// [process]'s user, as the SID's bytes.
+    unsafe fn user(process: HANDLE) -> Option<Vec<u8>> {
+        // SAFETY: the token is opened for query and closed; the buffer is sized by the first call.
+        unsafe {
+            let mut token: HANDLE = std::ptr::null_mut();
+            if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
+                return None;
+            }
+            let mut len = 0u32;
+            GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut len);
+            let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+            let ok = GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), len, &mut len);
+            CloseHandle(token);
+            if ok == 0 {
+                return None;
+            }
+            let sid = (*(buf.as_ptr() as *const TOKEN_USER)).User.Sid;
+            Some(std::slice::from_raw_parts(sid as *const u8, GetLengthSid(sid) as usize).to_vec())
+        }
     }
 }
 
@@ -309,6 +366,17 @@ impl Daemon for SocketDaemon {
             done: p["done"].as_u64().unwrap_or(0),
             total: p["total"].as_u64().unwrap_or(0),
         }))
+    }
+
+    fn phone_thumbs(&self, id: &str, paths: &[String]) -> Result<Vec<(String, Vec<u8>)>> {
+        use base64::Engine;
+        let list = self.call_within("PhoneThumbs", json!([id, paths]), Duration::from_secs(60))?;
+        Ok(list
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|t| Some((t["path"].as_str()?.to_owned(), base64::engine::general_purpose::STANDARD.decode(t["jpg"].as_str()?).ok()?)))
+            .collect())
     }
 
     fn stop_phone_files(&self, id: &str) -> Result<()> {

@@ -1,6 +1,7 @@
 package dev.vyoma.connect.ui
 
 import dev.vyoma.connect.protocol.link.TransportKind
+import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -528,7 +529,7 @@ private fun apply(
 private fun tunable(x: Any): Boolean = when (x) {
     is Trigger.PcLink -> !x.connected
     is Trigger.PhoneBatteryBelow, is Trigger.PcBatteryBelow, is Trigger.Time -> true
-    is Trigger.BluetoothDevice, is Trigger.PcVia, is Trigger.WifiNetwork -> true
+    is Trigger.BluetoothDevice, is Trigger.PcVia, is Trigger.WifiNetwork, is Trigger.AppOpen -> true
     is Action.PcVolume, is Action.PcBrightness, is Action.MessagePc, is Action.NotifyMe, is Action.RunCommand -> true
     else -> false
 }
@@ -553,6 +554,7 @@ private fun triggerGroups(condition: Boolean) = listOf(
         Trigger.Call(ringingOnly = false), Trigger.Call(ringingOnly = true),
         Trigger.PhoneCharging(charging = true), Trigger.PhoneCharging(charging = false), Trigger.PhoneBatteryBelow(20),
         Trigger.Headphones(connected = true), Trigger.Headphones(connected = false),
+        Trigger.AppOpen("", "", open = true),
     )),
     Group("Connections", listOf(
         Trigger.BluetoothDevice("", "", connected = true),
@@ -610,6 +612,7 @@ private fun PickerDialog(vm: AppViewModel, slot: Slot, away: Boolean, taken: Set
                             is Trigger.BluetoothDevice -> "A Bluetooth device"
                             is Trigger.PcVia -> "How the PC is connected"
                             is Trigger.WifiNetwork -> "A Wi-Fi network"
+                            is Trigger.AppOpen -> "An app is open"
                             is Action.PcVolume -> "Set PC volume"
                             is Action.PcBrightness -> "Set PC brightness"
                             else -> look.label
@@ -682,6 +685,7 @@ private fun TuneDialog(vm: AppViewModel, value: Any, onDismiss: () -> Unit, onDo
             )
         }
         is Trigger.WifiNetwork -> WifiDialog(vm, value, onDismiss) { onDone(it) }
+        is Trigger.AppOpen -> AppDialog(vm, value, onDismiss) { onDone(it) }
         is Trigger.Time -> {
             var period by remember { mutableStateOf(value.end != null) }
             var days by remember { mutableIntStateOf(value.days) }
@@ -823,6 +827,72 @@ private fun BluetoothDialog(vm: AppViewModel, value: Trigger.BluetoothDevice, on
                 // A device since unpaired keeps the name it was picked by.
                 val name = devices.firstOrNull { it.first == address }?.second ?: value.name
                 onDone(Trigger.BluetoothDevice(address, name, connected))
+            }) { Text("Done") }
+        },
+        dismissButton = { DialogButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/**
+ * One app, opened or closed. Seeing which app is on screen needs Usage access, which Android gives
+ * only in its own settings: the dialog sends the person there and reads it again on return.
+ */
+@Composable
+private fun AppDialog(vm: AppViewModel, value: Trigger.AppOpen, onDismiss: () -> Unit, onDone: (Trigger) -> Unit) {
+    val context = LocalContext.current
+    val apps = remember { vm.launchableApps(context) }
+    var allowed by remember { mutableStateOf(vm.usageAllowed()) }
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycle) {
+        val watch = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) allowed = vm.usageAllowed() }
+        lifecycle.lifecycle.addObserver(watch)
+        onDispose { lifecycle.lifecycle.removeObserver(watch) }
+    }
+    var pkg by remember { mutableStateOf(value.pkg) }
+    var open by remember { mutableStateOf(value.open) }
+    var search by remember { mutableStateOf("") }
+    val shown = apps.filter { search.isBlank() || it.second.contains(search.trim(), ignoreCase = true) }
+    GlassDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("App") },
+        text = {
+            Column {
+                SegmentedControl(listOf("Opens", "Closes"), if (open) 0 else 1, { open = it == 0 })
+                Spacer(Modifier.height(12.dp))
+                if (!allowed) {
+                    Text(
+                        "To see which app is open, Android needs you to allow Vyoma in Usage access. Vyoma only looks while a rule names an app and the screen is on.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    OutlinedTextField(search, { search = it }, singleLine = true, label = { Text("Search") }, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                    Column(Modifier.heightIn(max = 300.dp).fadingVerticalScroll(rememberScrollState())) {
+                        shown.forEachIndexed { i, (p, name) ->
+                            ListRow(
+                                title = name,
+                                icon = Icons.Rounded.Apps,
+                                iconTint = SystemColor.MINT.color,
+                                horizontalPadding = 0.dp,
+                                showDivider = i < shown.lastIndex,
+                                haptic = Haptic.Select,
+                                trailing = if (p == pkg) ({ Icon(Icons.Rounded.Check, "Chosen") }) else null,
+                                onClick = { pkg = p },
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (!allowed) DialogButton(onClick = {
+                val exact = android.content.Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS, android.net.Uri.parse("package:" + context.packageName))
+                runCatching { context.startActivity(exact) }.recoverCatching { context.startActivity(android.content.Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)) }
+            }) { Text("Allow") }
+            else DialogButton(enabled = pkg.isNotEmpty(), onClick = {
+                // An app since removed keeps the name it was picked by.
+                val name = apps.firstOrNull { it.first == pkg }?.second ?: value.name
+                onDone(Trigger.AppOpen(pkg, name, open))
             }) { Text("Done") }
         },
         dismissButton = { DialogButton(onClick = onDismiss) { Text("Cancel") } },

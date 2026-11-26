@@ -39,11 +39,13 @@ pub struct Mac {
     pub away: Arc<away::Away>,
     /// When Mission Control was opened from the phone (macOS doesn't say whether it's showing).
     mission: Mutex<Option<Instant>>,
+    /// The browser video offered to the phones.
+    handoff: Arc<crate::handoff::Offer>,
 }
 
 impl Mac {
     pub fn new(brightness: mpsc::UnboundedSender<(String, Value)>, away: Arc<away::Away>) -> Self {
-        Self { wallpaper: Mutex::new(vyoma::wallpaper_path()), brightness, away, mission: Mutex::new(None) }
+        Self { wallpaper: Mutex::new(vyoma::wallpaper_path()), brightness, away, mission: Mutex::new(None), handoff: Arc::default() }
     }
 
     /// From the main thread, every few seconds and before a phone's wallpaper request.
@@ -58,9 +60,11 @@ impl Mac {
             Feature::Power | Feature::Wake | Feature::Wallpaper | Feature::Desktop | Feature::Mirror | Feature::Paste | Feature::Away => true,
             // Only with a built-in display to dim; macOS has no per-app volumes.
             Feature::Controls => brightness::available(),
-            // Not on a Mac yet: no browser's media handoff, virtual gamepad, USB accessory, phone
-            // camera as a webcam or Bluetooth touchpad.
-            Feature::Handoff | Feature::Gamepad | Feature::Accessory | Feature::Webcam | Feature::Touchpad => false,
+            // Offered without a radio too: the phone then says Bluetooth is off or missing.
+            Feature::Handoff | Feature::Touchpad => true,
+            // Not on a Mac: a virtual gamepad (and so the controller over USB) and the phone's camera
+            // as a webcam need Apple's restricted entitlements and a Developer ID.
+            Feature::Gamepad | Feature::Accessory | Feature::Webcam => false,
         }
     }
 }
@@ -100,6 +104,29 @@ impl Platform for Mac {
 
     async fn screenshot(&self, cx: &Cx) -> Result<()> {
         screen::screenshot(&cx.sender, &cx.me, &cx.pinned, &cx.name).await
+    }
+
+    fn handoff_offer(&self) -> Option<String> {
+        self.handoff.title()
+    }
+
+    async fn handoff(&self) -> Option<vyoma_engine::platform::Handoff> {
+        tokio::task::spawn_blocking(crate::handoff::find).await.ok().flatten()
+    }
+
+    async fn pause_handoff(&self, h: &vyoma_engine::platform::Handoff) {
+        let browser = h.player.clone();
+        let _ = tokio::task::spawn_blocking(move || crate::handoff::pause(&browser)).await;
+    }
+
+    fn touchpad(&self, cx: &Cx) -> Option<vyoma_engine::platform::Started> {
+        let (tx, rx) = mpsc::channel(256);
+        let task = tokio::spawn(crate::bluetooth::touchpad(cx.sender.clone(), cx.name.clone(), tx.clone(), rx));
+        Some(vyoma_engine::platform::Started { task, close: Box::new(move || tx.try_send(vyoma_core::pointer::Frame::Close).is_ok()) })
+    }
+
+    async fn bluetooth_address(&self) -> Option<String> {
+        tokio::task::spawn_blocking(crate::bluetooth::address).await.ok().flatten()
     }
 
     async fn camera_photo(&self, cx: &Cx) -> Result<()> {
@@ -259,11 +286,11 @@ mod tests {
     #[test]
     fn offers_what_it_serves() {
         let (incoming, _) = vyoma_engine::platform::capabilities_for(Mac::offers);
-        for kind in ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.screen.request", "vyoma.mirror", "vyoma.paste", "vyoma.desktop.step", "vyoma.away", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.wallpaper.request", "vyoma.files.list", "vyoma.xfer.begin"] {
+        for kind in ["vyoma.stats.request", "vyoma.screenshot.request", "vyoma.camera.request", "vyoma.screen.request", "vyoma.mirror", "vyoma.paste", "vyoma.desktop.step", "vyoma.away", "vyoma.pc.power", "vyoma.pc.wake", "vyoma.wallpaper.request", "vyoma.files.list", "vyoma.xfer.begin", "vyoma.handoff.request", "vyoma.pointer.request"] {
             assert!(incoming.contains(&kind), "{kind}");
         }
-        for kind in ["vyoma.webcam", "vyoma.gamepad.state", "vyoma.handoff.request", "vyoma.pointer.request", "vyoma.usb.accessory"] {
-            assert!(!incoming.contains(&kind), "{kind} isn't on a Mac yet");
+        for kind in ["vyoma.webcam", "vyoma.gamepad.state", "vyoma.usb.accessory"] {
+            assert!(!incoming.contains(&kind), "{kind} isn't on a Mac");
         }
     }
 }

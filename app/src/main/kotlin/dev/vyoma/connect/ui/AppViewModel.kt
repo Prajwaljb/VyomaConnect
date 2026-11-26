@@ -290,6 +290,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun needsBluetoothPermission(context: android.content.Context): Boolean = !dev.vyoma.connect.BuildConfig.DEMO &&
         context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED
 
+    /** The apps on this phone's home screen, (package, name), to pick from for an "app is open" rule. */
+    fun launchableApps(context: android.content.Context): List<Pair<String, String>> {
+        val pm = context.packageManager
+        val launcher = android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+        return pm.queryIntentActivities(launcher, 0)
+            .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
+            .filter { it.first != context.packageName }
+            .distinctBy { it.first }
+            .sortedBy { it.second.lowercase() }
+    }
+
+    /** Whether rules may see which app is on screen (Usage access); the demo pretends so. */
+    fun usageAllowed(): Boolean = dev.vyoma.connect.BuildConfig.DEMO || container.automation.usageAllowed()
+
     /** The fingerprint of the Wi-Fi the phone is on; the demo has a pretend one. */
     fun currentWifi(): String? = if (dev.vyoma.connect.BuildConfig.DEMO) "demo-wifi" else container.automation.currentWifi()
     /** The connected PC's commands, for a "Run command" action. */

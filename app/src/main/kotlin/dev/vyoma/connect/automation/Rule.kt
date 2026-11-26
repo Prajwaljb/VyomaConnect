@@ -50,6 +50,8 @@ sealed interface Trigger {
     data class PcVia(val via: TransportKind) : Trigger
     /** One Wi-Fi network: [print] is its fingerprint (see Signals), [name] what the user called it. */
     data class WifiNetwork(val print: String, val name: String, val on: Boolean) : Trigger
+    /** One app on screen (or not): [pkg] its package, [name] what it was called when picked. */
+    data class AppOpen(val pkg: String, val name: String, val open: Boolean = true) : Trigger
     /** Minutes after midnight; [end] null is a moment, else a period (it may run past midnight). */
     data class Time(val start: Int, val end: Int?, val days: Int = EVERY_DAY) : Trigger {
         override val ends: Boolean get() = end != null
@@ -183,6 +185,7 @@ internal object RuleJson {
             is Trigger.BluetoothDevice -> { put("type", "bluetooth"); put("address", t.address); put("name", t.name); put("on", t.connected) }
             is Trigger.PcVia -> { put("type", "pcVia"); put("via", t.via.name) }
             is Trigger.WifiNetwork -> { put("type", "wifi"); put("print", t.print); put("name", t.name); put("on", t.on) }
+            is Trigger.AppOpen -> { put("type", "app"); put("pkg", t.pkg); put("name", t.name); put("on", t.open) }
             is Trigger.Time -> { put("type", "time"); put("start", t.start); t.end?.let { put("end", it) }; put("days", t.days) }
         }
     }
@@ -203,6 +206,7 @@ internal object RuleJson {
             "bluetooth" -> Trigger.BluetoothDevice(o.getString("address"), o.optString("name"), on)
             "pcVia" -> runCatching { Trigger.PcVia(TransportKind.valueOf(o.getString("via"))) }.getOrNull()
             "wifi" -> Trigger.WifiNetwork(o.getString("print"), o.optString("name"), on)
+            "app" -> Trigger.AppOpen(o.getString("pkg"), o.optString("name"), on)
             "time" -> Trigger.Time(o.optInt("start"), if (o.has("end")) o.getInt("end") else null, o.optInt("days", EVERY_DAY))
             else -> null
         }

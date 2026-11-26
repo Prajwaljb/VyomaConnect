@@ -31,9 +31,16 @@ use crate::window::{Answer, Devices, text};
 
 pub const SFTP: &str = "kdeconnect.sftp";
 pub const SFTP_REQUEST: &str = "kdeconnect.sftp.request";
+/// Vyoma's phones: small pictures of a folder's photos and videos (`{n, size, paths}` → `{n, thumbs: [{path, jpg?}]}`).
+pub const THUMBS_REQUEST: &str = "vyoma.files.thumbs.request";
+pub const THUMBS: &str = "vyoma.files.thumbs";
+/// What a PC that shows the phone's files sends and takes (its identity lists them, or the phone
+/// doesn't load its file server's plugin for it).
+pub const INCOMING: &[&str] = &[SFTP, THUMBS];
+pub const OUTGOING: &[&str] = &[SFTP_REQUEST, THUMBS_REQUEST];
 
 /// The window's requests this module answers.
-pub const METHODS: &[&str] = &["PhoneFiles", "FetchPhoneFile", "PutPhoneFiles", "NewPhoneFolder", "DeletePhoneFile", "RenamePhoneFile", "PhoneFilesProgress", "StopPhoneFiles"];
+pub const METHODS: &[&str] = &["PhoneFiles", "FetchPhoneFile", "PutPhoneFiles", "NewPhoneFolder", "DeletePhoneFile", "RenamePhoneFile", "PhoneFilesProgress", "StopPhoneFiles", "PhoneThumbs"];
 
 /// What a copy stopped by the person answers (the window says so quietly, not as a failure).
 pub const STOPPED: &str = "Stopped";
@@ -42,6 +49,9 @@ pub const STOPPED: &str = "Stopped";
 const IDLE: Duration = Duration::from_secs(180);
 /// How long the phone has to start its server and say where.
 const ASK_WAIT: Duration = Duration::from_secs(20);
+/// Thumbnails asked at a time, and how long the phone has to make them.
+const THUMBS_AT_ONCE: usize = 24;
+const THUMBS_WAIT: Duration = Duration::from_secs(20);
 /// How long a failed request's check of the session may take.
 const PROBE_WAIT: Duration = Duration::from_secs(5);
 /// How long the connection and sign-in may take.
@@ -210,6 +220,9 @@ pub struct PhoneFiles {
     sessions: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<Arc<Open>>>>>>,
     /// Per phone: the copy under way, if one is.
     transfers: Mutex<HashMap<String, Arc<Transfer>>>,
+    /// Thumbnail requests waiting for the phone, by their number.
+    thumbs: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
+    next_thumbs: AtomicU64,
 }
 
 impl PhoneFiles {
@@ -221,11 +234,23 @@ impl PhoneFiles {
                 None
             }
         };
-        Arc::new(PhoneFiles { commands, key, waiting: Mutex::default(), sessions: Mutex::default(), transfers: Mutex::default() })
+        Arc::new(PhoneFiles { commands, key, waiting: Mutex::default(), sessions: Mutex::default(), transfers: Mutex::default(), thumbs: Mutex::default(), next_thumbs: AtomicU64::new(1) })
     }
 
-    /// The phone [id] sent `kdeconnect.sftp`.
+    /// Whether a packet of [kind] is one of the phone's answers here ([PhoneFiles::reply] takes it).
+    pub fn answers(kind: &str) -> bool {
+        kind == SFTP || kind == THUMBS
+    }
+
+    /// The phone [id] sent `kdeconnect.sftp` or `vyoma.files.thumbs`.
     pub fn reply(&self, id: &str, p: &Value) {
+        if p["type"] == THUMBS {
+            let n = p["body"]["n"].as_u64().unwrap_or(0);
+            if let Some(waiter) = self.thumbs.lock().unwrap_or_else(|e| e.into_inner()).remove(&n) {
+                let _ = waiter.send(p["body"]["thumbs"].clone());
+            }
+            return;
+        }
         let Some(reply) = parse(p) else { return };
         if let Some(waiter) = self.waiting.lock().unwrap_or_else(|e| e.into_inner()).remove(id) {
             let _ = waiter.send(reply);
@@ -369,6 +394,28 @@ impl PhoneFiles {
     }
 
     /// A folder's entries (folders first, then by name; hidden ones left out) and the phone's top folders.
+    /// Small JPEGs (base64) of the photos and videos at [paths], as `[{path, jpg}]`; the phone
+    /// leaves out what it can't show. An older phone that doesn't make them answers nothing.
+    pub async fn thumbnails(&self, phone: &Phone, paths: &[String], takes: bool) -> Result<Value> {
+        if !takes || paths.is_empty() {
+            return Ok(json!([]));
+        }
+        let mut found = Vec::new();
+        for chunk in paths.chunks(THUMBS_AT_ONCE) {
+            let n = self.next_thumbs.fetch_add(1, Ordering::Relaxed);
+            let (tx, rx) = oneshot::channel();
+            self.thumbs.lock().unwrap_or_else(|e| e.into_inner()).insert(n, tx);
+            self.commands
+                .send(Command::Send(phone.id.clone(), packet(THUMBS_REQUEST, json!({ "n": n, "size": 128, "paths": chunk }))))
+                .map_err(|_| anyhow!("Vyoma is stopping"))?;
+            let got = tokio::time::timeout(THUMBS_WAIT, rx).await;
+            self.thumbs.lock().unwrap_or_else(|e| e.into_inner()).remove(&n);
+            let Ok(Ok(Value::Array(list))) = got else { bail!("{} didn't send the pictures", phone.name) };
+            found.extend(list.into_iter().filter(|t| t["jpg"].is_string() && t["path"].as_str().is_some_and(|p| chunk.iter().any(|c| c == p))));
+        }
+        Ok(Value::Array(found))
+    }
+
     pub async fn list(self: &Arc<Self>, phone: &Phone, path: Option<&str>) -> Result<Value> {
         let open = self.session(phone).await?;
         let path = match path.filter(|p| p.starts_with('/')) {
@@ -727,6 +774,7 @@ pub fn request(files: &Arc<PhoneFiles>, method: &str, args: &Value, devices: &De
         _ => None,
     };
     let phone = text(&args, 0).and_then(|id| Phone::of(devices, &id));
+    let thumbs_taken = text(&args, 0).ok().and_then(|id| devices.get(&id)).is_some_and(|d| d.takes(THUMBS_REQUEST));
     Some(async move {
         if let Some(answer) = quick {
             return answer;
@@ -743,6 +791,8 @@ pub fn request(files: &Arc<PhoneFiles>, method: &str, args: &Value, devices: &De
             "NewPhoneFolder" => files.new_folder(&phone, &arg(1)?).await.map(|_| Value::Null),
             "DeletePhoneFile" => files.delete(&phone, &arg(1)?).await.map(|_| Value::Null),
             "RenamePhoneFile" => files.rename(&phone, &arg(1)?, &arg(2)?).await.map(|to| json!(to)),
+            // Pictures that don't come aren't worth reconnecting for.
+            "PhoneThumbs" => return files.thumbnails(&phone, &crate::window::strings(&args[1]), thumbs_taken).await.map_err(|e| format!("{e}")),
             _ => return Err("Not a files request".into()),
         };
         if done.is_err() {
@@ -772,6 +822,30 @@ mod tests {
         assert!(failed.is_err());
         let said = stopped(&transfer, Err::<(), _>(anyhow!(failed.unwrap_err())).context("Couldn't copy a.jpg"));
         assert_eq!(format!("{}", said.unwrap_err()), STOPPED);
+    }
+
+    #[tokio::test]
+    async fn thumbnails_come_back_by_their_number() {
+        let (tx, mut sent) = mpsc::unbounded_channel();
+        let dir = std::env::temp_dir().join(format!("vyoma-thumbs-{}", std::process::id()));
+        let me = Identity::load_or_create_in(&dir).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let files = PhoneFiles::new(&me, tx);
+        let phone = Phone { id: "p".into(), name: "Pixel".into(), remote: IpAddr::V4(Ipv4Addr::LOCALHOST), cert: vec![] };
+        // A phone that doesn't make them isn't asked.
+        assert_eq!(files.thumbnails(&phone, &["/a.jpg".into()], false).await.unwrap(), json!([]));
+        let answer = {
+            let files = files.clone();
+            tokio::spawn(async move { files.thumbnails(&phone, &["/a.jpg".into(), "/b.mp4".into()], true).await })
+        };
+        let Some(Command::Send(id, asked)) = sent.recv().await else { panic!("nothing asked") };
+        assert_eq!((id.as_str(), asked["type"].as_str()), ("p", Some(THUMBS_REQUEST)));
+        assert_eq!(asked["body"]["paths"], json!(["/a.jpg", "/b.mp4"]));
+        let n = asked["body"]["n"].clone();
+        // Another number is someone else's; a path not asked for is dropped.
+        files.reply("p", &json!({ "type": THUMBS, "body": { "n": 999, "thumbs": [] } }));
+        files.reply("p", &json!({ "type": THUMBS, "body": { "n": n, "thumbs": [{ "path": "/a.jpg", "jpg": "AAA" }, { "path": "/b.mp4" }, { "path": "/c.jpg", "jpg": "BBB" }] } }));
+        assert_eq!(answer.await.unwrap().unwrap(), json!([{ "path": "/a.jpg", "jpg": "AAA" }]));
     }
 
     #[test]
