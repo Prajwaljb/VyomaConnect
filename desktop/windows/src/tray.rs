@@ -241,7 +241,7 @@ fn add_icon(hwnd: HWND) {
     d.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     d.uCallbackMessage = ICON_EVENT;
     d.hIcon = icon();
-    put(&mut d.szTip, "Vyoma");
+    put(&mut d.szTip, "Vyoma (beta)");
     // SAFETY: a filled-in NOTIFYICONDATAW for our window.
     unsafe { Shell_NotifyIconW(NIM_ADD, &d) };
 }

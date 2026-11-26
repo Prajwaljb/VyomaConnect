@@ -95,10 +95,10 @@ Set up the PC first, then the phone.
 
 ### 1. Your PC
 
-Vyoma runs on Linux with KDE Plasma or GNOME. X11 desktops (Cinnamon, MATE, Xfce) have early support, not yet
-tested much on those desktops. macOS is coming in future releases.
+Vyoma runs on Linux with KDE Plasma or GNOME. X11 desktops (Cinnamon, MATE, Xfce), Hyprland and Sway have
+early support, not yet tested much there. **Mac** and **Windows** are in beta: see below.
 
-Paste this into a terminal:
+On Linux, paste this into a terminal:
 
 ```sh
 curl -fsSL https://github.com/Prajwaljb/VyomaConnect/releases/latest/download/install.sh | sh
@@ -124,6 +124,20 @@ own login screen (GDM).
 
 When a new version is out, Vyoma tells you and updates itself with one click, your pairings kept
 (or run the install line again).
+
+**Mac (beta, macOS 11 or later):** download `Vyoma-mac-<version>.zip` from the
+[latest release](https://github.com/Prajwaljb/VyomaConnect/releases/latest), open it and drag Vyoma into
+Applications. It isn't signed by Apple yet: the first time, open System Settings > Privacy & Security and
+choose Open Anyway.
+
+**Windows (beta, 64-bit Windows 10 or 11):** download `Vyoma-setup-<version>.exe` from the
+[latest release](https://github.com/Prajwaljb/VyomaConnect/releases/latest) and run it. It installs for you
+only, with no administrator. It isn't signed yet, so SmartScreen warns: choose More info > Run anyway (with
+Smart App Control on, Windows refuses it outright for now). Vyoma's window shows under This PC what's ready,
+such as letting phones through the firewall.
+
+The Mac and Windows versions are built and tested on GitHub's machines but haven't been tried much on real
+ones yet: please [tell us](https://github.com/Prajwaljb/VyomaConnect/issues) what breaks.
 
 **Rather build it from source?** `git clone https://github.com/Prajwaljb/VyomaConnect && VyomaConnect/desktop/daemon/install.sh`
 does the same from a clone, building it first (Arch, Debian, Ubuntu and Fedora).

@@ -1,0 +1,5 @@
+• Windows PCs (beta): your phone's files, screen, webcam, game controller, calls and more
+• Browse your phone's files from a Mac or Windows PC, with photo thumbnails
+• New automation trigger: an app is open
+• Works over your phone's hotspot, and never dials home over mobile data
+• Clipboard sync when closed tries again instead of losing a copy
