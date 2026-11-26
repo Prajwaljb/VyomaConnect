@@ -5,12 +5,6 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 description = "Vyoma's PC side on Windows: pairs with and serves Vyoma on your phone, on vyoma-core and vyoma-engine"
 
-# The camera for apps (vyoma_camera.dll, camera/): Windows' camera service loads it; the agent shares its frame code.
-[lib]
-name = "vyoma_camera"
-path = "camera/lib.rs"
-crate-type = ["cdylib", "rlib"]
-
 [[bin]]
 name = "vyoma-windows"
 path = "src/main.rs"
@@ -25,6 +19,9 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 vyoma-core = { path = "../core" }
 vyoma-engine = { path = "../engine", features = ["phone-files"] }
+# The camera for apps (vyoma_camera.dll, camera/, its own crate): Windows' camera service loads the
+# DLL; the agent shares its frame code.
+vyoma-camera = { path = "camera" }
 sysinfo = "0.40.0"
 # The controller driver download's SHA-256 (Apache-2.0/ISC, as core's).
 ring = "0.17.14"

@@ -4,6 +4,7 @@
 //!
 //! Windows refuses input into windows of programs running as administrator (UIPI) and the secure
 //! desktop (UAC prompts, the lock screen); there SendInput lands nowhere, as with any normal app.
+//! This PC's "Control admin windows" ([crate::admin_input]) reaches the first kind through a helper.
 //! Built and tested on CI and under Wine only; not yet run on a real Windows PC.
 
 use serde_json::Value;
@@ -269,8 +270,13 @@ fn send(all: &[INPUT]) -> anyhow::Result<()> {
     if all.is_empty() {
         return Ok(());
     }
-    // SAFETY: an array of filled-in INPUTs and its length.
-    let sent = unsafe { SendInput(all.len() as u32, all.as_ptr(), size_of::<INPUT>() as i32) };
+    // Through the admin helper where it's set up (This PC's "Control admin windows"): it reaches
+    // windows running as administrator too.
+    let sent = match crate::admin_input::send(all) {
+        Some(n) => n,
+        // SAFETY: an array of filled-in INPUTs and its length.
+        None => unsafe { SendInput(all.len() as u32, all.as_ptr(), size_of::<INPUT>() as i32) },
+    };
     if sent == 0 {
         anyhow::bail!("Windows didn't take the input: {}", std::io::Error::last_os_error());
     }

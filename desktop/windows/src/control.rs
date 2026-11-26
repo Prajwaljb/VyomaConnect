@@ -85,7 +85,7 @@ fn this_user_only() -> Result<*const SECURITY_ATTRIBUTES> {
 }
 
 /// This process's user, as "S-1-5-21-…".
-fn user_sid() -> Result<String> {
+pub(crate) fn user_sid() -> Result<String> {
     // SAFETY: the token is opened for query and closed; the buffer is sized by the first call;
     // the string form is LocalAlloc'd and freed after copying.
     unsafe {

@@ -89,6 +89,8 @@ pub struct Toast {
     pub buttons: Vec<Button>,
     /// Stays on screen until answered (the pairing question).
     pub urgent: bool,
+    /// A phone call ringing: Windows' call look (shown expanded, on screen until answered).
+    pub ringing: bool,
 }
 
 pub fn escape(s: &str) -> String {
@@ -111,7 +113,9 @@ pub fn escape(s: &str) -> String {
 impl Toast {
     pub fn xml(&self) -> String {
         let mut x = format!("<toast launch=\"{}\" activationType=\"foreground\"", escape(&self.launch));
-        if self.urgent {
+        if self.ringing {
+            x.push_str(" scenario=\"incomingCall\"");
+        } else if self.urgent {
             x.push_str(" scenario=\"reminder\"");
         }
         x.push_str("><visual><binding template=\"ToastGeneric\">");
@@ -136,8 +140,9 @@ impl Toast {
             }
             x.push_str("</actions>");
         }
-        if self.urgent {
-            // A reminder rings like one unless told to be quiet; the question isn't an alarm.
+        if self.urgent || self.ringing {
+            // A reminder rings like an alarm and a call loops Windows' ringtone unless told
+            // otherwise: one chime (the phone is ringing already).
             x.push_str("<audio src=\"ms-winsoundevent:Notification.Default\"/>");
         }
         x.push_str("</toast>");

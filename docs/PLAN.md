@@ -123,7 +123,9 @@ desktop/companion/     Rust daemon (Phase 2)
   PC connected or away, call, charging, battery, PC locked/playing/plugged in, headphones, home Wi-Fi (learned from
   the PC's network, no location permission), times and periods → PC lock/mute/volume/media/brightness/command/
   clipboard/message/screenshot/wake/sleep and phone notify/vibrate/pause. Walk-away actions run on the companion
-  (`vyoma.away`). Not done: "app opened" (needs usage access).
+  (`vyoma.away`). "An app is open" (2026-11-25): Android's usage access (`PACKAGE_USAGE_STATS`, asked in the
+  trigger's dialog), the foreground app read from UsageStatsManager's resumed/paused events every 1.5 s, only while
+  an enabled rule names an app and the screen is on.
 - **USB mode:** the companion runs `adb reverse`, and also automates the clipboard grant.
 
 ### Phase 3: Real-time features
@@ -350,6 +352,12 @@ Each row's "…" opens a sheet: Copy to this PC (a folder without opening it), R
 already there; the phone's top folders can't be), Delete. Files dragged onto the window
 wait for Slint, which takes no drops from outside the app (1.19). Tested against OpenSSH's sftp server
 (`VYOMA_SSHD_TEST=1`, a stopped 64 MB copy included), not yet the phone.
+Done 2026-11-25: photos and videos show their own small picture on the Files page: the window asks the agent's
+`PhoneThumbs` for the rows shown, 24 at a time; the agent sends `vyoma.files.thumbs.request {n, size: 128, paths}`
+and the phone's file-server plugin answers `vyoma.files.thumbs {n, thumbs: [{path, jpg?}]}` with Android's
+ThumbnailUtils JPEGs, only for a PC that asked to browse and only inside internal storage. Found on the way: the
+Mac's and Windows' identities never listed `kdeconnect.sftp`/`.sftp.request`, so a real phone wouldn't have loaded
+its file server's plugin for them (the Files page would have waited 20 s and given up); both list them now.
 Loose ends, 2026-11-08: a mount survives the link moving between the cable and Wi-Fi (remounted quietly at the
 same folder), and the mirror's sound goes as Opus (128 kbit/s instead of 1.5 Mbit/s PCM) to a PC that can play it.
 
@@ -403,6 +411,15 @@ explain macOS's one-time Allow in Privacy & Security.
    the window's Commands page.
 5. Next: screen viewing (ScreenCaptureKit and VideoToolbox into the phone's viewer), the pairing
    question in the window instead of a dialog, then a Developer ID if the Mac side gets users.
+6. Built and type-checked on Linux, not run on a Mac (2026-11-25): handoff (`handoff.rs`: Safari and the
+   Chromium browsers' front tab over AppleScript; the page's own video time where the browser lets Apple
+   Events run JavaScript, else a known video address at its `t=`) and Bluetooth (`bluetooth.rs`,
+   IOBluetooth: RFCOMM services under the phone's UUIDs, the link without Wi-Fi piped to the agent's TCP
+   port and the touchpad's signed frames read by core `pointer`; started only inside Vyoma.app, whose
+   Info.plist has `NSBluetoothAlwaysUsageDescription`, as macOS kills a process without it). Left out on
+   purpose: the phone as a webcam (a Camera Extension needs a system-extension entitlement and a Developer
+   ID), the game controller (a virtual HID device needs DriverKit's restricted entitlements) and so the
+   controller over USB.
 
 X11 (2026-11-11, phase 3 started early): one X11 backend for every X11 desktop rather than Cinnamon alone
 (`companion/src/x11.rs`, daemon `presenter_x11.rs`): clipboard, touchpad and keyboard (XTEST), screen view and
@@ -683,6 +700,32 @@ build, headless Xvfb display, private ports and pipe) and next on GitHub's runne
   - USB: UsbDk takes a likely phone over only while it's switched to accessory mode and while the
     accessory is read; frames go to the wired listener as adb's tunnel would carry them.
   - Not yet run on Windows: Frame Server and UsbDk aren't in Wine. CI runs makensis.
+- A review of the Windows side (2026-11-25), fixed:
+  - Sleep: phones are told (`vyoma.pc.leaving {why: sleep}`) and the PC announces itself on waking,
+    as on Linux; before, phones kept dialling a sleeping PC. Sleep from the phone on a Modern Standby
+    laptop (most new ones) turns the screen off, the way such a PC sleeps; `SetSuspendState` fails or
+    hibernates there.
+  - Settings' Startup apps switch (or Task Manager's) is read: This PC no longer says Vyoma starts
+    with Windows when it was turned off there.
+  - The camera service on ARM64 PCs is native and can't load an x64 DLL: the camera is its own
+    crate, built for both, and the right one is installed.
+  - The installer read the camera's registration in the 32-bit registry view (it's 32-bit), so the
+    uninstaller never removed the camera; updates asked for an administrator for the camera even
+    when it was never set up. Both fixed.
+  - Update installs the new release itself (the installer runs quietly per user, Vyoma reopens),
+    after checking it against the release's `.sha256`.
+  - An application manifest (Windows 10/11, DPI, long paths, today's dialogs), HDR displays shared
+    through `DuplicateOutput1` asking for 8-bit, Windows' call look for ringing toasts, the window
+    talking only to this user's pipe, and CI's actions moved off Node 20.
+  - Control admin windows (opt-in on This PC): the touchpad and keyboard reach windows running as
+    administrator through a small elevated helper (a copy under Program Files, started at sign-in
+    by a scheduled task with highest privileges) that only replays mouse and keyboard events from
+    this user's processes. Not the UAC prompt or lock screen (that would take a system service, as
+    RustDesk's); admin accounts only (a standard account or Administrator protection runs it without
+    rights, and This PC says so). Wine has no integrity levels: untested where it matters.
+  - Left for decisions: code signing (Smart App Control blocks unsigned downloads outright on many
+    new Windows 11 PCs, and certificates since 2023 live in hardware, so the PFX secret can't hold a
+    new one: SignPath's free open-source programme or Azure Artifact Signing), and a full ARM64 build.
 - Next: the NV12 picture handed to the hardware encoder as a texture (no read-back at all; needs the
   encoder's Direct3D manager), the mirror drawn with Direct3D if GDI's scaling proves slow.
 

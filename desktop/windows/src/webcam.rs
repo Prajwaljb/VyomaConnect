@@ -49,8 +49,15 @@ pub const INSTALL_ARG: &str = "--install-camera";
 /// As an administrator: take it out again.
 pub const REMOVE_ARG: &str = "--remove-camera";
 const VERSION: &str = include_str!("../../../VERSION");
-/// The DLL as it's installed beside the agent.
+/// The DLL as it's installed beside the agent, and its ARM64 build: on a Snapdragon PC the camera
+/// service is native ARM64 and loads only that one (the agent itself runs emulated there).
 const DLL: &str = "vyoma_camera.dll";
+const DLL_ARM64: &str = "vyoma_camera_arm64.dll";
+
+/// The one this PC's camera service can load.
+fn dll_for_this_pc() -> &'static str {
+    if win::arm64() { DLL_ARM64 } else { DLL }
+}
 /// The phone's words for a missing setup ("one-time setup" is what it looks for).
 const SETUP_NEEDED: &str = "The PC needs a one-time setup for the phone camera: on the PC, open This PC in Vyoma's window and press Set up";
 const NEEDS_11: &str = "The phone as a webcam needs Windows 11 on the PC";
@@ -134,15 +141,16 @@ pub fn set_up() -> Result<()> {
     Ok(())
 }
 
-fn program_files() -> PathBuf {
+pub(crate) fn program_files() -> PathBuf {
     std::env::var_os("ProgramW6432").or_else(|| std::env::var_os("ProgramFiles")).map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Program Files"))
 }
 
 /// `--install-camera` (as an administrator): the DLL beside this program copied under Program
 /// Files and its class registered for the camera service. Exit status 0 when done.
 pub fn install() -> Result<()> {
-    let here = std::env::current_exe()?.with_file_name(DLL);
-    anyhow::ensure!(here.is_file(), "{DLL} isn't beside the program; reinstall Vyoma");
+    let dll = dll_for_this_pc();
+    let here = std::env::current_exe()?.with_file_name(dll);
+    anyhow::ensure!(here.is_file(), "{dll} isn't beside the program; reinstall Vyoma");
     let dir = program_files().join("Vyoma");
     std::fs::create_dir_all(&dir).with_context(|| format!("couldn't make {}", dir.display()))?;
     let target = dir.join(installed_name());

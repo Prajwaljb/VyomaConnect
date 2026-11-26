@@ -412,6 +412,16 @@ fn paths(list: &[u16]) -> Vec<String> {
     list.split(|&c| c == 0).take_while(|s| !s.is_empty()).map(String::from_utf16_lossy).collect()
 }
 
+/// This PC's own processor family, as Windows sees it (an x64 Vyoma runs on ARM64 Windows too,
+/// but drivers and DLLs that Windows' own services load must be built for its real processor).
+pub fn arm64() -> bool {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, IsWow64Process2};
+    const IMAGE_FILE_MACHINE_ARM64: u16 = 0xAA64;
+    let (mut process, mut native) = (0u16, 0u16);
+    // SAFETY: two out-params for this process.
+    unsafe { IsWow64Process2(GetCurrentProcess(), &mut process, &mut native) != 0 && native == IMAGE_FILE_MACHINE_ARM64 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

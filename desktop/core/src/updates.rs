@@ -5,6 +5,7 @@
 //! The phones stay paired across the reinstall. State in `updates.json` in the side's folder.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -34,6 +35,10 @@ pub struct Updates {
     /// Whether a release file is this PC's download ("Vyoma-mac-0.12.0.zip").
     carries: fn(&str) -> bool,
     state: Mutex<State>,
+    /// This side installs a newer release itself (Windows: its installer, run quietly) rather than
+    /// opening the release's page; and whether it's doing so now.
+    installs: AtomicBool,
+    updating: AtomicBool,
 }
 
 impl Updates {
@@ -42,7 +47,7 @@ impl Updates {
         let v: Value = std::fs::read_to_string(&file).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(Value::Null);
         let s = |k: &str| v[k].as_str().unwrap_or("").to_owned();
         let state = State { off: v["off"].as_bool().unwrap_or(false), checked: v["checked"].as_i64().unwrap_or(0), latest: s("latest"), page: s("page"), told: s("told") };
-        Arc::new(Self { file, current: current.trim().to_owned(), carries, state: Mutex::new(state) })
+        Arc::new(Self { file, current: current.trim().to_owned(), carries, state: Mutex::new(state), installs: AtomicBool::new(false), updating: AtomicBool::new(false) })
     }
 
     fn save(&self) {
@@ -58,7 +63,24 @@ impl Updates {
     pub fn status(&self) -> Value {
         let s = self.state.lock().unwrap();
         let newer = (!s.off && is_newer(&s.latest, &self.current)).then(|| s.latest.clone());
-        json!({ "current": self.current, "latest": newer, "page": s.page, "checks": !s.off, "updating": false, "canUpdate": false, "packaged": false, "download": true })
+        let installs = self.installs.load(Ordering::Relaxed);
+        json!({ "current": self.current, "latest": newer, "page": s.page, "checks": !s.off, "updating": self.updating.load(Ordering::Relaxed), "canUpdate": installs, "packaged": false, "download": !installs })
+    }
+
+    /// This side installs updates itself: the window offers Update instead of Download.
+    pub fn installs_itself(&self) {
+        self.installs.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether an update is being fetched or installed now; true if it just started (one at a time).
+    pub fn set_updating(&self, on: bool) -> bool {
+        self.updating.swap(on, Ordering::Relaxed) != on
+    }
+
+    /// The newer release's version, if there is one.
+    pub fn newer(&self) -> Option<String> {
+        let s = self.state.lock().unwrap();
+        is_newer(&s.latest, &self.current).then(|| s.latest.clone())
     }
 
     pub fn set_checks(&self, on: bool) {
@@ -145,6 +167,13 @@ mod tests {
         u.set_checks(false);
         assert_eq!(u.status()["latest"], Value::Null);
         assert_eq!(Updates::load(&dir, "0.9.0", mac).status()["checks"], false, "kept");
+        // The Mac downloads; a side that installs itself offers Update, one at a time.
+        assert_eq!((u.status()["canUpdate"].as_bool(), u.status()["download"].as_bool()), (Some(false), Some(true)));
+        u.installs_itself();
+        assert_eq!((u.status()["canUpdate"].as_bool(), u.status()["download"].as_bool()), (Some(true), Some(false)));
+        assert_eq!(u.newer().as_deref(), Some("0.10.0"));
+        assert!(u.set_updating(true) && !u.set_updating(true), "one update at a time");
+        assert_eq!(u.status()["updating"], true);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

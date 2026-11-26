@@ -2,18 +2,20 @@
 ; Puts vyoma.exe (the window) and vyoma-windows.exe (the agent) in %LOCALAPPDATA%\Programs\Vyoma, a
 ; Start menu entry, and an entry in Settings > Apps to uninstall it. Opening Vyoma at the end starts
 ; the agent and has it start with Windows (vyoma.exe runs `vyoma-windows.exe --install`).
-; A running Vyoma is closed first (`--quit`), so an update replaces it in place. Uninstalling stops
-; it, takes out its start-with-Windows and Send to entries and toast registration (`--uninstall`) and the programs;
+; A running Vyoma is closed first (`--quit`), so an update replaces it in place. Vyoma's own Update
+; runs it as `/S /RESTART`: quietly, then Vyoma opens again. Uninstalling stops
+; it, takes out its start-with-Windows and Send to entries, toast registration and, if it was set up,
+; This PC's "Control admin windows" helper (asking for an administrator) (`--uninstall`), and the programs;
 ; pairings stay in %LOCALAPPDATA%\Vyoma, as they do when an app is removed and put back, unless the
 ; person asks for them to go. Firewall rules made with Let phones through need an administrator to
 ; remove, so they stay (they only let in that program, which is gone).
 ; Two optional parts need an administrator once, so each asks Windows for one when picked:
 ; "Phone as webcam" (Windows 11; picked by default there) runs `vyoma-windows.exe --install-camera`,
-; which copies vyoma_camera.dll under Program Files and registers it for Windows' camera service;
+; which copies vyoma_camera.dll (vyoma_camera_arm64.dll on an ARM64 PC) under Program Files and registers it for Windows' camera service;
 ; "Controller over USB" (not picked) runs `--get-usb-driver`: Red Hat's UsbDk, downloaded and checked.
 ; Both are also on Vyoma's This PC page (Set up, Get driver). Uninstalling removes the camera (asks).
 ;
-; makensis /DVERSION=0.12.0 /DSRC=<folder with both programs, vyoma_camera.dll and LICENSE> /DOUT=<setup.exe> [/DSIGN=<cmd>] vyoma.nsi
+; makensis /DVERSION=0.12.0 /DSRC=<folder with both programs, vyoma_camera.dll, vyoma_camera_arm64.dll and LICENSE> /DOUT=<setup.exe> [/DSIGN=<cmd>] vyoma.nsi
 ; SIGN: a command that signs the file it's given (CI's sign.cmd), run on the uninstaller and the installer.
 ; Built on GitHub's Windows runners (.github/workflows/windows.yml); not yet run on a real Windows PC.
 
@@ -26,7 +28,7 @@ RequestExecutionLevel user
   !error "makensis /DVERSION=x.y.z"
 !endif
 !ifndef SRC
-  !error "makensis /DSRC=<folder with vyoma.exe, vyoma-windows.exe, vyoma_camera.dll, LICENSE>"
+  !error "makensis /DSRC=<folder with vyoma.exe, vyoma-windows.exe, vyoma_camera.dll, vyoma_camera_arm64.dll, LICENSE>"
 !endif
 !ifndef OUT
   !define OUT "Vyoma-setup-${VERSION}.exe"
@@ -56,6 +58,7 @@ VIAddVersionKey "LegalCopyright" "GPL-3.0-or-later"
 !include "WinVer.nsh"
 !include "Sections.nsh"
 !include "x64.nsh"
+!include "FileFunc.nsh"
 
 !define MUI_ICON "..\..\desktop\windows\dist\vyoma.ico"
 !define MUI_UNICON "..\..\desktop\windows\dist\vyoma.ico"
@@ -87,6 +90,7 @@ Section "Vyoma" SecMain
   File "${SRC}\vyoma.exe"
   File "${SRC}\vyoma-windows.exe"
   File "${SRC}\vyoma_camera.dll"
+  File "${SRC}\vyoma_camera_arm64.dll"
   File /oname=LICENSE.txt "${SRC}\LICENSE"
   WriteUninstaller "$INSTDIR\uninstall.exe"
   CreateShortcut "$SMPROGRAMS\Vyoma.lnk" "$INSTDIR\vyoma.exe" "" "$INSTDIR\vyoma.exe" 0
@@ -121,15 +125,37 @@ SectionEnd
   !insertmacro MUI_DESCRIPTION_TEXT ${SecUsb} "Your phone as a game controller over the USB cable without USB debugging, through Red Hat's free UsbDk driver (downloaded from GitHub). Needs an administrator once."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
+!define CAMERA_KEY "SOFTWARE\Classes\CLSID\{5F0C9A1E-3B7D-4E62-A8F1-2D6C4B9E7A13}\InprocServer32"
+
 Function .onInit
   ; Virtual cameras came with Windows 11: the option is hidden before it.
   ${IfNot} ${AtLeastBuild} 22000
     !insertmacro UnselectSection ${SecWebcam}
     SectionSetText ${SecWebcam} ""
+  ${ElseIf} ${FileExists} "$INSTDIR\vyoma-windows.exe"
+    ; An update: picked only if it was set up before, so nobody who passed on it is asked for an
+    ; administrator at every update (nor a silent update stopped by the prompt). Read in the 64-bit
+    ; registry, where the agent registered it (this installer is 32-bit).
+    SetRegView 64
+    ReadRegStr $0 HKLM "${CAMERA_KEY}" ""
+    SetRegView default
+    ${If} $0 == ""
+      !insertmacro UnselectSection ${SecWebcam}
+    ${EndIf}
   ${EndIf}
   ; UsbDk is x64 only.
   ${IfNot} ${IsNativeAMD64}
     SectionSetText ${SecUsb} ""
+  ${EndIf}
+FunctionEnd
+
+; Vyoma's own Update runs this quietly with /RESTART: Vyoma opens again once it's replaced.
+Function .onInstSuccess
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} $R0 "/RESTART" $R1
+  ${IfNot} ${Errors}
+    Exec '"$INSTDIR\vyoma.exe"'
   ${EndIf}
 FunctionEnd
 
@@ -138,13 +164,17 @@ Section "Uninstall"
   ExecWait '"$INSTDIR\vyoma-windows.exe" --quit'
   ExecWait '"$INSTDIR\vyoma-windows.exe" --uninstall'
   ; The phone camera, if it was set up: it's machine-wide, so Windows asks for an administrator.
-  ReadRegStr $0 HKLM "SOFTWARE\Classes\CLSID\{5F0C9A1E-3B7D-4E62-A8F1-2D6C4B9E7A13}\InprocServer32" ""
+  ; In the 64-bit registry, where the agent registered it (this uninstaller is 32-bit).
+  SetRegView 64
+  ReadRegStr $0 HKLM "${CAMERA_KEY}" ""
+  SetRegView default
   StrCmp $0 "" +3
     DetailPrint "Removing Vyoma Phone Camera (Windows asks for an administrator)"
     ExecShellWait "runas" "$INSTDIR\vyoma-windows.exe" "--remove-camera" SW_HIDE
   Delete "$INSTDIR\vyoma.exe"
   Delete "$INSTDIR\vyoma-windows.exe"
   Delete "$INSTDIR\vyoma_camera.dll"
+  Delete "$INSTDIR\vyoma_camera_arm64.dll"
   Delete "$INSTDIR\LICENSE.txt"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"

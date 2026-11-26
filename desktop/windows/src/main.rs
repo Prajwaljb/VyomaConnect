@@ -27,6 +27,8 @@
 #[cfg(windows)]
 mod accessory;
 #[cfg(windows)]
+mod admin_input;
+#[cfg(windows)]
 mod away;
 #[cfg(windows)]
 mod bluetooth;
@@ -179,8 +181,17 @@ mod agent {
             }
             Some("--uninstall") => {
                 toast::unregister();
+                // Admin windows control: its helper and task go too (Windows asks for an administrator).
+                if let Err(e) = crate::admin_input::turn_off() {
+                    tracing::info!("admin input helper left: {e:#}");
+                }
                 system::uninstall()
             }
+            // Control admin windows (This PC): set up and taken out as an administrator, and the
+            // helper itself, started by its task at sign-in.
+            Some(crate::admin_input::INSTALL_ARG) => crate::admin_input::install(&std::env::args().nth(2).unwrap_or_default()),
+            Some(crate::admin_input::REMOVE_ARG) => crate::admin_input::remove(&std::env::args().nth(2).unwrap_or_default()),
+            Some(crate::admin_input::HELPER_ARG) => crate::admin_input::helper(),
             // Let phones through, as an administrator (Windows asked; see firewall::open).
             Some(firewall::OPEN_ARG) => firewall::allow(),
             // The phone camera for apps, as an administrator (This PC's Set up or the installer).
@@ -198,7 +209,7 @@ mod agent {
                 quit_running();
                 Ok(())
             }
-            Some(other) => bail!("unknown option {other}: try --install, --uninstall, --install-camera, --remove-camera or --quit"),
+            Some(other) => bail!("unknown option {other}: try --install, --uninstall, --install-camera, --remove-camera, --install-admin-input, --remove-admin-input or --quit"),
             None => run(win::data_dir()),
         }
     }
@@ -384,6 +395,8 @@ mod agent {
         // Told again on a new network (the phone's hotspot, another Wi-Fi) and after sleep: before,
         // only at start, so phones found this PC only when they next looked (15 min, screen off).
         let (moved_tx, mut moved) = mpsc::unbounded_channel();
+        // Windows also says when it wakes: phones hear at once, not at the next look.
+        let woke = moved_tx.clone();
         tokio::spawn(vyoma_core::networks::follow(moved_tx));
         let named_only = list_env("VYOMA_ANNOUNCE").is_some();
 
@@ -553,7 +566,7 @@ mod agent {
                                         send(&id, reply);
                                     }
                                 }
-                                Route::Other if kind == vyoma_engine::phonefiles::SFTP => files.reply(&id, &packet),
+                                Route::Other if vyoma_engine::phonefiles::PhoneFiles::answers(&kind) => files.reply(&id, &packet),
                         Route::Other => tracing::debug!("{}: nothing here for {kind}", d.name),
                             }
                         }
@@ -681,6 +694,18 @@ mod agent {
                                 send(id, lock_packet(locked));
                             }
                         }
+                    }
+                    // As Linux's: phones stop dialling a sleeping PC until it announces itself again.
+                    tray::Said::Sleeping => {
+                        tracing::info!("this PC is going to sleep: telling the phones");
+                        for (id, d) in &devices {
+                            if d.takes(LEAVING) {
+                                send(id, packet(LEAVING, json!({ "why": "sleep" })));
+                            }
+                        }
+                    }
+                    tray::Said::Awake => {
+                        let _ = woke.send("awake again");
                     }
                 },
                 _ = battery_tick.tick() => {
@@ -832,7 +857,7 @@ mod agent {
         }
 
         async fn answer(w: &Window, method: &str, args: &Value, _: &mut Devices) -> Option<Answer> {
-            matches!(method, "Wallpaper" | "Health" | "FixCheck" | "OpenFirewall").then_some(())?;
+            matches!(method, "Wallpaper" | "Health" | "FixCheck" | "OpenFirewall" | "Update").then_some(())?;
             Some(own(w, method, args).await)
         }
     }
@@ -842,12 +867,27 @@ mod agent {
         match method {
             // The window's look: the wallpaper's colours.
             "Wallpaper" => tokio::task::spawn_blocking(crate::wallpaper::for_window).await.map_err(|e| e.to_string())?.map_err(|e| format!("{e:#}")),
+            // Fetched, checked and installed here (the Mac's opens the release's page instead).
+            "Update" => {
+                let (updates, changes) = (w.updates.clone(), w.changes.clone());
+                tokio::spawn(async move {
+                    let changed = || {
+                        let _ = changes.send(json!({ "event": "Changed" }));
+                    };
+                    if let Err(e) = update::install(updates, changed).await {
+                        tracing::warn!("update: {e:#}");
+                        let text = format!("{e:#}");
+                        tokio::task::spawn_blocking(move || tray::notify("Vyoma couldn't update", &text));
+                    }
+                });
+                Ok(Value::Null)
+            }
             "Health" => {
                 let (checks, ways) = tokio::task::spawn_blocking(|| (checks(), ways())).await.map_err(|e| e.to_string())?;
                 Ok(json!({ "features": [], "installable": false, "checks": checks, "ways": ways, "notes": [], "update": w.updates.status(), "version": VERSION.trim() }))
             }
             "FixCheck" => match vyoma_engine::window::text(args, 0)?.as_str() {
-                AUTOSTART_CHECK => system::install().map(|_| Value::Null).map_err(|e| format!("{e:#}")),
+                AUTOSTART_CHECK => system::turn_on().map(|_| Value::Null).map_err(|e| format!("{e:#}")),
                 usb::CHECK => {
                     let changes = w.changes.clone();
                     tokio::spawn(async move {
@@ -871,6 +911,18 @@ mod agent {
                             tracing::warn!("no controller driver: {e:#}");
                             let text = format!("{e:#}");
                             tokio::task::spawn_blocking(move || tray::notify("Couldn't get the controller driver", &text));
+                        }
+                        let _ = changes.send(json!({ "event": "Changed" }));
+                    });
+                    Ok(Value::Null)
+                }
+                crate::admin_input::CHECK => {
+                    let changes = w.changes.clone();
+                    tokio::spawn(async move {
+                        if let Ok(Err(e)) = tokio::task::spawn_blocking(crate::admin_input::toggle).await {
+                            tracing::warn!("admin windows control: {e:#}");
+                            let text = format!("{e:#}");
+                            tokio::task::spawn_blocking(move || tray::notify("Admin windows control didn't change", &text));
                         }
                         let _ = changes.send(json!({ "event": "Changed" }));
                     });
@@ -937,7 +989,7 @@ mod agent {
             Err(e) => Way::missing(SCREEN, format!("{e:#}")),
         };
         vyoma_engine::ways::json(&[
-            Way::found("Touchpad and keyboard", "Windows' SendInput"),
+            Way::found("Touchpad and keyboard", if crate::admin_input::in_use() { "Windows' SendInput, through the admin helper" } else { "Windows' SendInput" }),
             Way::found("Clipboard", "Windows' clipboard"),
             screen,
             Way::found("Screenshots", "Windows' screen copy (GDI)"),
@@ -948,18 +1000,25 @@ mod agent {
 
     /// This PC's checks for the window's This PC page (blocking: the firewall's rules are read).
     fn checks() -> Value {
-        let autostart = system::installed();
+        let (autostart, off) = (system::installed(), system::turned_off_in_settings());
+        let detail = match (autostart, off) {
+            (true, false) => "Vyoma starts when you sign in",
+            (true, true) => "Turned off in Windows' Startup apps, so Vyoma runs only until you sign out",
+            _ => "Vyoma runs only until you sign out. Turn on to start it with Windows",
+        };
+        let ok = autostart && !off;
         let mut all = vec![json!({
             "name": AUTOSTART_CHECK,
-            "state": if autostart { "ok" } else { "warn" },
-            "detail": if autostart { "Vyoma starts when you sign in" } else { "Vyoma runs only until you sign out. Turn on to start it with Windows" },
-            "action": if autostart { "" } else { "Turn on" },
+            "state": if ok { "ok" } else { "warn" },
+            "detail": detail,
+            "action": if ok { "" } else { "Turn on" },
         })];
         all.extend(firewall::check());
         all.push(usb::check());
         all.push(crate::gamepad::check());
         all.push(crate::accessory::check());
         all.push(crate::webcam::check());
+        all.push(crate::admin_input::check());
         all.extend(crate::camera::check());
         Value::Array(all)
     }
@@ -1034,8 +1093,8 @@ mod agent {
                 "deviceName": name,
                 "deviceType": if laptop { "laptop" } else { "desktop" },
                 "protocolVersion": 8,
-                "incomingCapabilities": ([INCOMING, &engine_in].concat()),
-                "outgoingCapabilities": ([OUTGOING, &engine_out].concat()),
+                "incomingCapabilities": ([INCOMING, vyoma_engine::phonefiles::INCOMING, &engine_in].concat()),
+                "outgoingCapabilities": ([OUTGOING, vyoma_engine::phonefiles::OUTGOING, &engine_out].concat()),
             }),
         )
     }
@@ -1100,6 +1159,7 @@ mod agent {
             reply: note.reply.as_ref().map(|_| note.reply_hint()),
             buttons,
             urgent: false,
+            ringing: false,
         })
     }
 
@@ -1249,6 +1309,10 @@ mod agent {
                 assert!(incoming.iter().any(|t| t == offered), "{offered}");
             }
             assert!(incoming.iter().any(|t| t == "vyoma.screen.request"), "the live screen");
+            // The phone loads its file server's plugin only for a PC that lists its packets.
+            let outgoing = p["body"]["outgoingCapabilities"].as_array().unwrap();
+            assert!(incoming.iter().any(|t| t == "kdeconnect.sftp") && outgoing.iter().any(|t| t == "kdeconnect.sftp.request"));
+            assert!(outgoing.iter().any(|t| t == "vyoma.files.thumbs.request"));
             std::fs::remove_dir_all(&dir).unwrap();
         }
     }

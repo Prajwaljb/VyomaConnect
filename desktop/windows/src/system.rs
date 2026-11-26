@@ -17,6 +17,9 @@ use crate::win::wide;
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "Vyoma";
+/// Settings > Apps > Startup's switch for each Run entry (Task Manager's Startup tab too): a
+/// binary value whose first byte is odd when it's turned off.
+const APPROVED_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
 /// Per sign-in session: two people signed in each have their own agent.
 const AGENT_MUTEX: &str = r"Local\VyomaAgent";
 const WINDOW_MUTEX: &str = r"Local\VyomaWindow";
@@ -89,6 +92,40 @@ pub fn installed() -> bool {
     let len = ((size / 2) as usize).min(buf.len());
     let value = String::from_utf16_lossy(&buf[..len]);
     std::env::current_exe().is_ok_and(|exe| value.trim_end_matches('\0') == run_line(&exe))
+}
+
+/// Whether the person turned Vyoma off in Settings' Startup apps (or Task Manager): the Run entry
+/// stays, but Windows skips it at sign-in.
+pub fn turned_off_in_settings() -> bool {
+    use windows_sys::Win32::System::Registry::{RRF_RT_REG_BINARY, RegGetValueW};
+    let mut buf = [0u8; 16];
+    let mut size = buf.len() as u32;
+    // SAFETY: reading a binary value of at most [size] bytes into [buf].
+    let err = unsafe {
+        RegGetValueW(HKEY_CURRENT_USER, wide(APPROVED_KEY).as_ptr(), wide(RUN_VALUE).as_ptr(), RRF_RT_REG_BINARY, std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut size)
+    };
+    err == 0 && size > 0 && approved_says_off(buf[0])
+}
+
+fn approved_says_off(first: u8) -> bool {
+    first & 1 == 1
+}
+
+/// This PC's Turn on, which the person pressed: Settings' Startup switch on again too (never done
+/// on its own: that was their choice).
+pub fn turn_on() -> Result<()> {
+    install()?;
+    if turned_off_in_settings() {
+        use windows_sys::Win32::System::Registry::{REG_BINARY, RegSetKeyValueW};
+        // Enabled, as Settings writes it: 2, then zeros where it keeps when it was turned off.
+        let on = [2u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        // SAFETY: a REG_BINARY value of [on]'s bytes under HKCU.
+        let err = unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, wide(APPROVED_KEY).as_ptr(), wide(RUN_VALUE).as_ptr(), REG_BINARY, on.as_ptr().cast(), on.len() as u32) };
+        if err != 0 {
+            bail!("couldn't turn it on in Windows' Startup apps ({err})");
+        }
+    }
+    Ok(())
 }
 
 /// Held while this agent runs; a second agent in the same session gets none.
@@ -194,6 +231,13 @@ pub fn power(action: &str) -> Result<()> {
     // SAFETY: plain calls asking Windows to sleep or end the session.
     let ok = unsafe {
         match action {
+            // Most laptops of late sleep as phones do (Modern Standby), where a program can't ask for
+            // the old kind (it fails, or hibernates): the screen goes off as with the power button
+            // or the idle timeout, which is how such a PC goes to sleep.
+            "sleep" if modern_standby() => {
+                use windows_sys::Win32::UI::WindowsAndMessaging::{HWND_BROADCAST, PostMessageW, SC_MONITORPOWER, WM_SYSCOMMAND};
+                PostMessageW(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER as usize, 2) != 0
+            }
             "sleep" => {
                 allow_shutdown()?;
                 SetSuspendState(false, false, false)
@@ -214,6 +258,16 @@ pub fn power(action: &str) -> Result<()> {
         bail!("Windows didn't do it: {}", std::io::Error::last_os_error());
     }
     Ok(())
+}
+
+/// Whether this PC sleeps the Modern Standby way (S0 low power idle) rather than the old S3.
+fn modern_standby() -> bool {
+    use windows_sys::Win32::System::Power::{GetPwrCapabilities, SYSTEM_POWER_CAPABILITIES};
+    // SAFETY: Windows fills the struct it's given.
+    unsafe {
+        let mut caps: SYSTEM_POWER_CAPABILITIES = std::mem::zeroed();
+        GetPwrCapabilities(&mut caps) && caps.AoAc
+    }
 }
 
 /// Lights the screen as a touch of the mouse would: a move there and back (Windows wakes the
@@ -241,6 +295,16 @@ mod tests {
     #[test]
     fn the_run_line_is_quoted() {
         assert_eq!(run_line(Path::new(r"C:\Program Files\Vyoma\vyoma-windows.exe")), r#""C:\Program Files\Vyoma\vyoma-windows.exe""#);
+    }
+
+    #[test]
+    fn settings_startup_switch() {
+        // As Settings and Task Manager write it: 02/06 on, 03/07 off.
+        assert!(!approved_says_off(2) && !approved_says_off(6));
+        assert!(approved_says_off(3) && approved_says_off(7));
+        // Read on this PC without failing (no value: not turned off).
+        let _ = turned_off_in_settings();
+        let _ = modern_standby();
     }
 
     #[test]

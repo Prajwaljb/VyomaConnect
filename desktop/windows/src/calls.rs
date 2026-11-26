@@ -29,7 +29,7 @@ pub fn ringing_toast(id: &str, phone: &str, call: &Call) -> Toast {
         body: call.body(phone),
         launch: toast::args(&[("do", "open")]),
         buttons,
-        urgent: true,
+        ringing: true,
         ..Default::default()
     }
 }
@@ -105,7 +105,8 @@ mod tests {
     #[test]
     fn the_ringing_toast_offers_what_the_phone_allows() {
         let t = ringing_toast("phone1", "Pixel", &call(false));
-        assert_eq!((t.title.as_str(), t.body.as_str(), t.urgent), ("Sam is calling", "123, on Pixel", true));
+        assert_eq!((t.title.as_str(), t.body.as_str(), t.ringing), ("Sam is calling", "123, on Pixel", true));
+        assert!(t.xml().contains("scenario=\"incomingCall\"") && t.xml().contains("Notification.Default"));
         assert_eq!(t.buttons.iter().map(|b| b.label.as_str()).collect::<Vec<_>>(), ["Silence"]);
         let t = ringing_toast("phone1", "Pixel", &call(true));
         assert_eq!(t.buttons.iter().map(|b| b.label.as_str()).collect::<Vec<_>>(), ["Silence", "Decline"]);

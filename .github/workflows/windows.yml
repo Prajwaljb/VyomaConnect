@@ -31,10 +31,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.release || github.ref }}
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -42,8 +42,9 @@ jobs:
             desktop/core/target
             desktop/engine/target
             desktop/windows/target
+            desktop/windows/camera/target
             desktop/gui/target
-          key: windows-${{ hashFiles('desktop/core/Cargo.toml', 'desktop/engine/Cargo.toml', 'desktop/windows/Cargo.toml', 'desktop/gui/Cargo.lock') }}
+          key: windows-${{ hashFiles('desktop/core/Cargo.toml', 'desktop/engine/Cargo.toml', 'desktop/windows/Cargo.toml', 'desktop/windows/camera/Cargo.toml', 'desktop/gui/Cargo.lock') }}
       - name: Test vyoma-core
         working-directory: desktop/core
         run: cargo test --release
@@ -53,6 +54,10 @@ jobs:
         run: cargo test --release
       - name: Test vyoma-windows
         working-directory: desktop/windows
+        run: cargo test --release
+      # The camera Windows' camera service loads (its own crate: only Windows' API crates).
+      - name: Test the camera
+        working-directory: desktop/windows/camera
         run: cargo test --release
       # The window talks to the agent over its named pipe (gui/src/socket.rs).
       - name: Test the window
@@ -64,6 +69,10 @@ jobs:
         run: |
           (cd windows && cargo build --release)
           (cd gui && cargo build --release)
+          # The camera for both processors Windows' camera service runs on: on a Snapdragon PC it's
+          # native ARM64 and can't load the x64 DLL, while the rest of Vyoma runs there emulated.
+          rustup target add aarch64-pc-windows-msvc
+          (cd windows/camera && cargo build --release && cargo build --release --target aarch64-pc-windows-msvc)
       # Code signing, if the repo has a certificate: secrets WINDOWS_SIGN_PFX (the .pfx, base64) and
       # WINDOWS_SIGN_PASSWORD. It has to come from a certificate authority (or SignPath's free
       # programme for open source) for SmartScreen to stop warning; a self-made one changes nothing.
@@ -90,13 +99,15 @@ jobs:
         run: |
           call "%VYOMA_SIGN%" windows\target\release\vyoma-windows.exe || exit /b 1
           call "%VYOMA_SIGN%" gui\target\release\vyoma.exe || exit /b 1
-          call "%VYOMA_SIGN%" windows\target\release\vyoma_camera.dll || exit /b 1
+          call "%VYOMA_SIGN%" windows\camera\target\release\vyoma_camera.dll || exit /b 1
+          call "%VYOMA_SIGN%" windows\camera\target\aarch64-pc-windows-msvc\release\vyoma_camera.dll || exit /b 1
       - name: Package
         working-directory: desktop
         shell: bash
         run: |
           mkdir -p out/Vyoma
-          cp windows/target/release/vyoma-windows.exe windows/target/release/vyoma_camera.dll gui/target/release/vyoma.exe ../LICENSE out/Vyoma/
+          cp windows/target/release/vyoma-windows.exe windows/camera/target/release/vyoma_camera.dll gui/target/release/vyoma.exe ../LICENSE out/Vyoma/
+          cp windows/camera/target/aarch64-pc-windows-msvc/release/vyoma_camera.dll out/Vyoma/vyoma_camera_arm64.dll
           cp ../VERSION out/Vyoma/VERSION.txt
           (cd out && 7z a -tzip Vyoma-windows.zip Vyoma >/dev/null)
           ls -l out
@@ -114,7 +125,7 @@ jobs:
           & $nsis /V2 "/DVERSION=$version" @sign "/DSRC=$PWD\..\..\desktop\out\Vyoma" "/DOUT=$PWD\..\..\desktop\out\Vyoma-setup.exe" vyoma.nsi
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Get-Item ../../desktop/out/Vyoma-setup.exe
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Vyoma-windows
           path: |

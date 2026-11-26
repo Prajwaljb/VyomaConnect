@@ -430,7 +430,17 @@ impl Duplication {
                 create(D3D11_CREATE_DEVICE_BGRA_SUPPORT, &mut device, &mut context)?;
             }
             let (device, context) = (device.context("no Direct3D device")?, context.context("no Direct3D context")?);
-            let dup = output.DuplicateOutput(&device).context("Windows wouldn't share the screen")?;
+            // Asking for 8-bit BGRA by name: on an HDR display (a 16-bit desktop) Windows then
+            // converts for us, where the old call gives up. Windows 10 1703 and later; else the old one.
+            let modern = output.cast::<windows::Win32::Graphics::Dxgi::IDXGIOutput5>().ok().and_then(|o5| {
+                o5.DuplicateOutput1(&device, 0, &[windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM])
+                    .map_err(|e| tracing::debug!("DuplicateOutput1: {e}"))
+                    .ok()
+            });
+            let dup = match modern {
+                Some(dup) => dup,
+                None => output.DuplicateOutput(&device).context("Windows wouldn't share the screen")?,
+            };
             let turn = Turn::of(dup.GetDesc().Rotation);
             Ok(Duplication { device, context, dup, turn, staging: None, w: 0, h: 0, picture: false, gpu: None, gpu_tried: false, out_size, fps })
         }

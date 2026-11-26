@@ -388,14 +388,6 @@ pub fn check() -> Value {
     }
 }
 
-/// This PC's own processor family, as Windows sees it (an x64 Vyoma runs on ARM64 Windows too).
-fn arm64() -> bool {
-    use windows_sys::Win32::System::Threading::{GetCurrentProcess, IsWow64Process2};
-    const IMAGE_FILE_MACHINE_ARM64: u16 = 0xAA64;
-    let (mut process, mut native) = (0u16, 0u16);
-    // SAFETY: two out-params for this process.
-    unsafe { IsWow64Process2(GetCurrentProcess(), &mut process, &mut native) != 0 && native == IMAGE_FILE_MACHINE_ARM64 }
-}
 
 /// Get driver: the pinned installer into Vyoma's folder, checked, opened; then watched for.
 pub async fn fetch_driver(on_installed: impl FnOnce() + Send + 'static) -> Result<()> {
@@ -403,7 +395,7 @@ pub async fn fetch_driver(on_installed: impl FnOnce() + Send + 'static) -> Resul
         on_installed();
         return Ok(());
     }
-    let (arch, sum) = if arm64() { DRIVER_ARM64 } else { DRIVER_X64 };
+    let (arch, sum) = if crate::win::arm64() { DRIVER_ARM64 } else { DRIVER_X64 };
     let url = format!("https://github.com/vadimgrn/usbip-win2/releases/download/v.{DRIVER_VERSION}/USBip-{DRIVER_VERSION}-{arch}.exe");
     let dir = vyoma_core::identity::dir();
     std::fs::create_dir_all(&dir)?;

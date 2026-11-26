@@ -20,7 +20,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW, GetCursorPos, GetMessageW, HICON,
     IDI_APPLICATION, LoadIconW, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW,
     SetForegroundWindow, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE, WM_CONTEXTMENU,
-    WM_DESTROY, WM_ENDSESSION, WM_LBUTTONUP, WM_NULL, WM_QUERYENDSESSION, WM_RBUTTONUP, WNDCLASSEXW,
+    WM_DESTROY, WM_ENDSESSION, WM_LBUTTONUP, WM_NULL, WM_QUERYENDSESSION, WM_RBUTTONUP, WNDCLASSEXW, PBT_APMSUSPEND, PBT_APMRESUMEAUTOMATIC, WM_POWERBROADCAST,
 };
 
 use crate::win::wide;
@@ -34,6 +34,9 @@ pub enum Said {
     Ending,
     /// The session was locked (true) or unlocked.
     Locked(bool),
+    /// The PC is going to sleep (Modern Standby too), and is awake again.
+    Sleeping,
+    Awake,
 }
 
 /// The hidden window's class (Vyoma's window shares its title, "Vyoma").
@@ -44,7 +47,7 @@ const SHOW_NOTE: u32 = WM_APP + 1;
 const ICON_EVENT: u32 = WM_APP + 2;
 const OPEN: usize = 1;
 const QUIT: usize = 2;
-/// Windows waits for WM_ENDSESSION's answer; this long lets the agent tell phones it's leaving.
+/// Windows waits for WM_ENDSESSION's (and sleep's) answer; this long lets the agent tell phones it's leaving.
 const GOODBYE: Duration = Duration::from_millis(600);
 /// The session's lock changes (WTSRegisterSessionNotification): WM_WTSSESSION_CHANGE's lock and unlock.
 const WM_WTSSESSION_CHANGE: u32 = 0x02B1;
@@ -190,6 +193,8 @@ fn make_window() -> Option<HWND> {
             if let Some(locked) = session_locked() {
                 set_lock(locked);
             }
+            // Sleep and wake come here too; registered, Modern Standby's as well.
+            windows_sys::Win32::System::Power::RegisterSuspendResumeNotification(hwnd, windows_sys::Win32::UI::WindowsAndMessaging::DEVICE_NOTIFY_WINDOW_HANDLE);
         }
         (!hwnd.is_null()).then_some(hwnd)
     }
@@ -296,6 +301,18 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             let locked = wparam == WTS_SESSION_LOCK;
             set_lock(locked);
             say(Said::Locked(locked));
+        }
+        WM_POWERBROADCAST => {
+            match wparam as u32 {
+                PBT_APMSUSPEND => {
+                    say(Said::Sleeping);
+                    // Windows waits a moment for this answer: long enough to tell the phones.
+                    std::thread::sleep(GOODBYE);
+                }
+                PBT_APMRESUMEAUTOMATIC => say(Said::Awake),
+                _ => {}
+            }
+            return 1;
         }
         WM_QUERYENDSESSION => return 1,
         WM_ENDSESSION => {

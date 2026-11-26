@@ -32,14 +32,14 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates cmake ninja-build g++ extra-cmake-modules \
             qt6-base-dev libkf6purpose-dev libkf6coreaddons-dev
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
       - name: Build
         run: |
           cmake -S desktop/purpose -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: purpose-${{ matrix.runner }}
           path: build/bin/kf6/purpose/vyomaplugin.so
@@ -60,10 +60,10 @@ jobs:
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libfontconfig-dev libxkbcommon-dev
           curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -72,13 +72,13 @@ jobs:
             desktop/gui/target
           key: desktop-${{ matrix.runner }}-${{ hashFiles('desktop/*/Cargo.lock') }}
           restore-keys: desktop-${{ matrix.runner }}-
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: purpose-${{ matrix.runner }}
           path: purpose
       - name: Build and pack
         run: VYOMA_SHARE_PLUGIN=purpose/vyomaplugin.so sh packaging/bundle-desktop.sh dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.runner }}
           path: dist/*.tar.gz
@@ -88,10 +88,10 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

@@ -1,3 +1,5 @@
 // Vyoma's icon in vyoma-windows.exe and vyoma.exe (Explorer, the taskbar, the notification area's
 // icon, resource 1 in tray.rs). From desktop/icon/gen.py.
 1 ICON "vyoma.ico"
+// Their manifest (1 = the program's own, 24 = RT_MANIFEST): see vyoma.manifest.
+1 24 "vyoma.manifest"
